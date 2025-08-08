@@ -20,6 +20,7 @@ jobs:
 
       - name: Install Poetry
         run: pip install poetry
+        run: poetry add --group dev poetry-dynamic-versioning
 
       - name: Install dependencies
         run: poetry install

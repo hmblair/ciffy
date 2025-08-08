@@ -18,7 +18,7 @@ vcs = "git"
 style = "pep440"
 
 [tool.poetry-dynamic-versioning.substitution]
-files = ["src/ciffy/__init__.py"]
+files = ["ciffy/__init__.py"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]

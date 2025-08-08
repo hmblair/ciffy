@@ -5,6 +5,8 @@ authors = ["Hamish M. Blair <hmblair@stanford.edu>"]
 license = "CC BY-NC 4.0"
 readme = "README.md"
 homepage = "https://github.com/hmblair/ciffy"
+repository = "https://github.com/hmblair/ciffy"
+packages = [{include = "ciffy"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -20,5 +22,10 @@ style = "pep440"
 files = ["ciffy/__init__.py"]
 
 [build-system]
-requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = [
+    "setuptools>=64",
+    "wheel",
+    "poetry-dynamic-versioning>=1.0.0,<2.0.0",
+    "numpy>=1.21.0"
+]
+build-backend = "setuptools.build_meta"

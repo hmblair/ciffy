@@ -8,21 +8,12 @@ AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'
 URL = 'https://github.com/hmblair/ciffy'
 
-DEBUG = False
-DEBUG_COMPILE_ARGS = []
-DEBUG_LINK_ARGS = []
-
-if DEBUG:
-    DEBUG_COMPILE_ARGS = ['-fsanitize=address', '-g']
-    DEBUG_LINK_ARGS = ['-fsanitize=address']
-
 MODULE = "_ciffy_c"
 module = Extension(
     name=MODULE,
     sources=['ciffy/src/_ciffy_c.c'],
     include_dirs=[numpy.get_include()],
-    extra_compile_args=['-O3', '-march=native'] + DEBUG_COMPILE_ARGS,
-    extra_link_args=[] + DEBUG_LINK_ARGS,
+    extra_compile_args=['-O3', '-march=native'],
 )
 
 setup(

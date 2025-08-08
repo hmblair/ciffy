@@ -1,0 +1,6 @@
+__pycache__/
+build/
+_generate/
+*egg-info
+*.so
+.DS_Store

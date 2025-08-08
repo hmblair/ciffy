@@ -10,16 +10,6 @@ homepage = "https://github.com/hmblair/ciffy"
 python = "^3.8"
 numpy = "^1.21.0"
 
-[tool.poetry.dev-dependencies]
-
-[tool.poetry.build]
-generate-setup-py = true
-
-[tool.poetry.scripts]
-
-[tool.poetry.plugins."poetry-plugin-ciffy.extensions"]
-_ciffy_c = { src = "ciffy/src/_ciffy_c.c", include = ["numpy"] }
-
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"

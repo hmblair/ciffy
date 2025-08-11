@@ -1,6 +1,6 @@
 __version__ = "0.1.1"
 
-from .main import Polymer, load, Scale, Molecule, Reduction
+from .main import Polymer, Scale, Molecule, Reduction, load
 
 RESIDUE = Scale.RESIDUE
 CHAIN = Scale.CHAIN

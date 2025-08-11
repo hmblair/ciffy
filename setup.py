@@ -1,4 +1,4 @@
-from distutils.core import setup, Extension
+from setuptools import setup, Extension
 import numpy
 
 NAME = 'ciffy'
@@ -8,15 +8,15 @@ AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'
 URL = 'https://github.com/hmblair/ciffy'
 
-MODULE = "_ciffy_c"
+EXT = "_c"
 SOURCES = [
-    'ciffy/src/_ciffy_c.c',
+    'ciffy/src/_c.c',
     'ciffy/src/io.c',
     'ciffy/src/py.c',
     'ciffy/src/cif.c',
 ]
 module = Extension(
-    name=MODULE,
+    name=f"{NAME}.{EXT}",
     sources=SOURCES,
     include_dirs=[numpy.get_include()],
     extra_compile_args=['-O3'],

@@ -21,8 +21,10 @@ jobs:
       - name: Install Poetry
         run: pip3 install poetry
 
-      - name: Install dependencies
-        run: poetry install
+      - name: Build and install dependencies
+        run: |
+          poetry install
+          poetry run python setup.py build_ext --inplace
 
       - name: Publish to PyPI
         env: 

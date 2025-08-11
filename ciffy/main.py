@@ -6,8 +6,8 @@ from .enum import Residue, RES_ABBREV, RibonucleicAcid, Element
 from .reduction import Reduction, _Reduction, REDUCTIONS
 from typing import Generator
 import torch
-from _ciffy_c import _load
 from copy import copy
+from ._c import _load
 
 
 UNKNOWN = "UNKNOWN"

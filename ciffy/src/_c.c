@@ -1,4 +1,4 @@
-#include "_ciffy_c.h"
+#include "_c.h"
 
 static inline bool _eq(char *str1, char* str2) {
 
@@ -264,14 +264,14 @@ static PyMethodDef methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
-static struct PyModuleDef _ciffy_c = {
+static struct PyModuleDef _c = {
     PyModuleDef_HEAD_INIT,
-    "_ciffy_c",
+    "_c",
     NULL,
     -1,
     methods
 };
 
-PyMODINIT_FUNC PyInit__ciffy_c(void) {
-    return PyModule_Create(&_ciffy_c);
+PyMODINIT_FUNC PyInit__c(void) {
+    return PyModule_Create(&_c);
 }

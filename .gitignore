@@ -3,4 +3,5 @@ build/
 _generate/
 *egg-info
 *.so
+poetry.lock
 .DS_Store

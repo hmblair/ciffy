@@ -19,7 +19,7 @@ module = Extension(
     name=MODULE,
     sources=SOURCES,
     include_dirs=[numpy.get_include()],
-    extra_compile_args=['-O3', '-march=native'],
+    extra_compile_args=['-O3'],
 )
 
 setup(

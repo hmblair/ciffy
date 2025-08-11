@@ -11,21 +11,12 @@ packages = [{include = "ciffy"}]
 [tool.poetry.dependencies]
 python = "^3.11"
 numpy = "^1.21.0"
-torch = "^2.0.0"
-
-[tool.poetry-dynamic-versioning]
-enable = true
-vcs = "git"
-style = "pep440"
-
-[tool.poetry-dynamic-versioning.substitution]
-files = ["ciffy/__init__.py"]
 
 [build-system]
 requires = [
     "setuptools>=64",
     "wheel",
-    "poetry-dynamic-versioning>=1.0.0,<2.0.0",
+    "poetry",
     "numpy>=1.21.0"
 ]
 build-backend = "setuptools.build_meta"

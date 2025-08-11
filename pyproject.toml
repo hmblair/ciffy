@@ -1,6 +1,7 @@
 [tool.poetry]
 name = "ciffy"
 description = ""
+version = "0.1.1"
 authors = ["Hamish M. Blair <hmblair@stanford.edu>"]
 license = "CC BY-NC 4.0"
 readme = "README.md"

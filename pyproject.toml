@@ -1,7 +1,9 @@
-[tool.poetry]
+[project]
 name = "ciffy"
-description = ""
 version = "0.1.1"
+
+[tool.poetry]
+description = "Load cif files in a jiffy"
 authors = ["Hamish M. Blair <hmblair@stanford.edu>"]
 license = "CC BY-NC 4.0"
 readme = "README.md"

@@ -1,5 +1,5 @@
-#ifndef LOOKUP_H
-#define LOOKUP_H
+#ifndef _CIFFY_LOOKUP_H
+#define _CIFFY_LOOKUP_H
 
 #include <string.h>
 
@@ -8,4 +8,4 @@ struct _LOOKUP {
     int value;
 };
 
-#endif // LOOKUP_H
+#endif

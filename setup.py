@@ -9,9 +9,15 @@ EMAIL = 'hmblair@stanford.edu'
 URL = 'https://github.com/hmblair/ciffy'
 
 MODULE = "_ciffy_c"
+SOURCES = [
+    'ciffy/src/_ciffy_c.c',
+    'ciffy/src/io.c',
+    'ciffy/src/py.c',
+    'ciffy/src/cif.c',
+]
 module = Extension(
     name=MODULE,
-    sources=['ciffy/src/_ciffy_c.c'],
+    sources=SOURCES,
     include_dirs=[numpy.get_include()],
     extra_compile_args=['-O3', '-march=native'],
 )

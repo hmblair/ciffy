@@ -1,4 +1,5 @@
 from __future__ import annotations
+import numpy as np
 import os
 from enum import Enum
 from .enum import Residue, RES_ABBREV, RibonucleicAcid, Element
@@ -13,17 +14,17 @@ UNKNOWN = "UNKNOWN"
 
 
 class Scale(Enum):
-    RESIDUE = 0
-    CHAIN = 1
+    RESIDUE  = 0
+    CHAIN    = 1
     MOLECULE = 2
 
 
 class Molecule(Enum):
     PROTEIN = 0
-    RNA = 1
-    DNA = 2
-    OTHER = 3
-    MISSING = 4
+    RNA     = 1
+    DNA     = 2
+    WATER   = 3
+    ION     = 4
 
 
 def _molecule_type(val: int) -> Molecule:
@@ -57,10 +58,12 @@ class Polymer:
         id: str,
         names: list[str],
         lengths: torch.Tensor,
+        nonpoly: int = 0,
     ) -> None:
 
         self._id = id
         self.names = names
+        self.nonpoly = nonpoly
 
         if not _all_equal(
             coordinates.size(0),
@@ -73,8 +76,8 @@ class Polymer:
         _chn_count = sizes[Scale.CHAIN].sum().item()
         _mol_count = sizes[Scale.MOLECULE].sum().item()
 
-        if not _all_equal(_res_count, _chn_count, _mol_count):
-            raise ValueError(f"The residue ({_res_count}), chain ({_chn_count}), and molecule ({_mol_count}) atom counts do not agree for PDB {self.id()}.")
+        if not _all_equal(_res_count + nonpoly, _chn_count, _mol_count):
+            raise ValueError(f"The residue ({_res_count} + {nonpoly}), chain ({_chn_count}), and molecule ({_mol_count}) atom counts do not agree for PDB {self.id()}.")
 
         self.coordinates = coordinates
         self.atoms = atoms
@@ -82,7 +85,6 @@ class Polymer:
         self.sequence = sequence
         self._sizes = sizes
         self.lengths = lengths
-
 
     def id(self: Polymer) -> str:
         """
@@ -93,7 +95,6 @@ class Polymer:
             return UNKNOWN
         return self._id
 
-
     def chain_id(self: Polymer, ix: int | None = None) -> str | list[str]:
         """
         Get the PDB + chain ID of each (or the specified) chain.
@@ -103,7 +104,6 @@ class Polymer:
             return self.id() + '_' + self.names[ix]
 
         return [self.id() + '_' + name for name in self.names]
-
 
     def size(self: Polymer, scale: Scale | None = None) -> int:
         """
@@ -116,32 +116,17 @@ class Polymer:
         else:
             return self._sizes[scale].size(0)
 
-
     def type(self: Polymer) -> torch.Tensor:
         """
         Get the type of molecule (protein, RNA, DNA) of each chain.
         """
 
         types = torch.zeros(self.size(Scale.CHAIN), dtype=torch.long)
-        ix = torch.arange(self.size(Scale.RESIDUE)).repeat_interleave(self._sizes[Scale.RESIDUE])
+        atoms, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
 
-        atoms, _ = self.reduce(self.sequence[ix], Scale.CHAIN, Reduction.MAX)
         types[atoms < 5] = Molecule.RNA.value
-        types[atoms < 0] = Molecule.OTHER.value
 
         return types
-
-
-    def com(
-        self: Polymer,
-        scale: Scale,
-    ) -> torch.Tensor:
-        """
-        Get the center of mass of each of the given [scale].
-        """
-
-        tmp = self.center()
-        return tmp.reduce(tmp.coordinates * tmp.elements[:, None], scale)
 
     def reduce(
         self: Polymer,
@@ -163,12 +148,32 @@ class Polymer:
         ix = torch.arange(count).repeat_interleave(sizes)
 
         return REDUCTIONS[rtype](
-            features,
-            ix,
+            features, ix,
             dim=ATOM_DIM,
-            dim_size=self.size(scale),
+            dim_size=count,
         )
 
+    def rreduce(
+        self: Polymer,
+        features: torch.Tensor,
+        scale: Scale,
+        rtype: Reduction = Reduction.MEAN,
+    ) -> _Reduction:
+        """
+        Similar to reduce(), but with one feature per residue rather than per
+        atom.
+        """
+
+        ATOM_DIM = 0
+
+        count = self.size(scale)
+        ix = torch.arange(count).repeat_interleave(self.lengths)
+
+        return REDUCTIONS[rtype](
+            features, ix,
+            dim=ATOM_DIM,
+            dim_size=count,
+        )
 
     def expand(
         self: Polymer,
@@ -182,7 +187,6 @@ class Polymer:
 
         return features.repeat_interleave(self._sizes[scale], dim=0)
 
-
     def center(
         self: Polymer,
         scale: Scale = Scale.MOLECULE,
@@ -193,6 +197,7 @@ class Polymer:
         """
 
         # Get the coordinate means
+
         means = self.reduce(self.coordinates, scale)
 
         # Expand the means and subtract
@@ -206,7 +211,6 @@ class Polymer:
         centered.coordinates = coordinates
 
         return centered, means
-
 
     def _pc(
         self: Polymer,
@@ -230,7 +234,6 @@ class Polymer:
         # Compute the eigenvectors of the covariance matrices
 
         return torch.linalg.eigh(cov)
-
 
     def align(
         self: Polymer,
@@ -271,6 +274,16 @@ class Polymer:
 
         return aligned, Q
 
+    def count(
+        self: Polymer,
+        mask: torch.Tensor,
+        scale: Scale,
+    ) -> torch.Tensor:
+        """
+        Count the nonzero elements per each [scale].
+        """
+
+        return self.reduce(mask.long(), scale, Reduction.SUM)
 
     def __getitem__(
         self: Polymer,
@@ -284,25 +297,28 @@ class Polymer:
         atoms = self.atoms[mask]
         elements = self.elements[mask]
 
-        mol_sizes = torch.tensor([len(coordinates)], dtype=torch.long)
+        chain_sizes = self.count(mask, Scale.CHAIN)
+        res_sizes = self.count(mask, Scale.RESIDUE)
+        mol_sizes = self.count(mask, Scale.MOLECULE)
 
-        res_sizes = self.reduce(mask.long(), Scale.RESIDUE, Reduction.SUM)
-        chain_sizes = self.reduce(mask.long(), Scale.CHAIN, Reduction.SUM)
+        _residues = torch.zeros(self.size(Scale.CHAIN), dtype=torch.bool)
+        _residues[chain_sizes > 0] = True
+        residues = _residues.repeat_interleave(self.lengths, dim=0)
+
+        lengths = self.lengths[chain_sizes > 0]
 
         sizes = {
-            Scale.RESIDUE: res_sizes[res_sizes > 0],
-            Scale.CHAIN : chain_sizes[chain_sizes > 0],
+            Scale.RESIDUE: res_sizes[residues],
+            Scale.CHAIN: chain_sizes[chain_sizes > 0],
             Scale.MOLECULE: mol_sizes,
         }
 
-        sequence = self.sequence[res_sizes > 0]
+        sequence = self.sequence[residues]
 
         names = [
             self.names[ix] for ix in range(len(self.names))
             if chain_sizes[ix] > 0
         ]
-
-        lengths = self.lengths[chain_sizes > 0]
 
         return Polymer(
             coordinates,
@@ -315,7 +331,6 @@ class Polymer:
             lengths,
         )
 
-
     def mask(
         self: Polymer,
         mask: torch.Tensor | int,
@@ -326,13 +341,10 @@ class Polymer:
         """
 
         counts = self.size(scale)
-        sizes = self._sizes[scale]
-
         objects = torch.zeros(counts, dtype=torch.bool)
         objects[mask] = True
 
-        return objects.repeat_interleave(sizes)
-
+        return self.expand(objects, scale)
 
     def select(
         self: Polymer,
@@ -345,10 +357,9 @@ class Polymer:
 
         return self[self.mask(ix, scale)]
 
-
-    def get_by_name (
+    def get_by_name(
         self: Polymer,
-        name: torch.Tensor | int
+        name: torch.Tensor | int,
     ) -> Polymer:
         """
         Similar to select(), but for atom name rather than scale.
@@ -356,7 +367,6 @@ class Polymer:
 
         ix = (self.atoms[:, None] == name).any(1)
         return self[ix]
-
 
     def subset(
         self: Polymer,
@@ -368,7 +378,6 @@ class Polymer:
 
         ix = (self.type() == mol.value).nonzero().squeeze(-1)
         return self.select(ix, Scale.CHAIN)
-
 
     def chains(
         self: Polymer,
@@ -384,21 +393,6 @@ class Polymer:
             if mol is None or chain.istype(mol):
                 yield chain
 
-
-    def split(
-        self: Polymer,
-        scale: Scale,
-    ) -> tuple[Polymer, ...]:
-        """
-        Split the polymer baesd on the given feature.
-        """
-
-        return tuple(
-            self.select(ix, scale)
-            for ix in range(self.size(scale))
-        )
-
-
     def missing(
         self: Polymer,
         scale: Scale = Scale.RESIDUE,
@@ -409,7 +403,6 @@ class Polymer:
         """
 
         return (self._sizes[scale] == 0).nonzero().squeeze(-1)
-
 
     def moment(
         self: Polymer,
@@ -422,7 +415,6 @@ class Polymer:
         """
 
         return self.reduce(self.coordinates ** n, scale)
-
 
     def __repr__(self: Polymer) -> str:
 
@@ -453,7 +445,6 @@ class Polymer:
 
         return out
 
-
     def str(self: Polymer) -> str:
         """
         Get the sequence of residues as a string.
@@ -461,7 +452,6 @@ class Polymer:
 
         DICT = lambda x: RES_ABBREV[Residue.revdict().get(x, 'N')]
         return "".join([DICT(ix.item()) for ix in self.sequence])
-
 
     def istype(
         self: Polymer,
@@ -476,7 +466,6 @@ class Polymer:
         if _type.size(0) != 1:
             return False
         return _type[0].item() == mol.value
-
 
     def write(self: Polymer, filename: str) -> None:
 
@@ -516,7 +505,7 @@ def load(file: str) -> Polymer:
     if not os.path.isfile(file):
         raise OSError(f"The file \"{file}\" does not exist.")
 
-    id, coordinates, atoms, elements, residues, atoms_per_res, atoms_per_chain, res_per_chain, chain_names = _load(file)
+    id, coordinates, atoms, elements, residues, atoms_per_res, atoms_per_chain, res_per_chain, chain_names, nonpoly = _load(file)
 
     mol_sizes = torch.tensor([len(coordinates)], dtype=torch.long).numpy()
 
@@ -535,4 +524,5 @@ def load(file: str) -> Polymer:
         id,
         chain_names,
         torch.from_numpy(res_per_chain),
+        nonpoly,
     )

@@ -155,6 +155,11 @@ class Residue(IndexEnum):
     VAL = 22
     TRP = 23
     TYR = 24
+    # Water
+    HOH = 25
+    # Ions
+    MG  = 26
+    CS  = 27
 
 RES_ABBREV = {
     'A': 'a',

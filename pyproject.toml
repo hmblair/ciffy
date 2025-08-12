@@ -1,6 +1,6 @@
 [project]
 name = "ciffy"
-version = "0.1.1"
+version = "0.1.1a"
 
 [tool.poetry]
 description = "Load cif files in a jiffy"

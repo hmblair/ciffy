@@ -40,7 +40,11 @@ setup(
     version=VERSION,
     packages=[NAME],
     ext_modules=[module],
-    install_requires=['numpy'],
+    install_requires=[
+        'numpy',
+        'torch',
+        'torch_scatter',
+    ],
     author=AUTHOR,
     author_email=EMAIL,
     url=URL,

@@ -18,11 +18,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Poetry
-        run: pip3 install poetry
-
       - name: Install dependencies
-        run: pip install setuptools wheel twine
+        run: pip install setuptools wheel twine numpy
 
       - name: Build distribution
         run: |

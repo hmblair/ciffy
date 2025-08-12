@@ -33,6 +33,7 @@ module = Extension(
     sources=SOURCES,
     include_dirs=[numpy.get_include()],
     extra_compile_args=['-O3'],
+    include_dirs=[f'{NAME}/src']
 )
 
 setup(

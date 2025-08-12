@@ -1,8 +1,9 @@
 from setuptools import setup, Extension
+import ciffy
 import numpy
 
 NAME = 'ciffy'
-VERSION = '0.1.1a'
+VERSION = ciffy.__version__
 LICENSE = 'CC BY-NC 4.0'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'

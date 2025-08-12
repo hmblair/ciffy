@@ -1,7 +1,6 @@
 from setuptools import setup, Extension
 import os
 import re
-import ciffy
 import numpy
 
 NAME = 'ciffy'

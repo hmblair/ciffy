@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools", "wheel", "numpy"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ciffy"
-version = "0.1.1"
+version = "0.1.1a"
 
 [tool.poetry]
 description = "Load cif files in a jiffy"
@@ -14,14 +18,3 @@ packages = [{include = "ciffy"}]
 [tool.poetry.dependencies]
 python = "^3.11"
 numpy = "^1.21.0"
-
-[tool.poetry.group.build.dependencies]
-setuptools = "^80.9.0"
-
-[tool.poetry.build]
-script = "build.py"
-generate-setup-file = true
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"

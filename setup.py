@@ -2,7 +2,7 @@ from setuptools import setup, Extension
 import numpy
 
 NAME = 'ciffy'
-VERSION = '0.1.0'
+VERSION = '0.1.1a'
 LICENSE = 'CC BY-NC 4.0'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'

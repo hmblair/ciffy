@@ -1,1 +1,2 @@
 include ciffy/src/*.h
+include ciffy/src/hash/*

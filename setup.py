@@ -31,7 +31,7 @@ SOURCES = [
 module = Extension(
     name=f"{NAME}.{EXT}",
     sources=SOURCES,
-    include_dirs=[numpy.get_include(), f'{NAME}/src'],
+    include_dirs=[numpy.get_include()],
     extra_compile_args=['-O3'],
 )
 

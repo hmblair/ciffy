@@ -1,9 +1,22 @@
 from setuptools import setup, Extension
+import os
+import re
 import ciffy
 import numpy
 
 NAME = 'ciffy'
-VERSION = ciffy.__version__
+
+
+def _version() -> str:
+    with open(os.path.join(os.path.dirname(__file__), NAME, '__init__.py')) as f:
+        content = f.read()
+    match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", content, re.M)
+    if match:
+        return match.group(1)
+    raise RuntimeError("Cannot find version information")
+
+
+VERSION = _version()
 LICENSE = 'CC BY-NC 4.0'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'

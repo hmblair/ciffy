@@ -32,7 +32,4 @@ setup(
     author_email=EMAIL,
     url=URL,
     license=LICENSE,
-    options={
-        'bdist_wheel': {'universal': True},
-    }
 )

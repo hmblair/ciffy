@@ -2,7 +2,18 @@ from __future__ import annotations
 import numpy as np
 import os
 from enum import Enum
-from .enum import Residue, RES_ABBREV, RibonucleicAcid, Element
+from .enum import (
+    Residue,
+    RES_ABBREV,
+    RibonucleicAcid,
+    Adenosine,
+    Guanosine,
+    Cytosine,
+    Uridine,
+    Element,
+    FRAMES,
+    Backbone,
+)
 from .reduction import Reduction, _Reduction, REDUCTIONS
 from typing import Generator
 import torch
@@ -58,12 +69,14 @@ class Polymer:
         sizes: dict[Scale, torch.Tensor],
         id: str,
         names: list[str],
+        strands: list[str],
         lengths: torch.Tensor,
         nonpoly: int = 0,
     ) -> None:
 
-        self._id = id
+        self._id = id or UNKNOWN
         self.names = names
+        self.strands = strands
         self.nonpoly = nonpoly
 
         if not _all_equal(
@@ -95,24 +108,28 @@ class Polymer:
         if scale1 == scale2:
             return torch.ones(self.sizes(scale1))
 
-    def id(self: Polymer) -> str:
+    def id(self: Polymer, ix: int | None = None) -> str:
         """
         Get the PDB ID of the molecule.
         """
 
-        if not self._id:
-            return UNKNOWN
-        return self._id
+        if ix is None:
+            return self._id
+        return self._id + '_' + self.names[ix]
 
-    def chain_id(self: Polymer, ix: int | None = None) -> str | list[str]:
+    def strand(self: Polymer, ix: int) -> str:
         """
-        Get the PDB + chain ID of each (or the specified) chain.
+        Get the strand ID of the specified chain.
         """
 
-        if ix is not None:
-            return self.id() + '_' + self.names[ix]
+        return self._id + '_' + self.strands[ix]
 
-        return [self.id() + '_' + name for name in self.names]
+    def empty(self: Polymer) -> bool:
+        """
+        Is the polymer empty?
+        """
+
+        return self.coordinates.size(0) == 0
 
     def size(self: Polymer, scale: Scale | None = None) -> int:
         """
@@ -225,6 +242,18 @@ class Polymer:
 
         return centered, means
 
+    def pd(self: Polymer, scale: Scale | None = None) -> torch.Tensor:
+        """
+        Get the pairwise distances between the centers of the specified [scale]s.
+        """
+
+        if scale is not None:
+            _, coords = self.center(scale)
+        else:
+            coords = self.coordinates
+
+        return torch.cdist(coords, coords)
+
     def _pc(
         self: Polymer,
         scale: Scale,
@@ -333,6 +362,11 @@ class Polymer:
             if chn_sizes[ix] > 0
         ]
 
+        strands = [
+            self.strands[ix] for ix in range(len(self.strands))
+            if chn_sizes[ix] > 0
+        ]
+
         return Polymer(
             coordinates,
             atoms,
@@ -341,6 +375,7 @@ class Polymer:
             sizes,
             self._id,
             names,
+            strands,
             lengths,
         )
 
@@ -389,6 +424,7 @@ class Polymer:
 
         sequence = self.sequence[res_ix]
         names = [self.names[jx] for jx in chn_ix]
+        strands = [self.strands[jx] for jx in chn_ix]
 
         return Polymer(
             coordinates,
@@ -398,6 +434,7 @@ class Polymer:
             sizes,
             self._id,
             names,
+            strands,
             lengths,
         )
 
@@ -516,6 +553,27 @@ class Polymer:
         DICT = lambda x: RES_ABBREV[Residue.revdict().get(x, 'N')]
         return "".join([DICT(ix.item()) for ix in self.sequence])
 
+    def atom_names(self: Polymer) -> list[str]:
+        """
+        Get the sequence of atoms as a list of strings.
+        """
+
+        DICT = (
+            Adenosine.revdict() |
+            Guanosine.revdict() |
+            Cytosine.revdict() |
+            Uridine.revdict()
+        )
+        return [DICT.get(ix.item(),'?') for ix in self.atoms]
+
+    def frame(self: Polymer) -> Polymer:
+
+        return self.get_by_name(FRAMES)
+
+    def backbone(self: Polymer) -> Polymer:
+
+        return self.get_by_name(Backbone.index())
+
     def istype(
         self: Polymer,
         mol: Molecule,
@@ -568,7 +626,7 @@ def load(file: str) -> Polymer:
     if not os.path.isfile(file):
         raise OSError(f"The file \"{file}\" does not exist.")
 
-    id, coordinates, atoms, elements, residues, atoms_per_res, atoms_per_chain, res_per_chain, chain_names, nonpoly = _load(file)
+    id, coordinates, atoms, elements, residues, atoms_per_res, atoms_per_chain, res_per_chain, chain_names, strand_names, nonpoly = _load(file)
 
     mol_sizes = torch.tensor([len(coordinates)], dtype=torch.long).numpy()
 
@@ -586,6 +644,7 @@ def load(file: str) -> Polymer:
         {key: torch.from_numpy(value).long() for key, value in sizes.items()},
         id,
         chain_names,
+        strand_names,
         torch.from_numpy(res_per_chain),
         nonpoly,
     )

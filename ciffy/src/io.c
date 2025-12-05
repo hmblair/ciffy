@@ -1,49 +1,66 @@
+/**
+ * @file io.c
+ * @brief Low-level I/O and block parsing utilities for mmCIF files.
+ */
+
 #include "io.h"
 
-static inline bool _eq(const char *str1, const char* str2) {
 
-    return strncmp(str1, str2, strlen(str2)) == 0;
+CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
 
-}
-
-static inline bool _neq(const char *str1, const char* str2) {
-
-    return strncmp(str1, str2, strlen(str2)) != 0;
-
-}
-
-static inline bool _is_section_end(const char* line) {
-
-    return *line == '#';
-
-}
-
-char* _load_file(const char* name) {
+    *buffer = NULL;
 
     FILE *file = fopen(name, "r");
-
     if (file == NULL) {
-        perror("Failed to open file");
-        return NULL;
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to open file: %s", name);
+        return CIF_ERR_IO;
     }
 
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    char* buffer = malloc(size + 1);
-    if (buffer == NULL) {
-        perror("Failed to allocate memory");
+    /* Get file size */
+    if (fseek(file, 0, SEEK_END) != 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to seek to end of file: %s", name);
         fclose(file);
-        return NULL;
+        return CIF_ERR_IO;
     }
 
-    fread(buffer, 1, size, file);
-    buffer[size] = '\0';
+    long size = ftell(file);
+    if (size < 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to get file size: %s", name);
+        fclose(file);
+        return CIF_ERR_IO;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to seek to start of file: %s", name);
+        fclose(file);
+        return CIF_ERR_IO;
+    }
+
+    /* Allocate buffer */
+    char *buf = malloc((size_t)size + 1);
+    if (buf == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate %ld bytes for file: %s", size + 1, name);
+        fclose(file);
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Read file contents */
+    size_t bytes_read = fread(buf, 1, (size_t)size, file);
+    if (bytes_read != (size_t)size) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO,
+            "Failed to read file (expected %ld bytes, got %zu): %s",
+            size, bytes_read, name);
+        free(buf);
+        fclose(file);
+        return CIF_ERR_IO;
+    }
+
+    buf[size] = '\0';
     fclose(file);
 
-    return buffer;
-
+    *buffer = buf;
+    return CIF_OK;
 }
 
 
@@ -59,9 +76,8 @@ int _get_offset(char *buffer, char delimiter, int n) {
 
     int offset = 0;
 
-    // Delimiters within single quotes are ignored
-    // Single quotes within double quotes are ignored
-
+    /* Delimiters within single quotes are ignored.
+     * Single quotes within double quotes are ignored. */
     bool squotes = false;
     bool dquotes = false;
 
@@ -79,99 +95,118 @@ int _get_offset(char *buffer, char delimiter, int n) {
     }
 
     return offset;
-
 }
 
 
-int *_get_offsets(char *buffer, int fields) {
+int *_get_offsets(char *buffer, int fields, CifErrorContext *ctx) {
 
-    int *offsets = calloc(fields + 1, sizeof(int));
+    int *offsets = calloc((size_t)(fields + 1), sizeof(int));
+    if (offsets == NULL) {
+        if (ctx != NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+                "Failed to allocate offset array for %d fields", fields + 1);
+        }
+        return NULL;
+    }
+
     for (int ix = 0; ix <= fields; ix++) {
         offsets[ix] = _get_offset(buffer, ' ', ix);
     }
 
     return offsets;
-
 }
 
 
-char *_get_field(char *buffer) {
+char *_get_field(char *buffer, CifErrorContext *ctx) {
 
-    // Skip whitespace
-
+    /* Skip leading whitespace */
     while (*buffer == ' ') { buffer++; }
 
-    // Read until we see whitespace again
-    // Ignore single quotes, unless inside double quotes
-
+    /* Read until whitespace, handling quotes.
+     * Single quotes toggle quote mode (ignore spaces within).
+     * Double quotes affect single quote interpretation. */
     bool squotes = false;
     bool dquotes = false;
 
-    char *cpy = buffer;
+    char *start = buffer;
     while (*buffer != ' ' || squotes) {
         if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
         if (*buffer == '\"') { dquotes = !dquotes; }
         buffer++;
     }
-    int length = buffer - cpy;
 
-    char *field = malloc(length + 1);
-    strncpy(field, cpy, length);
-    field[length] = '\0';
-
-    return field;
-
+    size_t length = (size_t)(buffer - start);
+    return _strdup_n(start, length, ctx);
 }
 
 
-char *_get_field_and_advance(char **buffer) {
+char *_get_field_and_advance(char **buffer, CifErrorContext *ctx) {
 
-    // Skip whitespace
-
+    /* Skip leading whitespace */
     while (**buffer == ' ') { (*buffer)++; }
 
-    // Read until we see whitespace again
-
-    char *cpy = *buffer;
+    /* Read until whitespace */
+    char *start = *buffer;
     while (**buffer != ' ') { (*buffer)++; }
-    int length = *buffer - cpy;
 
-    char *field = malloc(length + 1);
-    strncpy(field, cpy, length);
-    field[length] = '\0';
-
-    return field;
-
+    size_t length = (size_t)(*buffer - start);
+    return _strdup_n(start, length, ctx);
 }
 
 
-char *_get_category(char *buffer) {
+char *_get_category(char *buffer, CifErrorContext *ctx) {
 
     char *pos = strchr(buffer, '.');
-    size_t length = pos - buffer + 1;
+    if (pos == NULL) {
+        if (ctx != NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Invalid attribute format (missing '.'): %.50s", buffer);
+        }
+        return NULL;
+    }
+
+    size_t length = (size_t)(pos - buffer + 1);
 
     char *result = malloc(length + 1);
+    if (result == NULL) {
+        if (ctx != NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+                "Failed to allocate %zu bytes for category", length + 1);
+        }
+        return NULL;
+    }
+
     strncpy(result, buffer, length);
     result[length - 1] = '.';
     result[length] = '\0';
 
     return result;
-
 }
 
 
-char *_get_attr(char *buffer) {
+char *_get_attr(char *buffer, CifErrorContext *ctx) {
 
-    char *start = strchr(buffer, '.') + 1;
+    char *start = strchr(buffer, '.');
+    if (start == NULL) {
+        if (ctx != NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Invalid attribute format (missing '.'): %.50s", buffer);
+        }
+        return NULL;
+    }
+    start++;  /* Skip the '.' */
+
     char *end = strchr(start, ' ');
-    size_t length = end - start;
+    if (end == NULL) {
+        /* Attribute extends to end of string - find newline or end */
+        end = strchr(start, '\n');
+        if (end == NULL) {
+            end = start + strlen(start);
+        }
+    }
 
-    char *result = malloc(length + 1);
-    strncpy(result, start, length);
-    result[length] = '\0';
-
-    return result;
-
+    size_t length = (size_t)(end - start);
+    return _strdup_n(start, length, ctx);
 }
 
 
@@ -180,19 +215,20 @@ int _get_attr_index(mmBlock *block, const char *attr) {
     char *ptr = block->head;
 
     for (int ix = 0; ix < block->attributes; ix++) {
-
-        char *curr = _get_attr(ptr);
-        if (_eq(curr, attr)) { return ix; }
+        char *curr = _get_attr(ptr, NULL);  /* Ignore allocation errors here */
+        if (curr != NULL) {
+            bool match = _eq(curr, attr);
+            free(curr);
+            if (match) { return ix; }
+        }
         _advance_line(&ptr);
-
     }
 
     return BAD_IX;
-
 }
 
 
-char *_get_attr_by_line(mmBlock* block, int line, int index) {
+char *_get_attr_by_line(mmBlock *block, int line, int index, CifErrorContext *ctx) {
 
     if (block->single) {
 
@@ -201,16 +237,33 @@ char *_get_attr_by_line(mmBlock* block, int line, int index) {
             _advance_line(&ptr);
         }
 
-        (void)_get_field_and_advance(&ptr);
-        return _get_field_and_advance(&ptr);
+        char *skip = _get_field_and_advance(&ptr, ctx);
+        if (skip != NULL) { free(skip); }
+        return _get_field_and_advance(&ptr, ctx);
 
     } else {
 
+        /* Bounds check for multi-entry blocks */
+        if (line < 0 || line >= block->size) {
+            if (ctx != NULL) {
+                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
+                    "Line index %d out of bounds (size=%d)", line, block->size);
+            }
+            return NULL;
+        }
+        if (index < 0 || index >= block->attributes) {
+            if (ctx != NULL) {
+                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
+                    "Attribute index %d out of bounds (attributes=%d)",
+                    index, block->attributes);
+            }
+            return NULL;
+        }
+
         char *ptr = block->start + line * block->width + block->offsets[index];
-        return _get_field(ptr);
+        return _get_field(ptr, ctx);
 
     }
-
 }
 
 
@@ -219,35 +272,54 @@ int _str_to_int(const char *str) {
     int base = 10;
     char *endptr = NULL;
 
-    int val = strtol(str, &endptr, base);
-    if (*endptr != '\0') { val = -1; }
+    long val = strtol(str, &endptr, base);
+    if (*endptr != '\0') { return -1; }
 
-    return val;
-
+    return (int)val;
 }
 
 
-static inline char* _strip_quotes(char* str) {
+static inline char *_strip_quotes(char *str) {
 
-    size_t len = strlen(str);
-    if (str[len - 1] == '"') { str[len - 1] = '\0'; }
-    if (str[0] == '"') { str++; } 
+    char *write_ptr = str;
+    char *read_ptr = str;
+
+    while (*read_ptr) {
+        if (*read_ptr != '"') {
+            *write_ptr = *read_ptr;
+            write_ptr++;
+        }
+        read_ptr++;
+    }
+    *write_ptr = '\0';
+
     return str;
-
 }
 
 
 int _lookup(HashTable func, char *token) {
 
-    int val = -1;
     token = _strip_quotes(token);
     struct _LOOKUP *lookup = func(token, strlen(token));
+
     if (lookup != NULL) {
-        val = lookup->value;
-    } else {
-        // printf("Failed to parse %s.\n", token);
+        return lookup->value;
     }
 
-    return val;
+    return -1;
+}
 
+
+CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext *ctx) {
+
+    token = _strip_quotes(token);
+    struct _LOOKUP *lookup = func(token, strlen(token));
+
+    if (lookup != NULL) {
+        *result = lookup->value;
+        return CIF_OK;
+    }
+
+    CIF_SET_ERROR(ctx, CIF_ERR_LOOKUP, "Unknown token: '%s'", token);
+    return CIF_ERR_LOOKUP;
 }

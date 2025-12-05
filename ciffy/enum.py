@@ -347,7 +347,9 @@ class Uridine(IndexEnum):
     H5   = 143
     H6   = 144
 
-RibonucleicAcid = IndexEnum("RibonucleicAcid", Adenosine.dict() | Cytosine.dict() | Guanosine.dict() | Uridine.dict())
+RibonucleicAcid = IndexEnum("RibonucleicAcid", Adenosine.dict("A_") | Cytosine.dict("C_") | Guanosine.dict("G_") | Uridine.dict("U_"))
+
+RibonucleicAcidNoPrefix = IndexEnum("RibonucleicAcid", Adenosine.dict() | Cytosine.dict() | Guanosine.dict() | Uridine.dict())
 
 _A = {"A_" + key: value for key, value in Adenosine.dict().items() if 'p' in key or "P" in key}
 _C = {"C_" + key: value for key, value in Cytosine.dict().items() if 'p' in key or "P" in key}
@@ -392,3 +394,24 @@ class Element(IndexEnum):
     O = 8
     P = 15
     S = 16
+
+
+FRAME1 = torch.tensor([
+    Adenosine.C2.value,
+    Cytosine.C2.value,
+    Guanosine.C2.value,
+    Uridine.C2.value,
+])
+FRAME2 = torch.tensor([
+    Adenosine.C4.value,
+    Cytosine.C4.value,
+    Guanosine.C4.value,
+    Uridine.C4.value,
+])
+FRAME3 = torch.tensor([
+    Adenosine.C6.value,
+    Cytosine.C6.value,
+    Guanosine.C6.value,
+    Uridine.C6.value,
+])
+FRAMES = torch.cat([FRAME1, FRAME2, FRAME3])

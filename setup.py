@@ -42,8 +42,6 @@ setup(
     ext_modules=[module],
     install_requires=[
         'numpy',
-        'torch',
-        'torch_scatter',
     ],
     author=AUTHOR,
     author_email=EMAIL,

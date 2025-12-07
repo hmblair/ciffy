@@ -196,8 +196,8 @@ static PyObject *_c_to_py(mmCIF cif) {
         return NULL;
     }
 
-    PyObject *nonpoly = _c_int_to_py_int(cif.nonpoly);
-    if (nonpoly == NULL) {
+    PyObject *polymer_count = _c_int_to_py_int(cif.polymer);
+    if (polymer_count == NULL) {
         Py_DECREF(py_id);
         Py_DECREF(chain_names_list);
         Py_DECREF(strand_names_list);
@@ -214,7 +214,7 @@ static PyObject *_c_to_py(mmCIF cif) {
     return PyTuple_Pack(11,
         py_id, coordinates, atoms_array, elements_array, residues_array,
         atoms_per_res, atoms_per_chain, res_per_chain,
-        chain_names_list, strand_names_list, nonpoly);
+        chain_names_list, strand_names_list, polymer_count);
 }
 
 
@@ -453,7 +453,7 @@ static PyMethodDef methods[] = {
      "Returns:\n"
      "    tuple: (id, coordinates, atoms, elements, residues,\n"
      "            atoms_per_res, atoms_per_chain, res_per_chain,\n"
-     "            chain_names, strand_names, nonpoly)\n\n"
+     "            chain_names, strand_names, polymer_count)\n\n"
      "Raises:\n"
      "    IOError: If file cannot be read\n"
      "    ValueError: If file format is invalid\n"

@@ -34,6 +34,7 @@ typedef struct {
     int residues;           /**< Total number of residues */
     int atoms;              /**< Total number of atoms (per model) */
 
+    int polymer;            /**< Count of polymeric atoms */
     int nonpoly;            /**< Count of non-polymeric atoms */
 
     float *coordinates;     /**< Atom coordinates [atoms * 3] as x,y,z triplets */

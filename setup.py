@@ -35,10 +35,19 @@ module = Extension(
     extra_compile_args=['-O3'],
 )
 
+PACKAGES = [
+    NAME,
+    f'{NAME}.utils',
+    f'{NAME}.types',
+    f'{NAME}.biochemistry',
+    f'{NAME}.operations',
+    f'{NAME}.io',
+]
+
 setup(
     name=NAME,
     version=VERSION,
-    packages=[NAME],
+    packages=PACKAGES,
     ext_modules=[module],
     install_requires=[
         'numpy',

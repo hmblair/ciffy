@@ -632,13 +632,15 @@ class Polymer:
         """
         Return a new Polymer with non-polymer atoms removed.
 
-        Non-polymer atoms include water, ions, and ligands that are
-        not part of the polymer chains.
+        Non-polymer atoms include water, ions, ligands, and any atoms
+        with unknown types (e.g., modified residues not in standard tables).
 
         Returns:
-            New Polymer containing only polymer atoms.
+            New Polymer containing only recognized polymer atoms.
         """
-        return self[~self.is_nonpoly]
+        # Filter out both non-polymer atoms and atoms with unknown types (-1)
+        mask = ~self.is_nonpoly & (self.atoms >= 0)
+        return self[mask]
 
     def chains(
         self: Polymer,

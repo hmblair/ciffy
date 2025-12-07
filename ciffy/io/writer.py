@@ -13,6 +13,8 @@ def write_pdb(polymer: "Polymer", filename: str) -> None:
     """
     Write a polymer structure to a PDB format file.
 
+    Non-polymer atoms (water, ions, ligands) are automatically filtered out.
+
     Args:
         polymer: The polymer structure to write.
         filename: Path to the output file.
@@ -26,6 +28,9 @@ def write_pdb(polymer: "Polymer", filename: str) -> None:
     """
     from ..types import Scale
     from ..biochemistry import Element, RibonucleicAcid
+
+    # Filter out non-polymer atoms
+    polymer = polymer.polymer_only()
 
     with open(filename, 'w') as file:
         for chain in polymer.chains():

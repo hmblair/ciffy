@@ -454,6 +454,7 @@ static int *_parse_sizes_relative(mmBlock *block, const char *attr, int *size, C
  * @param attr Sequence ID attribute name
  * @param size Total number of residues
  * @param nonpoly Output count of non-polymeric atoms
+ * @param is_nonpoly Output array marking non-polymer atoms (1) vs polymer (0)
  * @param lengths Array of residue counts per chain
  * @param ctx Error context
  * @return Array of atom counts per residue, or NULL on error
@@ -463,6 +464,7 @@ static int *_parse_residue_sizes(
     const char *attr,
     int size,
     int *nonpoly,
+    int *is_nonpoly,
     int *lengths,
     CifErrorContext *ctx
 ) {
@@ -524,9 +526,11 @@ static int *_parse_residue_sizes(
 
         if (num < 0) {
             (*nonpoly)++;
+            is_nonpoly[line] = 1;
             continue;
         }
 
+        is_nonpoly[line] = 0;
         int idx = offset + num;
         if (idx >= 0 && idx < size) {
             sizes[idx]++;
@@ -594,9 +598,17 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->coordinates = _parse_coords(&blocks->atom, ctx);
     if (cif->coordinates == NULL) return ctx->code;
 
-    /* Compute atoms per residue */
+    /* Allocate non-polymer mask array */
+    cif->is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
+    if (cif->is_nonpoly == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate is_nonpoly array of size %d", cif->atoms);
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Compute atoms per residue and populate is_nonpoly mask */
     cif->nonpoly = 0;
-    cif->atoms_per_res = _parse_residue_sizes(&blocks->atom, ATTR_SEQ_ID, cif->residues, &cif->nonpoly, cif->res_per_chain, ctx);
+    cif->atoms_per_res = _parse_residue_sizes(&blocks->atom, ATTR_SEQ_ID, cif->residues, &cif->nonpoly, cif->is_nonpoly, cif->res_per_chain, ctx);
     if (cif->atoms_per_res == NULL) return ctx->code;
 
     /* Compute atoms per chain */

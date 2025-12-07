@@ -35,6 +35,7 @@ typedef struct {
     int atoms;              /**< Total number of atoms (per model) */
 
     int nonpoly;            /**< Count of non-polymeric atoms */
+    int *is_nonpoly;        /**< Boolean mask: 1 if atom is non-polymer [atoms] */
 
     float *coordinates;     /**< Atom coordinates [atoms * 3] as x,y,z triplets */
     int   *types;           /**< Atom type indices [atoms] */

@@ -45,6 +45,7 @@ class Polymer:
         atoms: (N,) tensor of atom type indices.
         elements: (N,) tensor of element indices.
         sequence: (R,) tensor of residue type indices.
+        is_nonpoly: (N,) boolean tensor marking non-polymer atoms.
         names: List of chain names.
         strands: List of strand identifiers.
         lengths: (C,) tensor of residues per chain.
@@ -63,6 +64,7 @@ class Polymer:
         strands: list[str],
         lengths: torch.Tensor,
         nonpoly: int = 0,
+        is_nonpoly: torch.Tensor | None = None,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -78,6 +80,7 @@ class Polymer:
             strands: List of strand identifiers.
             lengths: (C,) tensor of residues per chain.
             nonpoly: Count of non-polymer atoms.
+            is_nonpoly: Boolean mask marking non-polymer atoms.
 
         Raises:
             ValueError: If tensor sizes are inconsistent.
@@ -113,6 +116,12 @@ class Polymer:
         self.sequence = sequence
         self._sizes = sizes
         self.lengths = lengths
+
+        # Initialize is_nonpoly mask (default to all False if not provided)
+        if is_nonpoly is not None:
+            self.is_nonpoly = is_nonpoly
+        else:
+            self.is_nonpoly = torch.zeros(coordinates.size(0), dtype=torch.bool)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -541,9 +550,12 @@ class Polymer:
         chn_atoms = sizes[Scale.CHAIN].sum().item()
         nonpoly = chn_atoms - res_atoms
 
+        # Filter is_nonpoly mask
+        is_nonpoly = self.is_nonpoly[mask]
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, nonpoly,
+            self._id, names, strands, lengths, nonpoly, is_nonpoly,
         )
 
     def select(self: Polymer, ix: torch.Tensor | int) -> Polymer:
@@ -582,9 +594,12 @@ class Polymer:
         chn_atoms = sizes[Scale.CHAIN].sum().item()
         nonpoly = chn_atoms - res_atoms
 
+        # Filter is_nonpoly mask
+        is_nonpoly = self.is_nonpoly[atm_ix]
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, nonpoly,
+            self._id, names, strands, lengths, nonpoly, is_nonpoly,
         )
 
     def get_by_name(self: Polymer, name: torch.Tensor | int) -> Polymer:
@@ -612,6 +627,18 @@ class Polymer:
         """
         ix = (self.molecule_type == mol.value).nonzero().squeeze(-1)
         return self.select(ix)
+
+    def polymer_only(self: Polymer) -> Polymer:
+        """
+        Return a new Polymer with non-polymer atoms removed.
+
+        Non-polymer atoms include water, ions, and ligands that are
+        not part of the polymer chains.
+
+        Returns:
+            New Polymer containing only polymer atoms.
+        """
+        return self[~self.is_nonpoly]
 
     def chains(
         self: Polymer,

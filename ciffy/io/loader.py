@@ -53,6 +53,7 @@ def load(file: str) -> "Polymer":
         chain_names,
         strand_names,
         nonpoly,
+        is_nonpoly,
     ) = _load(file)
 
     mol_sizes = torch.tensor([len(coordinates)], dtype=torch.long).numpy()
@@ -74,4 +75,5 @@ def load(file: str) -> "Polymer":
         strand_names,
         torch.from_numpy(res_per_chain),
         nonpoly,
+        torch.from_numpy(is_nonpoly).bool(),
     )

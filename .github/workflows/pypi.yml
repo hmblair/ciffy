@@ -1,17 +1,22 @@
-name: Publish Python package
+name: Build and Publish to PyPI
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - 'v*'  # Only trigger on version tags
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
 
 jobs:
-  publish:
+  # ============================================================================
+  # TEST
+  # Run tests before building to catch issues early.
+  # ============================================================================
+  test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -19,15 +24,115 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install setuptools wheel twine numpy
-
-      - name: Build distribution
         run: |
-          python setup.py sdist
+          pip install numpy pytest
+          pip install -e .
+
+      - name: Run tests
+        run: pytest tests/ -v --ignore=tests/profile.py
+
+  # ============================================================================
+  # BUILD SOURCE DISTRIBUTION
+  # Platform-independent source archive.
+  # ============================================================================
+  build-sdist:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install build numpy
+
+      - name: Build sdist
+        run: python -m build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # ============================================================================
+  # BUILD WHEELS
+  # Platform-specific binary wheels for faster installation.
+  # Uses cibuildwheel for cross-platform compatibility.
+  # ============================================================================
+  build-wheels:
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14]  # macos-13=Intel, macos-14=ARM
+        # Windows excluded - would need OpenMP setup
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+
+      - name: Install OpenMP (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir dist
+        env:
+          # Build for Python 3.9-3.12
+          CIBW_BUILD: cp39-* cp310-* cp311-* cp312-*
+          # Skip 32-bit and musl builds
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux*"
+          # Install numpy before building
+          CIBW_BEFORE_BUILD: pip install numpy
+          # macOS: Set OpenMP paths
+          CIBW_ENVIRONMENT_MACOS: >
+            LDFLAGS="-L/opt/homebrew/opt/libomp/lib -L/usr/local/opt/libomp/lib"
+            CPPFLAGS="-I/opt/homebrew/opt/libomp/include -I/usr/local/opt/libomp/include"
+          # Test the wheel
+          CIBW_TEST_REQUIRES: pytest numpy
+          CIBW_TEST_COMMAND: pytest {project}/tests -v --ignore={project}/tests/profile.py
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  # ============================================================================
+  # PUBLISH TO PYPI
+  # Upload all artifacts using trusted publishing (OIDC).
+  # Requires PyPI project to be configured for GitHub Actions publishing.
+  # ============================================================================
+  publish:
+    needs: [build-sdist, build-wheels]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # Required for trusted publishing
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          twine upload dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses trusted publishing - no API token needed
+        # Configure at: https://pypi.org/manage/project/ciffy/settings/publishing/

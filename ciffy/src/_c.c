@@ -61,39 +61,57 @@ static PyObject *_set_py_error(CifErrorContext *ctx, const char *filename) {
 
 /**
  * @brief Create a 1D NumPy array from int data.
+ *
+ * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
+ * is garbage collected.
  */
 static PyObject *_init_1d_arr_int(int size, int *data) {
     npy_intp dims[1] = {size};
     PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_INT, data);
     if (arr == NULL) {
+        free(data);
         PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
+        return NULL;
     }
+    PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
     return arr;
 }
 
 
 /**
  * @brief Create a 1D NumPy array from float data.
+ *
+ * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
+ * is garbage collected.
  */
 static PyObject *_init_1d_arr_float(int size, float *data) {
     npy_intp dims[1] = {size};
     PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_FLOAT, data);
     if (arr == NULL) {
+        free(data);
         PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
+        return NULL;
     }
+    PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
     return arr;
 }
 
 
 /**
  * @brief Create a 2D NumPy array from float data.
+ *
+ * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
+ * is garbage collected.
  */
 static PyObject *_init_2d_arr_float(int size1, int size2, float *data) {
     npy_intp dims[2] = {size1, size2};
     PyObject *arr = PyArray_SimpleNewFromData(2, dims, NPY_FLOAT, data);
     if (arr == NULL) {
+        free(data);
         PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
+        return NULL;
     }
+    PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
     return arr;
 }
 

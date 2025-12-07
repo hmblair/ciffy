@@ -7,18 +7,46 @@ polymer structures.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
-import torch
+
+import numpy as np
+
+from ..backend import is_torch, Array
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..types import Scale
 
 
+def _svdvals(arr: Array) -> Array:
+    """Compute singular values, backend-agnostic."""
+    if is_torch(arr):
+        import torch
+        return torch.linalg.svdvals(arr)
+    # NumPy returns (U, S, Vh), we just want S
+    return np.linalg.svd(arr, compute_uv=False)
+
+
+def _det(arr: Array) -> Array:
+    """Compute determinant, backend-agnostic."""
+    if is_torch(arr):
+        import torch
+        return torch.linalg.det(arr)
+    return np.linalg.det(arr)
+
+
+def _multiply(a: Array, b: Array) -> Array:
+    """Element-wise multiplication, backend-agnostic."""
+    if is_torch(a):
+        import torch
+        return torch.multiply(a, b)
+    return np.multiply(a, b)
+
+
 def coordinate_covariance(
     polymer1: "Polymer",
     polymer2: "Polymer",
     scale: "Scale",
-) -> torch.Tensor:
+) -> Array:
     """
     Compute coordinate covariance matrices between two polymers.
 
@@ -31,9 +59,9 @@ def coordinate_covariance(
         scale: Scale at which to compute covariance (e.g., MOLECULE).
 
     Returns:
-        Tensor of covariance matrices, one per scale unit.
+        Array of covariance matrices, one per scale unit.
     """
-    outer_prod = torch.multiply(
+    outer_prod = _multiply(
         polymer1.coordinates[:, None, :],
         polymer2.coordinates[:, :, None],
     )
@@ -44,7 +72,7 @@ def kabsch_distance(
     polymer1: "Polymer",
     polymer2: "Polymer",
     scale: "Scale",
-) -> torch.Tensor:
+) -> Array:
     """
     Compute Kabsch distance (aligned RMSD) between polymer structures.
 
@@ -58,7 +86,7 @@ def kabsch_distance(
         scale: Scale at which to compute distance (e.g., MOLECULE).
 
     Returns:
-        Tensor of squared distances, one per scale unit.
+        Array of squared distances, one per scale unit.
 
     Note:
         The returned value is the squared distance. Take sqrt() for RMSD.
@@ -76,12 +104,16 @@ def kabsch_distance(
     cov = coordinate_covariance(polymer1_c, polymer2_c, scale)
 
     # SVD to find optimal rotation
-    sigma = torch.linalg.svdvals(cov)
-    det = torch.linalg.det(cov)
+    sigma = _svdvals(cov)
+    det = _det(cov)
 
     # Handle reflection case
-    sigma = sigma.clone()
-    sigma[det < 0, -1] = -sigma[det < 0, -1]
+    if is_torch(sigma):
+        sigma = sigma.clone()
+        sigma[det < 0, -1] = -sigma[det < 0, -1]
+    else:
+        sigma = sigma.copy()
+        sigma[det < 0, -1] = -sigma[det < 0, -1]
     sigma = sigma.mean(-1)
 
     # Get variances of both point clouds

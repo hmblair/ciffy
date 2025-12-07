@@ -31,7 +31,14 @@ def _version() -> str:
     raise RuntimeError("Cannot find version information")
 
 
+def _readme() -> str:
+    with open(os.path.join(os.path.dirname(__file__), 'README.md'), encoding='utf-8') as f:
+        return f.read()
+
+
 VERSION = _version()
+DESCRIPTION = 'Fast CIF file parsing for molecular structures'
+LONG_DESCRIPTION = _readme()
 LICENSE = 'CC BY-NC 4.0'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'
@@ -55,6 +62,7 @@ module = Extension(
 
 PACKAGES = [
     NAME,
+    f'{NAME}.backend',
     f'{NAME}.utils',
     f'{NAME}.types',
     f'{NAME}.biochemistry',
@@ -62,14 +70,34 @@ PACKAGES = [
     f'{NAME}.io',
 ]
 
+CLASSIFIERS = [
+    'Development Status :: 4 - Beta',
+    'Intended Audience :: Science/Research',
+    'Topic :: Scientific/Engineering :: Bio-Informatics',
+    'Topic :: Scientific/Engineering :: Chemistry',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: C',
+    'Operating System :: POSIX :: Linux',
+    'Operating System :: MacOS',
+]
+
 setup(
     name=NAME,
     version=VERSION,
+    description=DESCRIPTION,
+    long_description=LONG_DESCRIPTION,
+    long_description_content_type='text/markdown',
     packages=PACKAGES,
     ext_modules=[module],
+    python_requires='>=3.9',
     install_requires=[
         'numpy',
     ],
+    classifiers=CLASSIFIERS,
     author=AUTHOR,
     author_email=EMAIL,
     url=URL,

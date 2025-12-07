@@ -1,2 +1,5 @@
+include README.md
+include ciffy/src/*.c
 include ciffy/src/*.h
-include ciffy/src/hash/*
+include ciffy/src/hash/*.c
+include ciffy/src/hash/*.h

@@ -21,6 +21,9 @@
 /** Sentinel value indicating attribute index not found */
 #define BAD_IX -1
 
+/** Sentinel value for failed inline parsing */
+#define PARSE_FAIL -1
+
 /**
  * @brief Represents a parsed mmCIF block (loop or single-value).
  *
@@ -38,6 +41,7 @@ typedef struct {
     char *head;         /**< Pointer to start of header (attribute definitions) */
     char *start;        /**< Pointer to start of data section */
     int  *offsets;      /**< Column byte offsets for multi-entry blocks */
+    char **lines;       /**< Pre-computed line pointers for cache efficiency */
 
 } mmBlock;
 
@@ -187,5 +191,94 @@ int _lookup(HashTable func, char *token);
  * @return CIF_OK on success, CIF_ERR_LOOKUP if not found
  */
 CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext *ctx);
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Inline parsing functions (no allocation, cache-friendly)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Pre-compute line pointers for a block.
+ *
+ * Populates block->lines with pointers to each line start for O(1) access.
+ * Must be called before using inline parsing functions.
+ *
+ * @param block Block to compute line pointers for
+ * @param ctx Error context, populated on failure
+ * @return CIF_OK on success, CIF_ERR_ALLOC on failure
+ */
+CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx);
+
+/**
+ * @brief Free pre-computed line pointers.
+ *
+ * @param block Block to free line pointers for
+ */
+void _free_lines(mmBlock *block);
+
+/**
+ * @brief Get pointer to field in block (no allocation).
+ *
+ * Returns pointer to start of field and optionally the field length.
+ * The returned pointer points into the original buffer.
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @param len Output for field length (may be NULL)
+ * @return Pointer to field start, or NULL on error
+ */
+char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len);
+
+/**
+ * @brief Parse float from block without allocation.
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @return Parsed float value (NaN on error)
+ */
+float _parse_float_inline(mmBlock *block, int line, int index);
+
+/**
+ * @brief Parse int from block without allocation.
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @return Parsed int value (PARSE_FAIL on error)
+ */
+int _parse_int_inline(mmBlock *block, int line, int index);
+
+/**
+ * @brief Lookup value from block without allocation.
+ *
+ * Parses field in-place and performs hash lookup.
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @param func Hash table lookup function
+ * @return Lookup result, or PARSE_FAIL if not found
+ */
+int _lookup_inline(mmBlock *block, int line, int index, HashTable func);
+
+/**
+ * @brief Lookup combined value from two fields without allocation.
+ *
+ * Combines two fields with underscore separator and performs hash lookup.
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index1 First attribute index
+ * @param index2 Second attribute index
+ * @param func Hash table lookup function
+ * @param buffer Thread-local buffer for combining (must be MAX_INLINE_BUFFER bytes)
+ * @return Lookup result, or PARSE_FAIL if not found
+ */
+int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
+                          HashTable func, char *buffer);
+
+/** Size of thread-local buffer for combined lookups */
+#define MAX_INLINE_BUFFER 128
 
 #endif /* _CIFFY_IO_H */

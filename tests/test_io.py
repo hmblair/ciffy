@@ -2,15 +2,14 @@
 Tests for loading and saving molecular structures.
 """
 
+import glob
 import os
 import tempfile
 import pytest
 
 TESTS_DIR = os.path.dirname(__file__)
-CIF_FILES = [
-    os.path.join(TESTS_DIR, "3SKW.cif"),
-    os.path.join(TESTS_DIR, "9GCM.cif"),
-]
+DATA_DIR = os.path.join(TESTS_DIR, "data")
+CIF_FILES = sorted(glob.glob(os.path.join(DATA_DIR, "*.cif")))
 
 
 class TestLoad:

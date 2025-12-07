@@ -323,3 +323,138 @@ CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext 
     CIF_SET_ERROR(ctx, CIF_ERR_LOOKUP, "Unknown token: '%s'", token);
     return CIF_ERR_LOOKUP;
 }
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Inline parsing functions (no allocation, cache-friendly)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
+
+    if (block->single || block->size <= 0) {
+        block->lines = NULL;
+        return CIF_OK;
+    }
+
+    block->lines = malloc((size_t)block->size * sizeof(char *));
+    if (block->lines == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate line pointers for %d lines", block->size);
+        return CIF_ERR_ALLOC;
+    }
+
+    for (int i = 0; i < block->size; i++) {
+        block->lines[i] = block->start + i * block->width;
+    }
+
+    return CIF_OK;
+}
+
+
+void _free_lines(mmBlock *block) {
+    if (block->lines != NULL) {
+        free(block->lines);
+        block->lines = NULL;
+    }
+}
+
+
+char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
+
+    if (block->lines == NULL) {
+        return NULL;
+    }
+
+    char *ptr = block->lines[line] + block->offsets[index];
+
+    /* Skip leading whitespace */
+    while (*ptr == ' ') ptr++;
+
+    if (len != NULL) {
+        /* Calculate field length (until whitespace or newline) */
+        char *end = ptr;
+        bool squotes = false;
+        bool dquotes = false;
+
+        while ((*end != ' ' && *end != '\n' && *end != '\0') || squotes) {
+            if (*end == '\'' && !dquotes) squotes = !squotes;
+            if (*end == '"') dquotes = !dquotes;
+            end++;
+        }
+        *len = (size_t)(end - ptr);
+    }
+
+    return ptr;
+}
+
+
+float _parse_float_inline(mmBlock *block, int line, int index) {
+
+    char *ptr = _get_field_ptr(block, line, index, NULL);
+    if (ptr == NULL) return 0.0f / 0.0f;  /* NaN */
+
+    return strtof(ptr, NULL);
+}
+
+
+int _parse_int_inline(mmBlock *block, int line, int index) {
+
+    char *ptr = _get_field_ptr(block, line, index, NULL);
+    if (ptr == NULL) return PARSE_FAIL;
+
+    return (int)strtol(ptr, NULL, 10);
+}
+
+
+int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
+
+    size_t len;
+    char *ptr = _get_field_ptr(block, line, index, &len);
+    if (ptr == NULL || len == 0) return PARSE_FAIL;
+    if (len >= MAX_INLINE_BUFFER) return PARSE_FAIL;
+
+    /* Copy to thread-local buffer for null-termination */
+    char buffer[MAX_INLINE_BUFFER];
+    memcpy(buffer, ptr, len);
+    buffer[len] = '\0';
+
+    /* Use existing lookup which handles quote stripping */
+    return _lookup(func, buffer);
+}
+
+
+int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
+                          HashTable func, char *buffer) {
+
+    size_t len1, len2;
+    char *ptr1 = _get_field_ptr(block, line, index1, &len1);
+    char *ptr2 = _get_field_ptr(block, line, index2, &len2);
+
+    if (ptr1 == NULL || ptr2 == NULL) return PARSE_FAIL;
+    if (len1 == 0 || len2 == 0) return PARSE_FAIL;
+
+    /* Check buffer overflow (need space for both fields + underscore + null) */
+    if (len1 + 1 + len2 + 1 >= MAX_INLINE_BUFFER) return PARSE_FAIL;
+
+    /* Copy first field, stripping quotes */
+    size_t out_len = 0;
+    for (size_t i = 0; i < len1; i++) {
+        if (ptr1[i] != '"' && ptr1[i] != '\'') {
+            buffer[out_len++] = ptr1[i];
+        }
+    }
+
+    buffer[out_len++] = '_';
+
+    /* Copy second field, stripping quotes */
+    for (size_t i = 0; i < len2; i++) {
+        if (ptr2[i] != '"' && ptr2[i] != '\'') {
+            buffer[out_len++] = ptr2[i];
+        }
+    }
+
+    buffer[out_len] = '\0';
+
+    struct _LOOKUP *lookup = func(buffer, out_len);
+    return lookup != NULL ? lookup->value : PARSE_FAIL;
+}

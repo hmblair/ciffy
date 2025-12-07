@@ -8,6 +8,10 @@
 
 #include "cif.h"
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 /* Include hash tables here to avoid duplicate symbols */
 #include "hash/atom.c"
 #include "hash/residue.c"
@@ -36,6 +40,35 @@ static const char *ATTR_COMP_ID       = "label_comp_id";
 
 /* Maximum length for combined token strings */
 #define MAX_TOKEN_LENGTH 512
+
+
+/**
+ * @brief Pre-computed attribute indices for atom parsing.
+ *
+ * This structure enables flexible single-pass parsing of atom data.
+ * New atom features can be added by extending this structure with
+ * additional index fields.
+ */
+typedef struct {
+    /* Coordinate indices */
+    int x;
+    int y;
+    int z;
+
+    /* Type indices */
+    int element;      /* Element symbol (C, N, O, etc.) */
+    int comp_id;      /* Residue/component name */
+    int atom_name;    /* Atom name within residue */
+
+    /* Chain/residue tracking */
+    int seq_id;       /* Sequence ID */
+    int label_asym;   /* Chain label */
+
+    /* Extensibility: add new atom feature indices here */
+    /* int b_factor; */
+    /* int occupancy; */
+
+} AtomIndices;
 
 
 char *_get_id(char *buffer, CifErrorContext *ctx) {
@@ -188,6 +221,123 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size, CifErrorC
 
 
 /**
+ * @brief Initialize atom indices from block.
+ *
+ * Looks up all attribute indices needed for atom parsing.
+ * Returns CIF_OK if all required attributes found.
+ */
+static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx, CifErrorContext *ctx) {
+
+    idx->x = _get_attr_index(block, ATTR_X);
+    if (idx->x == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_X);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->y = _get_attr_index(block, ATTR_Y);
+    if (idx->y == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_Y);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->z = _get_attr_index(block, ATTR_Z);
+    if (idx->z == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_Z);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->element = _get_attr_index(block, ATTR_ELEMENT);
+    if (idx->element == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_ELEMENT);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID);
+    if (idx->comp_id == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_COMP_ID);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME);
+    if (idx->atom_name == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_ATOM_NAME);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID);
+    if (idx->seq_id == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
+        return CIF_ERR_ATTR;
+    }
+
+    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM);
+    if (idx->label_asym == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_LABEL_ASYM);
+        return CIF_ERR_ATTR;
+    }
+
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Parse all per-atom data in a single pass (cache-friendly).
+ *
+ * Parses coordinates, elements, and atom types for all atoms in one
+ * parallel loop, maximizing cache efficiency by processing each line once.
+ *
+ * @param block Atom site block (must have lines pre-computed)
+ * @param idx Pre-computed attribute indices
+ * @param coords Output coordinate array [atoms * 3]
+ * @param elements Output element type array [atoms]
+ * @param types Output atom type array [atoms]
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+static CifError _parse_atoms_batch(
+    mmBlock *block,
+    AtomIndices *idx,
+    float *coords,
+    int *elements,
+    int *types,
+    CifErrorContext *ctx
+) {
+    (void)ctx;  /* Currently unused - parsing allows unknown types */
+
+    #pragma omp parallel
+    {
+        /* Thread-local buffer for combined lookups */
+        char combine_buf[MAX_INLINE_BUFFER];
+
+        #pragma omp for schedule(static)
+        for (int line = 0; line < block->size; line++) {
+
+            /* Parse coordinates (x, y, z) - all from same cache line */
+            float x = _parse_float_inline(block, line, idx->x);
+            float y = _parse_float_inline(block, line, idx->y);
+            float z = _parse_float_inline(block, line, idx->z);
+
+            /* Parse element type (-1 for unknown) */
+            int elem = _lookup_inline(block, line, idx->element, _lookup_element);
+
+            /* Parse atom type (-1 for unknown) */
+            int type = _lookup_double_inline(block, line, idx->comp_id, idx->atom_name,
+                                             _lookup_atom, combine_buf);
+
+            /* Store results */
+            coords[COORDS * line + 0] = x;
+            coords[COORDS * line + 1] = y;
+            coords[COORDS * line + 2] = z;
+            elements[line] = elem;
+            types[line] = type;
+        }
+    }
+
+    return CIF_OK;
+}
+
+
+/**
  * @brief Parse coordinate data (x, y, z) from atom block.
  */
 static float *_parse_coords(mmBlock *block, CifErrorContext *ctx) {
@@ -219,28 +369,39 @@ static float *_parse_coords(mmBlock *block, CifErrorContext *ctx) {
         return NULL;
     }
 
+    int error_occurred = 0;
+
+    #pragma omp parallel for schedule(static)
     for (int line = 0; line < block->size; line++) {
+        if (error_occurred) continue;  /* Skip if error in another thread */
+
         for (size_t ix = 0; ix < COORDS; ix++) {
-            char *token = _get_attr_by_line(block, line, indices[ix], ctx);
+            char *token = _get_attr_by_line(block, line, indices[ix], NULL);
             if (token == NULL) {
-                free(array);
-                return NULL;
+                #pragma omp atomic write
+                error_occurred = 1;
+                continue;
             }
 
             /* Parse float with error checking */
             char *endptr;
             float val = strtof(token, &endptr);
             if (endptr == token) {
-                CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                    "Invalid coordinate value '%s' at line %d", token, line);
                 free(token);
-                free(array);
-                return NULL;
+                #pragma omp atomic write
+                error_occurred = 1;
+                continue;
             }
 
             array[COORDS * line + ix] = val;
             free(token);
         }
+    }
+
+    if (error_occurred) {
+        free(array);
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Failed to parse coordinates");
+        return NULL;
     }
 
     return array;
@@ -266,14 +427,26 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr, 
         return NULL;
     }
 
+    int error_occurred = 0;
+
+    #pragma omp parallel for schedule(dynamic, 64)
     for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
+        if (error_occurred) continue;
+
+        char *token = _get_attr_by_line(block, line, index, NULL);
         if (token == NULL) {
-            free(array);
-            return NULL;
+            #pragma omp atomic write
+            error_occurred = 1;
+            continue;
         }
         array[line] = _lookup(func, token);
         free(token);
+    }
+
+    if (error_occurred) {
+        free(array);
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Failed to parse attribute '%s'", attr);
+        return NULL;
     }
 
     return array;
@@ -312,22 +485,28 @@ static int *_parse_via_lookup_double(
         return NULL;
     }
 
-    for (int line = 0; line < block->size; line++) {
+    int error_occurred = 0;
 
-        char *token1 = _get_attr_by_line(block, line, index1, ctx);
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (int line = 0; line < block->size; line++) {
+        if (error_occurred) continue;
+
+        char *token1 = _get_attr_by_line(block, line, index1, NULL);
         if (token1 == NULL) {
-            free(array);
-            return NULL;
+            #pragma omp atomic write
+            error_occurred = 1;
+            continue;
         }
 
-        char *token2 = _get_attr_by_line(block, line, index2, ctx);
+        char *token2 = _get_attr_by_line(block, line, index2, NULL);
         if (token2 == NULL) {
             free(token1);
-            free(array);
-            return NULL;
+            #pragma omp atomic write
+            error_occurred = 1;
+            continue;
         }
 
-        /* Combine tokens with bounds checking */
+        /* Combine tokens with bounds checking (buffer is thread-local) */
         char result[MAX_TOKEN_LENGTH];
         int written = snprintf(result, sizeof(result), "%s_%s", token1, token2);
 
@@ -335,14 +514,19 @@ static int *_parse_via_lookup_double(
         free(token2);
 
         if (written < 0 || (size_t)written >= sizeof(result)) {
-            CIF_SET_ERROR(ctx, CIF_ERR_OVERFLOW,
-                "Combined token too long at line %d (limit %zu)",
-                line, sizeof(result) - 1);
-            free(array);
-            return NULL;
+            #pragma omp atomic write
+            error_occurred = 1;
+            continue;
         }
 
         array[line] = _lookup(func, result);
+    }
+
+    if (error_occurred) {
+        free(array);
+        CIF_SET_ERROR(ctx, CIF_ERR_OVERFLOW,
+            "Failed to parse combined attributes '%s' + '%s'", attr1, attr2);
+        return NULL;
     }
 
     return array;
@@ -652,17 +836,49 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->strands = _get_unique(&blocks->poly, ATTR_STRAND_ID, &cif->chains, ctx);
     if (cif->strands == NULL) return ctx->code;
 
-    /* Parse atom types (residue_name + atom_name) */
-    cif->types = _parse_via_lookup_double(&blocks->atom, _lookup_atom, ATTR_COMP_ID, ATTR_ATOM_NAME, ctx);
-    if (cif->types == NULL) return ctx->code;
+    /* ─────────────────────────────────────────────────────────────────────────
+     * Single-pass atom parsing (cache-friendly)
+     * ───────────────────────────────────────────────────────────────────────── */
 
-    /* Parse element types */
-    cif->elements = _parse_via_lookup(&blocks->atom, _lookup_element, ATTR_ELEMENT, ctx);
-    if (cif->elements == NULL) return ctx->code;
+    /* Pre-compute line pointers for O(1) access */
+    CifError line_err = _precompute_lines(&blocks->atom, ctx);
+    if (line_err != CIF_OK) return line_err;
 
-    /* Parse coordinates */
-    cif->coordinates = _parse_coords(&blocks->atom, ctx);
-    if (cif->coordinates == NULL) return ctx->code;
+    /* Initialize attribute indices */
+    AtomIndices idx;
+    CifError idx_err = _init_atom_indices(&blocks->atom, &idx, ctx);
+    if (idx_err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        return idx_err;
+    }
+
+    /* Allocate output arrays */
+    cif->coordinates = calloc(COORDS * (size_t)cif->atoms, sizeof(float));
+    cif->elements = calloc((size_t)cif->atoms, sizeof(int));
+    cif->types = calloc((size_t)cif->atoms, sizeof(int));
+
+    if (cif->coordinates == NULL || cif->elements == NULL || cif->types == NULL) {
+        free(cif->coordinates);
+        free(cif->elements);
+        free(cif->types);
+        _free_lines(&blocks->atom);
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate atom arrays");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Parse all atom data in single pass */
+    CifError parse_err = _parse_atoms_batch(&blocks->atom, &idx,
+                                            cif->coordinates, cif->elements, cif->types, ctx);
+    _free_lines(&blocks->atom);  /* No longer needed */
+
+    if (parse_err != CIF_OK) {
+        free(cif->coordinates);
+        free(cif->elements);
+        free(cif->types);
+        return parse_err;
+    }
+
+    /* ───────────────────────────────────────────────────────────────────────── */
 
     /* Allocate temporary non-polymer mask array (local, freed after reordering) */
     int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));

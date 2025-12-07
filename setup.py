@@ -1,9 +1,25 @@
 from setuptools import setup, Extension
 import os
 import re
+import sys
 import numpy
 
 NAME = 'ciffy'
+
+# Cross-platform OpenMP configuration
+if sys.platform == 'darwin':  # macOS
+    # Requires: brew install libomp
+    OMP_COMPILE_ARGS = ['-Xpreprocessor', '-fopenmp']
+    OMP_LINK_ARGS = ['-lomp']
+    # Homebrew libomp paths (Apple Silicon and Intel)
+    HOMEBREW_PREFIX = os.environ.get('HOMEBREW_PREFIX', '/opt/homebrew')
+    OMP_INCLUDE_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/include']
+    OMP_LIBRARY_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/lib']
+else:  # Linux
+    OMP_COMPILE_ARGS = ['-fopenmp']
+    OMP_LINK_ARGS = ['-fopenmp']
+    OMP_INCLUDE_DIRS = []
+    OMP_LIBRARY_DIRS = []
 
 
 def _version() -> str:
@@ -31,8 +47,10 @@ SOURCES = [
 module = Extension(
     name=f"{NAME}.{EXT}",
     sources=SOURCES,
-    include_dirs=[numpy.get_include()],
-    extra_compile_args=['-O3'],
+    include_dirs=[numpy.get_include()] + OMP_INCLUDE_DIRS,
+    library_dirs=OMP_LIBRARY_DIRS,
+    extra_compile_args=['-O3'] + OMP_COMPILE_ARGS,
+    extra_link_args=OMP_LINK_ARGS,
 )
 
 PACKAGES = [

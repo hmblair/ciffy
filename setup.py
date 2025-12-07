@@ -39,7 +39,7 @@ def _readme() -> str:
 VERSION = _version()
 DESCRIPTION = 'Fast CIF file parsing for molecular structures'
 LONG_DESCRIPTION = _readme()
-LICENSE = 'CC BY-NC 4.0'
+LICENSE = 'MIT'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'
 URL = 'https://github.com/hmblair/ciffy'
@@ -73,6 +73,7 @@ PACKAGES = [
 CLASSIFIERS = [
     'Development Status :: 4 - Beta',
     'Intended Audience :: Science/Research',
+    'License :: OSI Approved :: MIT License',
     'Topic :: Scientific/Engineering :: Bio-Informatics',
     'Topic :: Scientific/Engineering :: Chemistry',
     'Programming Language :: Python :: 3',

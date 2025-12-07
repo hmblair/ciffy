@@ -35,13 +35,7 @@ def molecule_type(value: int) -> Molecule:
     Raises:
         ValueError: If value doesn't correspond to a known molecule type.
     """
-    mapping = {
-        0: Molecule.PROTEIN,
-        1: Molecule.RNA,
-        2: Molecule.DNA,
-        3: Molecule.OTHER,
-        4: Molecule.MISSING,
-    }
-    if value in mapping:
-        return mapping[value]
-    raise ValueError(f"Unknown molecule type value: {value}")
+    try:
+        return Molecule(value)
+    except ValueError:
+        raise ValueError(f"Unknown molecule type value: {value}")

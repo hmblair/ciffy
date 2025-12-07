@@ -7,14 +7,15 @@ per-chain, or per-molecule features.
 
 from __future__ import annotations
 from enum import Enum
-from typing import Union
-import torch
-from torch_scatter import (
-    scatter_sum as t_scatter_sum,
-    scatter_mean as t_scatter_mean,
-    scatter_max as t_scatter_max,
-    scatter_min as t_scatter_min,
-)
+from typing import Union, TYPE_CHECKING
+
+import numpy as np
+
+from ..backend import ops as backend
+from ..backend import Array, is_torch
+
+if TYPE_CHECKING:
+    import torch
 
 
 class Reduction(Enum):
@@ -38,13 +39,13 @@ class Reduction(Enum):
 
 
 def scatter_collate(
-    features: torch.Tensor,
-    indices: torch.Tensor,
+    features: Array,
+    indices: Array,
     dim: int,
     dim_size: int,
-) -> list[torch.Tensor]:
+) -> list:
     """
-    Group features by their indices into a list of tensors.
+    Group features by their indices into a list of arrays.
 
     Args:
         features: Values to group.
@@ -55,43 +56,70 @@ def scatter_collate(
     Returns:
         List where each element contains all values for that index.
     """
+    if is_torch(indices):
+        max_idx = indices.max().item()
+    else:
+        max_idx = indices.max()
     return [
         features[indices == ix]
-        for ix in range(indices.max() + 1)
+        for ix in range(max_idx + 1)
     ]
+
+
+def _scatter_sum(features: Array, indices: Array, dim: int, dim_size: int) -> Array:
+    """Scatter sum wrapper for REDUCTIONS dict."""
+    return backend.scatter_sum(features, indices, dim_size)
+
+
+def _scatter_mean(features: Array, indices: Array, dim: int, dim_size: int) -> Array:
+    """Scatter mean wrapper for REDUCTIONS dict."""
+    return backend.scatter_mean(features, indices, dim_size)
+
+
+def _scatter_min(features: Array, indices: Array, dim: int, dim_size: int):
+    """Scatter min wrapper for REDUCTIONS dict."""
+    return backend.scatter_min(features, indices, dim_size)
+
+
+def _scatter_max(features: Array, indices: Array, dim: int, dim_size: int):
+    """Scatter max wrapper for REDUCTIONS dict."""
+    return backend.scatter_max(features, indices, dim_size)
 
 
 REDUCTIONS = {
     Reduction.NONE: lambda features, indices, dim, dim_size: features,
     Reduction.COLLATE: scatter_collate,
-    Reduction.MEAN: t_scatter_mean,
-    Reduction.SUM: t_scatter_sum,
-    Reduction.MIN: t_scatter_min,
-    Reduction.MAX: t_scatter_max,
+    Reduction.MEAN: _scatter_mean,
+    Reduction.SUM: _scatter_sum,
+    Reduction.MIN: _scatter_min,
+    Reduction.MAX: _scatter_max,
 }
 
 
 # Type alias for reduction results
 ReductionResult = Union[
-    torch.Tensor,
-    tuple[torch.Tensor, torch.LongTensor],
-    list[torch.Tensor],
+    Array,
+    tuple,
+    list,
 ]
 
 
-def create_reduction_index(count: int, sizes: torch.Tensor) -> torch.Tensor:
+def create_reduction_index(count: int, sizes: Array) -> Array:
     """
-    Create an index tensor for scatter reduction.
+    Create an index array for scatter reduction.
 
     Args:
         count: Number of unique groups.
         sizes: Number of elements in each group.
 
     Returns:
-        Tensor where element i contains the group index for that element.
+        Array where element i contains the group index for that element.
 
     Example:
-        >>> create_reduction_index(3, torch.tensor([2, 1, 3]))
-        tensor([0, 0, 1, 2, 2, 2])
+        >>> create_reduction_index(3, np.array([2, 1, 3]))
+        array([0, 0, 1, 2, 2, 2])
     """
-    return torch.arange(count).repeat_interleave(sizes)
+    if is_torch(sizes):
+        import torch
+        return torch.arange(count).repeat_interleave(sizes)
+    return np.repeat(np.arange(count), sizes)

@@ -21,22 +21,33 @@ def write_pdb(polymer: "Polymer", filename: str) -> None:
 
     Raises:
         IOError: If the file cannot be written.
+        ValueError: If the polymer contains non-RNA chains.
         KeyError: If an atom type is not recognized.
 
     Note:
         Currently supports RNA structures only.
     """
-    from ..types import Scale
+    from ..types import Scale, Molecule
     from ..biochemistry import Element, RibonucleicAcid
 
     # Filter out non-polymer atoms
     polymer = polymer.polymer_only()
 
+    # Validate that all chains are RNA
+    for i, mol_type in enumerate(polymer.molecule_type):
+        if mol_type.item() != Molecule.RNA.value:
+            raise ValueError(
+                f"Chain {i} is not RNA (type={mol_type.item()}). "
+                "PDB writing currently supports RNA structures only. "
+                "Use polymer.subset(RNA) to filter RNA chains first."
+            )
+
     with open(filename, 'w') as file:
         for chain in polymer.chains():
+            seq = chain.str()
             atom_idx = 0
             for residue in range(chain.size(Scale.RESIDUE)):
-                residue_name = polymer.str()[residue]
+                residue_name = seq[residue] if residue < len(seq) else 'X'
 
                 for _ in range(chain._sizes[Scale.RESIDUE][residue]):
                     element = Element.revdict()[chain.elements[atom_idx].item()]

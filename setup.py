@@ -62,11 +62,27 @@ module = Extension(
 
 PACKAGES = [
     NAME,
+    f'{NAME}.backend',
     f'{NAME}.utils',
     f'{NAME}.types',
     f'{NAME}.biochemistry',
     f'{NAME}.operations',
     f'{NAME}.io',
+]
+
+CLASSIFIERS = [
+    'Development Status :: 4 - Beta',
+    'Intended Audience :: Science/Research',
+    'Topic :: Scientific/Engineering :: Bio-Informatics',
+    'Topic :: Scientific/Engineering :: Chemistry',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: C',
+    'Operating System :: POSIX :: Linux',
+    'Operating System :: MacOS',
 ]
 
 setup(
@@ -77,9 +93,11 @@ setup(
     long_description_content_type='text/markdown',
     packages=PACKAGES,
     ext_modules=[module],
+    python_requires='>=3.9',
     install_requires=[
         'numpy',
     ],
+    classifiers=CLASSIFIERS,
     author=AUTHOR,
     author_email=EMAIL,
     url=URL,

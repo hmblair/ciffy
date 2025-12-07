@@ -7,11 +7,17 @@ other molecular types.
 """
 
 from __future__ import annotations
-from typing import Generator
+from typing import Generator, Union, TYPE_CHECKING
 from copy import copy
-import torch
 
+import numpy as np
+
+from .backend import Array, is_torch, get_backend, size as arr_size
+from .backend import ops as backend
 from .types import Scale, Molecule
+
+if TYPE_CHECKING:
+    import torch
 from .types.molecule import molecule_type
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .biochemistry import (
@@ -30,6 +36,59 @@ from .utils import all_equal, filter_by_mask
 
 
 UNKNOWN = "UNKNOWN"
+
+
+def _ones_like_backend(template: Array, size: int) -> Array:
+    """Create a ones array matching the backend of template."""
+    if is_torch(template):
+        import torch
+        return torch.ones(size, dtype=torch.long)
+    return np.ones(size, dtype=np.int64)
+
+
+def _zeros_like_backend(template: Array, size: int) -> Array:
+    """Create a zeros array matching the backend of template."""
+    if is_torch(template):
+        import torch
+        return torch.zeros(size, dtype=torch.long)
+    return np.zeros(size, dtype=np.int64)
+
+
+def _array_like_backend(template: Array, data: list) -> Array:
+    """Create an array from data matching the backend of template."""
+    if is_torch(template):
+        import torch
+        return torch.tensor(data, dtype=torch.long)
+    return np.array(data, dtype=np.int64)
+
+
+def _bool_zeros_like_backend(template: Array, size: int) -> Array:
+    """Create a boolean zeros array matching the backend of template."""
+    if is_torch(template):
+        import torch
+        return torch.zeros(size, dtype=torch.bool)
+    return np.zeros(size, dtype=bool)
+
+
+def _cdist(x1: Array, x2: Array) -> Array:
+    """Compute pairwise distances, backend-agnostic."""
+    return backend.cdist(x1, x2)
+
+
+def _eigh(arr: Array) -> tuple:
+    """Compute eigendecomposition, backend-agnostic."""
+    if is_torch(arr):
+        import torch
+        return torch.linalg.eigh(arr)
+    return np.linalg.eigh(arr)
+
+
+def _det(arr: Array) -> Array:
+    """Compute determinant, backend-agnostic."""
+    if is_torch(arr):
+        import torch
+        return torch.linalg.det(arr)
+    return np.linalg.det(arr)
 
 
 class Polymer:
@@ -58,15 +117,15 @@ class Polymer:
 
     def __init__(
         self: Polymer,
-        coordinates: torch.Tensor,
-        atoms: torch.Tensor,
-        elements: torch.Tensor,
-        sequence: torch.Tensor,
-        sizes: dict[Scale, torch.Tensor],
+        coordinates: Array,
+        atoms: Array,
+        elements: Array,
+        sequence: Array,
+        sizes: dict[Scale, Array],
         id: str,
         names: list[str],
         strands: list[str],
-        lengths: torch.Tensor,
+        lengths: Array,
         polymer_count: int | None = None,
     ) -> None:
         """
@@ -94,7 +153,7 @@ class Polymer:
 
         # Store polymer/nonpoly counts
         # If polymer_count is None, assume all atoms are polymer (backward compat)
-        total_atoms = coordinates.size(0)
+        total_atoms = arr_size(coordinates, 0)
         if polymer_count is not None:
             self.polymer_count = polymer_count
             self.nonpoly = total_atoms - polymer_count
@@ -103,9 +162,9 @@ class Polymer:
             self.nonpoly = 0
 
         if not all_equal(
-            coordinates.size(0),
-            atoms.size(0),
-            elements.size(0),
+            arr_size(coordinates, 0),
+            arr_size(atoms, 0),
+            arr_size(elements, 0),
         ):
             raise ValueError(
                 f"Coordinate, atom, and element tensors must have equal size "
@@ -165,7 +224,7 @@ class Polymer:
 
     def empty(self: Polymer) -> bool:
         """Check if the polymer has no atoms."""
-        return self.coordinates.size(0) == 0
+        return arr_size(self.coordinates, 0) == 0
 
     def size(self: Polymer, scale: Scale | None = None) -> int:
         """
@@ -179,10 +238,10 @@ class Polymer:
             Number of units at the specified scale.
         """
         if scale is None:
-            return self.coordinates.size(0)
-        return self._sizes[scale].size(0)
+            return arr_size(self.coordinates, 0)
+        return arr_size(self._sizes[scale], 0)
 
-    def sizes(self: Polymer, scale: Scale) -> torch.Tensor:
+    def sizes(self: Polymer, scale: Scale) -> Array:
         """
         Get the sizes tensor for a scale.
 
@@ -194,7 +253,7 @@ class Polymer:
         """
         return self._sizes[scale]
 
-    def per(self: Polymer, inner: Scale, outer: Scale) -> torch.Tensor:
+    def per(self: Polymer, inner: Scale, outer: Scale) -> Array:
         """
         Get the count of inner units per outer unit.
 
@@ -203,14 +262,14 @@ class Polymer:
             outer: Outer scale (e.g., CHAIN).
 
         Returns:
-            Tensor with count of inner units per outer unit.
+            Array with count of inner units per outer unit.
 
         Example:
             >>> polymer.per(Scale.RESIDUE, Scale.CHAIN)
-            tensor([150, 200, 175])  # residues per chain
+            array([150, 200, 175])  # residues per chain
         """
         if inner == outer:
-            return torch.ones(self.size(inner), dtype=torch.long)
+            return _ones_like_backend(self.coordinates, self.size(inner))
 
         if inner == Scale.ATOM:
             if outer == Scale.RESIDUE:
@@ -224,28 +283,28 @@ class Polymer:
             if outer == Scale.CHAIN:
                 return self.lengths
             if outer == Scale.MOLECULE:
-                return torch.tensor([self.size(Scale.RESIDUE)])
+                return _array_like_backend(self.coordinates, [self.size(Scale.RESIDUE)])
 
         if inner == Scale.CHAIN:
             if outer == Scale.MOLECULE:
-                return torch.tensor([self.size(Scale.CHAIN)])
+                return _array_like_backend(self.coordinates, [self.size(Scale.CHAIN)])
 
         raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
 
     @property
-    def molecule_type(self: Polymer) -> torch.Tensor:
+    def molecule_type(self: Polymer) -> Array:
         """
         Get the molecule type of each chain.
 
         Returns:
-            Tensor of Molecule enum values, one per chain.
+            Array of Molecule enum values, one per chain.
         """
-        types = torch.zeros(self.size(Scale.CHAIN), dtype=torch.long)
+        types = _zeros_like_backend(self.coordinates, self.size(Scale.CHAIN))
         atoms, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
         types[atoms < 5] = Molecule.RNA.value
         return types
 
-    def type(self: Polymer) -> torch.Tensor:
+    def type(self: Polymer) -> Array:
         """
         Get the molecule type of each chain.
 
@@ -267,7 +326,7 @@ class Polymer:
             True if single chain matches type, False otherwise.
         """
         types = self.molecule_type
-        if types.size(0) != 1:
+        if arr_size(types, 0) != 1:
             return False
         return types[0].item() == mol.value
 
@@ -277,7 +336,7 @@ class Polymer:
 
     def reduce(
         self: Polymer,
-        features: torch.Tensor,
+        features: Array,
         scale: Scale,
         rtype: Reduction = Reduction.MEAN,
     ) -> ReductionResult:
@@ -313,7 +372,7 @@ class Polymer:
 
     def rreduce(
         self: Polymer,
-        features: torch.Tensor,
+        features: Array,
         scale: Scale,
         rtype: Reduction = Reduction.MEAN,
     ) -> ReductionResult:
@@ -338,10 +397,10 @@ class Polymer:
 
     def expand(
         self: Polymer,
-        features: torch.Tensor,
+        features: Array,
         source: Scale,
         dest: Scale = Scale.ATOM,
-    ) -> torch.Tensor:
+    ) -> Array:
         """
         Expand per-scale features to a finer scale.
 
@@ -364,9 +423,9 @@ class Polymer:
 
     def count(
         self: Polymer,
-        mask: torch.Tensor,
+        mask: Array,
         scale: Scale,
-    ) -> torch.Tensor:
+    ) -> Array:
         """
         Count True values in mask per scale unit.
 
@@ -386,7 +445,7 @@ class Polymer:
     def center(
         self: Polymer,
         scale: Scale = Scale.MOLECULE,
-    ) -> tuple[Polymer, torch.Tensor]:
+    ) -> tuple[Polymer, Array]:
         """
         Center coordinates at the specified scale.
 
@@ -408,7 +467,7 @@ class Polymer:
 
         return centered, means
 
-    def pd(self: Polymer, scale: Scale | None = None) -> torch.Tensor:
+    def pd(self: Polymer, scale: Scale | None = None) -> Array:
         """
         Compute pairwise distances.
 
@@ -426,12 +485,12 @@ class Polymer:
         else:
             coords = self.coordinates
 
-        return torch.cdist(coords, coords)
+        return _cdist(coords, coords)
 
     def _pc(
         self: Polymer,
         scale: Scale,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[Array, Array]:
         """
         Compute principal components at the specified scale.
 
@@ -447,12 +506,12 @@ class Polymer:
         """
         cov = self.coordinates[:, None, :] * self.coordinates[:, :, None]
         cov = self.reduce(cov, scale)
-        return torch.linalg.eigh(cov)
+        return _eigh(cov)
 
     def align(
         self: Polymer,
         scale: Scale,
-    ) -> tuple[Polymer, torch.Tensor]:
+    ) -> tuple[Polymer, Array]:
         """
         Align structure to principal axes at the specified scale.
 
@@ -476,7 +535,7 @@ class Polymer:
 
         # Ensure stability by fixing signs based on third moments
         signs = aligned.moment(3, scale).sign()
-        signs[:, 0] = signs[:, 1] * signs[:, 2] * torch.linalg.det(Q)
+        signs[:, 0] = signs[:, 1] * signs[:, 2] * _det(Q)
         signs_exp = aligned.expand(signs, scale)
 
         aligned.coordinates = aligned.coordinates * signs_exp
@@ -488,7 +547,7 @@ class Polymer:
         self: Polymer,
         n: int,
         scale: Scale,
-    ) -> torch.Tensor:
+    ) -> Array:
         """
         Compute the n-th moment of coordinates at a scale.
 
@@ -507,10 +566,10 @@ class Polymer:
 
     def mask(
         self: Polymer,
-        indices: torch.Tensor | int,
+        indices: Array | int,
         source: Scale,
         dest: Scale = Scale.ATOM,
-    ) -> torch.Tensor:
+    ) -> Array:
         """
         Create a boolean mask selecting specific units.
 
@@ -520,14 +579,14 @@ class Polymer:
             dest: Scale of the output mask.
 
         Returns:
-            Boolean tensor at dest scale.
+            Boolean array at dest scale.
         """
         counts = self.size(source)
-        objects = torch.zeros(counts, dtype=torch.bool)
+        objects = _bool_zeros_like_backend(self.coordinates, counts)
         objects[indices] = True
         return self.expand(objects, source, dest)
 
-    def __getitem__(self: Polymer, mask: torch.Tensor) -> Polymer:
+    def __getitem__(self: Polymer, mask: Array) -> Polymer:
         """
         Select atoms by boolean mask.
 
@@ -547,7 +606,7 @@ class Polymer:
 
         # Determine which residues have atoms
         chn_mask = chn_sizes > 0
-        residues = chn_mask.repeat_interleave(self.lengths, dim=0)
+        residues = backend.repeat_interleave(chn_mask, self.lengths)
 
         lengths = self.lengths[chn_mask]
 
@@ -563,7 +622,7 @@ class Polymer:
 
         # Calculate new polymer_count: count how many of the first
         # polymer_count atoms survive the mask
-        polymer_mask = torch.zeros(self.size(), dtype=torch.bool)
+        polymer_mask = _bool_zeros_like_backend(self.coordinates, self.size())
         polymer_mask[:self.polymer_count] = True
         new_polymer_count = (mask & polymer_mask).sum().item()
 
@@ -572,7 +631,7 @@ class Polymer:
             self._id, names, strands, lengths, new_polymer_count,
         )
 
-    def select(self: Polymer, ix: torch.Tensor | int) -> Polymer:
+    def select(self: Polymer, ix: Array | int) -> Polymer:
         """
         Select chains by index.
 
@@ -583,7 +642,7 @@ class Polymer:
             New Polymer with selected chains.
         """
         if isinstance(ix, int):
-            ix = torch.tensor([ix])
+            ix = _array_like_backend(self.coordinates, [ix])
 
         atm_ix = self.mask(ix, Scale.CHAIN, Scale.ATOM)
         res_ix = self.mask(ix, Scale.CHAIN, Scale.RESIDUE)
@@ -596,7 +655,7 @@ class Polymer:
         sizes = {
             Scale.RESIDUE: self._sizes[Scale.RESIDUE][res_ix],
             Scale.CHAIN: self._sizes[Scale.CHAIN][ix],
-            Scale.MOLECULE: torch.tensor([len(coordinates)]),
+            Scale.MOLECULE: _array_like_backend(self.coordinates, [len(coordinates)]),
         }
 
         sequence = self.sequence[res_ix]
@@ -612,7 +671,7 @@ class Polymer:
             self._id, names, strands, lengths, new_polymer_count,
         )
 
-    def get_by_name(self: Polymer, name: torch.Tensor | int) -> Polymer:
+    def get_by_name(self: Polymer, name: Array | int) -> Polymer:
         """
         Select atoms by atom type name.
 
@@ -658,7 +717,7 @@ class Polymer:
             return self
 
         # Create mask for polymer atoms with known types
-        mask = torch.zeros(self.size(), dtype=torch.bool)
+        mask = _bool_zeros_like_backend(self.coordinates, self.size())
         mask[:self.polymer_count] = True
         mask = mask & (self.atoms >= 0)
         return self[mask]
@@ -681,7 +740,7 @@ class Polymer:
             if mol is None or chain.istype(mol):
                 yield chain
 
-    def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> torch.Tensor:
+    def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
         """
         Get mask of resolved (non-empty) units.
 
@@ -758,7 +817,7 @@ class Polymer:
 
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
-        out = f"PDB {self.id()} with {self.size()} atoms.\n"
+        out = f"PDB {self.id()} with {self.size()} atoms ({self.backend}).\n"
         out += "-" * 39 + "\n"
 
         header_pad = len(str(self.size(Scale.CHAIN)))
@@ -778,6 +837,70 @@ class Polymer:
         return out
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Backend Conversion
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def backend(self: Polymer) -> str:
+        """
+        Get the array backend type.
+
+        Returns:
+            'numpy' if arrays are NumPy, 'torch' if PyTorch tensors.
+        """
+        from .backend import get_backend
+        return get_backend(self.coordinates).value
+
+    def numpy(self: Polymer) -> Polymer:
+        """
+        Convert all arrays to NumPy.
+
+        Returns:
+            New Polymer with NumPy arrays. If already NumPy, returns self.
+        """
+        from .backend import to_numpy, is_numpy
+        if is_numpy(self.coordinates):
+            return self
+        return Polymer(
+            coordinates=to_numpy(self.coordinates),
+            atoms=to_numpy(self.atoms),
+            elements=to_numpy(self.elements),
+            sequence=to_numpy(self.sequence),
+            sizes={k: to_numpy(v) for k, v in self._sizes.items()},
+            id=self._id,
+            names=self.names.copy(),
+            strands=self.strands.copy(),
+            lengths=to_numpy(self.lengths),
+            polymer_count=self.polymer_count,
+        )
+
+    def torch(self: Polymer) -> Polymer:
+        """
+        Convert all arrays to PyTorch tensors.
+
+        Returns:
+            New Polymer with PyTorch tensors. If already PyTorch, returns self.
+
+        Raises:
+            ImportError: If PyTorch is not installed.
+        """
+        from .backend import to_torch, is_torch
+        if is_torch(self.coordinates):
+            return self
+        return Polymer(
+            coordinates=to_torch(self.coordinates).float(),
+            atoms=to_torch(self.atoms).long(),
+            elements=to_torch(self.elements).long(),
+            sequence=to_torch(self.sequence).long(),
+            sizes={k: to_torch(v).long() for k, v in self._sizes.items()},
+            id=self._id,
+            names=self.names.copy(),
+            strands=self.strands.copy(),
+            lengths=to_torch(self.lengths).long(),
+            polymer_count=self.polymer_count,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
     # I/O
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -795,7 +918,7 @@ class Polymer:
     # Utilities
     # ─────────────────────────────────────────────────────────────────────────
 
-    def with_coordinates(self: Polymer, coordinates: torch.Tensor) -> Polymer:
+    def with_coordinates(self: Polymer, coordinates: Array) -> Polymer:
         """
         Create a copy with new coordinates.
 

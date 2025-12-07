@@ -1,9 +1,15 @@
 /**
  * @file cif.c
- * @brief mmCIF-specific parsing logic.
+ * @brief mmCIF parsing pipeline.
  *
- * Implements parsing functions for extracting molecular structure
- * data from mmCIF blocks.
+ * Parses mmCIF files to extract molecular structure data including
+ * coordinates, atom types, residue sequences, and chain organization.
+ *
+ * Pipeline:
+ *   1. Block Validation  - Verify required mmCIF blocks exist
+ *   2. Metadata Parsing  - Extract chain/residue counts and names
+ *   3. Atom Parsing      - Single-pass coordinate/type extraction (parallelized)
+ *   4. Atom Reordering   - Separate polymer/non-polymer atoms
  */
 
 #include "cif.h"
@@ -12,21 +18,25 @@
 #include <omp.h>
 #endif
 
-/* Include hash tables here to avoid duplicate symbols */
+/* Hash tables for type lookups */
 #include "hash/atom.c"
 #include "hash/residue.c"
 #include "hash/element.c"
 
 
-/* Number of coordinate dimensions (x, y, z) */
+/* ============================================================================
+ * CONSTANTS
+ * mmCIF attribute names used throughout parsing.
+ * ============================================================================ */
+
 static const size_t COORDS = 3;
 
-/* mmCIF attribute names for coordinates */
+/* Coordinate attributes */
 static const char *ATTR_X = "Cartn_x";
 static const char *ATTR_Y = "Cartn_y";
 static const char *ATTR_Z = "Cartn_z";
 
-/* mmCIF attribute names for structure data */
+/* Structure attributes */
 static const char *ATTR_MODEL         = "pdbx_PDB_model_num";
 static const char *ATTR_CHAIN_ID      = "id";
 static const char *ATTR_RES_PER_CHAIN = "asym_id";
@@ -38,41 +48,37 @@ static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 static const char *ATTR_COMP_ID       = "label_comp_id";
 
-/* Maximum length for combined token strings */
-#define MAX_TOKEN_LENGTH 512
 
+/* ============================================================================
+ * TYPES
+ * Internal structures for parsing state.
+ * ============================================================================ */
 
 /**
- * @brief Pre-computed attribute indices for atom parsing.
+ * Pre-computed attribute indices for single-pass atom parsing.
  *
- * This structure enables flexible single-pass parsing of atom data.
- * New atom features can be added by extending this structure with
- * additional index fields.
+ * Storing indices avoids repeated string lookups in the hot loop.
+ * Extend this struct to add new per-atom features (b-factor, occupancy, etc).
  */
 typedef struct {
-    /* Coordinate indices */
-    int x;
-    int y;
-    int z;
-
-    /* Type indices */
-    int element;      /* Element symbol (C, N, O, etc.) */
-    int comp_id;      /* Residue/component name */
-    int atom_name;    /* Atom name within residue */
-
-    /* Chain/residue tracking */
-    int seq_id;       /* Sequence ID */
-    int label_asym;   /* Chain label */
-
-    /* Extensibility: add new atom feature indices here */
-    /* int b_factor; */
-    /* int occupancy; */
-
+    int x, y, z;              /* Coordinate column indices */
+    int element;              /* Element symbol (C, N, O, etc.) */
+    int comp_id;              /* Residue/component name */
+    int atom_name;            /* Atom name within residue */
+    int seq_id;               /* Sequence ID for polymer detection */
+    int label_asym;           /* Chain label */
 } AtomIndices;
 
 
-char *_get_id(char *buffer, CifErrorContext *ctx) {
+/* ============================================================================
+ * FILE HEADER
+ * Extract PDB identifier from mmCIF header.
+ * ============================================================================ */
 
+/**
+ * Parse the PDB identifier from "data_XXXX" header line.
+ */
+char *_get_id(char *buffer, CifErrorContext *ctx) {
     const char *prefix = "data_";
 
     if (_neq(buffer, prefix)) {
@@ -81,91 +87,27 @@ char *_get_id(char *buffer, CifErrorContext *ctx) {
         return NULL;
     }
 
-    buffer += 5;  /* Skip "data_" */
-
+    buffer += 5;
     char *start = buffer;
-    while (*buffer != '\n' && *buffer != '\0') { buffer++; }
+    while (*buffer != '\n' && *buffer != '\0') buffer++;
 
-    size_t length = (size_t)(buffer - start);
-    return _strdup_n(start, length, ctx);
+    return _strdup_n(start, (size_t)(buffer - start), ctx);
 }
 
 
-/**
- * @brief Parse an integer array from a block attribute.
- */
-static int *_parse_int(mmBlock *block, const char *attr, CifErrorContext *ctx) {
-
-    int index = _get_attr_index(block, attr);
-    if (index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr, block->category);
-        return NULL;
-    }
-
-    int *array = calloc((size_t)block->size, sizeof(int));
-    if (array == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate int array of size %d", block->size);
-        return NULL;
-    }
-
-    for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
-            free(array);
-            return NULL;
-        }
-        array[line] = _str_to_int(token);
-        free(token);
-    }
-
-    return array;
-}
-
+/* ============================================================================
+ * ATTRIBUTE UTILITIES
+ * Generic helpers for extracting values from mmCIF blocks.
+ * ============================================================================ */
 
 /**
- * @brief Parse a string array from a block attribute.
- */
-static char **_parse_str(mmBlock *block, const char *attr, CifErrorContext *ctx) {
-
-    int index = _get_attr_index(block, attr);
-    if (index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr, block->category);
-        return NULL;
-    }
-
-    char **array = calloc((size_t)block->size, sizeof(char *));
-    if (array == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate string array of size %d", block->size);
-        return NULL;
-    }
-
-    for (int line = 0; line < block->size; line++) {
-        array[line] = _get_attr_by_line(block, line, index, ctx);
-        if (array[line] == NULL) {
-            /* Clean up already allocated strings */
-            for (int i = 0; i < line; i++) { free(array[i]); }
-            free(array);
-            return NULL;
-        }
-    }
-
-    return array;
-}
-
-
-/**
- * @brief Extract unique values from a block attribute.
+ * Extract unique string values from an attribute (first occurrence only).
  *
- * Returns an array of unique string values in order of first appearance.
- * If *size > 0 on entry, uses that as the expected array size.
- * Otherwise, determines size dynamically and sets *size on output.
+ * Used for chain names, strand IDs, etc. where values repeat across rows
+ * but we only want distinct values in order of appearance.
  */
-static char **_get_unique(mmBlock *block, const char *attr, int *size, CifErrorContext *ctx) {
-
+static char **_get_unique(mmBlock *block, const char *attr, int *size,
+                          CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -185,10 +127,9 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size, CifErrorC
     int ix = 0;
 
     for (int line = 0; line < block->size; line++) {
-
         char *token = _get_attr_by_line(block, line, index, ctx);
         if (token == NULL) {
-            for (int i = 0; i <= ix; i++) { free(str[i]); }
+            for (int i = 0; i <= ix; i++) free(str[i]);
             free(str);
             return NULL;
         }
@@ -198,346 +139,28 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size, CifErrorC
             str[ix] = token;
         } else if (_neq(prev, token)) {
             prev = token;
-            ix++;
-            if ((size_t)ix >= alloc_size) {
-                /* Shouldn't happen if size is correct, but be safe */
+            if ((size_t)++ix >= alloc_size) {
                 free(token);
                 break;
             }
             str[ix] = token;
         } else {
-            free(token);  /* Duplicate, free it */
-        }
-    }
-
-    if (*size > 0) {
-        return str;
-    } else {
-        *size = ix + 1;
-        char **resized = realloc(str, (size_t)(*size) * sizeof(char *));
-        return resized != NULL ? resized : str;
-    }
-}
-
-
-/**
- * @brief Initialize atom indices from block.
- *
- * Looks up all attribute indices needed for atom parsing.
- * Returns CIF_OK if all required attributes found.
- */
-static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx, CifErrorContext *ctx) {
-
-    idx->x = _get_attr_index(block, ATTR_X);
-    if (idx->x == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_X);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->y = _get_attr_index(block, ATTR_Y);
-    if (idx->y == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_Y);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->z = _get_attr_index(block, ATTR_Z);
-    if (idx->z == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_Z);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->element = _get_attr_index(block, ATTR_ELEMENT);
-    if (idx->element == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_ELEMENT);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID);
-    if (idx->comp_id == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_COMP_ID);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME);
-    if (idx->atom_name == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_ATOM_NAME);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID);
-    if (idx->seq_id == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
-        return CIF_ERR_ATTR;
-    }
-
-    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM);
-    if (idx->label_asym == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_LABEL_ASYM);
-        return CIF_ERR_ATTR;
-    }
-
-    return CIF_OK;
-}
-
-
-/**
- * @brief Parse all per-atom data in a single pass (cache-friendly).
- *
- * Parses coordinates, elements, and atom types for all atoms in one
- * parallel loop, maximizing cache efficiency by processing each line once.
- *
- * @param block Atom site block (must have lines pre-computed)
- * @param idx Pre-computed attribute indices
- * @param coords Output coordinate array [atoms * 3]
- * @param elements Output element type array [atoms]
- * @param types Output atom type array [atoms]
- * @param ctx Error context
- * @return CIF_OK on success, error code on failure
- */
-static CifError _parse_atoms_batch(
-    mmBlock *block,
-    AtomIndices *idx,
-    float *coords,
-    int *elements,
-    int *types,
-    CifErrorContext *ctx
-) {
-    (void)ctx;  /* Currently unused - parsing allows unknown types */
-
-    #pragma omp parallel
-    {
-        /* Thread-local buffer for combined lookups */
-        char combine_buf[MAX_INLINE_BUFFER];
-
-        #pragma omp for schedule(static)
-        for (int line = 0; line < block->size; line++) {
-
-            /* Parse coordinates (x, y, z) - all from same cache line */
-            float x = _parse_float_inline(block, line, idx->x);
-            float y = _parse_float_inline(block, line, idx->y);
-            float z = _parse_float_inline(block, line, idx->z);
-
-            /* Parse element type (-1 for unknown) */
-            int elem = _lookup_inline(block, line, idx->element, _lookup_element);
-
-            /* Parse atom type (-1 for unknown) */
-            int type = _lookup_double_inline(block, line, idx->comp_id, idx->atom_name,
-                                             _lookup_atom, combine_buf);
-
-            /* Store results */
-            coords[COORDS * line + 0] = x;
-            coords[COORDS * line + 1] = y;
-            coords[COORDS * line + 2] = z;
-            elements[line] = elem;
-            types[line] = type;
-        }
-    }
-
-    return CIF_OK;
-}
-
-
-/**
- * @brief Parse coordinate data (x, y, z) from atom block.
- */
-static float *_parse_coords(mmBlock *block, CifErrorContext *ctx) {
-
-    int x_index = _get_attr_index(block, ATTR_X);
-    if (x_index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing coordinate attribute '%s'", ATTR_X);
-        return NULL;
-    }
-
-    int y_index = _get_attr_index(block, ATTR_Y);
-    if (y_index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing coordinate attribute '%s'", ATTR_Y);
-        return NULL;
-    }
-
-    int z_index = _get_attr_index(block, ATTR_Z);
-    if (z_index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing coordinate attribute '%s'", ATTR_Z);
-        return NULL;
-    }
-
-    int indices[3] = { x_index, y_index, z_index };
-
-    float *array = calloc(COORDS * (size_t)block->size, sizeof(float));
-    if (array == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate coordinate array for %d atoms", block->size);
-        return NULL;
-    }
-
-    int error_occurred = 0;
-
-    #pragma omp parallel for schedule(static)
-    for (int line = 0; line < block->size; line++) {
-        if (error_occurred) continue;  /* Skip if error in another thread */
-
-        for (size_t ix = 0; ix < COORDS; ix++) {
-            char *token = _get_attr_by_line(block, line, indices[ix], NULL);
-            if (token == NULL) {
-                #pragma omp atomic write
-                error_occurred = 1;
-                continue;
-            }
-
-            /* Parse float with error checking */
-            char *endptr;
-            float val = strtof(token, &endptr);
-            if (endptr == token) {
-                free(token);
-                #pragma omp atomic write
-                error_occurred = 1;
-                continue;
-            }
-
-            array[COORDS * line + ix] = val;
             free(token);
         }
     }
 
-    if (error_occurred) {
-        free(array);
-        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Failed to parse coordinates");
-        return NULL;
+    if (*size <= 0) {
+        *size = ix + 1;
+        char **resized = realloc(str, (size_t)(*size) * sizeof(char *));
+        return resized ? resized : str;
     }
-
-    return array;
+    return str;
 }
 
-
 /**
- * @brief Parse attribute values via hash table lookup.
+ * Count unique consecutive values in an attribute.
  */
-static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr, CifErrorContext *ctx) {
-
-    int index = _get_attr_index(block, attr);
-    if (index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr, block->category);
-        return NULL;
-    }
-
-    int *array = calloc((size_t)block->size, sizeof(int));
-    if (array == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate lookup array of size %d", block->size);
-        return NULL;
-    }
-
-    int error_occurred = 0;
-
-    #pragma omp parallel for schedule(dynamic, 64)
-    for (int line = 0; line < block->size; line++) {
-        if (error_occurred) continue;
-
-        char *token = _get_attr_by_line(block, line, index, NULL);
-        if (token == NULL) {
-            #pragma omp atomic write
-            error_occurred = 1;
-            continue;
-        }
-        array[line] = _lookup(func, token);
-        free(token);
-    }
-
-    if (error_occurred) {
-        free(array);
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Failed to parse attribute '%s'", attr);
-        return NULL;
-    }
-
-    return array;
-}
-
-
-/**
- * @brief Parse combined attribute values (e.g., residue_atom) via hash lookup.
- */
-static int *_parse_via_lookup_double(
-    mmBlock *block,
-    HashTable func,
-    const char *attr1,
-    const char *attr2,
-    CifErrorContext *ctx
-) {
-
-    int index1 = _get_attr_index(block, attr1);
-    if (index1 == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr1, block->category);
-        return NULL;
-    }
-
-    int index2 = _get_attr_index(block, attr2);
-    if (index2 == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr2, block->category);
-        return NULL;
-    }
-
-    int *array = calloc((size_t)block->size, sizeof(int));
-    if (array == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate lookup array of size %d", block->size);
-        return NULL;
-    }
-
-    int error_occurred = 0;
-
-    #pragma omp parallel for schedule(dynamic, 64)
-    for (int line = 0; line < block->size; line++) {
-        if (error_occurred) continue;
-
-        char *token1 = _get_attr_by_line(block, line, index1, NULL);
-        if (token1 == NULL) {
-            #pragma omp atomic write
-            error_occurred = 1;
-            continue;
-        }
-
-        char *token2 = _get_attr_by_line(block, line, index2, NULL);
-        if (token2 == NULL) {
-            free(token1);
-            #pragma omp atomic write
-            error_occurred = 1;
-            continue;
-        }
-
-        /* Combine tokens with bounds checking (buffer is thread-local) */
-        char result[MAX_TOKEN_LENGTH];
-        int written = snprintf(result, sizeof(result), "%s_%s", token1, token2);
-
-        free(token1);
-        free(token2);
-
-        if (written < 0 || (size_t)written >= sizeof(result)) {
-            #pragma omp atomic write
-            error_occurred = 1;
-            continue;
-        }
-
-        array[line] = _lookup(func, result);
-    }
-
-    if (error_occurred) {
-        free(array);
-        CIF_SET_ERROR(ctx, CIF_ERR_OVERFLOW,
-            "Failed to parse combined attributes '%s' + '%s'", attr1, attr2);
-        return NULL;
-    }
-
-    return array;
-}
-
-
-/**
- * @brief Count unique values in a block attribute.
- */
-static int _unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
-
+static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -549,15 +172,14 @@ static int _unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
     char *prev = NULL;
 
     for (int line = 0; line < block->size; line++) {
-
         char *token = _get_attr_by_line(block, line, index, ctx);
         if (token == NULL) {
-            if (prev != NULL) free(prev);
+            free(prev);
             return -1;
         }
 
         if (prev == NULL || _neq(prev, token)) {
-            if (prev != NULL) free(prev);
+            free(prev);
             prev = token;
             count++;
         } else {
@@ -565,18 +187,58 @@ static int _unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
         }
     }
 
-    if (prev != NULL) free(prev);
+    free(prev);
     return count;
 }
 
+/**
+ * Parse residue types via hash table lookup.
+ *
+ * Used for sequence parsing where residue names map to type indices.
+ */
+static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
+                              CifErrorContext *ctx) {
+    int index = _get_attr_index(block, attr);
+    if (index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
+            "Missing attribute '%s' in block '%s'", attr, block->category);
+        return NULL;
+    }
+
+    int *array = calloc((size_t)block->size, sizeof(int));
+    if (array == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate lookup array of size %d", block->size);
+        return NULL;
+    }
+
+    for (int line = 0; line < block->size; line++) {
+        char *token = _get_attr_by_line(block, line, index, ctx);
+        if (token == NULL) {
+            free(array);
+            return NULL;
+        }
+        array[line] = _lookup(func, token);
+        free(token);
+    }
+
+    return array;
+}
+
+
+/* ============================================================================
+ * SIZE COUNTING
+ * Count items per group (residues per chain, atoms per residue, etc).
+ * ============================================================================ */
 
 /**
- * @brief Parse size counts relative to attribute changes.
+ * Count items grouped by attribute value changes.
  *
- * Counts items grouped by unique attribute values.
+ * Returns array where sizes[i] = count of rows with i-th unique value.
+ * Used for residues-per-chain and atoms-per-chain counting.
  */
-static int *_parse_sizes_relative(mmBlock *block, const char *attr, int *size, CifErrorContext *ctx) {
-
+static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
+                                  CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -596,10 +258,9 @@ static int *_parse_sizes_relative(mmBlock *block, const char *attr, int *size, C
     int ix = 0;
 
     for (int line = 0; line < block->size; line++) {
-
         char *token = _get_attr_by_line(block, line, index, ctx);
         if (token == NULL) {
-            if (prev != NULL) free(prev);
+            free(prev);
             free(sizes);
             return NULL;
         }
@@ -614,148 +275,202 @@ static int *_parse_sizes_relative(mmBlock *block, const char *attr, int *size, C
             free(token);
         }
 
-        if ((size_t)ix < alloc_size) {
-            sizes[ix]++;
-        }
+        if ((size_t)ix < alloc_size) sizes[ix]++;
     }
 
-    if (prev != NULL) free(prev);
+    free(prev);
 
-    if (*size > 0) {
-        return sizes;
-    } else {
+    if (*size <= 0) {
         *size = ix + 1;
         int *resized = realloc(sizes, (size_t)(*size) * sizeof(int));
-        return resized != NULL ? resized : sizes;
+        return resized ? resized : sizes;
     }
+    return sizes;
 }
 
-
 /**
- * @brief Parse per-residue atom counts with chain awareness.
+ * Count atoms per residue with chain-aware indexing.
  *
- * @param block The atom_site block
- * @param attr Sequence ID attribute name
- * @param size Total number of residues
- * @param nonpoly Output count of non-polymeric atoms
- * @param is_nonpoly Output array marking non-polymer atoms (1) vs polymer (0)
- * @param lengths Array of residue counts per chain
- * @param ctx Error context
- * @return Array of atom counts per residue, or NULL on error
+ * Handles non-polymer atoms (seq_id < 0) by marking them in is_nonpoly mask.
+ * Returns NULL-terminated sizes array indexed by global residue index.
  */
-static int *_parse_residue_sizes(
-    mmBlock *block,
-    const char *attr,
-    int size,
-    int *nonpoly,
-    int *is_nonpoly,
-    int *lengths,
-    CifErrorContext *ctx
-) {
-
-    int index = _get_attr_index(block, attr);
-    if (index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", attr, block->category);
+static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
+                                     int *nonpoly_count, int *is_nonpoly,
+                                     int *res_per_chain, CifErrorContext *ctx) {
+    int seq_index = _get_attr_index(block, ATTR_SEQ_ID);
+    if (seq_index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
         return NULL;
     }
 
-    int cindex = _get_attr_index(block, ATTR_LABEL_ASYM);
-    if (cindex == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-            "Missing attribute '%s' in block '%s'", ATTR_LABEL_ASYM, block->category);
+    int chain_index = _get_attr_index(block, ATTR_LABEL_ASYM);
+    if (chain_index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_LABEL_ASYM);
         return NULL;
     }
 
-    int *sizes = calloc((size_t)size, sizeof(int));
+    int *sizes = calloc((size_t)residue_count, sizeof(int));
     if (sizes == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate residue sizes array of size %d", size);
+            "Failed to allocate residue sizes array of size %d", residue_count);
         return NULL;
     }
 
-    int offset = 0;
-    char *pchain = NULL;
-    int *len_ptr = lengths;
+    int chain_offset = 0;
+    char *prev_chain = NULL;
+    int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
-
-        char *ctoken = _get_attr_by_line(block, line, cindex, ctx);
-        if (ctoken == NULL) {
-            if (pchain != NULL) free(pchain);
+        /* Track chain changes to compute residue offset */
+        char *chain = _get_attr_by_line(block, line, chain_index, ctx);
+        if (chain == NULL) {
+            free(prev_chain);
             free(sizes);
             return NULL;
         }
 
-        if (pchain == NULL) {
-            pchain = ctoken;
-        } else if (_neq(pchain, ctoken)) {
-            free(pchain);
-            pchain = ctoken;
-            offset += *len_ptr;
-            len_ptr++;
+        if (prev_chain == NULL) {
+            prev_chain = chain;
+        } else if (_neq(prev_chain, chain)) {
+            free(prev_chain);
+            prev_chain = chain;
+            chain_offset += *chain_len_ptr++;
         } else {
-            free(ctoken);
+            free(chain);
         }
 
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
-            if (pchain != NULL) free(pchain);
+        /* Parse sequence ID */
+        char *seq_token = _get_attr_by_line(block, line, seq_index, ctx);
+        if (seq_token == NULL) {
+            free(prev_chain);
             free(sizes);
             return NULL;
         }
 
-        int num = _str_to_int(token) - 1;
-        free(token);
+        int seq_id = _str_to_int(seq_token) - 1;
+        free(seq_token);
 
-        if (num < 0) {
-            (*nonpoly)++;
+        /* Non-polymer atoms have invalid seq_id */
+        if (seq_id < 0) {
+            (*nonpoly_count)++;
             is_nonpoly[line] = 1;
             continue;
         }
 
         is_nonpoly[line] = 0;
-        int idx = offset + num;
-        if (idx >= 0 && idx < size) {
-            sizes[idx]++;
+        int residue_idx = chain_offset + seq_id;
+        if (residue_idx >= 0 && residue_idx < residue_count) {
+            sizes[residue_idx]++;
         }
     }
 
-    if (pchain != NULL) free(pchain);
+    free(prev_chain);
     return sizes;
 }
 
 
+/* ============================================================================
+ * BATCH ATOM PARSING
+ * Single-pass parallel parsing of all per-atom data.
+ * Maximizes cache efficiency by processing each line once.
+ * ============================================================================ */
+
 /**
- * @brief Reorder arrays so polymer atoms come first, non-polymer last.
+ * Initialize attribute indices for batch parsing.
  *
- * Given a boolean mask indicating non-polymer atoms, reorder all per-atom
- * arrays (coordinates, types, elements) so that:
- * - Polymer atoms occupy indices [0, polymer_count)
- * - Non-polymer atoms occupy indices [polymer_count, atom_count)
+ * Pre-computes column indices to avoid repeated string lookups in hot loop.
+ */
+static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx,
+                                   CifErrorContext *ctx) {
+    idx->x = _get_attr_index(block, ATTR_X);
+    idx->y = _get_attr_index(block, ATTR_Y);
+    idx->z = _get_attr_index(block, ATTR_Z);
+    idx->element = _get_attr_index(block, ATTR_ELEMENT);
+    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID);
+    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME);
+    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID);
+    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM);
+
+    /* Validate required indices */
+    if (idx->x == BAD_IX || idx->y == BAD_IX || idx->z == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing coordinate attributes");
+        return CIF_ERR_ATTR;
+    }
+    if (idx->element == BAD_IX || idx->comp_id == BAD_IX || idx->atom_name == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing atom type attributes");
+        return CIF_ERR_ATTR;
+    }
+    if (idx->seq_id == BAD_IX || idx->label_asym == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing chain/residue attributes");
+        return CIF_ERR_ATTR;
+    }
+
+    return CIF_OK;
+}
+
+/**
+ * Parse all per-atom data in a single parallel pass.
  *
- * @param cif The mmCIF struct with arrays to reorder
- * @param is_nonpoly Boolean mask (1 = non-polymer, 0 = polymer) [atoms]
- * @param ctx Error context
- * @return CIF_OK on success, error code on failure
+ * For each atom line, parses:
+ *   - Coordinates (x, y, z)
+ *   - Element type via hash lookup
+ *   - Atom type via combined hash lookup (residue_atom)
+ *
+ * Uses pre-computed line pointers for O(1) row access.
+ * Unknown types return -1 (valid for non-standard residues/ligands).
+ */
+static CifError _parse_atoms_batch(mmBlock *block, AtomIndices *idx,
+                                   float *coords, int *elements, int *types) {
+    #pragma omp parallel
+    {
+        char combine_buf[MAX_INLINE_BUFFER];
+
+        #pragma omp for schedule(static)
+        for (int line = 0; line < block->size; line++) {
+            /* Parse coordinates */
+            coords[COORDS * line + 0] = _parse_float_inline(block, line, idx->x);
+            coords[COORDS * line + 1] = _parse_float_inline(block, line, idx->y);
+            coords[COORDS * line + 2] = _parse_float_inline(block, line, idx->z);
+
+            /* Parse types (-1 for unknown) */
+            elements[line] = _lookup_inline(block, line, idx->element, _lookup_element);
+            types[line] = _lookup_double_inline(block, line, idx->comp_id,
+                                                idx->atom_name, _lookup_atom, combine_buf);
+        }
+    }
+
+    return CIF_OK;
+}
+
+
+/* ============================================================================
+ * ATOM REORDERING
+ * Separate polymer atoms from non-polymer (ligands, water, ions).
+ * Enables simple slicing: polymer = atoms[0:polymer_count]
+ * ============================================================================ */
+
+/**
+ * Reorder arrays so polymer atoms come first.
+ *
+ * After reordering:
+ *   - atoms[0, polymer_count) = polymer atoms
+ *   - atoms[polymer_count, total) = non-polymer atoms
  */
 static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx) {
-
     int atoms = cif->atoms;
     int polymer_count = atoms - cif->nonpoly;
 
-    /* If no reordering needed, just set polymer count */
     if (cif->nonpoly == 0) {
         cif->polymer = polymer_count;
         return CIF_OK;
     }
 
-    /* Allocate temporary arrays for reordered data */
+    /* Allocate reorder buffers */
     float *new_coords = calloc(COORDS * (size_t)atoms, sizeof(float));
     int *new_types = calloc((size_t)atoms, sizeof(int));
     int *new_elements = calloc((size_t)atoms, sizeof(int));
 
-    if (new_coords == NULL || new_types == NULL || new_elements == NULL) {
+    if (!new_coords || !new_types || !new_elements) {
         free(new_coords);
         free(new_types);
         free(new_elements);
@@ -763,22 +478,19 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
         return CIF_ERR_ALLOC;
     }
 
-    /* Two-pass copy: polymer atoms first [0, polymer), then non-polymer [polymer, atoms) */
+    /* Two-pointer copy: polymer to front, non-polymer to back */
     int poly_ix = 0;
     int nonpoly_ix = polymer_count;
 
     for (int i = 0; i < atoms; i++) {
         int dest = is_nonpoly[i] ? nonpoly_ix++ : poly_ix++;
-
-        /* Copy coordinates (3 floats per atom) */
-        memcpy(&new_coords[COORDS * dest], &cif->coordinates[COORDS * i], COORDS * sizeof(float));
-
-        /* Copy types and elements */
+        memcpy(&new_coords[COORDS * dest], &cif->coordinates[COORDS * i],
+               COORDS * sizeof(float));
         new_types[dest] = cif->types[i];
         new_elements[dest] = cif->elements[i];
     }
 
-    /* Replace old arrays with reordered ones */
+    /* Swap arrays */
     free(cif->coordinates);
     free(cif->types);
     free(cif->elements);
@@ -792,9 +504,25 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
 }
 
 
+/* ============================================================================
+ * PUBLIC INTERFACE
+ * Main entry point for populating mmCIF structure from parsed blocks.
+ * ============================================================================ */
+
+/**
+ * Populate mmCIF structure from parsed blocks.
+ *
+ * Pipeline:
+ *   1. Validate required blocks exist
+ *   2. Count models, chains, residues, atoms
+ *   3. Parse chain/residue metadata
+ *   4. Batch parse atom data (parallelized)
+ *   5. Reorder atoms (polymer first)
+ */
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
-    /* Validate required blocks */
+    /* ── Block Validation ─────────────────────────────────────────────────── */
+
     if (blocks->atom.category == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _atom_site block");
         return CIF_ERR_BLOCK;
@@ -808,56 +536,52 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return CIF_ERR_BLOCK;
     }
 
-    /* Count the number of models, chains, residues, atoms */
-    int model_count = _unique(&blocks->atom, ATTR_MODEL, ctx);
+    /* ── Count Structure Elements ─────────────────────────────────────────── */
+
+    int model_count = _count_unique(&blocks->atom, ATTR_MODEL, ctx);
     if (model_count < 0) return ctx->code;
     cif->models = model_count;
 
     cif->chains = blocks->chain.size;
     cif->residues = blocks->poly.size;
 
-    /* Adjust atom count for multi-model structures */
+    /* Adjust for multi-model structures (use first model only) */
     blocks->atom.size /= cif->models;
     cif->atoms = blocks->atom.size;
 
-    /* Count residues per chain */
-    cif->res_per_chain = _parse_sizes_relative(&blocks->poly, ATTR_RES_PER_CHAIN, &cif->chains, ctx);
+    /* ── Parse Metadata ───────────────────────────────────────────────────── */
+
+    cif->res_per_chain = _count_sizes_by_group(&blocks->poly, ATTR_RES_PER_CHAIN,
+                                               &cif->chains, ctx);
     if (cif->res_per_chain == NULL) return ctx->code;
 
-    /* Get chain names */
     cif->names = _get_unique(&blocks->chain, ATTR_CHAIN_ID, &cif->chains, ctx);
     if (cif->names == NULL) return ctx->code;
 
-    /* Get residue sequence */
-    cif->sequence = _parse_via_lookup(&blocks->poly, _lookup_residue, ATTR_RESIDUE_NAME, ctx);
+    cif->sequence = _parse_via_lookup(&blocks->poly, _lookup_residue,
+                                      ATTR_RESIDUE_NAME, ctx);
     if (cif->sequence == NULL) return ctx->code;
 
-    /* Get strand IDs */
     cif->strands = _get_unique(&blocks->poly, ATTR_STRAND_ID, &cif->chains, ctx);
     if (cif->strands == NULL) return ctx->code;
 
-    /* ─────────────────────────────────────────────────────────────────────────
-     * Single-pass atom parsing (cache-friendly)
-     * ───────────────────────────────────────────────────────────────────────── */
+    /* ── Batch Atom Parsing ───────────────────────────────────────────────── */
 
-    /* Pre-compute line pointers for O(1) access */
-    CifError line_err = _precompute_lines(&blocks->atom, ctx);
-    if (line_err != CIF_OK) return line_err;
+    CifError err = _precompute_lines(&blocks->atom, ctx);
+    if (err != CIF_OK) return err;
 
-    /* Initialize attribute indices */
     AtomIndices idx;
-    CifError idx_err = _init_atom_indices(&blocks->atom, &idx, ctx);
-    if (idx_err != CIF_OK) {
+    err = _init_atom_indices(&blocks->atom, &idx, ctx);
+    if (err != CIF_OK) {
         _free_lines(&blocks->atom);
-        return idx_err;
+        return err;
     }
 
-    /* Allocate output arrays */
     cif->coordinates = calloc(COORDS * (size_t)cif->atoms, sizeof(float));
     cif->elements = calloc((size_t)cif->atoms, sizeof(int));
     cif->types = calloc((size_t)cif->atoms, sizeof(int));
 
-    if (cif->coordinates == NULL || cif->elements == NULL || cif->types == NULL) {
+    if (!cif->coordinates || !cif->elements || !cif->types) {
         free(cif->coordinates);
         free(cif->elements);
         free(cif->types);
@@ -866,43 +590,39 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return CIF_ERR_ALLOC;
     }
 
-    /* Parse all atom data in single pass */
-    CifError parse_err = _parse_atoms_batch(&blocks->atom, &idx,
-                                            cif->coordinates, cif->elements, cif->types, ctx);
-    _free_lines(&blocks->atom);  /* No longer needed */
-
-    if (parse_err != CIF_OK) {
+    err = _parse_atoms_batch(&blocks->atom, &idx,
+                             cif->coordinates, cif->elements, cif->types);
+    _free_lines(&blocks->atom);
+    if (err != CIF_OK) {
         free(cif->coordinates);
         free(cif->elements);
         free(cif->types);
-        return parse_err;
+        return err;
     }
 
-    /* ───────────────────────────────────────────────────────────────────────── */
+    /* ── Atom Reordering ──────────────────────────────────────────────────── */
 
-    /* Allocate temporary non-polymer mask array (local, freed after reordering) */
     int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
     if (is_nonpoly == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate is_nonpoly array of size %d", cif->atoms);
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate nonpoly mask");
         return CIF_ERR_ALLOC;
     }
 
-    /* Compute atoms per residue and populate is_nonpoly mask */
     cif->nonpoly = 0;
-    cif->atoms_per_res = _parse_residue_sizes(&blocks->atom, ATTR_SEQ_ID, cif->residues, &cif->nonpoly, is_nonpoly, cif->res_per_chain, ctx);
+    cif->atoms_per_res = _count_atoms_per_residue(&blocks->atom, cif->residues,
+                                                  &cif->nonpoly, is_nonpoly,
+                                                  cif->res_per_chain, ctx);
     if (cif->atoms_per_res == NULL) {
         free(is_nonpoly);
         return ctx->code;
     }
 
-    /* Reorder atoms: polymer first [0, polymer), non-polymer last [polymer, atoms) */
-    CifError reorder_err = _reorder_atoms(cif, is_nonpoly, ctx);
-    free(is_nonpoly);  /* No longer needed after reordering */
-    if (reorder_err != CIF_OK) return reorder_err;
+    err = _reorder_atoms(cif, is_nonpoly, ctx);
+    free(is_nonpoly);
+    if (err != CIF_OK) return err;
 
-    /* Compute atoms per chain */
-    cif->atoms_per_chain = _parse_sizes_relative(&blocks->atom, ATTR_LABEL_ASYM, &cif->chains, ctx);
+    cif->atoms_per_chain = _count_sizes_by_group(&blocks->atom, ATTR_LABEL_ASYM,
+                                                 &cif->chains, ctx);
     if (cif->atoms_per_chain == NULL) return ctx->code;
 
     return CIF_OK;

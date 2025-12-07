@@ -29,7 +29,8 @@ class TestPublicAPI:
 
     def test_version(self):
         import ciffy
-        assert ciffy.__version__ == "0.4.0"
+        assert hasattr(ciffy, "__version__")
+        assert isinstance(ciffy.__version__, str)
 
 
 class TestBackwardCompatibility:

@@ -542,6 +542,72 @@ static int *_parse_residue_sizes(
 }
 
 
+/**
+ * @brief Reorder arrays so polymer atoms come first, non-polymer last.
+ *
+ * Given a boolean mask indicating non-polymer atoms, reorder all per-atom
+ * arrays (coordinates, types, elements) so that:
+ * - Polymer atoms occupy indices [0, polymer_count)
+ * - Non-polymer atoms occupy indices [polymer_count, atom_count)
+ *
+ * @param cif The mmCIF struct with arrays to reorder
+ * @param is_nonpoly Boolean mask (1 = non-polymer, 0 = polymer) [atoms]
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx) {
+
+    int atoms = cif->atoms;
+    int polymer_count = atoms - cif->nonpoly;
+
+    /* If no reordering needed, just set polymer count */
+    if (cif->nonpoly == 0) {
+        cif->polymer = polymer_count;
+        return CIF_OK;
+    }
+
+    /* Allocate temporary arrays for reordered data */
+    float *new_coords = calloc(COORDS * (size_t)atoms, sizeof(float));
+    int *new_types = calloc((size_t)atoms, sizeof(int));
+    int *new_elements = calloc((size_t)atoms, sizeof(int));
+
+    if (new_coords == NULL || new_types == NULL || new_elements == NULL) {
+        free(new_coords);
+        free(new_types);
+        free(new_elements);
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate reorder buffers");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Two-pass copy: polymer atoms first [0, polymer), then non-polymer [polymer, atoms) */
+    int poly_ix = 0;
+    int nonpoly_ix = polymer_count;
+
+    for (int i = 0; i < atoms; i++) {
+        int dest = is_nonpoly[i] ? nonpoly_ix++ : poly_ix++;
+
+        /* Copy coordinates (3 floats per atom) */
+        memcpy(&new_coords[COORDS * dest], &cif->coordinates[COORDS * i], COORDS * sizeof(float));
+
+        /* Copy types and elements */
+        new_types[dest] = cif->types[i];
+        new_elements[dest] = cif->elements[i];
+    }
+
+    /* Replace old arrays with reordered ones */
+    free(cif->coordinates);
+    free(cif->types);
+    free(cif->elements);
+
+    cif->coordinates = new_coords;
+    cif->types = new_types;
+    cif->elements = new_elements;
+    cif->polymer = polymer_count;
+
+    return CIF_OK;
+}
+
+
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     /* Validate required blocks */
@@ -598,9 +664,9 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->coordinates = _parse_coords(&blocks->atom, ctx);
     if (cif->coordinates == NULL) return ctx->code;
 
-    /* Allocate non-polymer mask array */
-    cif->is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
-    if (cif->is_nonpoly == NULL) {
+    /* Allocate temporary non-polymer mask array (local, freed after reordering) */
+    int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
+    if (is_nonpoly == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
             "Failed to allocate is_nonpoly array of size %d", cif->atoms);
         return CIF_ERR_ALLOC;
@@ -608,8 +674,16 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     /* Compute atoms per residue and populate is_nonpoly mask */
     cif->nonpoly = 0;
-    cif->atoms_per_res = _parse_residue_sizes(&blocks->atom, ATTR_SEQ_ID, cif->residues, &cif->nonpoly, cif->is_nonpoly, cif->res_per_chain, ctx);
-    if (cif->atoms_per_res == NULL) return ctx->code;
+    cif->atoms_per_res = _parse_residue_sizes(&blocks->atom, ATTR_SEQ_ID, cif->residues, &cif->nonpoly, is_nonpoly, cif->res_per_chain, ctx);
+    if (cif->atoms_per_res == NULL) {
+        free(is_nonpoly);
+        return ctx->code;
+    }
+
+    /* Reorder atoms: polymer first [0, polymer), non-polymer last [polymer, atoms) */
+    CifError reorder_err = _reorder_atoms(cif, is_nonpoly, ctx);
+    free(is_nonpoly);  /* No longer needed after reordering */
+    if (reorder_err != CIF_OK) return reorder_err;
 
     /* Compute atoms per chain */
     cif->atoms_per_chain = _parse_sizes_relative(&blocks->atom, ATTR_LABEL_ASYM, &cif->chains, ctx);

@@ -40,16 +40,20 @@ class Polymer:
     organization: atoms, residues, chains, and molecules. Provides
     methods for geometric operations, selection, and analysis.
 
+    Atoms are ordered with polymer atoms first [0, polymer_count),
+    followed by non-polymer atoms [polymer_count, total). This enables
+    efficient slicing instead of boolean masking.
+
     Attributes:
         coordinates: (N, 3) tensor of atom positions.
         atoms: (N,) tensor of atom type indices.
         elements: (N,) tensor of element indices.
         sequence: (R,) tensor of residue type indices.
-        is_nonpoly: (N,) boolean tensor marking non-polymer atoms.
         names: List of chain names.
         strands: List of strand identifiers.
         lengths: (C,) tensor of residues per chain.
-        nonpoly: Count of non-polymer atoms.
+        polymer_count: Number of polymer atoms (first polymer_count atoms).
+        nonpoly: Count of non-polymer atoms (last nonpoly atoms).
     """
 
     def __init__(
@@ -63,8 +67,7 @@ class Polymer:
         names: list[str],
         strands: list[str],
         lengths: torch.Tensor,
-        nonpoly: int = 0,
-        is_nonpoly: torch.Tensor | None = None,
+        polymer_count: int | None = None,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -79,8 +82,8 @@ class Polymer:
             names: List of chain names.
             strands: List of strand identifiers.
             lengths: (C,) tensor of residues per chain.
-            nonpoly: Count of non-polymer atoms.
-            is_nonpoly: Boolean mask marking non-polymer atoms.
+            polymer_count: Number of polymer atoms. If None, all atoms
+                are assumed to be polymer atoms.
 
         Raises:
             ValueError: If tensor sizes are inconsistent.
@@ -88,7 +91,16 @@ class Polymer:
         self._id = id or UNKNOWN
         self.names = names
         self.strands = strands
-        self.nonpoly = nonpoly
+
+        # Store polymer/nonpoly counts
+        # If polymer_count is None, assume all atoms are polymer (backward compat)
+        total_atoms = coordinates.size(0)
+        if polymer_count is not None:
+            self.polymer_count = polymer_count
+            self.nonpoly = total_atoms - polymer_count
+        else:
+            self.polymer_count = total_atoms
+            self.nonpoly = 0
 
         if not all_equal(
             coordinates.size(0),
@@ -104,9 +116,9 @@ class Polymer:
         chn_count = sizes[Scale.CHAIN].sum().item()
         mol_count = sizes[Scale.MOLECULE].sum().item()
 
-        if not all_equal(res_count + nonpoly, chn_count, mol_count):
+        if not all_equal(res_count + self.nonpoly, chn_count, mol_count):
             raise ValueError(
-                f"Atom counts do not match: residues ({res_count} + {nonpoly}), "
+                f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
                 f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.id()}."
             )
 
@@ -116,12 +128,6 @@ class Polymer:
         self.sequence = sequence
         self._sizes = sizes
         self.lengths = lengths
-
-        # Initialize is_nonpoly mask (default to all False if not provided)
-        if is_nonpoly is not None:
-            self.is_nonpoly = is_nonpoly
-        else:
-            self.is_nonpoly = torch.zeros(coordinates.size(0), dtype=torch.bool)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -288,7 +294,17 @@ class Polymer:
 
         Returns:
             Reduced features. For MIN/MAX, returns (values, indices).
+
+        Note:
+            When reducing to RESIDUE scale, non-polymer atoms are excluded
+            since they don't belong to any residue.
         """
+        # Non-polymer atoms don't belong to residues, so slice them out
+        # when reducing to RESIDUE scale. With reordered atoms, polymer
+        # atoms are always first [0, polymer_count), so we can use simple slicing.
+        if scale == Scale.RESIDUE and self.nonpoly > 0:
+            features = features[:self.polymer_count]
+
         count = self.size(scale)
         sizes = self._sizes[scale]
         ix = create_reduction_index(count, sizes)
@@ -545,17 +561,15 @@ class Polymer:
         names = filter_by_mask(self.names, chn_mask)
         strands = filter_by_mask(self.strands, chn_mask)
 
-        # Calculate nonpoly atoms (atoms not belonging to residues)
-        res_atoms = sizes[Scale.RESIDUE].sum().item()
-        chn_atoms = sizes[Scale.CHAIN].sum().item()
-        nonpoly = chn_atoms - res_atoms
-
-        # Filter is_nonpoly mask
-        is_nonpoly = self.is_nonpoly[mask]
+        # Calculate new polymer_count: count how many of the first
+        # polymer_count atoms survive the mask
+        polymer_mask = torch.zeros(self.size(), dtype=torch.bool)
+        polymer_mask[:self.polymer_count] = True
+        new_polymer_count = (mask & polymer_mask).sum().item()
 
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, nonpoly, is_nonpoly,
+            self._id, names, strands, lengths, new_polymer_count,
         )
 
     def select(self: Polymer, ix: torch.Tensor | int) -> Polymer:
@@ -589,17 +603,13 @@ class Polymer:
         names = [self.names[j] for j in ix]
         strands = [self.strands[j] for j in ix]
 
-        # Calculate nonpoly atoms (atoms not belonging to residues)
-        res_atoms = sizes[Scale.RESIDUE].sum().item()
-        chn_atoms = sizes[Scale.CHAIN].sum().item()
-        nonpoly = chn_atoms - res_atoms
-
-        # Filter is_nonpoly mask
-        is_nonpoly = self.is_nonpoly[atm_ix]
+        # Calculate new polymer_count from residue sizes
+        # (residue atoms are always polymer atoms)
+        new_polymer_count = sizes[Scale.RESIDUE].sum().item()
 
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, nonpoly, is_nonpoly,
+            self._id, names, strands, lengths, new_polymer_count,
         )
 
     def get_by_name(self: Polymer, name: torch.Tensor | int) -> Polymer:
@@ -638,8 +648,19 @@ class Polymer:
         Returns:
             New Polymer containing only recognized polymer atoms.
         """
-        # Filter out both non-polymer atoms and atoms with unknown types (-1)
-        mask = ~self.is_nonpoly & (self.atoms >= 0)
+        # With reordered atoms, polymer atoms are [0, polymer_count)
+        # Also filter out unknown atom types (-1)
+        if self.nonpoly == 0:
+            # No non-polymer atoms, but may still have unknown types
+            if (self.atoms < 0).any():
+                mask = self.atoms >= 0
+                return self[mask]
+            return self
+
+        # Create mask for polymer atoms with known types
+        mask = torch.zeros(self.size(), dtype=torch.bool)
+        mask[:self.polymer_count] = True
+        mask = mask & (self.atoms >= 0)
         return self[mask]
 
     def chains(

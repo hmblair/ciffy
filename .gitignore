@@ -6,3 +6,4 @@ _generate/
 *.so
 poetry.lock
 .DS_Store
+.pytest_cache

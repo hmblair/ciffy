@@ -31,7 +31,14 @@ def _version() -> str:
     raise RuntimeError("Cannot find version information")
 
 
+def _readme() -> str:
+    with open(os.path.join(os.path.dirname(__file__), 'README.md'), encoding='utf-8') as f:
+        return f.read()
+
+
 VERSION = _version()
+DESCRIPTION = 'Fast CIF file parsing for molecular structures'
+LONG_DESCRIPTION = _readme()
 LICENSE = 'CC BY-NC 4.0'
 AUTHOR = 'Hamish M. Blair'
 EMAIL = 'hmblair@stanford.edu'
@@ -65,6 +72,9 @@ PACKAGES = [
 setup(
     name=NAME,
     version=VERSION,
+    description=DESCRIPTION,
+    long_description=LONG_DESCRIPTION,
+    long_description_content_type='text/markdown',
     packages=PACKAGES,
     ext_modules=[module],
     install_requires=[

@@ -536,9 +536,14 @@ class Polymer:
         names = filter_by_mask(self.names, chn_mask)
         strands = filter_by_mask(self.strands, chn_mask)
 
+        # Calculate nonpoly atoms (atoms not belonging to residues)
+        res_atoms = sizes[Scale.RESIDUE].sum().item()
+        chn_atoms = sizes[Scale.CHAIN].sum().item()
+        nonpoly = chn_atoms - res_atoms
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths,
+            self._id, names, strands, lengths, nonpoly,
         )
 
     def select(self: Polymer, ix: torch.Tensor | int) -> Polymer:
@@ -572,9 +577,14 @@ class Polymer:
         names = [self.names[j] for j in ix]
         strands = [self.strands[j] for j in ix]
 
+        # Calculate nonpoly atoms (atoms not belonging to residues)
+        res_atoms = sizes[Scale.RESIDUE].sum().item()
+        chn_atoms = sizes[Scale.CHAIN].sum().item()
+        nonpoly = chn_atoms - res_atoms
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths,
+            self._id, names, strands, lengths, nonpoly,
         )
 
     def get_by_name(self: Polymer, name: torch.Tensor | int) -> Polymer:

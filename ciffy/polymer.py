@@ -91,6 +91,21 @@ def _det(arr: Array) -> Array:
     return np.linalg.det(arr)
 
 
+def _nonzero_1d(arr: Array) -> Array:
+    """Get indices of non-zero elements in a 1D array, backend-agnostic."""
+    if is_torch(arr):
+        return arr.nonzero().squeeze(-1)
+    # NumPy nonzero returns a tuple of arrays, one per dimension
+    return arr.nonzero()[0]
+
+
+def _to_int64(arr: Array) -> Array:
+    """Convert array to int64 dtype, backend-agnostic."""
+    if is_torch(arr):
+        return arr.long()
+    return arr.astype(np.int64)
+
+
 class Polymer:
     """
     A molecular structure with coordinates, atom types, and hierarchy.
@@ -416,9 +431,9 @@ class Polymer:
             Expanded feature tensor.
         """
         if dest == Scale.ATOM:
-            return features.repeat_interleave(self._sizes[source], dim=0)
+            return backend.repeat_interleave(features, self._sizes[source])
         if dest == Scale.RESIDUE:
-            return features.repeat_interleave(self.lengths, dim=0)
+            return backend.repeat_interleave(features, self.lengths)
         raise ValueError(f"Cannot expand to {dest.name}")
 
     def count(
@@ -436,7 +451,7 @@ class Polymer:
         Returns:
             Count tensor with one value per scale unit.
         """
-        return self.reduce(mask.long(), scale, Reduction.SUM)
+        return self.reduce(_to_int64(mask), scale, Reduction.SUM)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Geometry Operations
@@ -694,7 +709,7 @@ class Polymer:
         Returns:
             New Polymer with chains of that type.
         """
-        ix = (self.molecule_type == mol.value).nonzero().squeeze(-1)
+        ix = _nonzero_1d(self.molecule_type == mol.value)
         return self.select(ix)
 
     def polymer_only(self: Polymer) -> Polymer:
@@ -768,7 +783,7 @@ class Polymer:
         poly._sizes = copy(self._sizes)
         poly._sizes[scale] = poly._sizes[scale][resolved]
 
-        poly.lengths = self.rreduce(resolved.long(), Scale.CHAIN, Reduction.SUM)
+        poly.lengths = self.rreduce(_to_int64(resolved), Scale.CHAIN, Reduction.SUM)
         poly.sequence = self.sequence[resolved]
 
         return poly

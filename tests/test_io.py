@@ -19,7 +19,7 @@ class TestLoad:
     def test_load_file(self, cif_file):
         from ciffy import load
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
         assert polymer is not None
         assert not polymer.empty()
         assert polymer.size() > 0
@@ -28,7 +28,7 @@ class TestLoad:
     def test_load_has_coordinates(self, cif_file):
         from ciffy import load
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
         assert polymer.coordinates.shape[0] == polymer.size()
         assert polymer.coordinates.shape[1] == 3
 
@@ -36,7 +36,7 @@ class TestLoad:
     def test_load_has_atoms(self, cif_file):
         from ciffy import load
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
         assert polymer.atoms.shape[0] == polymer.size()
         assert polymer.elements.shape[0] == polymer.size()
 
@@ -44,7 +44,7 @@ class TestLoad:
     def test_load_has_chains(self, cif_file):
         from ciffy import load, Scale
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
         assert polymer.size(Scale.CHAIN) > 0
         assert len(polymer.names) == polymer.size(Scale.CHAIN)
         assert len(polymer.strands) == polymer.size(Scale.CHAIN)
@@ -53,7 +53,7 @@ class TestLoad:
     def test_load_has_residues(self, cif_file):
         from ciffy import load, Scale
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
         assert polymer.size(Scale.RESIDUE) > 0
         assert polymer.sequence.shape[0] == polymer.size(Scale.RESIDUE)
 
@@ -61,7 +61,7 @@ class TestLoad:
         from ciffy import load
 
         with pytest.raises(OSError):
-            load("nonexistent_file.cif", backend="numpy")
+            load("nonexistent_file.cif", backend="torch")
 
 
 class TestSave:
@@ -71,7 +71,7 @@ class TestSave:
     def test_save_file(self, cif_file):
         from ciffy import load, RNA
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
 
         # Get RNA chains only (PDB writer currently supports RNA)
         rna = polymer.subset(RNA)
@@ -93,7 +93,7 @@ class TestSave:
     def test_save_and_check_content(self, cif_file):
         from ciffy import load, RNA
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
 
         rna = polymer.subset(RNA)
         if rna.empty():
@@ -129,7 +129,7 @@ class TestRoundTrip:
     def test_load_center_save(self, cif_file):
         from ciffy import load, RNA, MOLECULE
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
 
         rna = polymer.subset(RNA)
         if rna.empty():
@@ -154,7 +154,7 @@ class TestRoundTrip:
     def test_load_select_chain_save(self, cif_file):
         from ciffy import load, RNA
 
-        polymer = load(cif_file, backend="numpy")
+        polymer = load(cif_file, backend="torch")
 
         rna = polymer.subset(RNA)
         if rna.empty():

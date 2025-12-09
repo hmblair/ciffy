@@ -25,7 +25,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install numpy pytest
+          pip install numpy pytest torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e .
 
       - name: Run tests
@@ -101,6 +101,7 @@ jobs:
             LDFLAGS="-L/opt/homebrew/opt/libomp/lib -L/usr/local/opt/libomp/lib"
             CPPFLAGS="-I/opt/homebrew/opt/libomp/include -I/usr/local/opt/libomp/include"
           # Test the wheel
+          CIBW_BEFORE_TEST: pip install torch --index-url https://download.pytorch.org/whl/cpu
           CIBW_TEST_REQUIRES: pytest numpy
           CIBW_TEST_COMMAND: pytest {project}/tests -v --ignore={project}/tests/profile.py
 

@@ -25,7 +25,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install numpy pytest torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy pytest
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e .
 
       - name: Run tests

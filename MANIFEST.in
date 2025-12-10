@@ -3,3 +3,4 @@ include ciffy/src/*.c
 include ciffy/src/*.h
 include ciffy/src/hash/*.c
 include ciffy/src/hash/*.h
+include ciffy/src/_generate/*.py

@@ -82,25 +82,6 @@ static PyObject *_init_1d_arr_int(int size, int *data) {
 
 
 /**
- * @brief Create a 1D NumPy array from float data.
- *
- * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
- * is garbage collected.
- */
-static PyObject *_init_1d_arr_float(int size, float *data) {
-    npy_intp dims[1] = {size};
-    PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_FLOAT, data);
-    if (arr == NULL) {
-        free(data);
-        PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
-        return NULL;
-    }
-    PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
-    return arr;
-}
-
-
-/**
  * @brief Create a 2D NumPy array from float data.
  *
  * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array

@@ -34,6 +34,39 @@
     } \
 } while(0)
 
+/**
+ * @brief Bounds check with error reporting.
+ *
+ * Returns CIF_ERR_BOUNDS if val >= max.
+ */
+#define CIF_CHECK_BOUNDS(val, max, name, ctx) do { \
+    if ((val) >= (max)) { \
+        LOG_ERROR("%s index %d exceeds count %d", (name), (val), (max)); \
+        CIF_SET_ERROR((ctx), CIF_ERR_BOUNDS, "%s index %d exceeds count %d", (name), (val), (max)); \
+        return CIF_ERR_BOUNDS; \
+    } \
+} while(0)
+
+/**
+ * @brief Chain name validation with error reporting.
+ *
+ * Returns CIF_ERR_PARSE if name is NULL.
+ */
+#define CIF_CHECK_CHAIN_NAME(name, idx, ctx) do { \
+    if ((name) == NULL) { \
+        LOG_ERROR("NULL chain name at index %d", (idx)); \
+        CIF_SET_ERROR((ctx), CIF_ERR_PARSE, "NULL chain name at index %d", (idx)); \
+        return CIF_ERR_PARSE; \
+    } \
+} while(0)
+
+/**
+ * @brief Get strand name, defaulting to "?" if NULL or empty.
+ */
+static inline const char *_safe_strand(const char *s) {
+    return (s && s[0]) ? s : "?";
+}
+
 
 /* ============================================================================
  * INTERNAL: Block Writers
@@ -60,15 +93,8 @@ static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext
 
     for (int i = 0; i < cif->chains; i++) {
         const char *name = cif->names[i];
-        const char *strand = (cif->strands[i] && cif->strands[i][0]) ? cif->strands[i] : "?";
-
-        if (name == NULL) {
-            LOG_ERROR("NULL chain name at index %d", i);
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", i);
-            return CIF_ERR_PARSE;
-        }
-
-        CIF_FPRINTF(file, ctx, "%-4s %-4s\n", name, strand);
+        CIF_CHECK_CHAIN_NAME(name, i, ctx);
+        CIF_FPRINTF(file, ctx, "%-4s %-4s\n", name, _safe_strand(cif->strands[i]));
     }
 
     CIF_FPRINTF(file, ctx, "#\n");
@@ -95,23 +121,13 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
 
     for (int chain = 0; chain < cif->chains; chain++) {
         const char *chain_name = cif->names[chain];
-        const char *strand = (cif->strands[chain] && cif->strands[chain][0]) ? cif->strands[chain] : "?";
-
-        if (chain_name == NULL) {
-            LOG_ERROR("NULL chain name at index %d", chain);
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", chain);
-            return CIF_ERR_PARSE;
-        }
+        const char *strand = _safe_strand(cif->strands[chain]);
+        CIF_CHECK_CHAIN_NAME(chain_name, chain, ctx);
 
         int output_seq_id = 1;  /* Track output sequence number (restarts per chain) */
 
         for (int res = 0; res < cif->res_per_chain[chain]; res++) {
-            /* Bounds check before array access */
-            if (res_idx >= cif->residues) {
-                LOG_ERROR("Residue index %d exceeds residue count %d", res_idx, cif->residues);
-                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Residue index %d exceeds count %d", res_idx, cif->residues);
-                return CIF_ERR_BOUNDS;
-            }
+            CIF_CHECK_BOUNDS(res_idx, cif->residues, "Residue", ctx);
 
             /* Skip residues with no polymer atoms (e.g., HETATM-only residues) */
             if (cif->atoms_per_res[res_idx] == 0) {
@@ -130,10 +146,7 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
             }
 
             CIF_FPRINTF(file, ctx, "%-4s %-4s %-4s %-6d\n",
-                chain_name,
-                res_name,
-                strand,
-                output_seq_id);
+                chain_name, res_name, strand, output_seq_id);
             output_seq_id++;
             res_idx++;
         }
@@ -183,12 +196,7 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
     /* Iterate through chains */
     for (int chain = 0; chain < cif->chains; chain++) {
         const char *chain_name = cif->names[chain];
-
-        if (chain_name == NULL) {
-            LOG_ERROR("NULL chain name at index %d", chain);
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", chain);
-            return CIF_ERR_PARSE;
-        }
+        CIF_CHECK_CHAIN_NAME(chain_name, chain, ctx);
 
         LOG_DEBUG("Writing chain %s with %d residues",
                   chain_name, cif->res_per_chain[chain]);
@@ -197,12 +205,7 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
 
         /* Iterate through residues in this chain */
         for (int res = 0; res < cif->res_per_chain[chain]; res++) {
-            /* Bounds check for residue index */
-            if (res_idx >= cif->residues) {
-                LOG_ERROR("Residue index %d exceeds count %d", res_idx, cif->residues);
-                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Residue index %d exceeds count %d", res_idx, cif->residues);
-                return CIF_ERR_BOUNDS;
-            }
+            CIF_CHECK_BOUNDS(res_idx, cif->residues, "Residue", ctx);
 
             int atoms_in_res = cif->atoms_per_res[res_idx];
 
@@ -216,12 +219,7 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
 
             /* Iterate through atoms in this residue */
             for (int a = 0; a < atoms_in_res; a++) {
-                /* Bounds check for atom index */
-                if (atom_idx >= cif->atoms) {
-                    LOG_ERROR("Atom index %d exceeds count %d", atom_idx, cif->atoms);
-                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Atom index %d exceeds count %d", atom_idx, cif->atoms);
-                    return CIF_ERR_BOUNDS;
-                }
+                CIF_CHECK_BOUNDS(atom_idx, cif->atoms, "Atom", ctx);
 
                 /* Determine if polymer or non-polymer atom */
                 const char *group = (atom_idx < cif->polymer) ? "ATOM" : "HETATM";

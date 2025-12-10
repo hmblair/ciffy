@@ -83,6 +83,19 @@ for chain in polymer.chains(ciffy.RNA):
 rmsd = ciffy.rmsd(polymer1, polymer2, ciffy.MOLECULE)
 ```
 
+## Saving Structures
+
+```python
+# Save to CIF format (supports all molecule types)
+polymer.write("output.cif")
+
+# Save only polymer atoms (excludes water, ions, ligands)
+polymer.poly().write("polymer_only.cif")
+
+# Save to PDB format (RNA only, legacy)
+polymer.write_pdb("output.pdb")
+```
+
 ## Module Structure
 
 ```

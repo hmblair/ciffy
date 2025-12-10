@@ -975,20 +975,6 @@ class Polymer:
 
     def write(self: Polymer, filename: str) -> None:
         """
-        Write structure to a PDB file.
-
-        Args:
-            filename: Output file path.
-
-        Note:
-            Currently supports RNA structures only.
-            Use write_cif() for general structure writing.
-        """
-        from .io.writer import write_pdb
-        write_pdb(self, filename)
-
-    def write_cif(self: Polymer, filename: str) -> None:
-        """
         Write structure to an mmCIF file.
 
         Supports all molecule types (protein, RNA, DNA) and includes
@@ -999,10 +985,24 @@ class Polymer:
 
         Example:
             >>> polymer = ciffy.load("structure.cif", backend="numpy")
-            >>> polymer.write_cif("output.cif")
+            >>> polymer.write("output.cif")
         """
         from .io.writer import write_cif
         write_cif(self, filename)
+
+    def write_pdb(self: Polymer, filename: str) -> None:
+        """
+        Write structure to a PDB file (legacy).
+
+        Args:
+            filename: Output file path.
+
+        Note:
+            Currently supports RNA structures only.
+            Use write() for general structure writing.
+        """
+        from .io.writer import write_pdb
+        write_pdb(self, filename)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Utilities

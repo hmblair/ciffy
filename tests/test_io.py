@@ -116,7 +116,7 @@ class TestSave:
             output_path = f.name
 
         try:
-            rna.write(output_path)
+            rna.write_pdb(output_path)
             assert os.path.exists(output_path)
             assert os.path.getsize(output_path) > 0
         finally:
@@ -140,7 +140,7 @@ class TestSave:
             output_path = f.name
 
         try:
-            rna.write(output_path)
+            rna.write_pdb(output_path)
 
             with open(output_path, 'r') as f:
                 content = f.read()
@@ -183,7 +183,7 @@ class TestRoundTrip:
             output_path = f.name
 
         try:
-            centered.write(output_path)
+            centered.write_pdb(output_path)
             assert os.path.exists(output_path)
             assert os.path.getsize(output_path) > 0
         finally:
@@ -211,7 +211,7 @@ class TestRoundTrip:
             output_path = f.name
 
         try:
-            first_chain.write(output_path)
+            first_chain.write_pdb(output_path)
             assert os.path.exists(output_path)
         finally:
             if os.path.exists(output_path):
@@ -233,7 +233,7 @@ class TestCifSave:
             output_path = f.name
 
         try:
-            polymer.write_cif(output_path)
+            polymer.write(output_path)
             assert os.path.exists(output_path)
             assert os.path.getsize(output_path) > 0
         finally:
@@ -252,7 +252,7 @@ class TestCifSave:
             output_path = f.name
 
         try:
-            polymer.write_cif(output_path)
+            polymer.write(output_path)
 
             with open(output_path, 'r') as f:
                 content = f.read()
@@ -281,7 +281,7 @@ class TestCifSave:
             output_path = f.name
 
         try:
-            original.write_cif(output_path)
+            original.write(output_path)
             reloaded = load(output_path, backend=backend)
 
             # Note: CIF writer currently only writes polymer atoms,
@@ -318,7 +318,7 @@ class TestCifSave:
             output_path = f.name
 
         try:
-            original.write_cif(output_path)
+            original.write(output_path)
             reloaded = load(output_path, backend=backend)
 
             # Verify reloaded polymer has valid sequence
@@ -351,7 +351,7 @@ class TestCifSave:
             output_path = f.name
 
         try:
-            rna.write_cif(output_path)
+            rna.write(output_path)
             assert os.path.exists(output_path)
             assert os.path.getsize(output_path) > 0
 

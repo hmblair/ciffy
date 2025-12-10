@@ -94,6 +94,67 @@ class TestLoad:
         # Verify coordinates are equivalent
         assert np.allclose(np_polymer.coordinates, np_polymer2.coordinates)
 
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_repr(self, cif_file, backend):
+        """Test that __repr__ contains accurate information."""
+        from ciffy import load, Scale
+
+        polymer = load(cif_file, backend=backend)
+        repr_str = repr(polymer)
+
+        # Check header line contains PDB ID, atom count, and backend
+        assert polymer.id() in repr_str
+        assert str(polymer.size()) in repr_str
+        assert backend in repr_str
+
+        # Check column headers are present
+        assert "Type" in repr_str
+        assert "# Res" in repr_str
+        assert "# Atom" in repr_str
+
+        # Check each chain is listed with correct information
+        for ix in range(polymer.size(Scale.CHAIN)):
+            chain_name = polymer.names[ix]
+            residue_count = polymer.lengths[ix].item()
+            atom_count = polymer._sizes[Scale.CHAIN][ix].item()
+
+            # Chain name should appear in output
+            assert chain_name in repr_str
+
+            # Residue and atom counts should appear (as strings in the line)
+            assert str(residue_count) in repr_str
+            assert str(atom_count) in repr_str
+
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_repr_molecule_types(self, cif_file, backend):
+        """Test that molecule types in __repr__ are valid."""
+        from ciffy import load, Molecule
+
+        polymer = load(cif_file, backend=backend)
+        repr_str = repr(polymer)
+
+        # All molecule type names should be valid
+        valid_types = {m.name for m in Molecule}
+        lines = repr_str.strip().split("\n")
+
+        # Skip header lines (first 3: title, separator, column headers)
+        # Data lines start after "Type" header line
+        data_started = False
+        for line in lines:
+            if "Type" in line and "# Res" in line:
+                data_started = True
+                continue
+            if not data_started:
+                continue
+            if line.strip():
+                # Extract molecule type (second column after chain name)
+                parts = line.split()
+                if len(parts) >= 4:  # chain, type, residues, atoms
+                    mol_type = parts[1]
+                    assert mol_type in valid_types, f"Invalid molecule type: {mol_type}"
+
 
 class TestCifSave:
     """Test CIF file saving with both backends."""

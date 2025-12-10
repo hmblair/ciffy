@@ -164,6 +164,38 @@ def print_results(results: dict) -> None:
         print("Biotite:     (not installed)")
 
 
+def generate_markdown_table(all_results: list[dict]) -> str:
+    """Generate a markdown table from benchmark results."""
+    lines = [
+        "| Structure | Atoms | ciffy | BioPython | Biotite |",
+        "|-----------|------:|------:|----------:|--------:|",
+    ]
+
+    for r in all_results:
+        c = r["ciffy"]
+        ciffy_ms = f"{c['mean']*1000:.2f} ms"
+
+        if r["biopython"]:
+            bp = r["biopython"]
+            bp_speedup = bp["mean"] / c["mean"]
+            biopython_str = f"{bp['mean']*1000:.0f} ms ({bp_speedup:.0f}x)"
+        else:
+            biopython_str = "—"
+
+        if r["biotite"]:
+            bt = r["biotite"]
+            bt_speedup = bt["mean"] / c["mean"]
+            biotite_str = f"{bt['mean']*1000:.0f} ms ({bt_speedup:.0f}x)"
+        else:
+            biotite_str = "—"
+
+        lines.append(
+            f"| {r['pdb_id']} | {r['atoms']:,} | {ciffy_ms} | {biopython_str} | {biotite_str} |"
+        )
+
+    return "\n".join(lines)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pytest Integration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,16 +226,25 @@ class TestBenchmark:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse
     import ciffy
-    print("ciffy Performance Benchmark")
-    print("="*60)
-    print(f"ciffy version: {ciffy.__version__}")
 
+    parser = argparse.ArgumentParser(description="ciffy performance benchmark")
+    parser.add_argument("--markdown", action="store_true", help="Output markdown table")
+    args = parser.parse_args()
+
+    all_results = []
     for pdb_id, filepath in TEST_FILES:
         if os.path.exists(filepath):
             results = benchmark_file(pdb_id, filepath)
-            print_results(results)
-        else:
-            print(f"\nSkipping {pdb_id}: file not found")
+            all_results.append(results)
 
-    print()
+    if args.markdown:
+        print(generate_markdown_table(all_results))
+    else:
+        print("ciffy Performance Benchmark")
+        print("="*60)
+        print(f"ciffy version: {ciffy.__version__}")
+        for results in all_results:
+            print_results(results)
+        print()

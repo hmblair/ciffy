@@ -19,6 +19,9 @@ from .operations.alignment import kabsch_distance as rmsd
 from .io.loader import load
 from .io.writer import write_cif
 
+# Vocabulary sizes (for embedding layers)
+from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
+
 # Convenience aliases
 RESIDUE = Scale.RESIDUE
 CHAIN = Scale.CHAIN
@@ -40,6 +43,10 @@ __all__ = [
     "load",
     "write_cif",
     "rmsd",
+    # Vocabulary sizes
+    "NUM_ELEMENTS",
+    "NUM_RESIDUES",
+    "NUM_ATOMS",
     # Convenience aliases
     "RESIDUE",
     "CHAIN",

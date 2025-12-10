@@ -3,9 +3,10 @@
 Auto-generate hash lookup tables for CIF parsing and writing.
 
 Generates:
-  - atom.gperf, residue.gperf, element.gperf (forward lookups)
+  - hash/atom.gperf, hash/residue.gperf, hash/element.gperf (forward lookups)
   - hash/atom.c, hash/residue.c, hash/element.c (gperf output)
   - hash/reverse.h (reverse lookups for writing)
+  - biochemistry/_generated_atoms.py (Python enums with auto-assigned indices)
 
 Usage:
   python generate.py [--gperf-path /path/to/gperf]
@@ -34,21 +35,44 @@ def find_gperf():
     raise RuntimeError("gperf not found. Install with: brew install gperf (macOS) or apt install gperf (Linux)")
 
 
-def generate_gperf_files():
-    """Generate .gperf source files from Python enums."""
-    from ciffy.biochemistry.nucleotides import (
-        Adenosine, Cytosine, Guanosine, Uridine,
-        GuanosineTriphosphate, CytidineTriphosphate, Deoxyguanosine,
-    )
+def to_python_name(cif_name: str) -> str:
+    """Convert CIF atom name to valid Python identifier.
+
+    Examples:
+        "C5'" -> "C5p"
+        "H5''" -> "H5pp"
+        "CA" -> "CA"
+    """
+    return cif_name.replace("'", "p")
+
+
+def generate_all():
+    """Generate all lookup tables and Python enums."""
+    from ciffy.biochemistry.atoms import ALL_ATOMS
     from ciffy.biochemistry.residues import Residue
     from ciffy.biochemistry.elements import Element
 
-    # Output directory for generated files
-    hash_dir = Path("../hash")
+    # Output directories
+    hash_dir = Path(__file__).parent.parent / "hash"
+    biochem_dir = Path(__file__).parent.parent.parent / "biochemistry"
     hash_dir.mkdir(exist_ok=True)
 
-    # === atom.gperf ===
-    atom_str = """%define lookup-function-name _lookup_atom
+    # === Assign indices to all atoms ===
+    # Index 0 is reserved for "unknown"
+    atom_index = {}  # (residue, atom_name) -> index
+    current_idx = 1
+
+    for residue, atoms in ALL_ATOMS.items():
+        for atom in atoms:
+            key = (residue, atom)
+            if key not in atom_index:
+                atom_index[key] = current_idx
+                current_idx += 1
+
+    print(f"Assigned indices to {len(atom_index)} atoms (1-{current_idx - 1})")
+
+    # === Generate atom.gperf ===
+    atom_gperf = """%define lookup-function-name _lookup_atom
 %define hash-function-name _hash_atom
 %define constants-prefix ATOM
 %struct-type
@@ -58,31 +82,14 @@ def generate_gperf_files():
 struct _LOOKUP;
 %%
 """
-    # Helper to convert Python name to CIF name
-    def to_cif_name(name):
-        if name.endswith('pp'):
-            return name[:-2] + "''"
-        elif name.endswith('p'):
-            return name[:-1] + "'"
-        return name
-
-    # Standard nucleotides
-    for prefix, cls in [("A", Adenosine), ("C", Cytosine), ("G", Guanosine), ("U", Uridine)]:
-        for member in cls:
-            cif_name = to_cif_name(member.name)
-            atom_str += f"{prefix}_{cif_name}, {member.value}\n"
-
-    # Modified nucleotides
-    for prefix, cls in [("GTP", GuanosineTriphosphate), ("CCC", CytidineTriphosphate), ("GNG", Deoxyguanosine)]:
-        for member in cls:
-            cif_name = to_cif_name(member.name)
-            atom_str += f"{prefix}_{cif_name}, {member.value}\n"
+    for (residue, atom), idx in sorted(atom_index.items(), key=lambda x: x[1]):
+        atom_gperf += f"{residue}_{atom}, {idx}\n"
 
     with open(hash_dir / "atom.gperf", "w") as f:
-        f.write(atom_str)
+        f.write(atom_gperf)
 
-    # === residue.gperf ===
-    residue_str = """%define lookup-function-name _lookup_residue
+    # === Generate residue.gperf ===
+    residue_gperf = """%define lookup-function-name _lookup_residue
 %define hash-function-name _hash_residue
 %define constants-prefix RESIDUE
 %struct-type
@@ -93,13 +100,13 @@ struct _LOOKUP;
 %%
 """
     for member in Residue:
-        residue_str += f"{member.name}, {member.value}\n"
+        residue_gperf += f"{member.name}, {member.value}\n"
 
     with open(hash_dir / "residue.gperf", "w") as f:
-        f.write(residue_str)
+        f.write(residue_gperf)
 
-    # === element.gperf (static, rarely changes) ===
-    element_str = """%define lookup-function-name _lookup_element
+    # === Generate element.gperf ===
+    element_gperf = """%define lookup-function-name _lookup_element
 %define hash-function-name _hash_element
 %define constants-prefix ELEMENT
 %struct-type
@@ -110,57 +117,40 @@ struct _LOOKUP;
 %%
 """
     for member in Element:
-        element_str += f"{member.name}, {member.value}\n"
+        element_gperf += f"{member.name}, {member.value}\n"
 
     with open(hash_dir / "element.gperf", "w") as f:
-        f.write(element_str)
+        f.write(element_gperf)
 
     print("Generated: hash/atom.gperf, hash/residue.gperf, hash/element.gperf")
 
+    # === Generate reverse.h ===
+    generate_reverse_header(hash_dir, atom_index, Residue, Element)
 
-def generate_reverse_header():
+    # === Generate Python enums ===
+    generate_python_enums(biochem_dir, atom_index)
+
+    return atom_index
+
+
+def generate_reverse_header(hash_dir, atom_index, Residue, Element):
     """Generate reverse.h for CIF writing."""
-    from ciffy.biochemistry.nucleotides import (
-        Adenosine, Cytosine, Guanosine, Uridine,
-        GuanosineTriphosphate, CytidineTriphosphate, Deoxyguanosine,
-    )
-    from ciffy.biochemistry.residues import Residue
-    from ciffy.biochemistry.elements import Element
-
-    # Helper to convert Python name to CIF name
-    def to_cif_name(name):
-        if name.endswith('pp'):
-            return name[:-2] + "''"
-        elif name.endswith('p'):
-            return name[:-1] + "'"
-        return name
-
-    # Collect all atoms with their info
-    atoms = {}  # idx -> (residue_prefix, atom_name)
-    for prefix, cls in [
-        ("A", Adenosine), ("C", Cytosine), ("G", Guanosine), ("U", Uridine),
-        ("GTP", GuanosineTriphosphate), ("CCC", CytidineTriphosphate), ("GNG", Deoxyguanosine),
-    ]:
-        for member in cls:
-            cif_name = to_cif_name(member.name)
-            atoms[member.value] = (prefix, cif_name)
+    # Collect atoms info
+    atoms = {}  # idx -> (residue, atom_name)
+    for (residue, atom), idx in atom_index.items():
+        atoms[idx] = (residue, atom)
 
     # Collect residues
-    residues = {}  # idx -> name
-    for member in Residue:
-        residues[member.value] = member.name
+    residues = {member.value: member.name for member in Residue}
 
     # Collect elements
-    elements = {}  # idx -> symbol
-    for member in Element:
-        elements[member.value] = member.name
+    elements = {member.value: member.name for member in Element}
 
     # Find max indices
     atom_max = max(atoms.keys()) + 1
     residue_max = max(residues.keys()) + 1
     element_max = max(elements.keys()) + 1
 
-    # Generate header
     header = f'''#ifndef _CIFFY_REVERSE_H
 #define _CIFFY_REVERSE_H
 
@@ -253,15 +243,152 @@ static inline const AtomInfo *atom_info(int idx) {
 #endif /* _CIFFY_REVERSE_H */
 '''
 
-    with open("../hash/reverse.h", "w") as f:
+    with open(hash_dir / "reverse.h", "w") as f:
         f.write(header)
 
     print("Generated: hash/reverse.h")
 
 
+def generate_python_enums(biochem_dir, atom_index):
+    """Generate Python enum file with auto-assigned indices."""
+    from ciffy.biochemistry.atoms import (
+        NUCLEOTIDE_ATOMS, AMINO_ACID_ATOMS,
+    )
+
+    # Build per-residue atom dicts
+    residue_atoms = {}  # residue -> {python_name: index}
+    for (residue, atom), idx in atom_index.items():
+        if residue not in residue_atoms:
+            residue_atoms[residue] = {}
+        python_name = to_python_name(atom)
+        residue_atoms[residue][python_name] = idx
+
+    # Class name mapping
+    class_names = {
+        # Nucleotides
+        "A": "Adenosine",
+        "C": "Cytosine",
+        "G": "Guanosine",
+        "U": "Uridine",
+        "GTP": "GuanosineTriphosphate",
+        "CCC": "CytidineTriphosphate",
+        "GNG": "Deoxyguanosine",
+        # Amino acids
+        "GLY": "Glycine",
+        "ALA": "Alanine",
+        "VAL": "Valine",
+        "LEU": "Leucine",
+        "ILE": "Isoleucine",
+        "PRO": "Proline",
+        "PHE": "Phenylalanine",
+        "TRP": "Tryptophan",
+        "MET": "Methionine",
+        "CYS": "Cysteine",
+        "SER": "Serine",
+        "THR": "Threonine",
+        "ASN": "Asparagine",
+        "GLN": "Glutamine",
+        "ASP": "AsparticAcid",
+        "GLU": "GlutamicAcid",
+        "LYS": "Lysine",
+        "ARG": "Arginine",
+        "HIS": "Histidine",
+        "TYR": "Tyrosine",
+    }
+
+    code = '''"""
+Auto-generated atom enum definitions.
+
+DO NOT EDIT MANUALLY - Generated by ciffy/src/codegen/generate.py
+
+To modify atoms, edit ciffy/biochemistry/atoms.py and run:
+    python ciffy/src/codegen/generate.py
+"""
+
+from ..utils import IndexEnum
+
+
+'''
+
+    # Generate nucleotide classes
+    code += "# " + "=" * 77 + "\n"
+    code += "# NUCLEOTIDES\n"
+    code += "# " + "=" * 77 + "\n\n"
+
+    for residue in NUCLEOTIDE_ATOMS.keys():
+        class_name = class_names[residue]
+        atoms = residue_atoms[residue]
+        code += f"class {class_name}(IndexEnum):\n"
+        code += f'    """{class_name} ({residue}) atom indices."""\n'
+        for python_name, idx in atoms.items():
+            code += f"    {python_name} = {idx}\n"
+        code += "\n\n"
+
+    # Generate amino acid classes
+    code += "# " + "=" * 77 + "\n"
+    code += "# AMINO ACIDS\n"
+    code += "# " + "=" * 77 + "\n\n"
+
+    for residue in AMINO_ACID_ATOMS.keys():
+        class_name = class_names[residue]
+        atoms = residue_atoms[residue]
+        code += f"class {class_name}(IndexEnum):\n"
+        code += f'    """{class_name} ({residue}) atom indices."""\n'
+        for python_name, idx in atoms.items():
+            code += f"    {python_name} = {idx}\n"
+        code += "\n\n"
+
+    # Generate combined enums
+    code += "# " + "=" * 77 + "\n"
+    code += "# COMBINED ENUMS\n"
+    code += "# " + "=" * 77 + "\n\n"
+
+    # RibonucleicAcid
+    code += "RibonucleicAcid = IndexEnum(\n"
+    code += '    "RibonucleicAcid",\n'
+    code += '    Adenosine.dict("A_") | Cytosine.dict("C_") |\n'
+    code += '    Guanosine.dict("G_") | Uridine.dict("U_")\n'
+    code += ")\n\n"
+
+    # RibonucleicAcidNoPrefix
+    code += "RibonucleicAcidNoPrefix = IndexEnum(\n"
+    code += '    "RibonucleicAcid",\n'
+    code += '    Adenosine.dict() | Cytosine.dict() |\n'
+    code += '    Guanosine.dict() | Uridine.dict()\n'
+    code += ")\n\n"
+
+    # ModifiedNucleotides
+    code += "ModifiedNucleotides = IndexEnum(\n"
+    code += '    "ModifiedNucleotides",\n'
+    code += '    GuanosineTriphosphate.dict("GTP_") |\n'
+    code += '    CytidineTriphosphate.dict("CCC_") |\n'
+    code += '    Deoxyguanosine.dict("GNG_")\n'
+    code += ")\n\n"
+
+    # AminoAcids
+    code += "AminoAcids = IndexEnum(\n"
+    code += '    "AminoAcids",\n'
+    code += '    Glycine.dict("GLY_") | Alanine.dict("ALA_") |\n'
+    code += '    Valine.dict("VAL_") | Leucine.dict("LEU_") |\n'
+    code += '    Isoleucine.dict("ILE_") | Proline.dict("PRO_") |\n'
+    code += '    Phenylalanine.dict("PHE_") | Tryptophan.dict("TRP_") |\n'
+    code += '    Methionine.dict("MET_") | Cysteine.dict("CYS_") |\n'
+    code += '    Serine.dict("SER_") | Threonine.dict("THR_") |\n'
+    code += '    Asparagine.dict("ASN_") | Glutamine.dict("GLN_") |\n'
+    code += '    AsparticAcid.dict("ASP_") | GlutamicAcid.dict("GLU_") |\n'
+    code += '    Lysine.dict("LYS_") | Arginine.dict("ARG_") |\n'
+    code += '    Histidine.dict("HIS_") | Tyrosine.dict("TYR_")\n'
+    code += ")\n"
+
+    with open(biochem_dir / "_generated_atoms.py", "w") as f:
+        f.write(code)
+
+    print("Generated: biochemistry/_generated_atoms.py")
+
+
 def run_gperf(gperf_path):
     """Run gperf to generate .c files from .gperf files."""
-    hash_dir = Path("../hash")
+    hash_dir = Path(__file__).parent.parent / "hash"
 
     for name in ["element", "residue", "atom"]:
         input_file = hash_dir / f"{name}.gperf"
@@ -288,16 +415,8 @@ def main():
     parser.add_argument("--skip-gperf", action="store_true", help="Skip running gperf (only generate .gperf files)")
     args = parser.parse_args()
 
-    # Change to script directory
-    script_dir = Path(__file__).parent
-    import os
-    os.chdir(script_dir)
-
-    # Generate .gperf files
-    generate_gperf_files()
-
-    # Generate reverse.h
-    generate_reverse_header()
+    # Generate .gperf files, reverse.h, and Python enums
+    generate_all()
 
     # Run gperf
     if not args.skip_gperf:

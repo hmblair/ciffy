@@ -1,28 +1,28 @@
 """
-Base enum classes with tensor conversion capabilities.
+Base enum classes with array conversion capabilities.
 
 Provides IndexEnum for enums that map to integer indices and PairEnum
-for storing pairs of enum values with tensor conversion.
+for storing pairs of enum values with array conversion.
 """
 
 from __future__ import annotations
 from enum import Enum
 import itertools
-import torch
+import numpy as np
 
 
 class PairEnum(list):
     """
-    Store a set of pairs of atom enums with tensor conversion capabilities.
+    Store a set of pairs of atom enums with array conversion capabilities.
 
     Useful for representing bonds or other pairwise relationships between
-    enum values. Provides methods to convert pairs to tensor indices and
+    enum values. Provides methods to convert pairs to array indices and
     to create pairwise lookup tables.
 
     Example:
         >>> bonds = PairEnum([(Atom.C, Atom.O), (Atom.C, Atom.N)])
         >>> bonds.indices()
-        tensor([[6, 8], [6, 7]])
+        array([[6, 8], [6, 7]])
     """
 
     def __init__(
@@ -37,28 +37,28 @@ class PairEnum(list):
     ) -> PairEnum:
         return self.__class__(super().__add__(other))
 
-    def indices(self: PairEnum) -> torch.Tensor:
+    def indices(self: PairEnum) -> np.ndarray:
         """
-        Convert pairs to a tensor of their integer values.
+        Convert pairs to an array of their integer values.
 
         Returns:
-            Tensor of shape (N, 2) where N is the number of pairs.
+            Array of shape (N, 2) where N is the number of pairs.
         """
-        return torch.tensor([
+        return np.array([
             [atom1.value, atom2.value]
             for atom1, atom2 in self
-        ])
+        ], dtype=np.int64)
 
-    def pairwise(self: PairEnum) -> torch.Tensor:
+    def pairwise(self: PairEnum) -> np.ndarray:
         """
         Create a symmetric lookup table for pair indices.
 
         Returns:
-            Square tensor where entry [i,j] contains the pair index
+            Square array where entry [i,j] contains the pair index
             for atoms with values i and j, or -1 if no such pair exists.
         """
         n = self.indices().max() + 1
-        table = torch.ones(n, n, dtype=torch.long) * -1
+        table = np.full((n, n), -1, dtype=np.int64)
 
         for ix, (x, y) in enumerate(self):
             table[x.value, y.value] = ix
@@ -69,9 +69,9 @@ class PairEnum(list):
 
 class IndexEnum(Enum):
     """
-    An enum with tensor conversion capabilities.
+    An enum with array conversion capabilities.
 
-    Extends standard Enum with methods to convert enum values to tensors,
+    Extends standard Enum with methods to convert enum values to arrays,
     lists, and dictionaries. Useful for biochemistry constants where enum
     values represent atom indices.
 
@@ -81,22 +81,22 @@ class IndexEnum(Enum):
         ...     N = 7
         ...     O = 8
         >>> Element.index()
-        tensor([6, 7, 8])
+        array([6, 7, 8])
         >>> Element.dict()
         {'C': 6, 'N': 7, 'O': 8}
     """
 
     @classmethod
-    def index(cls: type[IndexEnum]) -> torch.Tensor:
+    def index(cls: type[IndexEnum]) -> np.ndarray:
         """
-        Return a tensor of all enum values.
+        Return an array of all enum values.
 
         Returns:
-            Long tensor containing all integer values in the enum.
+            Integer array containing all values in the enum.
         """
-        return torch.tensor([
+        return np.array([
             atom.value for atom in cls
-        ]).long()
+        ], dtype=np.int64)
 
     @classmethod
     def list(

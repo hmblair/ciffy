@@ -125,14 +125,14 @@ class TestUtilityFunctions:
         assert result == ['a', 'c']
 
     def test_index_enum(self):
-        import torch
+        import numpy as np
         from ciffy.utils import IndexEnum
 
         TestEnum = IndexEnum("TestEnum", {"A": 1, "B": 2, "C": 3})
         assert TestEnum.A.value == 1
 
         indices = TestEnum.index()
-        assert torch.equal(indices, torch.tensor([1, 2, 3]))
+        assert np.array_equal(indices, np.array([1, 2, 3]))
 
         d = TestEnum.dict()
         assert d == {"A": 1, "B": 2, "C": 3}

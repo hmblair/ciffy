@@ -5,8 +5,10 @@ Common utilities used throughout the codebase.
 """
 
 from __future__ import annotations
-from typing import TypeVar
-import torch
+from typing import TypeVar, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 T = TypeVar('T')
 
@@ -24,7 +26,7 @@ def all_equal(*values) -> bool:
     return len(set(values)) <= 1
 
 
-def filter_by_mask(items: list[T], mask: torch.Tensor) -> list[T]:
+def filter_by_mask(items: list[T], mask: "torch.Tensor") -> list[T]:
     """
     Filter a list by a boolean tensor mask.
 

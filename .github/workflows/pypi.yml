@@ -56,6 +56,9 @@ jobs:
       - name: Install build tools
         run: pip install build numpy
 
+      - name: Generate hash tables
+        run: PYTHONPATH=. python ciffy/src/codegen/generate.py
+
       - name: Build sdist
         run: python -m build --sdist
 

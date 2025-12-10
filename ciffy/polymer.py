@@ -70,6 +70,19 @@ def _bool_zeros_like_backend(template: Array, size: int) -> Array:
     return np.zeros(size, dtype=bool)
 
 
+def _as_backend(template: Array, arr: Array) -> Array:
+    """Convert arr to match the backend of template."""
+    if is_torch(template):
+        if not is_torch(arr):
+            import torch
+            return torch.from_numpy(np.asarray(arr))
+        return arr
+    else:
+        if is_torch(arr):
+            return arr.numpy()
+        return np.asarray(arr)
+
+
 def _cdist(x1: Array, x2: Array) -> Array:
     """Compute pairwise distances, backend-agnostic."""
     return backend.cdist(x1, x2)
@@ -696,6 +709,7 @@ class Polymer:
         Returns:
             New Polymer with matching atoms.
         """
+        name = _as_backend(self.atoms, name)
         mask = (self.atoms[:, None] == name).any(1)
         return self[mask]
 

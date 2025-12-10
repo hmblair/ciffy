@@ -1,5 +1,5 @@
 /**
- * @file cif_write.c
+ * @file writer.c
  * @brief CIF file writing implementation.
  *
  * Serializes mmCIF structures to standard mmCIF format.
@@ -10,7 +10,7 @@
  *   4. _atom_site block (coordinates and atom types)
  */
 
-#include "cif_write.h"
+#include "writer.h"
 #include "hash/reverse.h"
 #include "log.h"
 

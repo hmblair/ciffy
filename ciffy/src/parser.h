@@ -1,8 +1,8 @@
-#ifndef _CIFFY_CIF_H
-#define _CIFFY_CIF_H
+#ifndef _CIFFY_PARSER_H
+#define _CIFFY_PARSER_H
 
 /**
- * @file cif.h
+ * @file parser.h
  * @brief mmCIF-specific parsing structures and functions.
  *
  * Provides the main data structures for representing parsed mmCIF data
@@ -89,4 +89,4 @@ char *_get_id(char *buffer, CifErrorContext *ctx);
  */
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx);
 
-#endif /* _CIFFY_CIF_H */
+#endif /* _CIFFY_PARSER_H */

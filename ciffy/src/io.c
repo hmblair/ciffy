@@ -260,7 +260,16 @@ char *_get_attr_by_line(mmBlock *block, int line, int index, CifErrorContext *ct
             return NULL;
         }
 
-        char *ptr = block->start + line * block->width + block->offsets[index];
+        char *ptr;
+        if (block->variable_width) {
+            /* Variable-width: use line pointers and calculate offset per-line */
+            char *line_start = block->lines[line];
+            int offset = _get_offset(line_start, ' ', index);
+            ptr = line_start + offset;
+        } else {
+            /* Fixed-width: use precomputed offsets */
+            ptr = block->start + line * block->width + block->offsets[index];
+        }
         return _get_field(ptr, ctx);
 
     }
@@ -329,6 +338,46 @@ CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext 
  * Inline parsing functions (no allocation, cache-friendly)
  * ───────────────────────────────────────────────────────────────────────────── */
 
+CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
+    /* Count lines first by scanning for newlines */
+    int count = 0;
+    char *ptr = block->start;
+
+    while (*ptr != '\0' && !_is_section_end(ptr)) {
+        count++;
+        /* Advance to next line */
+        while (*ptr != '\n' && *ptr != '\0') ptr++;
+        if (*ptr == '\n') ptr++;
+    }
+
+    block->end = ptr;
+    block->size = count;
+
+    if (count == 0) {
+        block->lines = NULL;
+        return CIF_OK;
+    }
+
+    /* Allocate line pointer array */
+    block->lines = malloc((size_t)count * sizeof(char *));
+    if (block->lines == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate line pointers for %d lines", count);
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Second pass: populate pointers */
+    ptr = block->start;
+    for (int i = 0; i < count; i++) {
+        block->lines[i] = ptr;
+        while (*ptr != '\n' && *ptr != '\0') ptr++;
+        if (*ptr == '\n') ptr++;
+    }
+
+    return CIF_OK;
+}
+
+
 CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
 
     if (block->single || block->size <= 0) {
@@ -336,6 +385,17 @@ CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
         return CIF_OK;
     }
 
+    /* For variable-width blocks, lines are already populated by _scan_lines() */
+    if (block->variable_width) {
+        if (block->lines == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Variable-width block missing line pointers");
+            return CIF_ERR_PARSE;
+        }
+        return CIF_OK;
+    }
+
+    /* Fixed-width: compute from width */
     block->lines = malloc((size_t)block->size * sizeof(char *));
     if (block->lines == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
@@ -373,7 +433,16 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
         return NULL;
     }
 
-    char *ptr = block->lines[line] + block->offsets[index];
+    char *ptr;
+    if (block->variable_width) {
+        /* Variable-width: calculate offset for this specific line */
+        char *line_start = block->lines[line];
+        int offset = _get_offset(line_start, ' ', index);
+        ptr = line_start + offset;
+    } else {
+        /* Fixed-width: use precomputed offsets */
+        ptr = block->lines[line] + block->offsets[index];
+    }
 
     /* Skip leading whitespace */
     while (*ptr == ' ') ptr++;

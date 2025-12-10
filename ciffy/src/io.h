@@ -16,7 +16,7 @@
 
 #include "error.h"
 #include "common.h"
-#include "hash/lookup.h"
+#include "codegen/lookup.h"
 
 /** Sentinel value indicating attribute index not found */
 #define BAD_IX -1
@@ -36,12 +36,14 @@ typedef struct {
     char *category;     /**< Block category (e.g., "_atom_site.") */
     int  attributes;    /**< Number of attributes/columns in the block */
     int  size;          /**< Number of data entries (rows) */
-    int  width;         /**< Bytes per line (for multi-entry blocks) */
+    int  width;         /**< Bytes per line (for fixed-width blocks, 0 for variable) */
     bool single;        /**< true if single-entry block, false if loop */
+    bool variable_width;/**< true if lines have variable widths (fallback mode) */
     char *head;         /**< Pointer to start of header (attribute definitions) */
     char *start;        /**< Pointer to start of data section */
-    int  *offsets;      /**< Column byte offsets for multi-entry blocks */
-    char **lines;       /**< Pre-computed line pointers for cache efficiency */
+    char *end;          /**< Pointer to end of data section (for variable-width) */
+    int  *offsets;      /**< Column byte offsets (template from first line) */
+    char **lines;       /**< Line start pointers (always populated for variable-width) */
 
 } mmBlock;
 
@@ -195,6 +197,18 @@ CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Inline parsing functions (no allocation, cache-friendly)
  * ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Scan variable-width block for line boundaries.
+ *
+ * Populates block->lines by scanning for newlines. Sets block->size
+ * and block->end. Used as fallback when fixed-width parsing fails.
+ *
+ * @param block Block to scan (start must be set)
+ * @param ctx Error context, populated on failure
+ * @return CIF_OK on success, CIF_ERR_ALLOC on failure
+ */
+CifError _scan_lines(mmBlock *block, CifErrorContext *ctx);
 
 /**
  * @brief Pre-compute line pointers for a block.

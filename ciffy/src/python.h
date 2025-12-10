@@ -1,8 +1,8 @@
-#ifndef _CIFFY_PY_H
-#define _CIFFY_PY_H
+#ifndef _CIFFY_PYTHON_H
+#define _CIFFY_PYTHON_H
 
 /**
- * @file py.h
+ * @file python.h
  * @brief Python C API helper functions.
  *
  * Provides utilities for converting between C types and Python objects.
@@ -11,7 +11,7 @@
 #define PY_SSIZE_T_CLEAN
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 
-/* NumPy multi-file setup: _c.c defines the API, other files import it */
+/* NumPy multi-file setup: module.c defines the API, other files import it */
 #ifndef CIFFY_MAIN_MODULE
 #define NO_IMPORT_ARRAY
 #endif
@@ -100,4 +100,4 @@ char **_py_list_to_c_arr(PyObject *list, int *size);
  */
 void _free_c_str_arr(char **arr, int size);
 
-#endif /* _CIFFY_PY_H */
+#endif /* _CIFFY_PYTHON_H */

@@ -1,5 +1,5 @@
-#ifndef _CIFFY_H
-#define _CIFFY_H
+#ifndef _CIFFY_MODULE_H
+#define _CIFFY_MODULE_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,10 +7,10 @@
 #include <stdbool.h>
 
 #include "io.h"
-#include "py.h"
-#include "cif.h"
-#include "cif_write.h"
+#include "python.h"
+#include "parser.h"
+#include "writer.h"
 
 #define __py_init() if (PyArray_API == NULL) { import_array(); }
 
-#endif
+#endif /* _CIFFY_MODULE_H */

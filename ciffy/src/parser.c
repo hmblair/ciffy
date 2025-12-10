@@ -1,5 +1,5 @@
 /**
- * @file cif.c
+ * @file parser.c
  * @brief mmCIF parsing pipeline.
  *
  * Parses mmCIF files to extract molecular structure data including
@@ -12,7 +12,7 @@
  *   4. Atom Reordering   - Separate polymer/non-polymer atoms
  */
 
-#include "cif.h"
+#include "parser.h"
 #include "log.h"
 
 #include <math.h>    /* for isnan */

@@ -289,8 +289,8 @@ class TestCifSave:
             assert reloaded.size() == original.polymer_count
 
             # Verify polymer coordinates are close (allow small float precision loss)
-            orig_coords = np.array(original.coordinates[:original.polymer_count])
-            reload_coords = np.array(reloaded.coordinates)
+            orig_coords = np.asarray(original.coordinates[:original.polymer_count])
+            reload_coords = np.asarray(reloaded.coordinates)
             assert np.allclose(orig_coords, reload_coords, atol=0.001)
 
             # Verify chain count matches
@@ -322,7 +322,7 @@ class TestCifSave:
             reloaded = load(output_path, backend=backend)
 
             # Verify reloaded polymer has valid sequence
-            reload_seq = np.array(reloaded.sequence)
+            reload_seq = np.asarray(reloaded.sequence)
             assert len(reload_seq) > 0, "Reloaded structure should have residues"
 
             # Verify residue count matches what was written (polymer atoms only)

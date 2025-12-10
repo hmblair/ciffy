@@ -1,11 +1,11 @@
 /**
- * @file py.c
+ * @file python.c
  * @brief Python C API helper functions.
  *
  * Provides utilities for converting between C types and Python objects.
  */
 
-#include "py.h"
+#include "python.h"
 
 
 const char *_get_filename(PyObject *args) {

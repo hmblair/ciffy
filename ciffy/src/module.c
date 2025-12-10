@@ -1,14 +1,14 @@
 /**
- * @file _c.c
+ * @file module.c
  * @brief Python C extension entry point for ciffy.
  *
  * Provides the _load function that reads mmCIF files and returns
  * parsed molecular structure data as Python/NumPy objects.
  */
 
-/* Define CIFFY_MAIN_MODULE before including headers so py.h knows to import numpy */
+/* Define CIFFY_MAIN_MODULE before including headers so python.h knows to import numpy */
 #define CIFFY_MAIN_MODULE
-#include "_c.h"
+#include "module.h"
 #include "log.h"
 
 
@@ -307,6 +307,7 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
     if (!block.single) {
         /* Multi-entry block: calculate offsets and line width */
         block.start = *buffer;
+        block.variable_width = false;
         block.offsets = _get_offsets(block.start, block.attributes, ctx);
         if (block.offsets == NULL) {
             free(block.category);
@@ -326,12 +327,26 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
             return block;
         }
 
-        /* Count entries until section end */
+        /* Count entries until section end (assuming fixed-width) */
         while (**buffer != '\0' && !_is_section_end(*buffer)) {
             /* Check if we're at a valid position (previous char should be newline) */
             if (*buffer > block.start && (*buffer)[-1] != '\n') {
-                LOG_WARNING("Non-homogeneous line widths in block %s, stopping at %d entries",
-                            block.category, block.size);
+                /* Variable-width detected - fall back to line scanning */
+                LOG_INFO("Variable line widths in block %s, using fallback parser",
+                         block.category);
+                block.variable_width = true;
+
+                CifError err = _scan_lines(&block, ctx);
+                if (err != CIF_OK) {
+                    free(block.category);
+                    free(block.offsets);
+                    block.category = NULL;
+                    block.offsets = NULL;
+                    return block;
+                }
+
+                /* Advance buffer to end of data section */
+                *buffer = block.end;
                 break;
             }
 
@@ -353,6 +368,8 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
 static void _free_block(mmBlock *block) {
     block->head = NULL;
     block->start = NULL;
+    block->end = NULL;
+    block->variable_width = false;
 
     if (block->category != NULL) {
         free(block->category);
@@ -362,6 +379,11 @@ static void _free_block(mmBlock *block) {
     if (block->offsets != NULL) {
         free(block->offsets);
         block->offsets = NULL;
+    }
+
+    if (block->lines != NULL) {
+        free(block->lines);
+        block->lines = NULL;
     }
 }
 

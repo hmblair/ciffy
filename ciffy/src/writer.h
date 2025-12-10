@@ -1,8 +1,8 @@
-#ifndef _CIFFY_CIF_WRITE_H
-#define _CIFFY_CIF_WRITE_H
+#ifndef _CIFFY_WRITER_H
+#define _CIFFY_WRITER_H
 
 /**
- * @file cif_write.h
+ * @file writer.h
  * @brief CIF file writing declarations.
  *
  * Provides functions for serializing mmCIF structures back to CIF format.
@@ -11,7 +11,7 @@
  */
 
 #include <stdio.h>
-#include "cif.h"
+#include "parser.h"
 #include "error.h"
 
 /**
@@ -43,4 +43,4 @@ CifError _write_cif(const mmCIF *cif, const char *filename, CifErrorContext *ctx
  */
 CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx);
 
-#endif /* _CIFFY_CIF_WRITE_H */
+#endif /* _CIFFY_WRITER_H */

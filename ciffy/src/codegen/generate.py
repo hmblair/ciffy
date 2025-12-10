@@ -43,13 +43,17 @@ def generate_gperf_files():
     from ciffy.biochemistry.residues import Residue
     from ciffy.biochemistry.elements import Element
 
+    # Output directory for generated files
+    hash_dir = Path("../hash")
+    hash_dir.mkdir(exist_ok=True)
+
     # === atom.gperf ===
     atom_str = """%define lookup-function-name _lookup_atom
 %define hash-function-name _hash_atom
 %define constants-prefix ATOM
 %struct-type
 %{
-#include "lookup.h"
+#include "../codegen/lookup.h"
 %}
 struct _LOOKUP;
 %%
@@ -74,7 +78,7 @@ struct _LOOKUP;
             cif_name = to_cif_name(member.name)
             atom_str += f"{prefix}_{cif_name}, {member.value}\n"
 
-    with open("atom.gperf", "w") as f:
+    with open(hash_dir / "atom.gperf", "w") as f:
         f.write(atom_str)
 
     # === residue.gperf ===
@@ -83,7 +87,7 @@ struct _LOOKUP;
 %define constants-prefix RESIDUE
 %struct-type
 %{
-#include "lookup.h"
+#include "../codegen/lookup.h"
 %}
 struct _LOOKUP;
 %%
@@ -91,7 +95,7 @@ struct _LOOKUP;
     for member in Residue:
         residue_str += f"{member.name}, {member.value}\n"
 
-    with open("residue.gperf", "w") as f:
+    with open(hash_dir / "residue.gperf", "w") as f:
         f.write(residue_str)
 
     # === element.gperf (static, rarely changes) ===
@@ -100,7 +104,7 @@ struct _LOOKUP;
 %define constants-prefix ELEMENT
 %struct-type
 %{
-#include "lookup.h"
+#include "../codegen/lookup.h"
 %}
 struct _LOOKUP;
 %%
@@ -108,10 +112,10 @@ struct _LOOKUP;
     for member in Element:
         element_str += f"{member.name}, {member.value}\n"
 
-    with open("element.gperf", "w") as f:
+    with open(hash_dir / "element.gperf", "w") as f:
         f.write(element_str)
 
-    print("Generated: atom.gperf, residue.gperf, element.gperf")
+    print("Generated: hash/atom.gperf, hash/residue.gperf, hash/element.gperf")
 
 
 def generate_reverse_header():
@@ -258,14 +262,13 @@ static inline const AtomInfo *atom_info(int idx) {
 def run_gperf(gperf_path):
     """Run gperf to generate .c files from .gperf files."""
     hash_dir = Path("../hash")
-    hash_dir.mkdir(exist_ok=True)
 
     for name in ["element", "residue", "atom"]:
-        input_file = f"{name}.gperf"
+        input_file = hash_dir / f"{name}.gperf"
         output_file = hash_dir / f"{name}.c"
 
         result = subprocess.run(
-            [gperf_path, input_file],
+            [gperf_path, str(input_file)],
             capture_output=True,
             text=True
         )

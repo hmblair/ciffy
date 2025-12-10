@@ -21,7 +21,7 @@ class GenerateAndBuildExt(build_ext):
         """Run the hash table generator before building."""
         generate_script = os.path.join(
             os.path.dirname(__file__),
-            'ciffy', 'src', '_generate', 'generate.py'
+            'ciffy', 'src', 'codegen', 'generate.py'
         )
 
         if not os.path.exists(generate_script):
@@ -102,11 +102,11 @@ URL = 'https://github.com/hmblair/ciffy'
 
 EXT = "_c"
 SOURCES = [
-    'ciffy/src/_c.c',
+    'ciffy/src/module.c',
     'ciffy/src/io.c',
-    'ciffy/src/py.c',
-    'ciffy/src/cif.c',
-    'ciffy/src/cif_write.c',
+    'ciffy/src/python.c',
+    'ciffy/src/parser.c',
+    'ciffy/src/writer.c',
 ]
 module = Extension(
     name=f"{NAME}.{EXT}",

@@ -88,8 +88,13 @@ def _cdist(x1: Array, x2: Array) -> Array:
     return backend.cdist(x1, x2)
 
 
-def _eigh(arr: Array) -> tuple:
-    """Compute eigendecomposition, backend-agnostic."""
+def _eigh(arr: Array) -> tuple[Array, Array]:
+    """
+    Compute eigendecomposition, backend-agnostic.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors).
+    """
     if is_torch(arr):
         import torch
         return torch.linalg.eigh(arr)
@@ -341,6 +346,13 @@ class Polymer:
         Returns:
             Tensor of Molecule enum values.
         """
+        import warnings
+        warnings.warn(
+            "Polymer.type() is deprecated and will be removed in v0.7.0. "
+            "Use the molecule_type property instead: polymer.molecule_type",
+            DeprecationWarning,
+            stacklevel=2
+        )
         return self.molecule_type
 
     def istype(self: Polymer, mol: Molecule) -> bool:
@@ -668,9 +680,21 @@ class Polymer:
 
         Returns:
             New Polymer with selected chains.
+
+        Raises:
+            IndexError: If any index is out of range.
         """
         if isinstance(ix, int):
             ix = _array_like_backend(self.coordinates, [ix])
+
+        # Validate indices
+        max_chain = self.size(Scale.CHAIN)
+        ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
+        for j in ix_list:
+            if j < 0 or j >= max_chain:
+                raise IndexError(
+                    f"Chain index {j} out of range for Polymer with {max_chain} chains"
+                )
 
         atm_ix = self.mask(ix, Scale.CHAIN, Scale.ATOM)
         res_ix = self.mask(ix, Scale.CHAIN, Scale.RESIDUE)

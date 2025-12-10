@@ -63,17 +63,27 @@ class GenerateAndBuildExt(build_ext):
             print(result.stdout)
 
 # Cross-platform OpenMP configuration
-if sys.platform == 'darwin':  # macOS
-    # Requires: brew install libomp
-    OMP_COMPILE_ARGS = ['-Xpreprocessor', '-fopenmp']
-    OMP_LINK_ARGS = ['-lomp']
-    # Homebrew libomp paths (Apple Silicon and Intel)
-    HOMEBREW_PREFIX = os.environ.get('HOMEBREW_PREFIX', '/opt/homebrew')
-    OMP_INCLUDE_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/include']
-    OMP_LIBRARY_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/lib']
-else:  # Linux
-    OMP_COMPILE_ARGS = ['-fopenmp']
-    OMP_LINK_ARGS = ['-fopenmp']
+# Set CIFFY_NO_OPENMP=1 to disable OpenMP (useful for PyTorch compatibility)
+USE_OPENMP = os.environ.get('CIFFY_NO_OPENMP', '0') != '1'
+
+if USE_OPENMP:
+    if sys.platform == 'darwin':  # macOS
+        # Requires: brew install libomp
+        OMP_COMPILE_ARGS = ['-Xpreprocessor', '-fopenmp']
+        OMP_LINK_ARGS = ['-lomp']
+        # Homebrew libomp paths (Apple Silicon and Intel)
+        HOMEBREW_PREFIX = os.environ.get('HOMEBREW_PREFIX', '/opt/homebrew')
+        OMP_INCLUDE_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/include']
+        OMP_LIBRARY_DIRS = [f'{HOMEBREW_PREFIX}/opt/libomp/lib']
+    else:  # Linux
+        OMP_COMPILE_ARGS = ['-fopenmp']
+        OMP_LINK_ARGS = ['-fopenmp']
+        OMP_INCLUDE_DIRS = []
+        OMP_LIBRARY_DIRS = []
+else:
+    # Disable OpenMP - define NO_OPENMP to skip omp.h include
+    OMP_COMPILE_ARGS = ['-DNO_OPENMP']
+    OMP_LINK_ARGS = []
     OMP_INCLUDE_DIRS = []
     OMP_LIBRARY_DIRS = []
 

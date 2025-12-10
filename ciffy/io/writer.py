@@ -51,16 +51,28 @@ def write_pdb(polymer: "Polymer", filename: str) -> None:
             seq = chain.str()
             atom_idx = 0
             for residue in range(chain.size(Scale.RESIDUE)):
-                residue_name = seq[residue] if residue < len(seq) else 'X'
+                if residue >= len(seq):
+                    import warnings
+                    warnings.warn(
+                        f"Residue index {residue} exceeds sequence length {len(seq)} "
+                        f"in chain '{chain.names[0]}'; using 'X' as placeholder.",
+                        UserWarning
+                    )
+                    residue_name = 'X'
+                else:
+                    residue_name = seq[residue]
 
                 for _ in range(chain._sizes[Scale.RESIDUE][residue]):
                     element = Element.revdict()[chain.elements[atom_idx].item()]
                     atom_value = chain.atoms[atom_idx].item()
 
                     if atom_value not in RibonucleicAcid.revdict():
-                        raise KeyError(
-                            f"Unknown atom type: {atom_value}. "
-                            "PDB writing currently supports RNA structures only."
+                        element_name = Element.revdict().get(chain.elements[atom_idx].item(), "unknown")
+                        raise ValueError(
+                            f"Unrecognized atom type (index={atom_value}, element={element_name}) "
+                            f"at residue {residue + 1} in chain '{chain.names[0]}'. "
+                            f"PDB writing supports standard RNA atoms only. "
+                            f"Use write() for CIF format which supports all atom types."
                         )
 
                     atom_name = RibonucleicAcid.revdict()[atom_value].replace('p', "'")

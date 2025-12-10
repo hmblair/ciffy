@@ -37,5 +37,5 @@ def molecule_type(value: int) -> Molecule:
     """
     try:
         return Molecule(value)
-    except ValueError:
-        raise ValueError(f"Unknown molecule type value: {value}")
+    except ValueError as e:
+        raise ValueError(f"Unknown molecule type value: {value}") from e

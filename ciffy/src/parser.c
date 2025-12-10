@@ -157,9 +157,14 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
     }
 
     if (*size <= 0) {
-        *size = ix + 1;
-        char **resized = realloc(str, (size_t)(*size) * sizeof(char *));
-        return resized ? resized : str;
+        int new_size = ix + 1;
+        char **resized = realloc(str, (size_t)new_size * sizeof(char *));
+        if (resized != NULL) {
+            str = resized;
+        } else {
+            LOG_WARNING("realloc shrink failed for unique array, using oversized buffer");
+        }
+        *size = new_size;
     }
     return str;
 }
@@ -292,9 +297,14 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
     free(prev);
 
     if (*size <= 0) {
-        *size = ix + 1;
-        int *resized = realloc(sizes, (size_t)(*size) * sizeof(int));
-        return resized ? resized : sizes;
+        int new_size = ix + 1;
+        int *resized = realloc(sizes, (size_t)new_size * sizeof(int));
+        if (resized != NULL) {
+            sizes = resized;
+        } else {
+            LOG_WARNING("realloc shrink failed for sizes array, using oversized buffer");
+        }
+        *size = new_size;
     }
     return sizes;
 }

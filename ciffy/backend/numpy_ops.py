@@ -50,10 +50,13 @@ def scatter_mean(
     sums = scatter_sum(src, index, dim_size)
     counts = np.zeros(dim_size, dtype=np.int64)
     np.add.at(counts, index, 1)
-    counts = np.maximum(counts, 1)  # Avoid division by zero
     # Reshape counts for broadcasting
     shape = (-1,) + (1,) * (sums.ndim - 1)
-    return sums / counts.reshape(shape)
+    # Proper division - empty bins get 0 (consistent with torch behavior)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        result = sums / counts.reshape(shape)
+        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+    return result
 
 
 def scatter_max(
@@ -72,6 +75,10 @@ def scatter_max(
     Returns:
         Tuple of (max_values, argmax_indices). argmax_indices may be None.
     """
+    # Track which bins have values (avoids sentinel collision with real data)
+    has_value = np.zeros(dim_size, dtype=bool)
+    np.logical_or.at(has_value, index, True)
+
     # Use appropriate min value based on dtype
     if np.issubdtype(src.dtype, np.floating):
         fill_value = -np.inf
@@ -81,8 +88,10 @@ def scatter_max(
     result = np.full((dim_size, *src.shape[1:]), fill_value, dtype=src.dtype)
     np.maximum.at(result, index, src)
 
-    # Replace sentinel with 0 for empty bins
-    result = np.where(result == fill_value, np.zeros_like(result), result)
+    # Zero out only unfilled bins (not bins that happen to equal sentinel)
+    for i in range(dim_size):
+        if not has_value[i]:
+            result[i] = 0
 
     return result, None
 
@@ -103,6 +112,10 @@ def scatter_min(
     Returns:
         Tuple of (min_values, argmin_indices). argmin_indices may be None.
     """
+    # Track which bins have values (avoids sentinel collision with real data)
+    has_value = np.zeros(dim_size, dtype=bool)
+    np.logical_or.at(has_value, index, True)
+
     # Use appropriate max value based on dtype
     if np.issubdtype(src.dtype, np.floating):
         fill_value = np.inf
@@ -112,8 +125,10 @@ def scatter_min(
     result = np.full((dim_size, *src.shape[1:]), fill_value, dtype=src.dtype)
     np.minimum.at(result, index, src)
 
-    # Replace sentinel with 0 for empty bins
-    result = np.where(result == fill_value, np.zeros_like(result), result)
+    # Zero out only unfilled bins (not bins that happen to equal sentinel)
+    for i in range(dim_size):
+        if not has_value[i]:
+            result[i] = 0
 
     return result, None
 

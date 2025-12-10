@@ -44,6 +44,16 @@ PyObject *_c_int_to_py_int(int value) {
 
 PyObject *_c_arr_to_py_list(char **arr, int size) {
 
+    /* Handle NULL array */
+    if (arr == NULL && size > 0) {
+        PyErr_SetString(PyExc_ValueError,
+            "Cannot convert NULL array with non-zero size to Python list");
+        return NULL;
+    }
+    if (size <= 0) {
+        return PyList_New(0);
+    }
+
     PyObject *list = PyList_New(size);
     if (list == NULL) {
         PyErr_SetString(PyExc_MemoryError, "Failed to create Python list");

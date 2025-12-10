@@ -5,10 +5,13 @@ Common utilities used throughout the codebase.
 """
 
 from __future__ import annotations
-from typing import TypeVar, TYPE_CHECKING
+from typing import TypeVar, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     import torch
+    import numpy as np
+    # Array type for type hints - accepts both backends
+    ArrayLike = Union[np.ndarray, "torch.Tensor"]
 
 T = TypeVar('T')
 
@@ -26,20 +29,20 @@ def all_equal(*values) -> bool:
     return len(set(values)) <= 1
 
 
-def filter_by_mask(items: list[T], mask: "torch.Tensor") -> list[T]:
+def filter_by_mask(items: list[T], mask: "ArrayLike") -> list[T]:
     """
-    Filter a list by a boolean tensor mask.
+    Filter a list by a boolean array mask.
 
     Args:
         items: List of items to filter.
-        mask: Boolean tensor where True indicates items to keep.
+        mask: Boolean array (NumPy or PyTorch) where True indicates items to keep.
 
     Returns:
         New list containing only items where mask is True.
 
     Example:
         >>> items = ['a', 'b', 'c']
-        >>> mask = torch.tensor([True, False, True])
+        >>> mask = np.array([True, False, True])
         >>> filter_by_mask(items, mask)
         ['a', 'c']
     """

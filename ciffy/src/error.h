@@ -59,11 +59,13 @@ typedef struct {
  * @param ... Format arguments
  */
 #define CIF_SET_ERROR(ctx, err_code, fmt, ...) do { \
-    (ctx)->code = (err_code); \
-    (ctx)->file = __FILE__; \
-    (ctx)->line = __LINE__; \
-    (ctx)->function = __func__; \
-    snprintf((ctx)->message, sizeof((ctx)->message), fmt, ##__VA_ARGS__); \
+    if ((ctx) != NULL) { \
+        (ctx)->code = (err_code); \
+        (ctx)->file = __FILE__; \
+        (ctx)->line = __LINE__; \
+        (ctx)->function = __func__; \
+        snprintf((ctx)->message, sizeof((ctx)->message), fmt, ##__VA_ARGS__); \
+    } \
 } while(0)
 
 /**

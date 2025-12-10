@@ -5,7 +5,7 @@ A Python package for loading and manipulating molecular structures from
 CIF (Crystallographic Information File) format files.
 """
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 # Core types
 from .polymer import Polymer
@@ -17,6 +17,7 @@ from .operations.alignment import kabsch_distance as rmsd
 
 # I/O
 from .io.loader import load
+from .io.writer import write_cif
 
 # Convenience aliases
 RESIDUE = Scale.RESIDUE
@@ -37,6 +38,7 @@ __all__ = [
     "Reduction",
     # Functions
     "load",
+    "write_cif",
     "rmsd",
     # Convenience aliases
     "RESIDUE",

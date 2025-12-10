@@ -56,10 +56,12 @@ def scatter_collate(
     Returns:
         List where each element contains all values for that index.
     """
+    if len(indices) == 0:
+        return [features[indices == ix] for ix in range(dim_size)]
     if is_torch(indices):
         max_idx = indices.max().item()
     else:
-        max_idx = indices.max()
+        max_idx = int(indices.max())
     return [
         features[indices == ix]
         for ix in range(max_idx + 1)
@@ -98,9 +100,9 @@ REDUCTIONS = {
 
 # Type alias for reduction results
 ReductionResult = Union[
-    Array,
-    tuple,
-    list,
+    Array,                              # MEAN, SUM
+    tuple[Array, Array | None],         # MIN, MAX (values, indices)
+    list[Array],                        # COLLATE
 ]
 
 

@@ -67,6 +67,35 @@ static inline const char *_safe_strand(const char *s) {
     return (s && s[0]) ? s : "?";
 }
 
+/**
+ * @brief Format atom name for CIF output, quoting if contains prime (').
+ *
+ * CIF requires strings containing special characters like ' to be quoted.
+ * This function writes the formatted name to buffer, returning the buffer.
+ *
+ * @param name Atom name (e.g., "C2'" or "C2")
+ * @param buffer Output buffer (must be at least 8 bytes)
+ * @return Pointer to buffer with formatted name
+ */
+static inline const char *_format_atom_name(const char *name, char *buffer) {
+    /* Check if name contains a prime (') character */
+    int needs_quote = 0;
+    for (const char *p = name; *p; p++) {
+        if (*p == '\'') {
+            needs_quote = 1;
+            break;
+        }
+    }
+
+    if (needs_quote) {
+        /* Quote the name: C2' becomes "C2'" */
+        snprintf(buffer, 8, "\"%s\"", name);
+        return buffer;
+    }
+
+    return name;
+}
+
 
 /* ============================================================================
  * INTERNAL: Block Writers
@@ -94,7 +123,7 @@ static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext
     for (int i = 0; i < cif->chains; i++) {
         const char *name = cif->names[i];
         CIF_CHECK_CHAIN_NAME(name, i, ctx);
-        CIF_FPRINTF(file, ctx, "%-4s %-4s\n", name, _safe_strand(cif->strands[i]));
+        CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s\n", name, _safe_strand(cif->strands[i]));
     }
 
     CIF_FPRINTF(file, ctx, "#\n");
@@ -145,7 +174,7 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
                           seq_idx, chain_name, output_seq_id);
             }
 
-            CIF_FPRINTF(file, ctx, "%-4s %-4s %-4s %-6d\n",
+            CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s %-4.4s %-6d\n",
                 chain_name, res_name, strand, output_seq_id);
             output_seq_id++;
             res_idx++;
@@ -241,6 +270,10 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                               type_idx, atom_idx, chain_name, output_seq_id);
                 }
 
+                /* Format atom name, quoting if it contains a prime (') */
+                char atom_buf[8];
+                const char *atom_name = _format_atom_name(ainfo->atom, atom_buf);
+
                 /* Get coordinates - check for overflow */
                 int coord_idx = 3 * atom_idx;
                 if (coord_idx + 2 >= 3 * cif->atoms) {
@@ -257,14 +290,14 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                  * with field delimiters. The parser uses whitespace to find field boundaries,
                  * so right-justified fields like %5d break offset computation. All fields
                  * must have consistent width for the fixed-line-width parser to work.
-                 * Field widths: serial(7), element(2), atom(4), res(4), chain(4), seq(6), coord(10) */
+                 * Field widths: serial(7), element(2), atom(6 for quoted), res(4), chain(4), seq(6), coord(10) */
                 if (atom_idx < cif->polymer) {
-                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2s %-4s . %-4s %-4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
-                        group, serial, elem, ainfo->atom,
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
+                        group, serial, elem, atom_name,
                         res_name, chain_name, output_seq_id, x, y, z);
                 } else {
-                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2s %-4s . %-4s %-4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
-                        group, serial, elem, ainfo->atom,
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
+                        group, serial, elem, atom_name,
                         res_name, chain_name, ".", x, y, z);
                 }
 

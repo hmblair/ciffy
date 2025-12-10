@@ -5,18 +5,14 @@ CIF file loading functionality.
 from __future__ import annotations
 import os
 import warnings
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
 
-# Sentinel to detect if backend was specified
-_NO_BACKEND = object()
-
-
-def load(file: str, backend: Optional[str] = _NO_BACKEND) -> "Polymer":
+def load(file: str, backend: str | None = None) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
 
@@ -47,7 +43,7 @@ def load(file: str, backend: Optional[str] = _NO_BACKEND) -> "Polymer":
     from .._c import _load
 
     # Handle backend parameter
-    if backend is _NO_BACKEND:
+    if backend is None:
         warnings.warn(
             "Default backend will change from 'torch' to 'numpy' in v0.6.0. "
             "Pass backend='torch' or backend='numpy' explicitly to silence this warning.",

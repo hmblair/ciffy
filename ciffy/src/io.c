@@ -500,6 +500,40 @@ int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
 }
 
 
+/**
+ * @brief Copy field to buffer, stripping only outer quotes.
+ *
+ * CIF uses "..." to quote strings containing special characters.
+ * For example, "C2'" is the string C2' (with an internal prime).
+ * We must preserve internal ' characters while removing outer quotes.
+ *
+ * @param ptr Source field pointer
+ * @param len Length of source field
+ * @param buffer Destination buffer
+ * @param out_len Current position in buffer (updated)
+ */
+static void _copy_field_strip_outer_quotes(const char *ptr, size_t len,
+                                            char *buffer, size_t *out_len) {
+    /* Check for outer double quotes: "..." */
+    if (len >= 2 && ptr[0] == '"' && ptr[len - 1] == '"') {
+        for (size_t i = 1; i < len - 1; i++) {
+            buffer[(*out_len)++] = ptr[i];
+        }
+    }
+    /* Check for outer single quotes: '...' */
+    else if (len >= 2 && ptr[0] == '\'' && ptr[len - 1] == '\'') {
+        for (size_t i = 1; i < len - 1; i++) {
+            buffer[(*out_len)++] = ptr[i];
+        }
+    }
+    /* No outer quotes - copy as-is */
+    else {
+        for (size_t i = 0; i < len; i++) {
+            buffer[(*out_len)++] = ptr[i];
+        }
+    }
+}
+
 int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
                           HashTable func, char *buffer) {
 
@@ -513,22 +547,14 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
     /* Check buffer overflow (need space for both fields + underscore + null) */
     if (len1 + 1 + len2 + 1 > MAX_INLINE_BUFFER) return PARSE_FAIL;
 
-    /* Copy first field, stripping quotes */
+    /* Copy first field, stripping only outer quotes */
     size_t out_len = 0;
-    for (size_t i = 0; i < len1; i++) {
-        if (ptr1[i] != '"' && ptr1[i] != '\'') {
-            buffer[out_len++] = ptr1[i];
-        }
-    }
+    _copy_field_strip_outer_quotes(ptr1, len1, buffer, &out_len);
 
     buffer[out_len++] = '_';
 
-    /* Copy second field, stripping quotes */
-    for (size_t i = 0; i < len2; i++) {
-        if (ptr2[i] != '"' && ptr2[i] != '\'') {
-            buffer[out_len++] = ptr2[i];
-        }
-    }
+    /* Copy second field, stripping only outer quotes */
+    _copy_field_strip_outer_quotes(ptr2, len2, buffer, &out_len);
 
     buffer[out_len] = '\0';
 

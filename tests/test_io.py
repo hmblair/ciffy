@@ -335,6 +335,53 @@ class TestCifSave:
                 os.unlink(output_path)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_round_trip_preserves_atom_types(self, cif_file, backend):
+        """Test that round-trip preserves atom types including backbone atoms.
+
+        This specifically tests that atoms with primes (like C2', O3') are
+        correctly written and re-read, not confused with nucleobase atoms
+        (like C2, which is different from C2').
+        """
+        from ciffy import load
+        import numpy as np
+
+        original = load(cif_file, backend=backend)
+
+        with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as f:
+            output_path = f.name
+
+        try:
+            original.write(output_path)
+            reloaded = load(output_path, backend=backend)
+
+            # Compare polymer atom types (non-polymer atoms not written)
+            orig_atoms = np.asarray(original.atoms[:original.polymer_count])
+            reload_atoms = np.asarray(reloaded.atoms)
+
+            # Atom types should match exactly
+            assert np.array_equal(orig_atoms, reload_atoms), \
+                f"Atom types mismatch: original has {len(np.unique(orig_atoms))} unique types, " \
+                f"reloaded has {len(np.unique(reload_atoms))} unique types"
+
+            # Specifically check that backbone atoms exist (primed atoms)
+            # Adenosine C2' is index 11, C2 is index 21
+            from ciffy.biochemistry.nucleotides import Adenosine
+            has_backbone = Adenosine.C2p.value in orig_atoms
+            has_nucleobase = Adenosine.C2.value in orig_atoms
+
+            if has_backbone:
+                assert Adenosine.C2p.value in reload_atoms, \
+                    "Backbone C2' atoms lost in round-trip"
+            if has_nucleobase:
+                assert Adenosine.C2.value in reload_atoms, \
+                    "Nucleobase C2 atoms lost in round-trip"
+
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_cif_save_from_subset(self, cif_file):
         """Test saving a subset of the structure to CIF."""
         from ciffy import load, RNA

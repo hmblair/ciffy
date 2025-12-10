@@ -8,7 +8,7 @@
  * Pipeline:
  *   1. Block Validation  - Verify required mmCIF blocks exist
  *   2. Metadata Parsing  - Extract chain/residue counts and names
- *   3. Atom Parsing      - Single-pass coordinate/type extraction (parallelized)
+ *   3. Atom Parsing      - Single-pass coordinate/type extraction
  *   4. Atom Reordering   - Separate polymer/non-polymer atoms
  */
 
@@ -17,10 +17,6 @@
 
 #include <math.h>    /* for isnan */
 #include <unistd.h>  /* for isatty */
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 /* Hash tables for type lookups */
 #include "hash/atom.c"
@@ -471,22 +467,18 @@ static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx,
  */
 static CifError _parse_atoms_batch(mmBlock *block, AtomIndices *idx,
                                    float *coords, int *elements, int *types) {
-    #pragma omp parallel
-    {
-        char combine_buf[MAX_INLINE_BUFFER];
+    char combine_buf[MAX_INLINE_BUFFER];
 
-        #pragma omp for schedule(static)
-        for (int line = 0; line < block->size; line++) {
-            /* Parse coordinates */
-            coords[COORDS * line + 0] = _parse_float_inline(block, line, idx->x);
-            coords[COORDS * line + 1] = _parse_float_inline(block, line, idx->y);
-            coords[COORDS * line + 2] = _parse_float_inline(block, line, idx->z);
+    for (int line = 0; line < block->size; line++) {
+        /* Parse coordinates */
+        coords[COORDS * line + 0] = _parse_float_inline(block, line, idx->x);
+        coords[COORDS * line + 1] = _parse_float_inline(block, line, idx->y);
+        coords[COORDS * line + 2] = _parse_float_inline(block, line, idx->z);
 
-            /* Parse types (-1 for unknown) */
-            elements[line] = _lookup_inline(block, line, idx->element, _lookup_element);
-            types[line] = _lookup_double_inline(block, line, idx->comp_id,
-                                                idx->atom_name, _lookup_atom, combine_buf);
-        }
+        /* Parse types (-1 for unknown) */
+        elements[line] = _lookup_inline(block, line, idx->element, _lookup_element);
+        types[line] = _lookup_double_inline(block, line, idx->comp_id,
+                                            idx->atom_name, _lookup_atom, combine_buf);
     }
 
     return CIF_OK;

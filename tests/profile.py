@@ -1,7 +1,7 @@
 """
 Performance profiling for ciffy CIF parser.
 
-Compares single-threaded, multi-threaded (OpenMP), and BioPython parsing.
+Compares ciffy vs BioPython and Biotite parsing performance.
 
 Usage:
     python -m pytest tests/profile.py -v -s
@@ -32,16 +32,6 @@ TEST_FILES = [
 BENCHMARK_RUNS = 10
 
 
-def _set_omp_threads(n: int) -> None:
-    """Set OpenMP thread count via environment variable."""
-    os.environ["OMP_NUM_THREADS"] = str(n)
-
-
-def _get_omp_threads() -> int:
-    """Get current OpenMP thread count."""
-    return int(os.environ.get("OMP_NUM_THREADS", os.cpu_count() or 1))
-
-
 def _bio_get_coords(iden: str, file: str) -> np.ndarray:
     """Load coordinates using BioPython's FastMMCIFParser."""
     from Bio.PDB.MMCIFParser import FastMMCIFParser
@@ -57,6 +47,12 @@ def _bio_get_coords(iden: str, file: str) -> np.ndarray:
                     coords.append(atom.get_vector()._ar)
 
     return np.stack(coords, axis=0) if coords else np.array([])
+
+
+def _biotite_load(file: str):
+    """Load structure using Biotite."""
+    from biotite.structure.io import load_structure
+    return load_structure(file)
 
 
 def _benchmark(func, runs: int = BENCHMARK_RUNS) -> tuple[float, float]:
@@ -87,32 +83,56 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS) -> di
 
     results = {"pdb_id": pdb_id, "file": filepath}
 
-    # Warmup: multiple runs to populate file cache and stabilize performance
-    for _ in range(3):
-        ciffy.load(filepath, backend="numpy")
+    # Define loader functions
+    def load_ciffy():
+        return ciffy.load(filepath, backend="numpy")
 
-    # Single-threaded ciffy
-    _set_omp_threads(1)
-    mean, std = _benchmark(lambda: ciffy.load(filepath, backend="numpy"), runs)
-    results["ciffy_1thread"] = {"mean": mean, "std": std}
+    def load_biopython():
+        return _bio_get_coords(pdb_id, filepath)
 
-    # Multi-threaded ciffy (use all cores)
-    num_cores = os.cpu_count() or 4
-    _set_omp_threads(num_cores)
-    mean, std = _benchmark(lambda: ciffy.load(filepath, backend="numpy"), runs)
-    results["ciffy_multithread"] = {"mean": mean, "std": std, "threads": num_cores}
+    def load_biotite():
+        return _biotite_load(filepath)
 
-    # BioPython
+    # Check which libraries are available
+    has_biopython = True
+    has_biotite = True
     try:
-        # Warmup BioPython too
-        _bio_get_coords(pdb_id, filepath)
-        mean, std = _benchmark(lambda: _bio_get_coords(pdb_id, filepath), runs)
-        results["biopython"] = {"mean": mean, "std": std}
+        load_biopython()
     except ImportError:
+        has_biopython = False
+    try:
+        load_biotite()
+    except ImportError:
+        has_biotite = False
+
+    # Equal warmup for all: 3 runs each to stabilize file cache and JIT
+    for _ in range(3):
+        load_ciffy()
+    if has_biopython:
+        for _ in range(3):
+            load_biopython()
+    if has_biotite:
+        for _ in range(3):
+            load_biotite()
+
+    # Benchmark each (file is now equally cached for all)
+    mean, std = _benchmark(load_ciffy, runs)
+    results["ciffy"] = {"mean": mean, "std": std}
+
+    if has_biopython:
+        mean, std = _benchmark(load_biopython, runs)
+        results["biopython"] = {"mean": mean, "std": std}
+    else:
         results["biopython"] = None
 
+    if has_biotite:
+        mean, std = _benchmark(load_biotite, runs)
+        results["biotite"] = {"mean": mean, "std": std}
+    else:
+        results["biotite"] = None
+
     # Load once to get atom count
-    poly = ciffy.load(filepath, backend="numpy")
+    poly = load_ciffy()
     results["atoms"] = poly.size()
 
     return results
@@ -124,27 +144,24 @@ def print_results(results: dict) -> None:
     print(f"PDB: {results['pdb_id']} ({results['atoms']} atoms)")
     print(f"{'='*60}")
 
-    c1 = results["ciffy_1thread"]
-    print(f"ciffy (1 thread):    {c1['mean']*1000:7.2f} ms ± {c1['std']*1000:.2f} ms")
-
-    cm = results["ciffy_multithread"]
-    print(f"ciffy ({cm['threads']} threads):   {cm['mean']*1000:7.2f} ms ± {cm['std']*1000:.2f} ms")
-
-    # Speedup from parallelization
-    parallel_speedup = c1["mean"] / cm["mean"]
-    print(f"  → Parallel speedup: {parallel_speedup:.2f}x")
+    c = results["ciffy"]
+    print(f"ciffy:       {c['mean']*1000:7.2f} ms ± {c['std']*1000:.2f} ms")
 
     if results["biopython"]:
         bp = results["biopython"]
-        print(f"BioPython:           {bp['mean']*1000:7.2f} ms ± {bp['std']*1000:.2f} ms")
-
-        # Speedup vs BioPython
-        bp_speedup_1t = bp["mean"] / c1["mean"]
-        bp_speedup_mt = bp["mean"] / cm["mean"]
-        print(f"  → vs BioPython (1T): {bp_speedup_1t:.2f}x faster")
-        print(f"  → vs BioPython (MT): {bp_speedup_mt:.2f}x faster")
+        print(f"BioPython:   {bp['mean']*1000:7.2f} ms ± {bp['std']*1000:.2f} ms")
+        speedup = bp["mean"] / c["mean"]
+        print(f"  → {speedup:.1f}x faster than BioPython")
     else:
-        print("BioPython:           (not installed)")
+        print("BioPython:   (not installed)")
+
+    if results["biotite"]:
+        bt = results["biotite"]
+        print(f"Biotite:     {bt['mean']*1000:7.2f} ms ± {bt['std']*1000:.2f} ms")
+        speedup = bt["mean"] / c["mean"]
+        print(f"  → {speedup:.1f}x faster than Biotite")
+    else:
+        print("Biotite:     (not installed)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,16 +181,11 @@ class TestBenchmark:
         print_results(results)
 
         # Basic sanity checks
-        assert results["ciffy_1thread"]["mean"] > 0
-        assert results["ciffy_multithread"]["mean"] > 0
-
-        # Parallel should be at least as fast as single-threaded
-        # (on single-core machines they might be equal)
-        assert results["ciffy_multithread"]["mean"] <= results["ciffy_1thread"]["mean"] * 1.1
+        assert results["ciffy"]["mean"] > 0
 
         # If BioPython is available, ciffy should be faster
         if results["biopython"]:
-            assert results["ciffy_1thread"]["mean"] < results["biopython"]["mean"], \
+            assert results["ciffy"]["mean"] < results["biopython"]["mean"], \
                 "ciffy should be faster than BioPython"
 
 
@@ -182,8 +194,10 @@ class TestBenchmark:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import ciffy
     print("ciffy Performance Benchmark")
     print("="*60)
+    print(f"ciffy version: {ciffy.__version__}")
 
     for pdb_id, filepath in TEST_FILES:
         if os.path.exists(filepath):

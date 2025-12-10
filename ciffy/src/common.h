@@ -47,6 +47,35 @@ static inline bool _neq(const char *str1, const char *str2) {
 }
 
 /**
+ * @brief Compare a non-null-terminated field against a null-terminated string.
+ *
+ * @param ptr Field pointer (not null-terminated)
+ * @param len Length of the field
+ * @param str Null-terminated string to compare against
+ * @return true if the field equals the string
+ */
+static inline bool _field_eq(const char *ptr, size_t len, const char *str) {
+    size_t str_len = strlen(str);
+    if (len != str_len) return false;
+    return memcmp(ptr, str, len) == 0;
+}
+
+/**
+ * @brief Compare two non-null-terminated fields for equality.
+ *
+ * @param ptr1 First field pointer
+ * @param len1 Length of first field
+ * @param ptr2 Second field pointer
+ * @param len2 Length of second field
+ * @return true if fields are equal
+ */
+static inline bool _field_eq_field(const char *ptr1, size_t len1,
+                                   const char *ptr2, size_t len2) {
+    if (len1 != len2) return false;
+    return memcmp(ptr1, ptr2, len1) == 0;
+}
+
+/**
  * @brief Check if the current line marks the end of a CIF section.
  *
  * In mmCIF format, sections end with a line starting with '#'.

@@ -169,7 +169,8 @@ char **_py_list_to_c_arr(PyObject *list, int *size) {
             return NULL;
         }
 
-        const char *str = PyUnicode_AsUTF8(item);
+        Py_ssize_t str_len;
+        const char *str = PyUnicode_AsUTF8AndSize(item, &str_len);
         if (str == NULL) {
             /* Free already allocated strings */
             for (Py_ssize_t j = 0; j < i; j++) {
@@ -179,7 +180,8 @@ char **_py_list_to_c_arr(PyObject *list, int *size) {
             return NULL;  /* Exception already set */
         }
 
-        arr[i] = strdup(str);
+        /* Use known length to avoid strlen() call */
+        arr[i] = malloc((size_t)str_len + 1);
         if (arr[i] == NULL) {
             /* Free already allocated strings */
             for (Py_ssize_t j = 0; j < i; j++) {
@@ -189,6 +191,8 @@ char **_py_list_to_c_arr(PyObject *list, int *size) {
             PyErr_NoMemory();
             return NULL;
         }
+        memcpy(arr[i], str, (size_t)str_len);
+        arr[i][str_len] = '\0';
     }
 
     return arr;

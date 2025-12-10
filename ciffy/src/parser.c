@@ -110,6 +110,8 @@ char *_get_id(char *buffer, CifErrorContext *ctx) {
  *
  * Used for chain names, strand IDs, etc. where values repeat across rows
  * but we only want distinct values in order of appearance.
+ *
+ * Uses pointer-based comparison to avoid allocating for duplicate values.
  */
 static char **_get_unique(mmBlock *block, const char *attr, int *size,
                           CifErrorContext *ctx) {
@@ -128,36 +130,48 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
         return NULL;
     }
 
-    char *prev = NULL;
+    /* Track previous value as pointer+length to avoid allocation for comparison */
+    char *prev_ptr = NULL;
+    size_t prev_len = 0;
     int ix = 0;
 
     for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
-            for (int i = 0; i <= ix; i++) free(str[i]);
+        size_t cur_len;
+        char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
+        if (cur_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get field at line %d, index %d", line, index);
+            for (int i = 0; i < ix; i++) free(str[i]);
             free(str);
             return NULL;
         }
 
-        if (prev == NULL) {
-            prev = token;
-            str[ix] = token;
-        } else if (_neq(prev, token)) {
-            prev = token;
-            if ((size_t)++ix >= alloc_size) {
+        /* Check if this is a new unique value */
+        bool is_new = (prev_ptr == NULL) ||
+                      !_field_eq_field(prev_ptr, prev_len, cur_ptr, cur_len);
+
+        if (is_new) {
+            if (ix > 0 && (size_t)ix >= alloc_size) {
                 LOG_WARNING("Unique value count %d exceeds allocation %zu, truncating",
                             ix + 1, alloc_size);
-                free(token);
                 break;
             }
-            str[ix] = token;
-        } else {
-            free(token);
+            /* Only allocate when we find a new unique value */
+            str[ix] = _strdup_n(cur_ptr, cur_len, ctx);
+            if (str[ix] == NULL) {
+                for (int i = 0; i < ix; i++) free(str[i]);
+                free(str);
+                return NULL;
+            }
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
+            ix++;
         }
+        /* No allocation needed for duplicates */
     }
 
     if (*size <= 0) {
-        int new_size = ix + 1;
+        int new_size = ix;
         char **resized = realloc(str, (size_t)new_size * sizeof(char *));
         if (resized != NULL) {
             str = resized;
@@ -171,6 +185,8 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
 
 /**
  * Count unique consecutive values in an attribute.
+ *
+ * Uses pointer-based comparison - no allocations needed.
  */
 static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr);
@@ -181,25 +197,23 @@ static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx)
     }
 
     int count = 0;
-    char *prev = NULL;
+    char *prev_ptr = NULL;
+    size_t prev_len = 0;
 
     for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
-            free(prev);
+        size_t cur_len;
+        char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
+        if (cur_ptr == NULL) {
             return -1;
         }
 
-        if (prev == NULL || _neq(prev, token)) {
-            free(prev);
-            prev = token;
+        if (prev_ptr == NULL || !_field_eq_field(prev_ptr, prev_len, cur_ptr, cur_len)) {
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
             count++;
-        } else {
-            free(token);
         }
     }
 
-    free(prev);
     return count;
 }
 
@@ -248,6 +262,8 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
  *
  * Returns array where sizes[i] = count of rows with i-th unique value.
  * Used for residues-per-chain and atoms-per-chain counting.
+ *
+ * Uses pointer-based comparison - no allocations in the loop.
  */
 static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
                                   CifErrorContext *ctx) {
@@ -266,25 +282,25 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
         return NULL;
     }
 
-    char *prev = NULL;
+    char *prev_ptr = NULL;
+    size_t prev_len = 0;
     int ix = 0;
 
     for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
-            free(prev);
+        size_t cur_len;
+        char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
+        if (cur_ptr == NULL) {
             free(sizes);
             return NULL;
         }
 
-        if (prev == NULL) {
-            prev = token;
-        } else if (_neq(prev, token)) {
-            free(prev);
-            prev = token;
+        if (prev_ptr == NULL) {
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
+        } else if (!_field_eq_field(prev_ptr, prev_len, cur_ptr, cur_len)) {
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
             ix++;
-        } else {
-            free(token);
         }
 
         if ((size_t)ix < alloc_size) {
@@ -293,8 +309,6 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
             LOG_WARNING("Size index %d exceeds allocation %zu", ix, alloc_size);
         }
     }
-
-    free(prev);
 
     if (*size <= 0) {
         int new_size = ix + 1;
@@ -314,6 +328,8 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
  *
  * Handles non-polymer atoms (HETATM) by marking them in is_nonpoly mask.
  * Returns NULL-terminated sizes array indexed by global residue index.
+ *
+ * Uses pointer-based comparison - minimal allocations.
  */
 static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
                                      int *nonpoly_count, int *is_nonpoly,
@@ -344,20 +360,20 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
     }
 
     int chain_offset = 0;
-    char *prev_chain = NULL;
+    char *prev_chain_ptr = NULL;
+    size_t prev_chain_len = 0;
     int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
-        /* Check if atom is HETATM (non-polymer) */
-        char *group = _get_attr_by_line(block, line, group_index, ctx);
-        if (group == NULL) {
-            free(prev_chain);
+        /* Check if atom is HETATM (non-polymer) using pointer comparison */
+        size_t group_len;
+        char *group_ptr = _get_field_ptr(block, line, group_index, &group_len);
+        if (group_ptr == NULL) {
             free(sizes);
             return NULL;
         }
 
-        bool is_hetatm = (strcmp(group, "HETATM") == 0);
-        free(group);
+        bool is_hetatm = _field_eq(group_ptr, group_len, "HETATM");
 
         if (is_hetatm) {
             (*nonpoly_count)++;
@@ -368,33 +384,24 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         is_nonpoly[line] = 0;
 
         /* Track chain changes to compute residue offset */
-        char *chain = _get_attr_by_line(block, line, chain_index, ctx);
-        if (chain == NULL) {
-            free(prev_chain);
+        size_t chain_len;
+        char *chain_ptr = _get_field_ptr(block, line, chain_index, &chain_len);
+        if (chain_ptr == NULL) {
             free(sizes);
             return NULL;
         }
 
-        if (prev_chain == NULL) {
-            prev_chain = chain;
-        } else if (_neq(prev_chain, chain)) {
-            free(prev_chain);
-            prev_chain = chain;
+        if (prev_chain_ptr == NULL) {
+            prev_chain_ptr = chain_ptr;
+            prev_chain_len = chain_len;
+        } else if (!_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
+            prev_chain_ptr = chain_ptr;
+            prev_chain_len = chain_len;
             chain_offset += *chain_len_ptr++;
-        } else {
-            free(chain);
         }
 
-        /* Parse sequence ID */
-        char *seq_token = _get_attr_by_line(block, line, seq_index, ctx);
-        if (seq_token == NULL) {
-            free(prev_chain);
-            free(sizes);
-            return NULL;
-        }
-
-        int seq_id = _str_to_int(seq_token) - 1;
-        free(seq_token);
+        /* Parse sequence ID inline without allocation */
+        int seq_id = _parse_int_inline(block, line, seq_index) - 1;
 
         /* Skip atoms with invalid seq_id (shouldn't happen for ATOM records) */
         if (seq_id < 0) {
@@ -408,7 +415,6 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         }
     }
 
-    free(prev_chain);
     return sizes;
 }
 
@@ -589,6 +595,25 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     LOG_DEBUG("All required blocks present");
 
+    /* ── Precompute Line Pointers ────────────────────────────────────────── */
+    /* Required for _get_field_ptr used in counting and metadata extraction */
+
+    CifError err = _precompute_lines(&blocks->atom, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _precompute_lines(&blocks->poly, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        return err;
+    }
+
+    err = _precompute_lines(&blocks->chain, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        return err;
+    }
+
     /* ── Count Structure Elements ─────────────────────────────────────────── */
 
     int model_count = _count_unique(&blocks->atom, ATTR_MODEL, ctx);
@@ -635,14 +660,14 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     if (cif->strands == NULL) return ctx->code;
 
     /* ── Batch Atom Parsing ───────────────────────────────────────────────── */
-
-    CifError err = _precompute_lines(&blocks->atom, ctx);
-    if (err != CIF_OK) return err;
+    /* Note: lines already precomputed at start of function */
 
     AtomIndices idx;
     err = _init_atom_indices(&blocks->atom, &idx, ctx);
     if (err != CIF_OK) {
         _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        _free_lines(&blocks->chain);
         return err;
     }
 
@@ -655,13 +680,18 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         free(cif->elements);
         free(cif->types);
         _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        _free_lines(&blocks->chain);
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate atom arrays");
         return CIF_ERR_ALLOC;
     }
 
     err = _parse_atoms_batch(&blocks->atom, &idx,
                              cif->coordinates, cif->elements, cif->types);
-    _free_lines(&blocks->atom);
+
+    /* Free poly and chain line pointers - no longer needed */
+    _free_lines(&blocks->poly);
+    _free_lines(&blocks->chain);
     if (err != CIF_OK) {
         free(cif->coordinates);
         free(cif->elements);

@@ -11,8 +11,12 @@ Usage:
 import glob
 import os
 import time
+import warnings
 import numpy as np
 import pytest
+
+# Suppress deprecation warnings during benchmarking
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="ciffy")
 
 # Get test directory
 TEST_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -83,27 +87,32 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS) -> di
 
     results = {"pdb_id": pdb_id, "file": filepath}
 
+    # Warmup: multiple runs to populate file cache and stabilize performance
+    for _ in range(3):
+        ciffy.load(filepath, backend="numpy")
+
     # Single-threaded ciffy
     _set_omp_threads(1)
-    # Need to reimport to pick up new thread count
-    mean, std = _benchmark(lambda: ciffy.load(filepath), runs)
+    mean, std = _benchmark(lambda: ciffy.load(filepath, backend="numpy"), runs)
     results["ciffy_1thread"] = {"mean": mean, "std": std}
 
     # Multi-threaded ciffy (use all cores)
     num_cores = os.cpu_count() or 4
     _set_omp_threads(num_cores)
-    mean, std = _benchmark(lambda: ciffy.load(filepath), runs)
+    mean, std = _benchmark(lambda: ciffy.load(filepath, backend="numpy"), runs)
     results["ciffy_multithread"] = {"mean": mean, "std": std, "threads": num_cores}
 
     # BioPython
     try:
+        # Warmup BioPython too
+        _bio_get_coords(pdb_id, filepath)
         mean, std = _benchmark(lambda: _bio_get_coords(pdb_id, filepath), runs)
         results["biopython"] = {"mean": mean, "std": std}
     except ImportError:
         results["biopython"] = None
 
     # Load once to get atom count
-    poly = ciffy.load(filepath)
+    poly = ciffy.load(filepath, backend="numpy")
     results["atoms"] = poly.size()
 
     return results

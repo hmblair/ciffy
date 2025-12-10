@@ -1019,28 +1019,21 @@ class Polymer:
         both polymer and non-polymer atoms.
 
         Args:
-            filename: Output file path.
+            filename: Output file path (must have .cif extension).
+
+        Raises:
+            ValueError: If filename does not end with .cif extension.
 
         Example:
             >>> polymer = ciffy.load("structure.cif", backend="numpy")
             >>> polymer.write("output.cif")
         """
+        if not filename.lower().endswith('.cif'):
+            raise ValueError(
+                f"Output file must have .cif extension, got: {filename!r}"
+            )
         from .io.writer import write_cif
         write_cif(self, filename)
-
-    def write_pdb(self: Polymer, filename: str) -> None:
-        """
-        Write structure to a PDB file (legacy).
-
-        Args:
-            filename: Output file path.
-
-        Note:
-            Currently supports RNA structures only.
-            Use write() for general structure writing.
-        """
-        from .io.writer import write_pdb
-        write_pdb(self, filename)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Utilities

@@ -91,9 +91,6 @@ polymer.write("output.cif")
 
 # Save only polymer atoms (excludes water, ions, ligands)
 polymer.poly().write("polymer_only.cif")
-
-# Save to PDB format (RNA only, legacy)
-polymer.write_pdb("output.pdb")
 ```
 
 ## Module Structure

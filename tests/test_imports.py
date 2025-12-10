@@ -100,9 +100,9 @@ class TestNewModuleStructure:
         assert kabsch_distance is not None
 
     def test_io_imports(self):
-        from ciffy.io import load, write_pdb
+        from ciffy.io import load, write_cif
         assert load is not None
-        assert write_pdb is not None
+        assert write_cif is not None
 
 
 class TestUtilityFunctions:

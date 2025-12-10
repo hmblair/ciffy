@@ -3,6 +3,7 @@ Residue definitions for nucleotides and amino acids.
 """
 
 from ..utils import IndexEnum
+from ..types import Molecule
 
 
 class Residue(IndexEnum):
@@ -60,6 +61,63 @@ class Residue(IndexEnum):
     GTP = 28  # Guanosine-5'-triphosphate
     CCC = 29  # Cytidine-5'-triphosphate (3' terminal)
     GNG = 30  # 2'-deoxyguanosine
+
+
+# Mapping from residue index to molecule type
+# Indices correspond to Residue enum values
+RESIDUE_MOLECULE_TYPE: dict[int, Molecule] = {
+    # RNA nucleotides (0-3)
+    0: Molecule.RNA,   # A, DA
+    1: Molecule.RNA,   # C, DC
+    2: Molecule.RNA,   # G, DG
+    3: Molecule.RNA,   # U, DU
+    4: Molecule.DNA,   # T, DT
+
+    # Amino acids (5-24)
+    5: Molecule.PROTEIN,   # ALA
+    6: Molecule.PROTEIN,   # CYS
+    7: Molecule.PROTEIN,   # ASP
+    8: Molecule.PROTEIN,   # GLU
+    9: Molecule.PROTEIN,   # PHE
+    10: Molecule.PROTEIN,  # GLY
+    11: Molecule.PROTEIN,  # HIS
+    12: Molecule.PROTEIN,  # ILE
+    13: Molecule.PROTEIN,  # LYS
+    14: Molecule.PROTEIN,  # LEU
+    15: Molecule.PROTEIN,  # MET
+    16: Molecule.PROTEIN,  # ASN
+    17: Molecule.PROTEIN,  # PRO
+    18: Molecule.PROTEIN,  # GLN
+    19: Molecule.PROTEIN,  # ARG
+    20: Molecule.PROTEIN,  # SER
+    21: Molecule.PROTEIN,  # THR
+    22: Molecule.PROTEIN,  # VAL
+    23: Molecule.PROTEIN,  # TRP
+    24: Molecule.PROTEIN,  # TYR
+
+    # Non-polymer
+    25: Molecule.WATER,    # HOH
+    26: Molecule.ION,      # MG
+    27: Molecule.ION,      # CS
+
+    # Modified nucleotides (treated as RNA for now)
+    28: Molecule.RNA,      # GTP
+    29: Molecule.RNA,      # CCC
+    30: Molecule.RNA,      # GNG
+}
+
+
+def residue_to_molecule(residue_idx: int) -> Molecule:
+    """
+    Get the molecule type for a residue index.
+
+    Args:
+        residue_idx: Integer residue index from Residue enum.
+
+    Returns:
+        Molecule type for this residue.
+    """
+    return RESIDUE_MOLECULE_TYPE.get(residue_idx, Molecule.UNKNOWN)
 
 
 RES_ABBREV: dict[str, str] = {

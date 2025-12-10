@@ -196,8 +196,16 @@ class TestMoleculeEnum:
         assert Molecule.PROTEIN.value == 0
         assert Molecule.RNA.value == 1
         assert Molecule.DNA.value == 2
+        assert hasattr(Molecule, 'HYBRID')
+        assert hasattr(Molecule, 'PROTEIN_D')
+        assert hasattr(Molecule, 'POLYSACCHARIDE')
+        assert hasattr(Molecule, 'PNA')
+        assert hasattr(Molecule, 'CYCLIC_PEPTIDE')
+        assert hasattr(Molecule, 'LIGAND')
+        assert hasattr(Molecule, 'ION')
+        assert hasattr(Molecule, 'WATER')
         assert hasattr(Molecule, 'OTHER')
-        assert hasattr(Molecule, 'MISSING')
+        assert hasattr(Molecule, 'UNKNOWN')
 
     def test_molecule_type_function(self):
         from ciffy.types.molecule import molecule_type, Molecule

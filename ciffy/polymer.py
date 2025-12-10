@@ -23,6 +23,7 @@ from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create
 from .biochemistry import (
     Residue,
     RES_ABBREV,
+    RESIDUE_MOLECULE_TYPE,
     RibonucleicAcid,
     Adenosine,
     Guanosine,
@@ -329,12 +330,32 @@ class Polymer:
         """
         Get the molecule type of each chain.
 
+        Determines molecule type by examining residue indices in each chain:
+        - RNA: indices 0-3 (A, C, G, U)
+        - DNA: index 4 (T/DT)
+        - Protein: indices 5-24 (amino acids)
+        - Water: index 25 (HOH)
+        - Ion: indices 26-27 (MG, CS)
+        - Other: modified nucleotides (28+)
+
+        Uses MAX residue index per chain to determine type, which works because
+        chains are typically homogeneous in molecular composition.
+
         Returns:
             Array of Molecule enum values, one per chain.
         """
-        types = _zeros_like_backend(self.coordinates, self.size(Scale.CHAIN))
-        atoms, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
-        types[atoms < 5] = Molecule.RNA.value
+        n_chains = self.size(Scale.CHAIN)
+        types = _zeros_like_backend(self.coordinates, n_chains)
+
+        # Get the maximum residue index per chain
+        max_res, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
+
+        # Classify based on residue index ranges
+        for i in range(n_chains):
+            res_idx = int(max_res[i].item() if hasattr(max_res[i], 'item') else max_res[i])
+            mol_type = RESIDUE_MOLECULE_TYPE.get(res_idx, Molecule.UNKNOWN)
+            types[i] = mol_type.value
+
         return types
 
     def type(self: Polymer) -> Array:

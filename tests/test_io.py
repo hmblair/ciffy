@@ -155,6 +155,32 @@ class TestLoad:
                     mol_type = parts[1]
                     assert mol_type in valid_types, f"Invalid molecule type: {mol_type}"
 
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_molecule_type_classification(self, cif_file, backend):
+        """Test that molecule_type property correctly classifies chains."""
+        from ciffy import load, Molecule, Scale
+
+        polymer = load(cif_file, backend=backend)
+        mol_types = polymer.molecule_type
+
+        # Should have one type per chain
+        assert len(mol_types) == polymer.size(Scale.CHAIN)
+
+        # All types should be valid Molecule enum values
+        valid_values = {m.value for m in Molecule}
+        for i, mol_val in enumerate(mol_types):
+            val = int(mol_val.item() if hasattr(mol_val, 'item') else mol_val)
+            assert val in valid_values, f"Chain {i} has invalid molecule type value: {val}"
+
+        # Verify RNA chains are classified correctly
+        rna_subset = polymer.subset(Molecule.RNA)
+        if not rna_subset.empty():
+            rna_types = rna_subset.molecule_type
+            for i, mol_val in enumerate(rna_types):
+                val = int(mol_val.item() if hasattr(mol_val, 'item') else mol_val)
+                assert val == Molecule.RNA.value, f"RNA subset chain {i} should be RNA"
+
 
 class TestCifSave:
     """Test CIF file saving with both backends."""

@@ -224,6 +224,184 @@ class Uridine(IndexEnum):
     H6 = 144
 
 
+class GuanosineTriphosphate(IndexEnum):
+    """
+    Guanosine-5'-triphosphate (GTP) atom indices.
+
+    GTP is a modified nucleotide with a triphosphate group.
+    Indices start at 149.
+    """
+
+    # Gamma phosphate group
+    PG = 149
+    O1G = 150
+    O2G = 151
+    O3G = 152
+
+    # Beta phosphate group
+    O3B = 153
+    PB = 154
+    O1B = 155
+    O2B = 156
+
+    # Alpha phosphate group
+    O3A = 157
+    PA = 158
+    O1A = 159
+    O2A = 160
+
+    # Sugar backbone
+    O5p = 161
+    C5p = 162
+    C4p = 163
+    O4p = 164
+    C3p = 165
+    O3p = 166
+    C2p = 167
+    O2p = 168
+    C1p = 169
+
+    # Nucleobase (guanine)
+    N9 = 170
+    C8 = 171
+    N7 = 172
+    C5 = 173
+    C6 = 174
+    O6 = 175
+    N1 = 176
+    C2 = 177
+    N2 = 178
+    N3 = 179
+    C4 = 180
+
+    # Hydrogens
+    HOG2 = 181
+    HOG3 = 182
+    HOB2 = 183
+    H5p = 184
+    H5pp = 185
+    H4p = 186
+    H3p = 187
+    HO3p = 188
+    H2p = 189
+    HO2p = 190
+    H1p = 191
+    H8 = 192
+    H1 = 193
+    H21 = 194
+    H22 = 195
+
+
+class CytidineTriphosphate(IndexEnum):
+    """
+    Cytidine-5'-triphosphate (CCC) atom indices.
+
+    CCC is a modified nucleotide found at 3' terminal.
+    Indices start at 196.
+    """
+
+    # Gamma phosphate group
+    PC = 196
+    O1C = 197
+    O2C = 198
+
+    # Standard phosphate
+    P = 199
+    OP1 = 200
+    OP2 = 201
+    OP3 = 202
+
+    # Sugar backbone
+    O5p = 203
+    C5p = 204
+    C4p = 205
+    O4p = 206
+    C3p = 207
+    O3p = 208
+    C2p = 209
+    O2p = 210
+    C1p = 211
+
+    # Nucleobase (cytosine)
+    N1 = 212
+    C2 = 213
+    O2 = 214
+    N3 = 215
+    C4 = 216
+    N4 = 217
+    C5 = 218
+    C6 = 219
+
+    # Hydrogens
+    HOC2 = 220
+    HOP2 = 221
+    HOP3 = 222
+    H5p = 223
+    H5pp = 224
+    H4p = 225
+    H3p = 226
+    H2p = 227
+    H1p = 228
+    H41 = 229
+    H42 = 230
+    H5 = 231
+    H6 = 232
+
+
+class Deoxyguanosine(IndexEnum):
+    """
+    2'-Deoxyguanosine (GNG) atom indices.
+
+    GNG is deoxyguanosine (missing 2'-OH).
+    Indices start at 233.
+    """
+
+    # Phosphate group
+    P = 233
+    OP1 = 234
+    OP2 = 235
+    OP3 = 236
+
+    # Sugar backbone (no O2')
+    O5p = 237
+    C5p = 238
+    C4p = 239
+    O4p = 240
+    C3p = 241
+    O3p = 242
+    C2p = 243  # No O2' (deoxy)
+    C1p = 244
+
+    # Nucleobase (guanine)
+    N9 = 245
+    C8 = 246
+    N7 = 247
+    C5 = 248
+    C6 = 249
+    O6 = 250
+    N1 = 251
+    C2 = 252
+    N2 = 253
+    N3 = 254
+    C4 = 255
+
+    # Hydrogens
+    HOP2 = 256
+    HOP3 = 257
+    H5p = 258
+    H5pp = 259
+    H4p = 260
+    H3p = 261
+    HO3p = 262
+    H2p = 263
+    H2pp = 264  # Second H on C2' (deoxy)
+    H1p = 265
+    H8 = 266
+    H1 = 267
+    H21 = 268
+    H22 = 269
+
+
 # Combined RNA nucleotide enum with prefixed names
 RibonucleicAcid = IndexEnum(
     "RibonucleicAcid",
@@ -236,4 +414,12 @@ RibonucleicAcidNoPrefix = IndexEnum(
     "RibonucleicAcid",
     Adenosine.dict() | Cytosine.dict() |
     Guanosine.dict() | Uridine.dict()
+)
+
+# Modified nucleotides with prefixed names
+ModifiedNucleotides = IndexEnum(
+    "ModifiedNucleotides",
+    GuanosineTriphosphate.dict("GTP_") |
+    CytidineTriphosphate.dict("CCC_") |
+    Deoxyguanosine.dict("GNG_")
 )

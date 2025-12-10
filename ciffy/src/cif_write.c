@@ -1,0 +1,415 @@
+/**
+ * @file cif_write.c
+ * @brief CIF file writing implementation.
+ *
+ * Serializes mmCIF structures to standard mmCIF format.
+ * The output includes all data loaded by the reader:
+ *   1. data_XXXX header
+ *   2. _struct_asym block (chain definitions)
+ *   3. _pdbx_poly_seq_scheme block (polymer sequence)
+ *   4. _atom_site block (coordinates and atom types)
+ */
+
+#include "cif_write.h"
+#include "hash/reverse.h"
+#include "log.h"
+
+#include <unistd.h>  /* for isatty */
+
+
+/* ============================================================================
+ * HELPER MACROS
+ * ============================================================================ */
+
+/**
+ * @brief fprintf with error checking.
+ *
+ * Returns CIF_ERR_IO if write fails.
+ */
+#define CIF_FPRINTF(file, ctx, ...) do { \
+    if (fprintf(file, __VA_ARGS__) < 0) { \
+        LOG_ERROR("Write failed"); \
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Write failed"); \
+        return CIF_ERR_IO; \
+    } \
+} while(0)
+
+
+/* ============================================================================
+ * INTERNAL: Block Writers
+ * Each function writes a specific mmCIF block to the file.
+ * ============================================================================ */
+
+/**
+ * @brief Write the data_ header line.
+ */
+static CifError _write_header(FILE *file, const char *id, CifErrorContext *ctx) {
+    CIF_FPRINTF(file, ctx, "data_%s\n", id);
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Write the _struct_asym block (chain definitions).
+ */
+static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym.id\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym.pdbx_strand_id\n");
+
+    for (int i = 0; i < cif->chains; i++) {
+        const char *name = cif->names[i];
+        const char *strand = (cif->strands[i] && cif->strands[i][0]) ? cif->strands[i] : "?";
+
+        if (name == NULL) {
+            LOG_ERROR("NULL chain name at index %d", i);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", i);
+            return CIF_ERR_PARSE;
+        }
+
+        CIF_FPRINTF(file, ctx, "%-4s %-4s\n", name, strand);
+    }
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Write the _pdbx_poly_seq_scheme block (polymer sequence).
+ *
+ * Only writes residues that have atoms (atoms_per_res > 0).
+ * This ensures consistency with the atom_site block.
+ */
+static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.asym_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.mon_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.pdb_strand_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.seq_id\n");
+
+    int res_idx = 0;
+    int unknown_count = 0;
+    int skipped_count = 0;
+
+    for (int chain = 0; chain < cif->chains; chain++) {
+        const char *chain_name = cif->names[chain];
+        const char *strand = (cif->strands[chain] && cif->strands[chain][0]) ? cif->strands[chain] : "?";
+
+        if (chain_name == NULL) {
+            LOG_ERROR("NULL chain name at index %d", chain);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", chain);
+            return CIF_ERR_PARSE;
+        }
+
+        int output_seq_id = 1;  /* Track output sequence number (restarts per chain) */
+
+        for (int res = 0; res < cif->res_per_chain[chain]; res++) {
+            /* Bounds check before array access */
+            if (res_idx >= cif->residues) {
+                LOG_ERROR("Residue index %d exceeds residue count %d", res_idx, cif->residues);
+                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Residue index %d exceeds count %d", res_idx, cif->residues);
+                return CIF_ERR_BOUNDS;
+            }
+
+            /* Skip residues with no polymer atoms (e.g., HETATM-only residues) */
+            if (cif->atoms_per_res[res_idx] == 0) {
+                skipped_count++;
+                res_idx++;
+                continue;
+            }
+
+            int seq_idx = cif->sequence[res_idx];
+            const char *res_name = residue_name(seq_idx);
+
+            if (seq_idx < 0) {
+                unknown_count++;
+                LOG_DEBUG("Unknown residue type %d at chain %s, position %d",
+                          seq_idx, chain_name, output_seq_id);
+            }
+
+            CIF_FPRINTF(file, ctx, "%-4s %-4s %-4s %-6d\n",
+                chain_name,
+                res_name,
+                strand,
+                output_seq_id);
+            output_seq_id++;
+            res_idx++;
+        }
+    }
+
+    if (skipped_count > 0) {
+        LOG_DEBUG("Skipped %d residues with no polymer atoms", skipped_count);
+    }
+    if (unknown_count > 0) {
+        LOG_WARNING("Found %d residues with unknown type (written as 'UNK')", unknown_count);
+    }
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Write the _atom_site block (coordinates and atom types).
+ */
+static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    /* Write block header */
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.group_PDB\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.type_symbol\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.label_atom_id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.label_alt_id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.label_comp_id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.label_asym_id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.label_seq_id\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_x\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_y\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_z\n");
+    CIF_FPRINTF(file, ctx, "_atom_site.pdbx_PDB_model_num\n");
+
+    LOG_INFO("Writing %d atoms (%d polymer, %d non-polymer)",
+             cif->atoms, cif->polymer, cif->nonpoly);
+
+    /* Track position within structure */
+    int atom_idx = 0;
+    int res_idx = 0;
+    int serial = 1;
+    int unknown_atom_count = 0;
+    int unknown_elem_count = 0;
+
+    /* Iterate through chains */
+    for (int chain = 0; chain < cif->chains; chain++) {
+        const char *chain_name = cif->names[chain];
+
+        if (chain_name == NULL) {
+            LOG_ERROR("NULL chain name at index %d", chain);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "NULL chain name at index %d", chain);
+            return CIF_ERR_PARSE;
+        }
+
+        LOG_DEBUG("Writing chain %s with %d residues",
+                  chain_name, cif->res_per_chain[chain]);
+
+        int output_seq_id = 1;  /* Track output sequence number (restarts per chain) */
+
+        /* Iterate through residues in this chain */
+        for (int res = 0; res < cif->res_per_chain[chain]; res++) {
+            /* Bounds check for residue index */
+            if (res_idx >= cif->residues) {
+                LOG_ERROR("Residue index %d exceeds count %d", res_idx, cif->residues);
+                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Residue index %d exceeds count %d", res_idx, cif->residues);
+                return CIF_ERR_BOUNDS;
+            }
+
+            int atoms_in_res = cif->atoms_per_res[res_idx];
+
+            /* Skip residues with no polymer atoms (e.g., HETATM-only residues) */
+            if (atoms_in_res == 0) {
+                res_idx++;
+                continue;
+            }
+
+            const char *res_name = residue_name(cif->sequence[res_idx]);
+
+            /* Iterate through atoms in this residue */
+            for (int a = 0; a < atoms_in_res; a++) {
+                /* Bounds check for atom index */
+                if (atom_idx >= cif->atoms) {
+                    LOG_ERROR("Atom index %d exceeds count %d", atom_idx, cif->atoms);
+                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Atom index %d exceeds count %d", atom_idx, cif->atoms);
+                    return CIF_ERR_BOUNDS;
+                }
+
+                /* Determine if polymer or non-polymer atom */
+                const char *group = (atom_idx < cif->polymer) ? "ATOM" : "HETATM";
+
+                /* Get element symbol via reverse lookup */
+                int elem_idx = cif->elements[atom_idx];
+                const char *elem = element_name(elem_idx);
+                if (elem_idx < 0 || elem_idx >= ELEMENT_MAX || strcmp(elem, "X") == 0) {
+                    unknown_elem_count++;
+                    LOG_DEBUG("Unknown element %d at atom %d", elem_idx, atom_idx);
+                }
+
+                /* Get atom name via reverse lookup */
+                int type_idx = cif->types[atom_idx];
+                const AtomInfo *ainfo = atom_info(type_idx);
+                if (type_idx < 0 || strcmp(ainfo->atom, "X") == 0) {
+                    unknown_atom_count++;
+                    LOG_DEBUG("Unknown atom type %d at atom %d (chain %s, res %d)",
+                              type_idx, atom_idx, chain_name, output_seq_id);
+                }
+
+                /* Get coordinates - check for overflow */
+                int coord_idx = 3 * atom_idx;
+                if (coord_idx + 2 >= 3 * cif->atoms) {
+                    LOG_ERROR("Coordinate index overflow at atom %d", atom_idx);
+                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Coordinate index overflow");
+                    return CIF_ERR_BOUNDS;
+                }
+                float x = cif->coordinates[coord_idx + 0];
+                float y = cif->coordinates[coord_idx + 1];
+                float z = cif->coordinates[coord_idx + 2];
+
+                /* Sequence ID: use output_seq_id for polymer, '.' for non-polymer */
+                /* NOTE: Use LEFT-justified fields (%-Nd) to avoid leading spaces that merge
+                 * with field delimiters. The parser uses whitespace to find field boundaries,
+                 * so right-justified fields like %5d break offset computation. All fields
+                 * must have consistent width for the fixed-line-width parser to work.
+                 * Field widths: serial(7), element(2), atom(4), res(4), chain(4), seq(6), coord(10) */
+                if (atom_idx < cif->polymer) {
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2s %-4s . %-4s %-4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
+                        group, serial, elem, ainfo->atom,
+                        res_name, chain_name, output_seq_id, x, y, z);
+                } else {
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2s %-4s . %-4s %-4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
+                        group, serial, elem, ainfo->atom,
+                        res_name, chain_name, ".", x, y, z);
+                }
+
+                atom_idx++;
+                serial++;
+            }
+            output_seq_id++;
+            res_idx++;
+        }
+    }
+
+    if (unknown_atom_count > 0) {
+        LOG_WARNING("Found %d atoms with unknown type (written as 'X')", unknown_atom_count);
+    }
+    if (unknown_elem_count > 0) {
+        LOG_WARNING("Found %d atoms with unknown element (written as 'X')", unknown_elem_count);
+    }
+
+    LOG_INFO("Wrote %d atoms to file", serial - 1);
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/* ============================================================================
+ * PUBLIC INTERFACE
+ * ============================================================================ */
+
+CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx) {
+    CifError err;
+
+    /* Validate basic inputs */
+    if (cif == NULL) {
+        LOG_ERROR("Cannot write NULL mmCIF structure");
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Cannot write NULL mmCIF structure");
+        return CIF_ERR_PARSE;
+    }
+    if (file == NULL) {
+        LOG_ERROR("Cannot write to NULL file handle");
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Cannot write to NULL file handle");
+        return CIF_ERR_IO;
+    }
+    if (cif->id == NULL) {
+        LOG_ERROR("mmCIF structure has no ID");
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "mmCIF structure has no ID");
+        return CIF_ERR_PARSE;
+    }
+
+    /* Validate required arrays for non-empty structures */
+    if (cif->chains > 0) {
+        if (cif->names == NULL) {
+            LOG_ERROR("chains=%d but names array is NULL", cif->chains);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing chain names array");
+            return CIF_ERR_PARSE;
+        }
+        if (cif->strands == NULL) {
+            LOG_ERROR("chains=%d but strands array is NULL", cif->chains);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing strands array");
+            return CIF_ERR_PARSE;
+        }
+        if (cif->res_per_chain == NULL) {
+            LOG_ERROR("chains=%d but res_per_chain array is NULL", cif->chains);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing res_per_chain array");
+            return CIF_ERR_PARSE;
+        }
+    }
+
+    if (cif->residues > 0) {
+        if (cif->sequence == NULL) {
+            LOG_ERROR("residues=%d but sequence array is NULL", cif->residues);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing sequence array");
+            return CIF_ERR_PARSE;
+        }
+        if (cif->atoms_per_res == NULL) {
+            LOG_ERROR("residues=%d but atoms_per_res array is NULL", cif->residues);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing atoms_per_res array");
+            return CIF_ERR_PARSE;
+        }
+    }
+
+    if (cif->atoms > 0) {
+        if (cif->coordinates == NULL) {
+            LOG_ERROR("atoms=%d but coordinates array is NULL", cif->atoms);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing coordinates array");
+            return CIF_ERR_PARSE;
+        }
+        if (cif->elements == NULL) {
+            LOG_ERROR("atoms=%d but elements array is NULL", cif->atoms);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing elements array");
+            return CIF_ERR_PARSE;
+        }
+        if (cif->types == NULL) {
+            LOG_ERROR("atoms=%d but types array is NULL", cif->atoms);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Missing types array");
+            return CIF_ERR_PARSE;
+        }
+    }
+
+    LOG_DEBUG("Validated structure: %d chains, %d residues, %d atoms",
+              cif->chains, cif->residues, cif->atoms);
+
+    /* Write each block in order */
+    err = _write_header(file, cif->id, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_struct_asym(file, cif, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_poly_seq(file, cif, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_atom_site(file, cif, ctx);
+    if (err != CIF_OK) return err;
+
+    return CIF_OK;
+}
+
+
+CifError _write_cif(const mmCIF *cif, const char *filename, CifErrorContext *ctx) {
+    LOG_INFO("Writing CIF file: %s", filename);
+
+    /* Open file for writing */
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        LOG_ERROR("Failed to open file for writing: %s", filename);
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to open file for writing: %s", filename);
+        return CIF_ERR_IO;
+    }
+
+    /* Write the structure */
+    CifError err = _write_cif_file(cif, file, ctx);
+
+    /* Close file */
+    if (fclose(file) != 0 && err == CIF_OK) {
+        LOG_ERROR("Failed to close file: %s", filename);
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to close file: %s", filename);
+        return CIF_ERR_IO;
+    }
+
+    if (err == CIF_OK) {
+        LOG_INFO("Successfully wrote CIF file: %s", filename);
+    }
+
+    return err;
+}

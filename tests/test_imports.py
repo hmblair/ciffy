@@ -1,8 +1,11 @@
 """
 Tests for module imports and backward compatibility.
+
+Includes tests for both numpy and torch backends.
 """
 
 import pytest
+import numpy as np
 
 
 class TestPublicAPI:
@@ -228,3 +231,181 @@ class TestReduction:
         result = create_reduction_index(3, torch.tensor([2, 1, 3]))
         expected = torch.tensor([0, 0, 1, 2, 2, 2])
         assert torch.equal(result, expected)
+
+
+class TestBackendOperations:
+    """Test backend operations work with both numpy and torch."""
+
+    def test_backend_detection_numpy(self):
+        from ciffy.backend import get_backend, Backend, is_numpy, is_torch
+
+        arr = np.array([1, 2, 3])
+        assert get_backend(arr) == Backend.NUMPY
+        assert is_numpy(arr)
+        assert not is_torch(arr)
+
+    def test_backend_detection_torch(self):
+        import torch
+        from ciffy.backend import get_backend, Backend, is_numpy, is_torch
+
+        arr = torch.tensor([1, 2, 3])
+        assert get_backend(arr) == Backend.TORCH
+        assert is_torch(arr)
+        assert not is_numpy(arr)
+
+    def test_backend_conversion_numpy_to_torch(self):
+        import torch
+        from ciffy.backend import to_torch
+
+        np_arr = np.array([1.0, 2.0, 3.0])
+        torch_arr = to_torch(np_arr)
+        assert isinstance(torch_arr, torch.Tensor)
+        assert np.allclose(np_arr, torch_arr.numpy())
+
+    def test_backend_conversion_torch_to_numpy(self):
+        import torch
+        from ciffy.backend import to_numpy
+
+        torch_arr = torch.tensor([1.0, 2.0, 3.0])
+        np_arr = to_numpy(torch_arr)
+        assert isinstance(np_arr, np.ndarray)
+        assert np.allclose(np_arr, torch_arr.numpy())
+
+    def test_scatter_sum_numpy(self):
+        from ciffy.backend.ops import scatter_sum
+
+        src = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        index = np.array([0, 1, 0])
+        result = scatter_sum(src, index, dim_size=2)
+
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (2, 2)
+        # index 0: [1,2] + [5,6] = [6,8]; index 1: [3,4]
+        assert np.allclose(result, [[6.0, 8.0], [3.0, 4.0]])
+
+    def test_scatter_sum_torch(self):
+        import torch
+        from ciffy.backend.ops import scatter_sum
+
+        src = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        index = torch.tensor([0, 1, 0])
+        result = scatter_sum(src, index, dim_size=2)
+
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (2, 2)
+        expected = torch.tensor([[6.0, 8.0], [3.0, 4.0]])
+        assert torch.allclose(result, expected)
+
+    def test_scatter_mean_numpy(self):
+        from ciffy.backend.ops import scatter_mean
+
+        src = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        index = np.array([0, 1, 0])
+        result = scatter_mean(src, index, dim_size=2)
+
+        assert isinstance(result, np.ndarray)
+        # index 0: mean([1,2], [5,6]) = [3,4]; index 1: [3,4]
+        assert np.allclose(result, [[3.0, 4.0], [3.0, 4.0]])
+
+    def test_scatter_mean_torch(self):
+        import torch
+        from ciffy.backend.ops import scatter_mean
+
+        src = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        index = torch.tensor([0, 1, 0])
+        result = scatter_mean(src, index, dim_size=2)
+
+        assert isinstance(result, torch.Tensor)
+        expected = torch.tensor([[3.0, 4.0], [3.0, 4.0]])
+        assert torch.allclose(result, expected)
+
+    def test_cdist_numpy(self):
+        from ciffy.backend.ops import cdist
+
+        x1 = np.array([[0.0, 0.0], [1.0, 0.0]])
+        x2 = np.array([[0.0, 0.0], [0.0, 1.0]])
+        result = cdist(x1, x2)
+
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (2, 2)
+        # Distances: [0,0]->[0,0]=0, [0,0]->[0,1]=1, [1,0]->[0,0]=1, [1,0]->[0,1]=sqrt(2)
+        expected = np.array([[0.0, 1.0], [1.0, np.sqrt(2)]])
+        assert np.allclose(result, expected)
+
+    def test_cdist_torch(self):
+        import torch
+        from ciffy.backend.ops import cdist
+
+        x1 = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
+        x2 = torch.tensor([[0.0, 0.0], [0.0, 1.0]])
+        result = cdist(x1, x2)
+
+        assert isinstance(result, torch.Tensor)
+        assert result.shape == (2, 2)
+        expected = torch.tensor([[0.0, 1.0], [1.0, 2**0.5]])
+        assert torch.allclose(result, expected)
+
+    def test_cat_numpy(self):
+        from ciffy.backend.ops import cat
+
+        a = np.array([1, 2, 3])
+        b = np.array([4, 5, 6])
+        result = cat([a, b])
+
+        assert isinstance(result, np.ndarray)
+        assert np.array_equal(result, np.array([1, 2, 3, 4, 5, 6]))
+
+    def test_cat_torch(self):
+        import torch
+        from ciffy.backend.ops import cat
+
+        a = torch.tensor([1, 2, 3])
+        b = torch.tensor([4, 5, 6])
+        result = cat([a, b])
+
+        assert isinstance(result, torch.Tensor)
+        assert torch.equal(result, torch.tensor([1, 2, 3, 4, 5, 6]))
+
+    def test_repeat_interleave_numpy(self):
+        from ciffy.backend.ops import repeat_interleave
+
+        arr = np.array([[1, 2], [3, 4], [5, 6]])
+        repeats = np.array([2, 1, 3])
+        result = repeat_interleave(arr, repeats)
+
+        assert isinstance(result, np.ndarray)
+        expected = np.array([[1, 2], [1, 2], [3, 4], [5, 6], [5, 6], [5, 6]])
+        assert np.array_equal(result, expected)
+
+    def test_repeat_interleave_torch(self):
+        import torch
+        from ciffy.backend.ops import repeat_interleave
+
+        arr = torch.tensor([[1, 2], [3, 4], [5, 6]])
+        repeats = torch.tensor([2, 1, 3])
+        result = repeat_interleave(arr, repeats)
+
+        assert isinstance(result, torch.Tensor)
+        expected = torch.tensor([[1, 2], [1, 2], [3, 4], [5, 6], [5, 6], [5, 6]])
+        assert torch.equal(result, expected)
+
+    def test_multiply_numpy(self):
+        from ciffy.backend.ops import multiply
+
+        a = np.array([1.0, 2.0, 3.0])
+        b = np.array([2.0, 3.0, 4.0])
+        result = multiply(a, b)
+
+        assert isinstance(result, np.ndarray)
+        assert np.allclose(result, [2.0, 6.0, 12.0])
+
+    def test_multiply_torch(self):
+        import torch
+        from ciffy.backend.ops import multiply
+
+        a = torch.tensor([1.0, 2.0, 3.0])
+        b = torch.tensor([2.0, 3.0, 4.0])
+        result = multiply(a, b)
+
+        assert isinstance(result, torch.Tensor)
+        assert torch.allclose(result, torch.tensor([2.0, 6.0, 12.0]))

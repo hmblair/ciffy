@@ -35,12 +35,12 @@
 #line 8 "residue.gperf"
 struct _LOOKUP;
 
-#define RESIDUETOTAL_KEYWORDS 28
+#define RESIDUETOTAL_KEYWORDS 31
 #define RESIDUEMIN_WORD_LENGTH 1
 #define RESIDUEMAX_WORD_LENGTH 3
-#define RESIDUEMIN_HASH_VALUE 3
-#define RESIDUEMAX_HASH_VALUE 61
-/* maximum key range = 59, duplicates = 0 */
+#define RESIDUEMIN_HASH_VALUE 1
+#define RESIDUEMAX_HASH_VALUE 84
+/* maximum key range = 84, duplicates = 0 */
 
 #ifdef __GNUC__
 __inline
@@ -54,32 +54,32 @@ _hash_residue (register const char *str, register size_t len)
 {
   static unsigned char asso_values[] =
     {
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 15, 62, 10, 62, 15,
-      62,  5,  5,  1, 62, 62,  0, 20, 28, 28,
-      25, 62,  0,  0, 23, 20, 11, 62, 62,  0,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
-      62, 62, 62, 62, 62, 62
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 15, 85,  5, 85,  5,
+      85, 10, 28, 16, 85, 85,  0, 30, 23, 25,
+       8, 85, 20,  0,  0,  1, 25, 85, 85,  0,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85, 85, 85, 85, 85,
+      85, 85, 85, 85, 85, 85
     };
   register unsigned int hval = len;
 
@@ -117,52 +117,53 @@ _lookup_residue (register const char *str, register size_t len)
 #endif
   static struct _LOOKUP wordlist[] =
     {
-      {""}, {""}, {""},
+      {""},
+#line 14 "residue.gperf"
+      {"T", 4},
+#line 13 "residue.gperf"
+      {"U", 3},
 #line 23 "residue.gperf"
       {"LYS", 13},
       {""}, {""},
-#line 12 "residue.gperf"
-      {"G", 2},
-      {""},
-#line 20 "residue.gperf"
-      {"GLY", 10},
-#line 21 "residue.gperf"
-      {"HIS", 11},
-      {""},
 #line 11 "residue.gperf"
       {"C", 1},
 #line 37 "residue.gperf"
       {"CS", 27},
 #line 16 "residue.gperf"
       {"CYS", 6},
-      {""}, {""},
+#line 24 "residue.gperf"
+      {"LEU", 14},
+      {""},
+#line 12 "residue.gperf"
+      {"G", 2},
+      {""},
+#line 20 "residue.gperf"
+      {"GLY", 10},
+#line 18 "residue.gperf"
+      {"GLU", 8},
+      {""},
 #line 10 "residue.gperf"
       {"A", 0},
       {""},
-#line 30 "residue.gperf"
-      {"SER", 20},
-#line 22 "residue.gperf"
-      {"ILE", 12},
-      {""},
-#line 13 "residue.gperf"
-      {"U", 3},
-      {""},
-#line 29 "residue.gperf"
-      {"ARG", 19},
-#line 14 "residue.gperf"
-      {"T", 4},
+#line 39 "residue.gperf"
+      {"CCC", 29},
+      {""}, {""},
+#line 38 "residue.gperf"
+      {"GTP", 28},
       {""},
 #line 34 "residue.gperf"
       {"TYR", 24},
-#line 36 "residue.gperf"
-      {"MG", 26},
-#line 18 "residue.gperf"
-      {"GLU", 8},
-#line 32 "residue.gperf"
-      {"VAL", 22},
+#line 22 "residue.gperf"
+      {"ILE", 12},
       {""},
-#line 31 "residue.gperf"
-      {"THR", 21},
+#line 17 "residue.gperf"
+      {"ASP", 7},
+      {""},
+#line 30 "residue.gperf"
+      {"SER", 20},
+      {""}, {""},
+#line 33 "residue.gperf"
+      {"TRP", 23},
       {""},
 #line 15 "residue.gperf"
       {"ALA", 5},
@@ -170,29 +171,35 @@ _lookup_residue (register const char *str, register size_t len)
 #line 28 "residue.gperf"
       {"GLN", 18},
       {""},
-#line 24 "residue.gperf"
-      {"LEU", 14},
-      {""}, {""},
-#line 35 "residue.gperf"
-      {"HOH", 25},
-      {""},
-#line 17 "residue.gperf"
-      {"ASP", 7},
+#line 25 "residue.gperf"
+      {"MET", 15},
       {""}, {""},
 #line 26 "residue.gperf"
       {"ASN", 16},
-      {""},
+#line 36 "residue.gperf"
+      {"MG", 26},
+#line 32 "residue.gperf"
+      {"VAL", 22},
 #line 19 "residue.gperf"
       {"PHE", 9},
+      {""},
+#line 40 "residue.gperf"
+      {"GNG", 30},
+#line 21 "residue.gperf"
+      {"HIS", 11},
+#line 29 "residue.gperf"
+      {"ARG", 19},
       {""}, {""},
-#line 33 "residue.gperf"
-      {"TRP", 23},
+#line 31 "residue.gperf"
+      {"THR", 21},
       {""}, {""}, {""}, {""},
 #line 27 "residue.gperf"
       {"PRO", 17},
-      {""}, {""}, {""}, {""},
-#line 25 "residue.gperf"
-      {"MET", 15}
+      {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""},
+      {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""},
+      {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""}, {""},
+#line 35 "residue.gperf"
+      {"HOH", 25}
     };
 #if (defined __GNUC__ && __GNUC__ + (__GNUC_MINOR__ >= 6) > 4) || (defined __clang__ && __clang_major__ >= 3)
 #pragma GCC diagnostic pop

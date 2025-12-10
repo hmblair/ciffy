@@ -1,0 +1,7 @@
+#!/bin/bash
+
+python3 generate.py
+
+/opt/homebrew/bin/gperf element.gperf > ../hash/element.c
+/opt/homebrew/bin/gperf residue.gperf > ../hash/residue.c
+/opt/homebrew/bin/gperf atom.gperf    > ../hash/atom.c

@@ -1,6 +1,6 @@
 ## Overview
 
-`ciffy` is a fast CIF file parser for molecular structures, with a C backend and Python interface.
+`ciffy` is a fast CIF file parser for molecular structures, with a C backend and Python interface. It supports both NumPy and PyTorch backends for array operations.
 
 ## Installation
 
@@ -16,24 +16,39 @@ pip install ciffy
 git clone https://github.com/hmblair/ciffy.git
 cd ciffy
 pip install -r requirements.txt
-pip install torch-scatter --no-build-isolation
 pip install -e .
 ```
 
-### Note on torch-scatter
+## Backends
 
-`ciffy` requires `torch-scatter`, which may need to be installed separately depending on your platform:
+`ciffy` supports two array backends:
 
-**Linux/Windows with CUDA:**
-```bash
-# Replace CUDA with your version (e.g., cu118, cu121) or cpu
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+${CUDA}.html
+- **NumPy**: Lightweight, no additional dependencies required
+- **PyTorch**: For GPU support and integration with deep learning workflows
+
+Specify the backend when loading structures:
+
+```python
+import ciffy
+
+# Load with NumPy backend (recommended for general use)
+polymer = ciffy.load("structure.cif", backend="numpy")
+
+# Load with PyTorch backend (for deep learning workflows)
+polymer = ciffy.load("structure.cif", backend="torch")
 ```
 
-**macOS or if pre-built wheels are unavailable:**
-```bash
-pip install torch-scatter --no-build-isolation
+Polymers can be converted between backends:
+
+```python
+# Convert to PyTorch tensors
+torch_polymer = polymer.torch()
+
+# Convert to NumPy arrays
+numpy_polymer = polymer.numpy()
 ```
+
+**Note:** The default backend will change from `"torch"` to `"numpy"` in v0.6.0. Specify the backend explicitly to avoid deprecation warnings.
 
 ## Usage
 
@@ -41,14 +56,14 @@ pip install torch-scatter --no-build-isolation
 import ciffy
 
 # Load a structure from a CIF file
-polymer = ciffy.load("structure.cif")
+polymer = ciffy.load("structure.cif", backend="numpy")
 
 # Basic information
 print(polymer)  # Summary of chains, residues, atoms
 
 # Access coordinates and properties
-coords = polymer.coordinates      # (N, 3) tensor
-atoms = polymer.atoms             # (N,) tensor of atom types
+coords = polymer.coordinates      # (N, 3) array/tensor
+atoms = polymer.atoms             # (N,) array/tensor of atom types
 sequence = polymer.str()          # Sequence string
 
 # Geometric operations
@@ -72,6 +87,7 @@ rmsd = ciffy.rmsd(polymer1, polymer2, ciffy.MOLECULE)
 
 ```
 ciffy/
+├── backend/        # NumPy/PyTorch abstraction layer
 ├── types/          # Scale, Molecule enums
 ├── biochemistry/   # Element, Residue, nucleotide definitions
 ├── operations/     # Reduction, alignment operations

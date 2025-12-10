@@ -1,10 +1,66 @@
 from setuptools import setup, Extension
+from setuptools.command.build_ext import build_ext
 import os
 import re
 import sys
+import subprocess
+import shutil
 import numpy
 
 NAME = 'ciffy'
+
+
+class GenerateAndBuildExt(build_ext):
+    """Custom build_ext that generates hash tables before compiling."""
+
+    def run(self):
+        self.generate_hash_tables()
+        super().run()
+
+    def generate_hash_tables(self):
+        """Run the hash table generator before building."""
+        generate_script = os.path.join(
+            os.path.dirname(__file__),
+            'ciffy', 'src', '_generate', 'generate.py'
+        )
+
+        if not os.path.exists(generate_script):
+            print("Warning: generate.py not found, skipping hash generation")
+            return
+
+        # Check if gperf is available (need 3.1+ for constants-prefix)
+        # Check Homebrew paths first (they have newer versions)
+        gperf_path = None
+        for path in ["/opt/homebrew/bin/gperf", "/usr/local/bin/gperf"]:
+            if os.path.exists(path):
+                gperf_path = path
+                break
+        if gperf_path is None:
+            gperf_path = shutil.which("gperf")
+
+        if gperf_path is None:
+            print("Warning: gperf not found, using pre-generated hash files")
+            print("Install gperf to regenerate: brew install gperf (macOS) or apt install gperf (Linux)")
+            # Still generate .gperf files and reverse.h (they don't need gperf)
+            args = ["--skip-gperf"]
+        else:
+            args = ["--gperf-path", gperf_path]
+
+        print("Generating hash lookup tables...")
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.path.dirname(__file__)
+
+        result = subprocess.run(
+            [sys.executable, generate_script] + args,
+            env=env,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            print(f"Warning: Hash generation failed: {result.stderr}")
+        else:
+            print(result.stdout)
 
 # Cross-platform OpenMP configuration
 if sys.platform == 'darwin':  # macOS
@@ -50,6 +106,7 @@ SOURCES = [
     'ciffy/src/io.c',
     'ciffy/src/py.c',
     'ciffy/src/cif.c',
+    'ciffy/src/cif_write.c',
 ]
 module = Extension(
     name=f"{NAME}.{EXT}",
@@ -94,6 +151,7 @@ setup(
     long_description_content_type='text/markdown',
     packages=PACKAGES,
     ext_modules=[module],
+    cmdclass={'build_ext': GenerateAndBuildExt},
     python_requires='>=3.9',
     install_requires=[
         'numpy',

@@ -6,7 +6,10 @@
  * parsed molecular structure data as Python/NumPy objects.
  */
 
+/* Define CIFFY_MAIN_MODULE before including headers so py.h knows to import numpy */
+#define CIFFY_MAIN_MODULE
 #include "_c.h"
+#include "log.h"
 
 
 /**
@@ -238,24 +241,39 @@ static PyObject *_c_to_py(mmCIF cif) {
 
 /**
  * @brief Skip past a multi-line attribute value.
+ *
+ * Multi-line values start and end with ';' on their own line.
+ * Adds protection against unterminated values (max 10000 lines).
  */
 static void _skip_multiline_attr(char **buffer) {
     _advance_line(buffer);
-    while (**buffer != ';') {
+    int lines = 0;
+    const int MAX_MULTILINE_LINES = 10000;
+    while (**buffer != ';' && **buffer != '\0' && lines < MAX_MULTILINE_LINES) {
+        _advance_line(buffer);
+        lines++;
+    }
+    if (lines >= MAX_MULTILINE_LINES) {
+        LOG_WARNING("Unterminated multiline attribute (exceeded %d lines)", MAX_MULTILINE_LINES);
+    }
+    if (**buffer == ';') {
         _advance_line(buffer);
     }
-    _advance_line(buffer);
 }
 
 
 /**
  * @brief Advance to the next block (skip to section end marker).
+ *
+ * Skips until finding a line starting with '#' or reaching end of buffer.
  */
 static void _next_block(char **buffer) {
-    while (!_is_section_end(*buffer)) {
+    while (**buffer != '\0' && !_is_section_end(*buffer)) {
         _advance_line(buffer);
     }
-    _advance_line(buffer);
+    if (**buffer != '\0') {
+        _advance_line(buffer);
+    }
 }
 
 
@@ -288,12 +306,21 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
     }
 
     /* Count attributes by scanning header lines */
-    while (_eq(*buffer, block.category)) {
+    while (**buffer != '\0' && _eq(*buffer, block.category)) {
         block.attributes++;
         _advance_line(buffer);
         if (**buffer == ';') {
             _skip_multiline_attr(buffer);
         }
+    }
+
+    /* Validate attribute count */
+    if (block.attributes == 0) {
+        LOG_ERROR("Block %s has no attributes", block.category);
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Block has no attributes");
+        free(block.category);
+        block.category = NULL;
+        return block;
     }
 
     if (!block.single) {
@@ -307,13 +334,28 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
         }
         block.width = block.offsets[block.attributes] + 1;
 
+        /* Validate width is positive */
+        if (block.width <= 0) {
+            LOG_ERROR("Invalid block width %d", block.width);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid block line width");
+            free(block.category);
+            free(block.offsets);
+            block.category = NULL;
+            block.offsets = NULL;
+            return block;
+        }
+
         /* Count entries until section end */
-        while (!_is_section_end(*buffer)) {
+        while (**buffer != '\0' && !_is_section_end(*buffer)) {
+            /* Check if we're at a valid position (previous char should be newline) */
+            if (*buffer > block.start && (*buffer)[-1] != '\n') {
+                LOG_WARNING("Non-homogeneous line widths in block %s, stopping at %d entries",
+                            block.category, block.size);
+                break;
+            }
+
             *buffer += block.width;
             block.size++;
-
-            /* If block is not homogeneous (different line widths), stop */
-            if ((*buffer)[-1] != '\n') { break; }
         }
     }
 
@@ -462,6 +504,139 @@ static PyObject *_load(PyObject *self, PyObject *args) {
 }
 
 
+/**
+ * @brief Save molecular structure data to an mmCIF file.
+ *
+ * Takes Python/NumPy data and writes it to a CIF file.
+ *
+ * @param self Module reference (unused)
+ * @param args Python arguments tuple containing:
+ *        - filename (str): Output file path
+ *        - id (str): PDB identifier
+ *        - coordinates (ndarray): (N, 3) float32 array
+ *        - atoms (ndarray): (N,) int32 array of atom types
+ *        - elements (ndarray): (N,) int32 array of element types
+ *        - residues (ndarray): (R,) int32 array of residue types
+ *        - atoms_per_res (ndarray): (R,) int32 array
+ *        - atoms_per_chain (ndarray): (C,) int32 array
+ *        - res_per_chain (ndarray): (C,) int32 array
+ *        - chain_names (list): List of chain name strings
+ *        - strand_names (list): List of strand ID strings
+ *        - polymer_count (int): Number of polymer atoms
+ * @return None on success, NULL on error
+ */
+static PyObject *_save(PyObject *self, PyObject *args) {
+
+    __py_init();
+
+    CifErrorContext ctx = CIF_ERROR_INIT;
+
+    /* Parse arguments */
+    const char *filename;
+    const char *id;
+    PyObject *py_coords, *py_atoms, *py_elements, *py_residues;
+    PyObject *py_atoms_per_res, *py_atoms_per_chain, *py_res_per_chain;
+    PyObject *py_chain_names, *py_strand_names;
+    int polymer_count;
+
+    if (!PyArg_ParseTuple(args, "ssOOOOOOOOOi",
+            &filename, &id,
+            &py_coords, &py_atoms, &py_elements, &py_residues,
+            &py_atoms_per_res, &py_atoms_per_chain, &py_res_per_chain,
+            &py_chain_names, &py_strand_names, &polymer_count)) {
+        return NULL;  /* PyArg_ParseTuple sets exception */
+    }
+
+    /* Build mmCIF structure from Python objects */
+    mmCIF cif = {0};
+    cif.polymer = polymer_count;
+
+    /* Copy ID string (we need to own it for mmCIF struct) */
+    cif.id = strdup(id);
+    if (cif.id == NULL) {
+        return PyErr_NoMemory();
+    }
+
+    /* Extract arrays (borrowed references - no copy needed) */
+    int coord_size;
+    cif.coordinates = _numpy_to_float_arr(py_coords, &coord_size);
+    if (cif.coordinates == NULL) {
+        free(cif.id);
+        return NULL;  /* Exception already set */
+    }
+    cif.atoms = coord_size / 3;  /* Coordinates are N*3 */
+
+    cif.types = _numpy_to_int_arr(py_atoms, NULL);
+    if (cif.types == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    cif.elements = _numpy_to_int_arr(py_elements, NULL);
+    if (cif.elements == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    cif.sequence = _numpy_to_int_arr(py_residues, &cif.residues);
+    if (cif.sequence == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    cif.atoms_per_res = _numpy_to_int_arr(py_atoms_per_res, NULL);
+    if (cif.atoms_per_res == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    cif.atoms_per_chain = _numpy_to_int_arr(py_atoms_per_chain, &cif.chains);
+    if (cif.atoms_per_chain == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    cif.res_per_chain = _numpy_to_int_arr(py_res_per_chain, NULL);
+    if (cif.res_per_chain == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    /* Extract chain name lists (need to copy because we need char** format) */
+    int num_chains;
+    cif.names = _py_list_to_c_arr(py_chain_names, &num_chains);
+    if (cif.names == NULL) {
+        free(cif.id);
+        return NULL;
+    }
+
+    int num_strands;
+    cif.strands = _py_list_to_c_arr(py_strand_names, &num_strands);
+    if (cif.strands == NULL) {
+        free(cif.id);
+        _free_c_str_arr(cif.names, num_chains);
+        return NULL;
+    }
+
+    /* Calculate non-polymer count */
+    cif.nonpoly = cif.atoms - cif.polymer;
+
+    /* Write to file */
+    CifError err = _write_cif(&cif, filename, &ctx);
+
+    /* Cleanup (only what we allocated - id and string arrays) */
+    free(cif.id);
+    _free_c_str_arr(cif.names, num_chains);
+    _free_c_str_arr(cif.strands, num_strands);
+
+    if (err != CIF_OK) {
+        return _set_py_error(&ctx, filename);
+    }
+
+    Py_RETURN_NONE;
+}
+
+
 /* Python module method table */
 static PyMethodDef methods[] = {
     {"_load", _load, METH_VARARGS,
@@ -476,6 +651,25 @@ static PyMethodDef methods[] = {
      "    IOError: If file cannot be read\n"
      "    ValueError: If file format is invalid\n"
      "    KeyError: If required attributes are missing\n"
+     "    MemoryError: If allocation fails\n"},
+    {"_save", _save, METH_VARARGS,
+     "Save molecular structure data to an mmCIF file.\n\n"
+     "Args:\n"
+     "    filename (str): Output file path\n"
+     "    id (str): PDB identifier\n"
+     "    coordinates (ndarray): (N, 3) float32 array of atom coordinates\n"
+     "    atoms (ndarray): (N,) int32 array of atom type indices\n"
+     "    elements (ndarray): (N,) int32 array of element indices\n"
+     "    residues (ndarray): (R,) int32 array of residue type indices\n"
+     "    atoms_per_res (ndarray): (R,) int32 array of atoms per residue\n"
+     "    atoms_per_chain (ndarray): (C,) int32 array of atoms per chain\n"
+     "    res_per_chain (ndarray): (C,) int32 array of residues per chain\n"
+     "    chain_names (list): List of chain name strings\n"
+     "    strand_names (list): List of strand ID strings\n"
+     "    polymer_count (int): Number of polymer atoms\n\n"
+     "Raises:\n"
+     "    IOError: If file cannot be written\n"
+     "    TypeError: If arguments have wrong type\n"
      "    MemoryError: If allocation fails\n"},
     {NULL, NULL, 0, NULL}
 };

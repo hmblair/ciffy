@@ -9,6 +9,7 @@
 #include "io.h"
 #include "py.h"
 #include "cif.h"
+#include "cif_write.h"
 
 #define __py_init() if (PyArray_API == NULL) { import_array(); }
 

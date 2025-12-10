@@ -13,6 +13,10 @@
  */
 
 #include "cif.h"
+#include "log.h"
+
+#include <math.h>    /* for isnan */
+#include <unistd.h>  /* for isatty */
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -47,6 +51,7 @@ static const char *ATTR_ATOM_NAME     = "label_atom_id";
 static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 static const char *ATTR_COMP_ID       = "label_comp_id";
+static const char *ATTR_GROUP_PDB     = "group_PDB";
 
 
 /* ============================================================================
@@ -140,6 +145,8 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
         } else if (_neq(prev, token)) {
             prev = token;
             if ((size_t)++ix >= alloc_size) {
+                LOG_WARNING("Unique value count %d exceeds allocation %zu, truncating",
+                            ix + 1, alloc_size);
                 free(token);
                 break;
             }
@@ -275,7 +282,11 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
             free(token);
         }
 
-        if ((size_t)ix < alloc_size) sizes[ix]++;
+        if ((size_t)ix < alloc_size) {
+            sizes[ix]++;
+        } else {
+            LOG_WARNING("Size index %d exceeds allocation %zu", ix, alloc_size);
+        }
     }
 
     free(prev);
@@ -291,7 +302,7 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
 /**
  * Count atoms per residue with chain-aware indexing.
  *
- * Handles non-polymer atoms (seq_id < 0) by marking them in is_nonpoly mask.
+ * Handles non-polymer atoms (HETATM) by marking them in is_nonpoly mask.
  * Returns NULL-terminated sizes array indexed by global residue index.
  */
 static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
@@ -309,6 +320,12 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         return NULL;
     }
 
+    int group_index = _get_attr_index(block, ATTR_GROUP_PDB);
+    if (group_index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_GROUP_PDB);
+        return NULL;
+    }
+
     int *sizes = calloc((size_t)residue_count, sizeof(int));
     if (sizes == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
@@ -321,6 +338,25 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
     int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
+        /* Check if atom is HETATM (non-polymer) */
+        char *group = _get_attr_by_line(block, line, group_index, ctx);
+        if (group == NULL) {
+            free(prev_chain);
+            free(sizes);
+            return NULL;
+        }
+
+        bool is_hetatm = (strcmp(group, "HETATM") == 0);
+        free(group);
+
+        if (is_hetatm) {
+            (*nonpoly_count)++;
+            is_nonpoly[line] = 1;
+            continue;
+        }
+
+        is_nonpoly[line] = 0;
+
         /* Track chain changes to compute residue offset */
         char *chain = _get_attr_by_line(block, line, chain_index, ctx);
         if (chain == NULL) {
@@ -350,14 +386,12 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         int seq_id = _str_to_int(seq_token) - 1;
         free(seq_token);
 
-        /* Non-polymer atoms have invalid seq_id */
+        /* Skip atoms with invalid seq_id (shouldn't happen for ATOM records) */
         if (seq_id < 0) {
-            (*nonpoly_count)++;
-            is_nonpoly[line] = 1;
+            LOG_WARNING("ATOM record with invalid seq_id at line %d", line);
             continue;
         }
 
-        is_nonpoly[line] = 0;
         int residue_idx = chain_offset + seq_id;
         if (residue_idx >= 0 && residue_idx < residue_count) {
             sizes[residue_idx]++;
@@ -460,6 +494,9 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
     int atoms = cif->atoms;
     int polymer_count = atoms - cif->nonpoly;
 
+    LOG_DEBUG("Reordering: %d total atoms, %d polymer, %d nonpoly",
+              atoms, polymer_count, cif->nonpoly);
+
     if (cif->nonpoly == 0) {
         cif->polymer = polymer_count;
         return CIF_OK;
@@ -520,21 +557,27 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
  *   5. Reorder atoms (polymer first)
  */
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
+    LOG_DEBUG("Starting CIF structure parsing");
 
     /* ── Block Validation ─────────────────────────────────────────────────── */
 
     if (blocks->atom.category == NULL) {
+        LOG_ERROR("Missing required _atom_site block");
         CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _atom_site block");
         return CIF_ERR_BLOCK;
     }
     if (blocks->poly.category == NULL) {
+        LOG_ERROR("Missing required _pdbx_poly_seq_scheme block");
         CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _pdbx_poly_seq_scheme block");
         return CIF_ERR_BLOCK;
     }
     if (blocks->chain.category == NULL) {
+        LOG_ERROR("Missing required _struct_asym block");
         CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _struct_asym block");
         return CIF_ERR_BLOCK;
     }
+
+    LOG_DEBUG("All required blocks present");
 
     /* ── Count Structure Elements ─────────────────────────────────────────── */
 
@@ -545,9 +588,25 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->chains = blocks->chain.size;
     cif->residues = blocks->poly.size;
 
+    /* Validate block sizes */
+    if (blocks->atom.size == 0) {
+        LOG_ERROR("Empty _atom_site block");
+        CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "No atoms in structure");
+        return CIF_ERR_BLOCK;
+    }
+
     /* Adjust for multi-model structures (use first model only) */
-    blocks->atom.size /= cif->models;
+    if (cif->models > 1) {
+        if (blocks->atom.size % cif->models != 0) {
+            LOG_WARNING("Atom count %d not evenly divisible by model count %d",
+                        blocks->atom.size, cif->models);
+        }
+        blocks->atom.size /= cif->models;
+    }
     cif->atoms = blocks->atom.size;
+
+    LOG_INFO("Parsing structure: %d models, %d chains, %d residues, %d atoms",
+             cif->models, cif->chains, cif->residues, cif->atoms);
 
     /* ── Parse Metadata ───────────────────────────────────────────────────── */
 
@@ -600,6 +659,19 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return err;
     }
 
+    /* Validate parsed coordinates - check for NaN values */
+    int nan_count = 0;
+    for (int i = 0; i < cif->atoms; i++) {
+        if (isnan(cif->coordinates[COORDS * i + 0]) ||
+            isnan(cif->coordinates[COORDS * i + 1]) ||
+            isnan(cif->coordinates[COORDS * i + 2])) {
+            nan_count++;
+        }
+    }
+    if (nan_count > 0) {
+        LOG_WARNING("Found %d atoms with invalid (NaN) coordinates", nan_count);
+    }
+
     /* ── Atom Reordering ──────────────────────────────────────────────────── */
 
     int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
@@ -624,6 +696,10 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->atoms_per_chain = _count_sizes_by_group(&blocks->atom, ATTR_LABEL_ASYM,
                                                  &cif->chains, ctx);
     if (cif->atoms_per_chain == NULL) return ctx->code;
+
+    cif->polymer = cif->atoms - cif->nonpoly;
+    LOG_INFO("Parsed %d polymer atoms, %d non-polymer atoms", cif->polymer, cif->nonpoly);
+    LOG_DEBUG("CIF structure parsing complete");
 
     return CIF_OK;
 }

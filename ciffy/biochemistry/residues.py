@@ -56,6 +56,11 @@ class Residue(IndexEnum):
     MG = 26
     CS = 27
 
+    # Modified nucleotides
+    GTP = 28  # Guanosine-5'-triphosphate
+    CCC = 29  # Cytidine-5'-triphosphate (3' terminal)
+    GNG = 30  # 2'-deoxyguanosine
+
 
 RES_ABBREV: dict[str, str] = {
     # Nucleotides (lowercase)

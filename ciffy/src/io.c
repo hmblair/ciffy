@@ -82,7 +82,7 @@ int _get_offset(char *buffer, char delimiter, int n) {
     bool dquotes = false;
 
     for (int ix = 0; ix < n; ix++) {
-        while (*buffer != delimiter || squotes) {
+        while ((*buffer != delimiter && *buffer != '\n' && *buffer != '\0') || squotes) {
             if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
             if (*buffer == '\"') { dquotes = !dquotes; }
             buffer++;
@@ -129,7 +129,7 @@ char *_get_field(char *buffer, CifErrorContext *ctx) {
     bool dquotes = false;
 
     char *start = buffer;
-    while (*buffer != ' ' || squotes) {
+    while ((*buffer != ' ' && *buffer != '\n' && *buffer != '\0') || squotes) {
         if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
         if (*buffer == '\"') { dquotes = !dquotes; }
         buffer++;
@@ -145,9 +145,9 @@ char *_get_field_and_advance(char **buffer, CifErrorContext *ctx) {
     /* Skip leading whitespace */
     while (**buffer == ' ') { (*buffer)++; }
 
-    /* Read until whitespace */
+    /* Read until whitespace or end of line */
     char *start = *buffer;
-    while (**buffer != ' ') { (*buffer)++; }
+    while (**buffer != ' ' && **buffer != '\n' && **buffer != '\0') { (*buffer)++; }
 
     size_t length = (size_t)(*buffer - start);
     return _strdup_n(start, length, ctx);
@@ -365,6 +365,14 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
         return NULL;
     }
 
+    /* Bounds validation */
+    if (line < 0 || line >= block->size) {
+        return NULL;
+    }
+    if (index < 0 || index >= block->attributes) {
+        return NULL;
+    }
+
     char *ptr = block->lines[line] + block->offsets[index];
 
     /* Skip leading whitespace */
@@ -434,7 +442,7 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
     if (len1 == 0 || len2 == 0) return PARSE_FAIL;
 
     /* Check buffer overflow (need space for both fields + underscore + null) */
-    if (len1 + 1 + len2 + 1 >= MAX_INLINE_BUFFER) return PARSE_FAIL;
+    if (len1 + 1 + len2 + 1 > MAX_INLINE_BUFFER) return PARSE_FAIL;
 
     /* Copy first field, stripping quotes */
     size_t out_len = 0;

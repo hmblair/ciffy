@@ -721,6 +721,10 @@ class Polymer:
 
         Returns:
             New Polymer containing only recognized polymer atoms.
+
+        Note:
+            Prefer `poly()` for a simpler interface that doesn't filter
+            unknown atom types.
         """
         # With reordered atoms, polymer atoms are [0, polymer_count)
         # Also filter out unknown atom types (-1)
@@ -735,6 +739,56 @@ class Polymer:
         mask = _bool_zeros_like_backend(self.coordinates, self.size())
         mask[:self.polymer_count] = True
         mask = mask & (self.atoms >= 0)
+        return self[mask]
+
+    def poly(self: Polymer) -> Polymer:
+        """
+        Return polymer portion only (excludes HETATM/non-polymer atoms).
+
+        The returned Polymer has valid residue information and can be used
+        with residue-scale operations like reduce(scale=Scale.RESIDUE).
+
+        This is more permissive than `polymer_only()` as it keeps atoms
+        with unknown types (useful for modified residues).
+
+        Returns:
+            New Polymer with only polymer atoms, or self if no HETATM atoms.
+
+        Example:
+            >>> p = load("file.cif")
+            >>> rna = p.poly()  # Get polymer only
+            >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
+        """
+        if self.nonpoly == 0:
+            return self
+
+        # Create mask for polymer atoms (first polymer_count atoms)
+        mask = _bool_zeros_like_backend(self.coordinates, self.size())
+        mask[:self.polymer_count] = True
+        return self[mask]
+
+    def hetero(self: Polymer) -> Polymer:
+        """
+        Return non-polymer atoms only (HETATM: water, ions, ligands).
+
+        Warning:
+            The returned Polymer has no valid residue information.
+            Residue-scale operations like reduce(scale=Scale.RESIDUE)
+            will return empty results.
+
+        Returns:
+            New Polymer with only HETATM atoms. If there are no HETATM atoms,
+            returns a Polymer with 0 atoms.
+
+        Example:
+            >>> p = load("file.cif")
+            >>> ligands = p.hetero()  # Get waters/ions/ligands
+            >>> if not ligands.empty():
+            ...     ligands.center(Scale.ATOM)  # Works on atom scale
+        """
+        # Create mask for non-polymer atoms (last nonpoly atoms)
+        mask = _bool_zeros_like_backend(self.coordinates, self.size())
+        mask[self.polymer_count:] = True
         return self[mask]
 
     def chains(
@@ -925,9 +979,30 @@ class Polymer:
 
         Args:
             filename: Output file path.
+
+        Note:
+            Currently supports RNA structures only.
+            Use write_cif() for general structure writing.
         """
         from .io.writer import write_pdb
         write_pdb(self, filename)
+
+    def write_cif(self: Polymer, filename: str) -> None:
+        """
+        Write structure to an mmCIF file.
+
+        Supports all molecule types (protein, RNA, DNA) and includes
+        both polymer and non-polymer atoms.
+
+        Args:
+            filename: Output file path.
+
+        Example:
+            >>> polymer = ciffy.load("structure.cif", backend="numpy")
+            >>> polymer.write_cif("output.cif")
+        """
+        from .io.writer import write_cif
+        write_cif(self, filename)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Utilities

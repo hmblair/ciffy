@@ -28,6 +28,9 @@ dependencies = ["numpy"]
 torch = ["torch"]
 dev = ["pytest", "torch"]
 
+[project.scripts]
+ciffy = "ciffy.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/hmblair/ciffy"
 Repository = "https://github.com/hmblair/ciffy"

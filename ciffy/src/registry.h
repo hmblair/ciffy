@@ -116,6 +116,7 @@ typedef enum {
     BLOCK_NONPOLY,     /**< _pdbx_nonpoly_scheme - non-polymer entities */
     BLOCK_CONN,        /**< _struct_conn - connectivity/bonds */
     BLOCK_ENTITY_POLY, /**< _entity_poly - polymer entity types (RNA/DNA/protein) */
+    BLOCK_ENTITY,      /**< _entity - molecular entity types (polymer/non-polymer) */
     BLOCK_COUNT        /**< Total number of block types */
 } BlockId;
 

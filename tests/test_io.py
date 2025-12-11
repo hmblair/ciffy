@@ -461,11 +461,10 @@ class TestCifSave:
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_preserves_molecule_type(self, cif_file, backend):
-        """Test that round-trip preserves molecule type for polymer chains.
+        """Test that round-trip preserves molecule type for all chains.
 
-        Non-polymer chains (those with 0 residues) are not written to entity_poly,
-        so we only compare polymer chains. The reloaded file should have exactly
-        the same molecule types for polymer chains.
+        With the _entity block written, both polymer and non-polymer chains
+        should preserve their molecule types exactly.
         """
         from ciffy import load, Scale
         from ciffy.types import Molecule
@@ -480,16 +479,12 @@ class TestCifSave:
             original.write(output_path)
             reloaded = load(output_path, backend=backend)
 
-            # Get polymer chain indices (chains with residues > 0)
-            orig_lengths = np.asarray(original.lengths)
-            poly_mask = orig_lengths > 0
-
-            # Molecule types should match exactly for polymer chains
-            orig_types = np.asarray(original.molecule_type)[poly_mask]
+            # All molecule types should match exactly
+            orig_types = np.asarray(original.molecule_type)
             reload_types = np.asarray(reloaded.molecule_type)
 
             assert np.array_equal(orig_types, reload_types), \
-                f"Molecule types mismatch for polymer chains: original={orig_types}, reloaded={reload_types}"
+                f"Molecule types mismatch: original={orig_types}, reloaded={reload_types}"
 
         finally:
             if os.path.exists(output_path):

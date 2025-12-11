@@ -27,6 +27,7 @@ static const BlockDef BLOCKS[] = {
     { BLOCK_NONPOLY,     "_pdbx_nonpoly_scheme.",  false },
     { BLOCK_CONN,        "_struct_conn.",          false },
     { BLOCK_ENTITY_POLY, "_entity_poly.",          false }, /* molecule types */
+    { BLOCK_ENTITY,      "_entity.",               false }, /* entity types (polymer/non-polymer) */
 };
 
 _Static_assert(sizeof(BLOCKS) / sizeof(BLOCKS[0]) == BLOCK_COUNT,
@@ -222,6 +223,7 @@ mmBlock *_get_block_by_id(mmBlockList *blocks, BlockId id) {
         case BLOCK_NONPOLY:     return &blocks->nonpoly;
         case BLOCK_CONN:        return &blocks->conn;
         case BLOCK_ENTITY_POLY: return &blocks->entity_poly;
+        case BLOCK_ENTITY:      return &blocks->entity;
         default:                return NULL;
     }
 }

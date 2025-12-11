@@ -119,10 +119,31 @@ static CifError _write_header(FILE *file, const char *id, CifErrorContext *ctx) 
 
 
 /**
+ * @brief Write the _entity block (entity type definitions).
+ *
+ * Defines whether each entity is a polymer or non-polymer.
+ * Each chain is treated as its own entity with entity_id = chain_index + 1.
+ */
+static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_entity.id\n");
+    CIF_FPRINTF(file, ctx, "_entity.type\n");
+
+    for (int i = 0; i < cif->chains; i++) {
+        const char *type = (cif->res_per_chain[i] > 0) ? "polymer" : "non-polymer";
+        CIF_FPRINTF(file, ctx, "%d %s\n", i + 1, type);
+    }
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
  * @brief Write the _struct_asym block (chain definitions).
  *
- * Only writes polymer chains (those with res_per_chain > 0).
- * Non-polymer chains are skipped to ensure round-trip consistency.
+ * Writes ALL chains (both polymer and non-polymer) with their entity mapping.
+ * Each chain maps to its own entity with entity_id = chain_index + 1.
  */
 static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
     CIF_FPRINTF(file, ctx, "loop_\n");
@@ -130,17 +151,10 @@ static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext
     CIF_FPRINTF(file, ctx, "_struct_asym.pdbx_strand_id\n");
     CIF_FPRINTF(file, ctx, "_struct_asym.entity_id\n");
 
-    int entity_id = 1;
     for (int i = 0; i < cif->chains; i++) {
-        /* Skip non-polymer chains (no residues) */
-        if (cif->res_per_chain[i] == 0) {
-            continue;
-        }
-
         const char *name = cif->names[i];
         CIF_CHECK_CHAIN_NAME(name, i, ctx);
-        CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s %d\n", name, _safe_strand(cif->strands[i]), entity_id);
-        entity_id++;
+        CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s %d\n", name, _safe_strand(cif->strands[i]), i + 1);
     }
 
     CIF_FPRINTF(file, ctx, "#\n");
@@ -477,6 +491,9 @@ CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx) {
 
     /* Write each block in order */
     err = _write_header(file, cif->id, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_entity(file, cif, ctx);
     if (err != CIF_OK) return err;
 
     err = _write_struct_asym(file, cif, ctx);

@@ -68,10 +68,14 @@ def main():
     template.coordinates = generated_coords
     print(f"  3. Attached coordinates to template")
 
-    # 4. Save as CIF file
+    # 4. Inspect the generated polymer
+    print(f"  4. Generated polymer:")
+    print(template)
+
+    # 5. Save as CIF file
     output_path = "/tmp/generated_rna.cif"
     template.write(output_path)
-    print(f"  4. Saved to {output_path}")
+    print(f"  5. Saved to {output_path}")
     print()
 
     # =========================================================================

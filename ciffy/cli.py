@@ -61,7 +61,8 @@ def main():
         # Optional: show atom details
         if args.atoms:
             from ciffy import Scale
-            print(f"\nAtoms per residue: {list(polymer.per(Scale.ATOM, Scale.RESIDUE))}")
+            atoms_per_res = polymer.per(Scale.ATOM, Scale.RESIDUE).tolist()
+            print(f"\nAtoms per residue: {atoms_per_res}")
 
 
 if __name__ == "__main__":

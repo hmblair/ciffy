@@ -141,6 +141,11 @@ setup(
     install_requires=[
         'numpy',
     ],
+    entry_points={
+        'console_scripts': [
+            'ciffy=ciffy.cli:main',
+        ],
+    },
     classifiers=CLASSIFIERS,
     author=AUTHOR,
     author_email=EMAIL,

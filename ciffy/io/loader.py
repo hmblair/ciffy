@@ -4,7 +4,6 @@ CIF file loading functionality.
 
 from __future__ import annotations
 import os
-import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,8 +20,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
 
     Args:
         file: Path to the CIF file.
-        backend: Array backend, either "numpy" or "torch".
-                 Default is "torch" (deprecated, will change to "numpy" in v0.6.0).
+        backend: Array backend, either "numpy" or "torch". Default is "numpy".
 
     Returns:
         Polymer object containing the parsed structure.
@@ -44,13 +42,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
 
     # Handle backend parameter
     if backend is None:
-        warnings.warn(
-            "Default backend will change from 'torch' to 'numpy' in v0.6.0. "
-            "Pass backend='torch' or backend='numpy' explicitly to silence this warning.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        backend = "torch"
+        backend = "numpy"
 
     if backend not in ("numpy", "torch"):
         raise ValueError(f"backend must be 'numpy' or 'torch', got {backend!r}")

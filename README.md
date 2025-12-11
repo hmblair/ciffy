@@ -60,7 +60,7 @@ torch_polymer = polymer.torch()
 numpy_polymer = polymer.numpy()
 ```
 
-**Note:** The default backend will change from `"torch"` to `"numpy"` in v0.6.0. Specify the backend explicitly to avoid deprecation warnings.
+**Note:** The default backend is `"numpy"` as of v0.6.0. Specify the backend explicitly for clarity.
 
 ## Usage
 

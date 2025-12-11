@@ -642,6 +642,10 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     int model_count = _count_unique(&blocks->atom, ATTR_MODEL, ctx);
     if (model_count < 0) return ctx->code;
+    if (model_count == 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid model count: 0");
+        return CIF_ERR_PARSE;
+    }
     cif->models = model_count;
 
     cif->chains = blocks->chain.size;
@@ -785,7 +789,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
  * Public functions for reading and managing mmCIF blocks.
  * ============================================================================ */
 
-void _skip_multiline_attr(char **buffer) {
+bool _skip_multiline_attr(char **buffer) {
     _advance_line(buffer);
     int lines = 0;
     const int MAX_MULTILINE_LINES = 10000;
@@ -794,11 +798,13 @@ void _skip_multiline_attr(char **buffer) {
         lines++;
     }
     if (lines >= MAX_MULTILINE_LINES) {
-        LOG_WARNING("Unterminated multiline attribute (exceeded %d lines)", MAX_MULTILINE_LINES);
+        LOG_ERROR("Unterminated multiline attribute (exceeded %d lines)", MAX_MULTILINE_LINES);
+        return false;
     }
     if (**buffer == ';') {
         _advance_line(buffer);
     }
+    return true;
 }
 
 
@@ -835,7 +841,13 @@ mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
         block.attributes++;
         _advance_line(buffer);
         if (**buffer == ';') {
-            _skip_multiline_attr(buffer);
+            if (!_skip_multiline_attr(buffer)) {
+                LOG_ERROR("Unterminated multiline in block %s", block.category);
+                CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Unterminated multiline attribute");
+                free(block.category);
+                block.category = NULL;
+                return block;
+            }
         }
     }
 

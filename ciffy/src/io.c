@@ -6,6 +6,12 @@
 #include "io.h"
 #include "log.h"
 
+#include <errno.h>
+#include <limits.h>
+
+/** Maximum file size (1GB) - prevents memory exhaustion attacks */
+#define MAX_CIF_FILE_SIZE (1024L * 1024L * 1024L)
+
 
 CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
 
@@ -27,6 +33,15 @@ CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
     long size = ftell(file);
     if (size < 0) {
         CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to get file size: %s", name);
+        fclose(file);
+        return CIF_ERR_IO;
+    }
+
+    /* Enforce maximum file size limit */
+    if (size > MAX_CIF_FILE_SIZE) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO,
+            "File too large: %ld bytes (max %ld): %s",
+            size, MAX_CIF_FILE_SIZE, name);
         fclose(file);
         return CIF_ERR_IO;
     }
@@ -235,11 +250,16 @@ int _get_attr_index(mmBlock *block, const char *attr, CifErrorContext *ctx) {
 
 int _str_to_int(const char *str) {
 
-    int base = 10;
+    errno = 0;
     char *endptr = NULL;
 
-    long val = strtol(str, &endptr, base);
-    if (*endptr != '\0') { return -1; }
+    long val = strtol(str, &endptr, 10);
+
+    /* Check for parse errors and overflow */
+    if (*endptr != '\0' || errno == ERANGE ||
+        val < INT_MIN || val > INT_MAX) {
+        return -1;
+    }
 
     return (int)val;
 }

@@ -120,8 +120,9 @@ void _free_block(mmBlock *block);
  * Multi-line values start and end with ';' on their own line.
  *
  * @param buffer Pointer to buffer pointer (modified in place)
+ * @return true on success, false if unterminated (exceeded max lines)
  */
-void _skip_multiline_attr(char **buffer);
+bool _skip_multiline_attr(char **buffer);
 
 /**
  * @brief Advance to the next block (skip to section end marker).

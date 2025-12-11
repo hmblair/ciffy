@@ -67,6 +67,9 @@ static inline const char *_safe_strand(const char *s) {
     return (s && s[0]) ? s : "?";
 }
 
+/** Maximum atom name length (e.g., "C2'" plus quotes and null) */
+#define MAX_ATOM_NAME_BUF 32
+
 /**
  * @brief Format atom name for CIF output, quoting if contains prime (').
  *
@@ -74,7 +77,7 @@ static inline const char *_safe_strand(const char *s) {
  * This function writes the formatted name to buffer, returning the buffer.
  *
  * @param name Atom name (e.g., "C2'" or "C2")
- * @param buffer Output buffer (must be at least 8 bytes)
+ * @param buffer Output buffer (must be at least MAX_ATOM_NAME_BUF bytes)
  * @return Pointer to buffer with formatted name
  */
 static inline const char *_format_atom_name(const char *name, char *buffer) {
@@ -89,7 +92,10 @@ static inline const char *_format_atom_name(const char *name, char *buffer) {
 
     if (needs_quote) {
         /* Quote the name: C2' becomes "C2'" */
-        snprintf(buffer, 8, "\"%s\"", name);
+        int written = snprintf(buffer, MAX_ATOM_NAME_BUF, "\"%s\"", name);
+        if (written >= MAX_ATOM_NAME_BUF) {
+            LOG_WARNING("Atom name truncated: %s", name);
+        }
         return buffer;
     }
 
@@ -271,16 +277,18 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 }
 
                 /* Format atom name, quoting if it contains a prime (') */
-                char atom_buf[8];
+                char atom_buf[MAX_ATOM_NAME_BUF];
                 const char *atom_name = _format_atom_name(ainfo->atom, atom_buf);
 
-                /* Get coordinates - check for overflow */
-                int coord_idx = 3 * atom_idx;
-                if (coord_idx + 2 >= 3 * cif->atoms) {
-                    LOG_ERROR("Coordinate index overflow at atom %d", atom_idx);
-                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS, "Coordinate index overflow");
+                /* Get coordinates - bounds check atom_idx first to prevent overflow */
+                if (atom_idx < 0 || atom_idx >= cif->atoms) {
+                    LOG_ERROR("Atom index %d out of bounds [0, %d)", atom_idx, cif->atoms);
+                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
+                        "Atom index %d out of bounds [0, %d)", atom_idx, cif->atoms);
                     return CIF_ERR_BOUNDS;
                 }
+                /* Safe: atom_idx < atoms, so 3*atom_idx < 3*atoms */
+                int coord_idx = 3 * atom_idx;
                 float x = cif->coordinates[coord_idx + 0];
                 float y = cif->coordinates[coord_idx + 1];
                 float z = cif->coordinates[coord_idx + 2];

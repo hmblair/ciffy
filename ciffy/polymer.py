@@ -306,6 +306,7 @@ class Polymer:
             return _ones_like_backend(self.coordinates, self.size(inner))
 
         if inner == Scale.ATOM:
+            # TODO: why is this not just a dictionary lookup?
             if outer == Scale.RESIDUE:
                 return self._sizes[Scale.RESIDUE]
             if outer == Scale.CHAIN:
@@ -344,6 +345,11 @@ class Polymer:
         Returns:
             Array of Molecule enum values, one per chain.
         """
+
+        # TODO: max_res is not a good way to check molecule types
+        # (cannot detect e.g. mixed/malformed residues as an edge case)
+        # Need to consider how else to compute molecule type
+
         n_chains = self.size(Scale.CHAIN)
         types = _zeros_like_backend(self.coordinates, n_chains)
 
@@ -541,6 +547,7 @@ class Polymer:
         Returns:
             Pairwise distance matrix.
         """
+        # TODO: rename to a more informative name
         if scale is not None:
             coords = self.reduce(self.coordinates, scale)
         else:
@@ -657,6 +664,7 @@ class Polymer:
         Returns:
             New Polymer with selected atoms.
         """
+        # TODO: simplify this, reduce overhead
         coordinates = self.coordinates[mask]
         atoms = self.atoms[mask]
         elements = self.elements[mask]
@@ -785,6 +793,7 @@ class Polymer:
             Prefer `poly()` for a simpler interface that doesn't filter
             unknown atom types.
         """
+        # TODO: deprecate -> remove
         # With reordered atoms, polymer atoms are [0, polymer_count)
         # Also filter out unknown atom types (-1)
         if self.nonpoly == 0:
@@ -907,6 +916,7 @@ class Polymer:
 
     def frame(self: Polymer) -> Polymer:
         """Select frame atoms for structural alignment."""
+        # TODO: deprecate -> remove
         return self.get_by_name(FRAMES)
 
     def backbone(self: Polymer) -> Polymer:
@@ -935,6 +945,7 @@ class Polymer:
         Returns:
             List of atom name strings.
         """
+        # TODO: use the updated reverse.h parser (works for proteins; faster)
         revdict = (
             Adenosine.revdict() |
             Guanosine.revdict() |
@@ -1070,6 +1081,7 @@ class Polymer:
         Returns:
             New Polymer with updated coordinates.
         """
+        #TODO: rename to something more informative
         result = copy(self)
         result.coordinates = coordinates
         return result

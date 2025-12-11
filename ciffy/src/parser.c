@@ -37,18 +37,16 @@ static const char *ATTR_X = "Cartn_x";
 static const char *ATTR_Y = "Cartn_y";
 static const char *ATTR_Z = "Cartn_z";
 
-/* Structure attributes */
-static const char *ATTR_MODEL         = "pdbx_PDB_model_num";
-static const char *ATTR_CHAIN_ID      = "id";
-static const char *ATTR_RES_PER_CHAIN = "asym_id";
-static const char *ATTR_STRAND_ID     = "pdb_strand_id";
-static const char *ATTR_RESIDUE_NAME  = "mon_id";
+/* Atom-level attributes (used by batch parser) */
 static const char *ATTR_ELEMENT       = "type_symbol";
 static const char *ATTR_ATOM_NAME     = "label_atom_id";
 static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 static const char *ATTR_COMP_ID       = "label_comp_id";
 static const char *ATTR_GROUP_PDB     = "group_PDB";
+
+/* Note: Metadata attributes (MODEL, CHAIN_ID, RES_PER_CHAIN, STRAND_ID, RESIDUE_NAME)
+ * are now defined in registry.c and used via _execute_plan() */
 
 
 /* ============================================================================
@@ -110,8 +108,8 @@ char *_get_id(char *buffer, CifErrorContext *ctx) {
  *
  * Uses pointer-based comparison to avoid allocating for duplicate values.
  */
-static char **_get_unique(mmBlock *block, const char *attr, int *size,
-                          CifErrorContext *ctx) {
+char **_get_unique(mmBlock *block, const char *attr, int *size,
+                   CifErrorContext *ctx) {
     LOG_DEBUG("Extracting unique '%s' from block '%s' (size=%d)",
               attr, block->category ? block->category : "unknown", block->size);
 
@@ -193,7 +191,7 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
  *
  * Uses pointer-based comparison - no allocations needed.
  */
-static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
+int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -232,8 +230,8 @@ static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx)
  * Used for sequence parsing where residue names map to type indices.
  * Uses inline lookup to avoid allocations in the loop.
  */
-static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
-                              CifErrorContext *ctx) {
+int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
+                       CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -281,8 +279,8 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
  *
  * Uses pointer-based comparison - no allocations in the loop.
  */
-static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
-                                  CifErrorContext *ctx) {
+int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
+                           CifErrorContext *ctx) {
     int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -626,56 +624,29 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     LOG_DEBUG("Line pointers precomputed for all blocks");
 
-    /* ── Count Structure Elements ─────────────────────────────────────────── */
+    /* ── Parse Metadata (registry-driven) ──────────────────────────────────── */
+    /* Compute field execution order and parse: chains, residues, models, atoms,
+     * names, res_per_chain, strands, sequence */
 
-    int model_count = _count_unique(&blocks->atom, ATTR_MODEL, ctx);
-    if (model_count < 0) return ctx->code;
-    if (model_count == 0) {
-        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid model count: 0");
-        return CIF_ERR_PARSE;
-    }
-    cif->models = model_count;
-
-    cif->chains = blocks->chain.size;
-    cif->residues = blocks->poly.size;
-
-    /* Validate block sizes */
-    if (blocks->atom.size == 0) {
-        LOG_ERROR("Empty _atom_site block");
-        CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "No atoms in structure");
-        return CIF_ERR_BLOCK;
+    ParsePlan plan;
+    err = _plan_parse(&plan, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        _free_lines(&blocks->chain);
+        return err;
     }
 
-    /* Adjust for multi-model structures (use first model only) */
-    if (cif->models > 1) {
-        if (blocks->atom.size % cif->models != 0) {
-            LOG_WARNING("Atom count %d not evenly divisible by model count %d",
-                        blocks->atom.size, cif->models);
-        }
-        blocks->atom.size /= cif->models;
+    err = _execute_plan(cif, blocks, &plan, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        _free_lines(&blocks->chain);
+        return err;
     }
-    cif->atoms = blocks->atom.size;
 
     LOG_INFO("Parsing structure: %d models, %d chains, %d residues, %d atoms",
              cif->models, cif->chains, cif->residues, cif->atoms);
-
-    /* ── Parse Metadata ───────────────────────────────────────────────────── */
-
-    LOG_DEBUG("Extracting chain metadata...");
-
-    cif->res_per_chain = _count_sizes_by_group(&blocks->poly, ATTR_RES_PER_CHAIN,
-                                               &cif->chains, ctx);
-    if (cif->res_per_chain == NULL) return ctx->code;
-
-    cif->names = _get_unique(&blocks->chain, ATTR_CHAIN_ID, &cif->chains, ctx);
-    if (cif->names == NULL) return ctx->code;
-
-    cif->sequence = _parse_via_lookup(&blocks->poly, _lookup_residue,
-                                      ATTR_RESIDUE_NAME, ctx);
-    if (cif->sequence == NULL) return ctx->code;
-
-    cif->strands = _get_unique(&blocks->poly, ATTR_STRAND_ID, &cif->chains, ctx);
-    if (cif->strands == NULL) return ctx->code;
 
     LOG_DEBUG("Metadata extracted: %d chains, %d residues in sequence",
               cif->chains, cif->residues);

@@ -1049,6 +1049,60 @@ class Polymer:
             polymer_count=self.polymer_count,
         )
 
+    def to(self: Polymer, device=None, dtype=None) -> Polymer:
+        """
+        Move tensors to device and/or convert dtype (torch backend only).
+
+        Args:
+            device: Target device (e.g., 'cuda', 'cpu', torch.device).
+            dtype: Target dtype for float tensors only (e.g., torch.float16).
+                   Integer tensors (atoms, elements, sequence, etc.) remain long.
+
+        Returns:
+            New Polymer with tensors on the specified device/dtype.
+            Returns self if no changes needed.
+
+        Raises:
+            ValueError: If called on NumPy backend.
+
+        Example:
+            >>> p = load("file.cif", backend="torch")
+            >>> p_gpu = p.to("cuda")
+            >>> p_fp16 = p.to(dtype=torch.float16)
+            >>> p_gpu_fp16 = p.to("cuda", torch.float16)
+        """
+        from .backend import is_torch
+        if not is_torch(self.coordinates):
+            raise ValueError("to() is only supported for torch backend. "
+                           "Use polymer.torch().to(...) to convert first.")
+
+        if device is None and dtype is None:
+            return self
+
+        # For coordinates (float), apply both device and dtype
+        coords = self.coordinates
+        if device is not None:
+            coords = coords.to(device)
+        if dtype is not None:
+            coords = coords.to(dtype)
+
+        # For integer tensors, only apply device (keep as long)
+        def move_int(t):
+            return t.to(device) if device is not None else t
+
+        return Polymer(
+            coordinates=coords,
+            atoms=move_int(self.atoms),
+            elements=move_int(self.elements),
+            sequence=move_int(self.sequence),
+            sizes={k: move_int(v) for k, v in self._sizes.items()},
+            id=self._id,
+            names=self.names.copy(),
+            strands=self.strands.copy(),
+            lengths=move_int(self.lengths),
+            polymer_count=self.polymer_count,
+        )
+
     # ─────────────────────────────────────────────────────────────────────────
     # I/O
     # ─────────────────────────────────────────────────────────────────────────

@@ -144,9 +144,10 @@ char *_get_attr(char *buffer, CifErrorContext *ctx);
  *
  * @param block The block to search
  * @param attr Attribute name to find
+ * @param ctx Error context for logging (may be NULL)
  * @return Index of attribute (0-based), or BAD_IX if not found
  */
-int _get_attr_index(mmBlock *block, const char *attr);
+int _get_attr_index(mmBlock *block, const char *attr, CifErrorContext *ctx);
 
 /**
  * @brief Convert a string to an integer.
@@ -170,6 +171,28 @@ typedef enum {
     LOOKUP_NOT_FOUND = 1,    /**< Value not in hash table (not an error) */
     LOOKUP_ERROR = -1        /**< Field access or buffer error */
 } LookupResult;
+
+/**
+ * @brief Result codes for integer parsing operations.
+ *
+ * Distinguishes between parse errors and missing/empty fields.
+ */
+typedef enum {
+    PARSE_INT_OK = 0,        /**< Parse succeeded, value is valid */
+    PARSE_INT_EMPTY = 1,     /**< Field is empty or missing value (e.g., '.') */
+    PARSE_INT_ERROR = -1     /**< Field access failed or parse error */
+} IntParseResult;
+
+/**
+ * @brief Result codes for float parsing operations.
+ *
+ * Distinguishes between parse errors and missing/empty fields.
+ */
+typedef enum {
+    PARSE_FLOAT_OK = 0,      /**< Parse succeeded, value is valid */
+    PARSE_FLOAT_EMPTY = 1,   /**< Field is empty or missing value (e.g., '.') */
+    PARSE_FLOAT_ERROR = -1   /**< Field access failed or parse error */
+} FloatParseResult;
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Inline parsing functions (no allocation, cache-friendly)
@@ -227,6 +250,7 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len);
  * @param line Line index
  * @param index Attribute index
  * @return Parsed float value (NaN on error)
+ * @deprecated Use _parse_float_safe() for better error handling
  */
 float _parse_float_inline(mmBlock *block, int line, int index);
 
@@ -237,8 +261,41 @@ float _parse_float_inline(mmBlock *block, int line, int index);
  * @param line Line index
  * @param index Attribute index
  * @return Parsed int value (PARSE_FAIL on error)
+ * @deprecated Use _parse_int_safe() for better error handling
  */
 int _parse_int_inline(mmBlock *block, int line, int index);
+
+/**
+ * @brief Parse int from block with distinct error handling.
+ *
+ * Unlike _parse_int_inline(), this function distinguishes between:
+ * - PARSE_INT_OK: Value parsed, result is valid
+ * - PARSE_INT_EMPTY: Field is empty or contains '.' (missing value)
+ * - PARSE_INT_ERROR: Field access failed
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @param result Output: parsed value (valid only if PARSE_INT_OK returned)
+ * @return PARSE_INT_OK, PARSE_INT_EMPTY, or PARSE_INT_ERROR
+ */
+IntParseResult _parse_int_safe(mmBlock *block, int line, int index, int *result);
+
+/**
+ * @brief Parse float from block with distinct error handling.
+ *
+ * Unlike _parse_float_inline(), this function distinguishes between:
+ * - PARSE_FLOAT_OK: Value parsed, result is valid
+ * - PARSE_FLOAT_EMPTY: Field is empty or contains '.' (missing value)
+ * - PARSE_FLOAT_ERROR: Field access failed
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @param result Output: parsed value (valid only if PARSE_FLOAT_OK returned)
+ * @return PARSE_FLOAT_OK, PARSE_FLOAT_EMPTY, or PARSE_FLOAT_ERROR
+ */
+FloatParseResult _parse_float_safe(mmBlock *block, int line, int index, float *result);
 
 /**
  * @brief Lookup value from block without allocation.

@@ -211,16 +211,20 @@ char *_get_attr(char *buffer, CifErrorContext *ctx) {
 }
 
 
-int _get_attr_index(mmBlock *block, const char *attr) {
+int _get_attr_index(mmBlock *block, const char *attr, CifErrorContext *ctx) {
 
     char *ptr = block->head;
+    const char *name = block->category ? block->category : "unknown";
 
     for (int ix = 0; ix < block->attributes; ix++) {
-        char *curr = _get_attr(ptr, NULL);  /* Ignore allocation errors here */
+        char *curr = _get_attr(ptr, ctx);
         if (curr != NULL) {
             bool match = _eq(curr, attr);
             free(curr);
             if (match) { return ix; }
+        } else {
+            /* Log allocation failure but continue searching */
+            LOG_DEBUG("_get_attr_index: failed to get attr %d in block '%s'", ix, name);
         }
         _advance_line(&ptr);
     }
@@ -442,6 +446,52 @@ int _parse_int_inline(mmBlock *block, int line, int index) {
     if (ptr == NULL) return PARSE_FAIL;
 
     return (int)strtol(ptr, NULL, 10);
+}
+
+
+IntParseResult _parse_int_safe(mmBlock *block, int line, int index, int *result) {
+
+    size_t len;
+    char *ptr = _get_field_ptr(block, line, index, &len);
+    if (ptr == NULL) return PARSE_INT_ERROR;
+
+    /* Check for empty or missing value marker '.' */
+    if (len == 0 || (len == 1 && ptr[0] == '.')) {
+        return PARSE_INT_EMPTY;
+    }
+
+    /* Parse the integer */
+    char *endptr = NULL;
+    long val = strtol(ptr, &endptr, 10);
+
+    /* Check if any digits were consumed */
+    if (endptr == ptr) return PARSE_INT_EMPTY;
+
+    *result = (int)val;
+    return PARSE_INT_OK;
+}
+
+
+FloatParseResult _parse_float_safe(mmBlock *block, int line, int index, float *result) {
+
+    size_t len;
+    char *ptr = _get_field_ptr(block, line, index, &len);
+    if (ptr == NULL) return PARSE_FLOAT_ERROR;
+
+    /* Check for empty or missing value marker '.' */
+    if (len == 0 || (len == 1 && ptr[0] == '.')) {
+        return PARSE_FLOAT_EMPTY;
+    }
+
+    /* Parse the float */
+    char *endptr = NULL;
+    float val = strtof(ptr, &endptr);
+
+    /* Check if any characters were consumed */
+    if (endptr == ptr) return PARSE_FLOAT_EMPTY;
+
+    *result = val;
+    return PARSE_FLOAT_OK;
 }
 
 

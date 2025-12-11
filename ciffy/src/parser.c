@@ -114,7 +114,7 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
     LOG_DEBUG("Extracting unique '%s' from block '%s' (size=%d)",
               attr, block->category ? block->category : "unknown", block->size);
 
-    int index = _get_attr_index(block, attr);
+    int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
             "Missing attribute '%s' in block '%s'", attr, block->category);
@@ -193,7 +193,7 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
  * Uses pointer-based comparison - no allocations needed.
  */
 static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx) {
-    int index = _get_attr_index(block, attr);
+    int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
             "Missing attribute '%s' in block '%s'", attr, block->category);
@@ -233,7 +233,7 @@ static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx)
  */
 static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
                               CifErrorContext *ctx) {
-    int index = _get_attr_index(block, attr);
+    int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
             "Missing attribute '%s' in block '%s'", attr, block->category);
@@ -282,7 +282,7 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
  */
 static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
                                   CifErrorContext *ctx) {
-    int index = _get_attr_index(block, attr);
+    int index = _get_attr_index(block, attr, ctx);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
             "Missing attribute '%s' in block '%s'", attr, block->category);
@@ -353,19 +353,19 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
 static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
                                      int *nonpoly_count, int *is_nonpoly,
                                      int *res_per_chain, CifErrorContext *ctx) {
-    int seq_index = _get_attr_index(block, ATTR_SEQ_ID);
+    int seq_index = _get_attr_index(block, ATTR_SEQ_ID, ctx);
     if (seq_index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
         return NULL;
     }
 
-    int chain_index = _get_attr_index(block, ATTR_LABEL_ASYM);
+    int chain_index = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
     if (chain_index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_LABEL_ASYM);
         return NULL;
     }
 
-    int group_index = _get_attr_index(block, ATTR_GROUP_PDB);
+    int group_index = _get_attr_index(block, ATTR_GROUP_PDB, ctx);
     if (group_index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_GROUP_PDB);
         return NULL;
@@ -457,14 +457,14 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
  */
 static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx,
                                    CifErrorContext *ctx) {
-    idx->x = _get_attr_index(block, ATTR_X);
-    idx->y = _get_attr_index(block, ATTR_Y);
-    idx->z = _get_attr_index(block, ATTR_Z);
-    idx->element = _get_attr_index(block, ATTR_ELEMENT);
-    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID);
-    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME);
-    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID);
-    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM);
+    idx->x = _get_attr_index(block, ATTR_X, ctx);
+    idx->y = _get_attr_index(block, ATTR_Y, ctx);
+    idx->z = _get_attr_index(block, ATTR_Z, ctx);
+    idx->element = _get_attr_index(block, ATTR_ELEMENT, ctx);
+    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID, ctx);
+    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME, ctx);
+    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID, ctx);
+    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
 
     /* Validate required indices */
     if (idx->x == BAD_IX || idx->y == BAD_IX || idx->z == BAD_IX) {

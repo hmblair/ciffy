@@ -248,17 +248,19 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
     }
 
     for (int line = 0; line < block->size; line++) {
-        int result = _lookup_inline(block, line, index, func);
-        if (result == PARSE_FAIL) {
-            /* Field access failed - report error with context */
+        /* First verify field access works */
+        size_t len;
+        char *ptr = _get_field_ptr(block, line, index, &len);
+        if (ptr == NULL) {
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to lookup '%s' in block '%s' at line %d/%d",
+                "Failed to access '%s' in block '%s' at line %d/%d",
                 attr, block->category ? block->category : "unknown",
                 line, block->size);
             free(array);
             return NULL;
         }
-        array[line] = result;
+        /* Lookup may return -1 for unknown values - that's OK */
+        array[line] = _lookup_inline(block, line, index, func);
     }
 
     return array;

@@ -54,9 +54,11 @@ def main():
         # Print polymer summary
         print(polymer)
 
-        # Optional: show sequence
+        # Optional: show sequence per chain
         if args.sequence:
-            print(f"\nSequence: {polymer.str()}")
+            print("\nSequence:")
+            for chain in polymer.chains():
+                print(f"  {chain.names[0]}: {chain.str()}")
 
         # Optional: show atom details
         if args.atoms:

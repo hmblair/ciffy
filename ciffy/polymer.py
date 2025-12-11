@@ -1027,17 +1027,20 @@ class Polymer:
             atoms = self._sizes[Scale.CHAIN][ix].item()
             total_res += res
             total_atoms += atoms
+            # Non-poly chains (res=0) show "-" for residue count
+            is_nonpoly = (res == 0)
             rows.append({
                 'chain': self.names[ix],
                 'type': mol.name,
                 'res': res,
+                'res_str': '-' if is_nonpoly else str(res),
                 'atoms': atoms,
             })
 
         # Calculate column widths (include totals in width calculation)
         chain_w = max(len(r['chain']) for r in rows) if rows else 1
         type_w = max(len(r['type']) for r in rows) if rows else 4
-        res_w = max((len(str(r['res'])) for r in rows), default=1)
+        res_w = max((len(r['res_str']) for r in rows), default=1)
         res_w = max(res_w, len(str(total_res)))
         atom_w = max((len(str(r['atoms'])) for r in rows), default=1)
         atom_w = max(atom_w, len(str(total_atoms)))
@@ -1060,7 +1063,7 @@ class Polymer:
         out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'Res':>{res_w}s}  {'Atoms':>{atom_w}s}\n"
 
         for r in rows:
-            out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res']:{res_w}d}  {r['atoms']:{atom_w}d}\n"
+            out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res_str']:>{res_w}s}  {r['atoms']:{atom_w}d}\n"
 
         out += f"{sep}\n"
         out += f"{'':{chain_w}s}  {'':{type_w}s}  {total_res:{res_w}d}  {total_atoms:{atom_w}d}\n"

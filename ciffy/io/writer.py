@@ -49,6 +49,7 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
     atoms_per_res = np.ascontiguousarray(polymer._sizes[Scale.RESIDUE].astype(np.int32))
     atoms_per_chain = np.ascontiguousarray(polymer._sizes[Scale.CHAIN].astype(np.int32))
     res_per_chain = np.ascontiguousarray(polymer.lengths.astype(np.int32))
+    molecule_types = np.ascontiguousarray(polymer.molecule_type.astype(np.int32))
 
     _save(
         filename,
@@ -63,4 +64,5 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
         polymer.names,
         polymer.strands,
         polymer.polymer_count,
+        molecule_types,
     )

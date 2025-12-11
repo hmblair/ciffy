@@ -1048,6 +1048,8 @@ void _store_or_free_block(mmBlock *block, mmBlockList *blocks) {
 }
 
 
+// TODO: Is this still needed? Is mmBlockList used anywhere? I thought that
+// we were no longer hard-coding the list of blocks.
 void _free_block_list(mmBlockList *blocks) {
     _free_block(&blocks->atom);
     _free_block(&blocks->poly);

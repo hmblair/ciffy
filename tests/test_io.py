@@ -458,6 +458,43 @@ class TestCifSave:
         with pytest.raises(ValueError, match="Cannot write empty polymer"):
             empty.write("/tmp/should_not_exist.cif")
 
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_round_trip_preserves_molecule_type(self, cif_file, backend):
+        """Test that round-trip preserves molecule type for polymer chains.
+
+        Non-polymer chains (those with 0 residues) are not written to entity_poly,
+        so we only compare polymer chains. The reloaded file should have exactly
+        the same molecule types for polymer chains.
+        """
+        from ciffy import load, Scale
+        from ciffy.types import Molecule
+        import numpy as np
+
+        original = load(cif_file, backend=backend)
+
+        with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as f:
+            output_path = f.name
+
+        try:
+            original.write(output_path)
+            reloaded = load(output_path, backend=backend)
+
+            # Get polymer chain indices (chains with residues > 0)
+            orig_lengths = np.asarray(original.lengths)
+            poly_mask = orig_lengths > 0
+
+            # Molecule types should match exactly for polymer chains
+            orig_types = np.asarray(original.molecule_type)[poly_mask]
+            reload_types = np.asarray(reloaded.molecule_type)
+
+            assert np.array_equal(orig_types, reload_types), \
+                f"Molecule types mismatch for polymer chains: original={orig_types}, reloaded={reload_types}"
+
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
 
 class TestMoleculeTypeDetection:
     """Test molecule type detection for various structures."""

@@ -157,6 +157,8 @@ struct _LOOKUP;
 
 def generate_reverse_header(hash_dir, atom_index, Residue, Element):
     """Generate reverse.h for CIF writing."""
+    from ciffy.biochemistry.molecule_types import ENTITY_POLY_TYPES
+
     # Collect atoms info
     atoms = {}  # idx -> (residue, atom_name)
     for (residue, atom), idx in atom_index.items():
@@ -168,10 +170,26 @@ def generate_reverse_header(hash_dir, atom_index, Residue, Element):
     # Collect elements
     elements = {member.value: member.name for member in Element}
 
+    # Collect molecule types (reverse: value -> CIF string)
+    # Use preferred canonical CIF strings for each molecule type
+    from ciffy.types import Molecule
+    molecule_types = {
+        Molecule.RNA.value: "polyribonucleotide",
+        Molecule.DNA.value: "polydeoxyribonucleotide",
+        Molecule.HYBRID.value: "polydeoxyribonucleotide/polyribonucleotide hybrid",
+        Molecule.PROTEIN.value: "polypeptide(L)",
+        Molecule.PROTEIN_D.value: "polypeptide(D)",
+        Molecule.CYCLIC_PEPTIDE.value: "cyclic-pseudo-peptide",
+        Molecule.POLYSACCHARIDE.value: "polysaccharide(D)",
+        Molecule.PNA.value: "peptide nucleic acid",
+        Molecule.OTHER.value: "other",
+    }
+
     # Find max indices
     atom_max = max(atoms.keys()) + 1
     residue_max = max(residues.keys()) + 1
     element_max = max(elements.keys()) + 1
+    molecule_max = max(molecule_types.keys()) + 1
 
     header = f'''#ifndef _CIFFY_REVERSE_H
 #define _CIFFY_REVERSE_H
@@ -260,6 +278,29 @@ static inline const AtomInfo *atom_info(int idx) {
         return &UNKNOWN;
     }
     return &ATOM_INFO[idx];
+}
+
+/* ============================================================================
+ * MOLECULE TYPE REVERSE LOOKUP
+ * ============================================================================ */
+
+'''
+    header += f'#define MOLECULE_MAX {molecule_max}\n\n'
+    header += 'static const char *MOLECULE_TYPE_NAMES[MOLECULE_MAX] = {\n'
+
+    for i in range(molecule_max):
+        if i in molecule_types:
+            header += f'    [{i}] = "{molecule_types[i]}",\n'
+        else:
+            header += f'    [{i}] = NULL,\n'
+
+    header += '''};
+
+static inline const char *molecule_type_name(int idx) {
+    if (idx < 0 || idx >= MOLECULE_MAX || MOLECULE_TYPE_NAMES[idx] == NULL) {
+        return "other";
+    }
+    return MOLECULE_TYPE_NAMES[idx];
 }
 
 #endif /* _CIFFY_REVERSE_H */

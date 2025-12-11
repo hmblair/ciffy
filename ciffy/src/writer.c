@@ -120,16 +120,83 @@ static CifError _write_header(FILE *file, const char *id, CifErrorContext *ctx) 
 
 /**
  * @brief Write the _struct_asym block (chain definitions).
+ *
+ * Only writes polymer chains (those with res_per_chain > 0).
+ * Non-polymer chains are skipped to ensure round-trip consistency.
  */
 static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
     CIF_FPRINTF(file, ctx, "loop_\n");
     CIF_FPRINTF(file, ctx, "_struct_asym.id\n");
     CIF_FPRINTF(file, ctx, "_struct_asym.pdbx_strand_id\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym.entity_id\n");
 
+    int entity_id = 1;
     for (int i = 0; i < cif->chains; i++) {
+        /* Skip non-polymer chains (no residues) */
+        if (cif->res_per_chain[i] == 0) {
+            continue;
+        }
+
         const char *name = cif->names[i];
         CIF_CHECK_CHAIN_NAME(name, i, ctx);
-        CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s\n", name, _safe_strand(cif->strands[i]));
+        CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s %d\n", name, _safe_strand(cif->strands[i]), entity_id);
+        entity_id++;
+    }
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Write the _entity_poly block (polymer type per entity).
+ *
+ * Maps each polymer chain to its molecule type (RNA, protein, etc).
+ * Each chain is treated as its own entity with entity_id = chain_index + 1.
+ * Non-polymer chains (res_per_chain == 0) are skipped.
+ */
+static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    /* Skip if no molecule_types array provided */
+    if (cif->molecule_types == NULL) {
+        LOG_DEBUG("No molecule_types array, skipping _entity_poly block");
+        return CIF_OK;
+    }
+
+    /* Count polymer chains first */
+    int poly_chains = 0;
+    for (int i = 0; i < cif->chains; i++) {
+        if (cif->res_per_chain[i] > 0) {
+            poly_chains++;
+        }
+    }
+
+    /* Skip block if no polymer chains */
+    if (poly_chains == 0) {
+        LOG_DEBUG("No polymer chains, skipping _entity_poly block");
+        return CIF_OK;
+    }
+
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly.entity_id\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly.type\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly.pdbx_strand_id\n");
+
+    for (int i = 0; i < cif->chains; i++) {
+        /* Skip non-polymer chains (no residues) */
+        if (cif->res_per_chain[i] == 0) {
+            continue;
+        }
+
+        int mol_type = cif->molecule_types[i];
+        const char *type_str = molecule_type_name(mol_type);
+        const char *strand = _safe_strand(cif->strands[i]);
+
+        /* Quote type strings that contain special characters */
+        if (strchr(type_str, '(') || strchr(type_str, '/') || strchr(type_str, ' ')) {
+            CIF_FPRINTF(file, ctx, "%d '%s' %s\n", i + 1, type_str, strand);
+        } else {
+            CIF_FPRINTF(file, ctx, "%d %s %s\n", i + 1, type_str, strand);
+        }
     }
 
     CIF_FPRINTF(file, ctx, "#\n");
@@ -413,6 +480,9 @@ CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx) {
     if (err != CIF_OK) return err;
 
     err = _write_struct_asym(file, cif, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_entity_poly(file, cif, ctx);
     if (err != CIF_OK) return err;
 
     err = _write_poly_seq(file, cif, ctx);

@@ -262,6 +262,7 @@ static PyObject *_load(PyObject *self, PyObject *args) {
  *        - chain_names (list): List of chain name strings
  *        - strand_names (list): List of strand ID strings
  *        - polymer_count (int): Number of polymer atoms
+ *        - molecule_types (ndarray): (C,) int32 array of molecule types
  * @return None on success, NULL on error
  */
 static PyObject *_save(PyObject *self, PyObject *args) {
@@ -275,14 +276,14 @@ static PyObject *_save(PyObject *self, PyObject *args) {
     const char *id;
     PyObject *py_coords, *py_atoms, *py_elements, *py_residues;
     PyObject *py_atoms_per_res, *py_atoms_per_chain, *py_res_per_chain;
-    PyObject *py_chain_names, *py_strand_names;
+    PyObject *py_chain_names, *py_strand_names, *py_molecule_types;
     int polymer_count;
 
-    if (!PyArg_ParseTuple(args, "ssOOOOOOOOOi",
+    if (!PyArg_ParseTuple(args, "ssOOOOOOOOOiO",
             &filename, &id,
             &py_coords, &py_atoms, &py_elements, &py_residues,
             &py_atoms_per_res, &py_atoms_per_chain, &py_res_per_chain,
-            &py_chain_names, &py_strand_names, &polymer_count)) {
+            &py_chain_names, &py_strand_names, &polymer_count, &py_molecule_types)) {
         return NULL;  /* PyArg_ParseTuple sets exception */
     }
 
@@ -357,6 +358,15 @@ static PyObject *_save(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    /* Extract molecule types array */
+    cif.molecule_types = _numpy_to_int_arr(py_molecule_types, NULL);
+    if (cif.molecule_types == NULL) {
+        free(cif.id);
+        _free_c_str_arr(cif.names, num_chains);
+        _free_c_str_arr(cif.strands, num_strands);
+        return NULL;
+    }
+
     /* Calculate non-polymer count */
     cif.nonpoly = cif.atoms - cif.polymer;
 
@@ -405,7 +415,8 @@ static PyMethodDef methods[] = {
      "    res_per_chain (ndarray): (C,) int32 array of residues per chain\n"
      "    chain_names (list): List of chain name strings\n"
      "    strand_names (list): List of strand ID strings\n"
-     "    polymer_count (int): Number of polymer atoms\n\n"
+     "    polymer_count (int): Number of polymer atoms\n"
+     "    molecule_types (ndarray): (C,) int32 array of molecule types\n\n"
      "Raises:\n"
      "    IOError: If file cannot be written\n"
      "    TypeError: If arguments have wrong type\n"

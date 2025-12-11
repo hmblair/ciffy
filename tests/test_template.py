@@ -61,10 +61,10 @@ class TestFromSequence:
         """Test single amino acid."""
         from ciffy import from_sequence, Scale
 
-        polymer = from_sequence("G")  # Glycine
+        polymer = from_sequence("M")  # Methionine (not ambiguous with nucleotides)
 
         assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [10]  # GLY
+        assert list(polymer.sequence) == [15]  # MET
 
     def test_warning_uppercase_nucleotides(self):
         """Test warning when uppercase looks like nucleotides."""
@@ -222,12 +222,12 @@ class TestFromSequence:
         """Test elements are atomic numbers."""
         from ciffy import from_sequence
 
-        polymer = from_sequence("G")  # Glycine - simple backbone only
+        polymer = from_sequence("M")  # Methionine - has S for variety
 
-        # Glycine has: N, CA, C, O, plus hydrogens
-        # N=7, C=6, O=8, H=1
+        # Methionine has: N, CA, C, O, CB, CG, SD, CE, plus hydrogens
+        # N=7, C=6, O=8, S=16, H=1
         elements = set(polymer.elements.tolist())
-        expected = {1, 6, 7, 8}  # H, C, N, O
+        expected = {1, 6, 7, 8, 16}  # H, C, N, O, S
         assert elements == expected
 
 

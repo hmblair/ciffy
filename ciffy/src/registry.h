@@ -145,18 +145,38 @@
  * ============================================================================ */
 
 /**
+ * @brief Block definition list using X-macro pattern.
+ *
+ * This macro defines all mmCIF blocks in one place. It auto-generates:
+ * - BlockId enum values
+ * - BLOCKS[] array in registry.c
+ *
+ * Format: X(NAME, category_prefix, is_required)
+ *
+ * To add a new block:
+ * 1. Add entry here: X(NEW_BLOCK, "_new_category.", false)
+ * 2. Add slot to mmBlockList struct in parser.h
+ * 3. Add case to _get_block_by_id() in registry.c
+ */
+#define BLOCK_LIST \
+    X(ATOM,        "_atom_site.",            true)  \
+    X(POLY,        "_pdbx_poly_seq_scheme.", true)  \
+    X(CHAIN,       "_struct_asym.",          true)  \
+    X(NONPOLY,     "_pdbx_nonpoly_scheme.",  false) \
+    X(CONN,        "_struct_conn.",          false) \
+    X(ENTITY_POLY, "_entity_poly.",          false) \
+    X(ENTITY,      "_entity.",               false)
+
+/**
  * @brief Block identifier enum.
  *
  * Each value corresponds to an mmCIF category block.
+ * Auto-generated from BLOCK_LIST macro.
  */
 typedef enum {
-    BLOCK_ATOM,        /**< _atom_site - atomic coordinates */
-    BLOCK_POLY,        /**< _pdbx_poly_seq_scheme - polymer sequence */
-    BLOCK_CHAIN,       /**< _struct_asym - chain definitions */
-    BLOCK_NONPOLY,     /**< _pdbx_nonpoly_scheme - non-polymer entities */
-    BLOCK_CONN,        /**< _struct_conn - connectivity/bonds */
-    BLOCK_ENTITY_POLY, /**< _entity_poly - polymer entity types (RNA/DNA/protein) */
-    BLOCK_ENTITY,      /**< _entity - molecular entity types (polymer/non-polymer) */
+    #define X(name, category, required) BLOCK_##name,
+    BLOCK_LIST
+    #undef X
     BLOCK_COUNT        /**< Total number of block types */
 } BlockId;
 

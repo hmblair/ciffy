@@ -119,9 +119,24 @@ static CifError _write_header(FILE *file, const char *id, CifErrorContext *ctx) 
 
 
 /**
+ * @brief Get the _entity.type string for a molecule type.
+ *
+ * Maps molecule type enum values to CIF entity type strings.
+ */
+static const char *_entity_type_string(int mol_type, int res_per_chain) {
+    /* Molecule type enum values from types/molecule.py */
+    enum { LIGAND = 8, ION = 9, WATER = 10 };
+
+    if (mol_type == WATER) return "water";
+    if (mol_type == LIGAND || mol_type == ION) return "non-polymer";
+    if (res_per_chain > 0) return "polymer";
+    return "non-polymer";
+}
+
+/**
  * @brief Write the _entity block (entity type definitions).
  *
- * Defines whether each entity is a polymer or non-polymer.
+ * Defines whether each entity is a polymer, non-polymer, or water.
  * Each chain is treated as its own entity with entity_id = chain_index + 1.
  */
 static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
@@ -130,7 +145,8 @@ static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx
     CIF_FPRINTF(file, ctx, "_entity.type\n");
 
     for (int i = 0; i < cif->chains; i++) {
-        const char *type = (cif->res_per_chain[i] > 0) ? "polymer" : "non-polymer";
+        int mol_type = cif->molecule_types ? cif->molecule_types[i] : -1;
+        const char *type = _entity_type_string(mol_type, cif->res_per_chain[i]);
         CIF_FPRINTF(file, ctx, "%d %s\n", i + 1, type);
     }
 

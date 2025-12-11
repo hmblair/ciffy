@@ -41,13 +41,14 @@
  * Format: X(NAME, category_prefix, is_required)
  */
 #define BLOCK_LIST \
-    X(ATOM,        "_atom_site.",            true)  \
-    X(POLY,        "_pdbx_poly_seq_scheme.", true)  \
-    X(CHAIN,       "_struct_asym.",          true)  \
-    X(NONPOLY,     "_pdbx_nonpoly_scheme.",  false) \
-    X(CONN,        "_struct_conn.",          false) \
-    X(ENTITY_POLY, "_entity_poly.",          false) \
-    X(ENTITY,      "_entity.",               false)
+    X(ATOM,           "_atom_site.",            true)  \
+    X(POLY,           "_pdbx_poly_seq_scheme.", true)  \
+    X(CHAIN,          "_struct_asym.",          true)  \
+    X(NONPOLY,        "_pdbx_nonpoly_scheme.",  false) \
+    X(CONN,           "_struct_conn.",          false) \
+    X(ENTITY_POLY,    "_entity_poly.",          false) \
+    X(ENTITY,         "_entity.",               false) \
+    X(ENTITY_NONPOLY, "_pdbx_entity_nonpoly.",  false)
 
 /**
  * @brief Block identifier enum.

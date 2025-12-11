@@ -24,6 +24,8 @@
 #include "hash/residue.c"
 #include "hash/element.c"
 #include "hash/molecule.c"
+#include "hash/entity.c"
+#include "hash/ion.c"
 
 
 /* ============================================================================

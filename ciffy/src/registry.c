@@ -75,6 +75,8 @@ extern struct _LOOKUP *_lookup_residue(const char *str, size_t len);
 extern struct _LOOKUP *_lookup_element(const char *str, size_t len);
 extern struct _LOOKUP *_lookup_atom(const char *str, size_t len);
 extern struct _LOOKUP *_lookup_molecule(const char *str, size_t len);
+extern struct _LOOKUP *_lookup_entity(const char *str, size_t len);
+extern struct _LOOKUP *_lookup_ion(const char *str, size_t len);
 
 /* Parser functions used by molecule_types */
 extern CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx);
@@ -126,11 +128,24 @@ static void _batch_types(mmCIF *cif, mmBlock *block, int row,
  * ============================================================================ */
 
 /**
- * Parse molecule types from _entity_poly block.
+ * Parse molecule types from _entity, _entity_poly, and _pdbx_entity_nonpoly.
  *
- * Maps each chain to its molecule type (RNA, DNA, PROTEIN, etc.) by:
- * 1. Building entity_id -> molecule_type map from _entity_poly
- * 2. Looking up each chain's entity_id in _struct_asym
+ * Classification hierarchy:
+ * 1. Parse _entity.type for base classification:
+ *    - "water" -> WATER (10)
+ *    - "branched" -> POLYSACCHARIDE (5)
+ *    - "non-polymer" -> LIGAND (8, may be refined to ION)
+ *    - "polymer" -> UNKNOWN (will be refined by _entity_poly)
+ *
+ * 2. Parse _pdbx_entity_nonpoly.comp_id to refine non-polymers:
+ *    - Known ion comp_ids (MG, CA, ZN, etc.) -> ION (9)
+ *
+ * 3. Parse _entity_poly.type for polymer classification:
+ *    - "polyribonucleotide" -> RNA (1)
+ *    - "polypeptide(L)" -> PROTEIN (0)
+ *    - etc.
+ *
+ * 4. Map chains via _struct_asym.entity_id
  */
 static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
                                       const void *def, CifErrorContext *ctx) {
@@ -148,75 +163,145 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         cif->molecule_types[i] = 12;  /* Molecule.UNKNOWN */
     }
 
-    /* Check if _entity_poly block exists */
+    /* Get block pointers */
+    mmBlock *entity = &blocks->b[BLOCK_ENTITY];
     mmBlock *entity_poly = &blocks->b[BLOCK_ENTITY_POLY];
+    mmBlock *entity_nonpoly = &blocks->b[BLOCK_ENTITY_NONPOLY];
     mmBlock *chain_block = &blocks->b[BLOCK_CHAIN];
 
-    if (entity_poly->category == NULL) {
-        LOG_DEBUG("No _entity_poly block - molecule types defaulting to UNKNOWN");
-        return CIF_OK;
-    }
-
-    /* Precompute lines for entity_poly block */
-    CifError err = _precompute_lines(entity_poly, ctx);
-    if (err != CIF_OK) return err;
-
-    /* Get attribute indices for entity_poly */
-    int ep_entity_idx = _get_attr_index(entity_poly, "entity_id", ctx);
-    int ep_type_idx = _get_attr_index(entity_poly, "type", ctx);
-
-    if (ep_entity_idx < 0 || ep_type_idx < 0) {
-        LOG_WARNING("_entity_poly missing entity_id or type attribute");
-        _free_lines(entity_poly);
-        return CIF_OK;  /* Not fatal - just use defaults */
-    }
+    /* Build entity_id -> molecule_type map */
+    int entity_map[100];
+    for (int i = 0; i < 100; i++) entity_map[i] = 12;  /* UNKNOWN */
 
     /* Get attribute index for struct_asym.entity_id */
     int sa_entity_idx = _get_attr_index(chain_block, "entity_id", ctx);
     if (sa_entity_idx < 0) {
         LOG_WARNING("_struct_asym missing entity_id attribute");
-        _free_lines(entity_poly);
         return CIF_OK;
     }
 
-    /* Build entity_id -> molecule_type map from _entity_poly */
-    int entity_map[100];
-    for (int i = 0; i < 100; i++) entity_map[i] = 12;  /* UNKNOWN */
+    /* ========================================================================
+     * STEP 1: Parse _entity.type for base classification
+     * ======================================================================== */
+    if (entity->category != NULL) {
+        CifError err = _precompute_lines(entity, ctx);
+        if (err != CIF_OK) return err;
 
-    for (int row = 0; row < entity_poly->size; row++) {
-        /* Get entity_id using inline parser */
-        int entity_id = _parse_int_inline(entity_poly, row, ep_entity_idx);
-        if (entity_id < 0 || entity_id >= 100) continue;
+        int e_id_idx = _get_attr_index(entity, "id", ctx);
+        int e_type_idx = _get_attr_index(entity, "type", ctx);
 
-        /* Get type string pointer for hash lookup */
-        size_t type_len;
-        const char *type_ptr = _get_field_ptr(entity_poly, row, ep_type_idx, &type_len);
-        if (!type_ptr || type_len == 0) continue;
+        if (e_id_idx >= 0 && e_type_idx >= 0) {
+            for (int row = 0; row < entity->size; row++) {
+                int entity_id = _parse_int_inline(entity, row, e_id_idx);
+                if (entity_id < 0 || entity_id >= 100) continue;
 
-        /* Copy to local buffer, stripping outer quotes, and null-terminate */
-        char type_buf[64];
-        if (type_len >= sizeof(type_buf)) continue;
+                size_t type_len;
+                const char *type_ptr = _get_field_ptr(entity, row, e_type_idx, &type_len);
+                if (!type_ptr || type_len == 0) continue;
 
-        /* Strip outer quotes if present */
-        const char *src = type_ptr;
-        size_t src_len = type_len;
-        _strip_outer_quotes(&src, &src_len);
-        memcpy(type_buf, src, src_len);
-        type_buf[src_len] = '\0';
+                /* Copy to buffer and null-terminate (required for gperf strcmp) */
+                char type_buf[32];
+                if (type_len >= sizeof(type_buf)) continue;
+                const char *src = type_ptr;
+                size_t src_len = type_len;
+                _strip_outer_quotes(&src, &src_len);
+                memcpy(type_buf, src, src_len);
+                type_buf[src_len] = '\0';
 
-        LOG_DEBUG("Entity %d type field: '%s' (len=%zu)", entity_id, type_buf, src_len);
-
-        /* Look up molecule type via hash table */
-        struct _LOOKUP *result = _lookup_molecule(type_buf, src_len);
-        int mol_type = result ? result->value : 11;  /* OTHER if not found */
-
-        entity_map[entity_id] = mol_type;
-        LOG_DEBUG("Entity %d -> molecule type %d (result=%p)", entity_id, mol_type, (void*)result);
+                /* Look up entity type */
+                struct _LOOKUP *result = _lookup_entity(type_buf, src_len);
+                if (result) {
+                    entity_map[entity_id] = result->value;
+                    LOG_DEBUG("Entity %d: _entity.type='%s' -> %d",
+                              entity_id, type_buf, result->value);
+                }
+            }
+        }
+        _free_lines(entity);
     }
 
-    _free_lines(entity_poly);
+    /* ========================================================================
+     * STEP 2: Parse _pdbx_entity_nonpoly.comp_id to refine ION vs LIGAND
+     * ======================================================================== */
+    if (entity_nonpoly->category != NULL) {
+        CifError err = _precompute_lines(entity_nonpoly, ctx);
+        if (err != CIF_OK) return err;
 
-    /* Map each chain to its molecule type via entity_id */
+        int enp_entity_idx = _get_attr_index(entity_nonpoly, "entity_id", ctx);
+        int enp_comp_idx = _get_attr_index(entity_nonpoly, "comp_id", ctx);
+
+        if (enp_entity_idx >= 0 && enp_comp_idx >= 0) {
+            for (int row = 0; row < entity_nonpoly->size; row++) {
+                int entity_id = _parse_int_inline(entity_nonpoly, row, enp_entity_idx);
+                if (entity_id < 0 || entity_id >= 100) continue;
+
+                size_t comp_len;
+                const char *comp_ptr = _get_field_ptr(entity_nonpoly, row, enp_comp_idx, &comp_len);
+                if (!comp_ptr || comp_len == 0) continue;
+
+                /* Copy to buffer and null-terminate (required for gperf strcmp) */
+                char comp_buf[16];
+                if (comp_len >= sizeof(comp_buf)) continue;
+                const char *src = comp_ptr;
+                size_t src_len = comp_len;
+                _strip_outer_quotes(&src, &src_len);
+                memcpy(comp_buf, src, src_len);
+                comp_buf[src_len] = '\0';
+
+                /* Check if this comp_id is a known ion */
+                struct _LOOKUP *result = _lookup_ion(comp_buf, src_len);
+                if (result) {
+                    entity_map[entity_id] = result->value;  /* ION (9) */
+                    LOG_DEBUG("Entity %d: comp_id='%s' -> ION", entity_id, comp_buf);
+                }
+            }
+        }
+        _free_lines(entity_nonpoly);
+    }
+
+    /* ========================================================================
+     * STEP 3: Parse _entity_poly.type for polymer classification
+     * ======================================================================== */
+    if (entity_poly->category != NULL) {
+        CifError err = _precompute_lines(entity_poly, ctx);
+        if (err != CIF_OK) return err;
+
+        int ep_entity_idx = _get_attr_index(entity_poly, "entity_id", ctx);
+        int ep_type_idx = _get_attr_index(entity_poly, "type", ctx);
+
+        if (ep_entity_idx >= 0 && ep_type_idx >= 0) {
+            for (int row = 0; row < entity_poly->size; row++) {
+                int entity_id = _parse_int_inline(entity_poly, row, ep_entity_idx);
+                if (entity_id < 0 || entity_id >= 100) continue;
+
+                size_t type_len;
+                const char *type_ptr = _get_field_ptr(entity_poly, row, ep_type_idx, &type_len);
+                if (!type_ptr || type_len == 0) continue;
+
+                /* Strip quotes */
+                char type_buf[64];
+                if (type_len >= sizeof(type_buf)) continue;
+                const char *src = type_ptr;
+                size_t src_len = type_len;
+                _strip_outer_quotes(&src, &src_len);
+                memcpy(type_buf, src, src_len);
+                type_buf[src_len] = '\0';
+
+                /* Look up molecule type via hash table */
+                struct _LOOKUP *result = _lookup_molecule(type_buf, src_len);
+                int mol_type = result ? result->value : 11;  /* OTHER if not found */
+
+                entity_map[entity_id] = mol_type;
+                LOG_DEBUG("Entity %d: _entity_poly.type='%s' -> %d",
+                          entity_id, type_buf, mol_type);
+            }
+        }
+        _free_lines(entity_poly);
+    }
+
+    /* ========================================================================
+     * STEP 4: Map chains to molecule types via entity_id
+     * ======================================================================== */
     for (int chain = 0; chain < cif->chains; chain++) {
         int entity_id = _parse_int_inline(chain_block, chain, sa_entity_idx);
         if (entity_id >= 0 && entity_id < 100) {

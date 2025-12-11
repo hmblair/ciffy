@@ -51,7 +51,9 @@ def generate_all():
     from ciffy.biochemistry.atoms import ALL_ATOMS
     from ciffy.biochemistry.residues import Residue
     from ciffy.biochemistry.elements import Element
-    from ciffy.biochemistry.molecule_types import ENTITY_POLY_TYPES
+    from ciffy.biochemistry.molecule_types import (
+        ENTITY_POLY_TYPES, ENTITY_TYPES, ION_COMP_IDS
+    )
 
     # Output directories
     hash_dir = Path(__file__).parent.parent / "hash"
@@ -144,7 +146,42 @@ struct _LOOKUP;
     with open(hash_dir / "molecule.gperf", "w") as f:
         f.write(molecule_gperf)
 
-    print("Generated: hash/atom.gperf, hash/residue.gperf, hash/element.gperf, hash/molecule.gperf")
+    # === Generate entity.gperf (for _entity.type lookup) ===
+    entity_gperf = """%define lookup-function-name _lookup_entity
+%define hash-function-name _hash_entity
+%define constants-prefix ENTITY
+%struct-type
+%{
+#include "../codegen/lookup.h"
+%}
+struct _LOOKUP;
+%%
+"""
+    for type_str, mol_value in ENTITY_TYPES.items():
+        entity_gperf += f"{type_str}, {mol_value}\n"
+
+    with open(hash_dir / "entity.gperf", "w") as f:
+        f.write(entity_gperf)
+
+    # === Generate ion.gperf (for ion comp_id lookup) ===
+    ion_gperf = """%define lookup-function-name _lookup_ion
+%define hash-function-name _hash_ion
+%define constants-prefix ION
+%struct-type
+%{
+#include "../codegen/lookup.h"
+%}
+struct _LOOKUP;
+%%
+"""
+    from ciffy.types import Molecule
+    for comp_id in sorted(ION_COMP_IDS):
+        ion_gperf += f"{comp_id}, {Molecule.ION.value}\n"
+
+    with open(hash_dir / "ion.gperf", "w") as f:
+        f.write(ion_gperf)
+
+    print("Generated: hash/*.gperf (atom, residue, element, molecule, entity, ion)")
 
     # === Generate reverse.h ===
     generate_reverse_header(hash_dir, atom_index, Residue, Element)
@@ -466,7 +503,7 @@ def run_gperf(gperf_path):
     """Run gperf to generate .c files from .gperf files."""
     hash_dir = Path(__file__).parent.parent / "hash"
 
-    for name in ["element", "residue", "atom", "molecule"]:
+    for name in ["element", "residue", "atom", "molecule", "entity", "ion"]:
         input_file = hash_dir / f"{name}.gperf"
         output_file = hash_dir / f"{name}.c"
 
@@ -482,7 +519,7 @@ def run_gperf(gperf_path):
         with open(output_file, "w") as f:
             f.write(result.stdout)
 
-    print("Generated: hash/atom.c, hash/residue.c, hash/element.c, hash/molecule.c")
+    print("Generated: hash/*.c (atom, residue, element, molecule, entity, ion)")
 
 
 def main():

@@ -19,6 +19,9 @@ from .operations.alignment import kabsch_distance as rmsd
 from .io.loader import load
 from .io.writer import write_cif
 
+# Template generation
+from .template import from_sequence
+
 # Vocabulary sizes (for embedding layers)
 from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 
@@ -42,6 +45,7 @@ __all__ = [
     # Functions
     "load",
     "write_cif",
+    "from_sequence",
     "rmsd",
     # Vocabulary sizes
     "NUM_ELEMENTS",

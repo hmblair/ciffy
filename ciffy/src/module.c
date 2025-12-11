@@ -101,68 +101,156 @@ static PyObject *_init_2d_arr_float(int size1, int size2, float *data) {
 
 
 /**
- * @brief Convert mmCIF struct to Python tuple.
+ * @brief Get the size for a field's array based on its size_source.
+ */
+static int _get_py_size(const mmCIF *cif, const FieldDef *def) {
+    switch (def->size_source) {
+        case SIZE_ATOMS:    return cif->atoms;
+        case SIZE_CHAINS:   return cif->chains;
+        case SIZE_RESIDUES: return cif->residues;
+        default:            return 0;
+    }
+}
+
+/**
+ * @brief Get the size for fields not using size_source metadata.
  *
- * Creates NumPy arrays and Python objects from the parsed C data.
+ * Some fields (e.g., sequence, res_per_chain) are allocated via
+ * custom functions and don't use the size_source system.
+ */
+static int _get_py_size_fallback(const mmCIF *cif, const FieldDef *def) {
+    switch (def->id) {
+        case FIELD_SEQUENCE:
+        case FIELD_ATOMS_PER_RES:
+            return cif->residues;
+        case FIELD_NAMES:
+        case FIELD_STRANDS:
+        case FIELD_RES_PER_CHAIN:
+        case FIELD_MOL_TYPES:
+            return cif->chains;
+        default:
+            return _get_py_size(cif, def);
+    }
+}
+
+/**
+ * @brief Export a single field to a Python object.
+ *
+ * Converts the field data to the appropriate Python type based on py_export.
+ *
+ * @param cif Parsed mmCIF data
+ * @param def Field definition with py_export type
+ * @return New Python object, or NULL on error
+ */
+static PyObject *_export_field(const mmCIF *cif, const FieldDef *def) {
+    /* Get pointer to the field data using storage_offset */
+    const char *base = (const char *)cif;
+    int size = _get_py_size_fallback(cif, def);
+
+    switch (def->py_export) {
+        case PY_INT: {
+            int value = *(const int *)(base + def->storage_offset);
+            return _c_int_to_py_int(value);
+        }
+
+        case PY_STRING: {
+            char *str = *(char **)(base + def->storage_offset);
+            return _c_str_to_py_str(str);
+        }
+
+        case PY_1D_INT: {
+            int *data = *(int **)(base + def->storage_offset);
+            return _init_1d_arr_int(size, data);
+        }
+
+        case PY_1D_FLOAT: {
+            /* Not currently used, but included for completeness */
+            float *data = *(float **)(base + def->storage_offset);
+            npy_intp dims[1] = {size};
+            PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_FLOAT, data);
+            if (arr) PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
+            return arr;
+        }
+
+        case PY_2D_FLOAT: {
+            float *data = *(float **)(base + def->storage_offset);
+            return _init_2d_arr_float(size, def->elements_per_item, data);
+        }
+
+        case PY_STR_LIST: {
+            char **data = *(char ***)(base + def->storage_offset);
+            return _c_arr_to_py_list(data, size);
+        }
+
+        default:
+            return NULL;  /* PY_NONE or unknown */
+    }
+}
+
+/**
+ * @brief Convert mmCIF struct to Python dict.
+ *
+ * Creates NumPy arrays and Python objects from the parsed C data,
+ * using the field registry to determine export types and names.
  * Returns NULL and sets Python exception on error.
- *
- * Uses tracked allocation pattern: all objects are stored in an array
- * for centralized cleanup on error, avoiding cascading Py_DECREF calls.
  */
 static PyObject *_c_to_py(mmCIF cif) {
+    PyObject *dict = PyDict_New();
+    if (dict == NULL) return NULL;
 
-    /* Track all allocated objects for cleanup on error */
-    #define MAX_OBJECTS 12
-    PyObject *objects[MAX_OBJECTS] = {NULL};
-    int count = 0;
+    const FieldDef *fields = _get_fields();
 
-    /* Helper macro: allocate, track, and return NULL on failure */
-    #define TRACK(obj) do { \
-        objects[count] = (obj); \
-        if (objects[count] == NULL) goto cleanup; \
-        count++; \
-    } while(0)
+    /* Export special fields not in the registry */
 
-    /* Allocate all objects (order must match PyTuple_Pack below) */
-    TRACK(_c_str_to_py_str(cif.id));                              /* 0: py_id */
-    TRACK(_init_2d_arr_float(cif.atoms, 3, cif.coordinates));     /* 1: coordinates */
-    TRACK(_init_1d_arr_int(cif.atoms, cif.types));                /* 2: atoms_array */
-    TRACK(_init_1d_arr_int(cif.atoms, cif.elements));             /* 3: elements_array */
-    TRACK(_init_1d_arr_int(cif.residues, cif.sequence));          /* 4: residues_array */
-    TRACK(_init_1d_arr_int(cif.residues, cif.atoms_per_res));     /* 5: atoms_per_res */
-    TRACK(_init_1d_arr_int(cif.chains, cif.atoms_per_chain));     /* 6: atoms_per_chain */
-    TRACK(_init_1d_arr_int(cif.chains, cif.res_per_chain));       /* 7: res_per_chain */
-    TRACK(_c_arr_to_py_list(cif.names, cif.chains));              /* 8: chain_names_list */
-    TRACK(_c_arr_to_py_list(cif.strands, cif.chains));            /* 9: strand_names_list */
-    TRACK(_c_int_to_py_int(cif.polymer));                         /* 10: polymer_count */
-    TRACK(_init_1d_arr_int(cif.chains, cif.molecule_types));      /* 11: molecule_types */
+    /* id: PDB identifier */
+    PyObject *py_id = _c_str_to_py_str(cif.id);
+    if (py_id == NULL) goto cleanup;
+    if (PyDict_SetItemString(dict, "id", py_id) < 0) {
+        Py_DECREF(py_id);
+        goto cleanup;
+    }
+    Py_DECREF(py_id);  /* Dict owns the reference now */
 
-    /* All allocations succeeded - build the result tuple */
-    PyObject *result = PyTuple_Pack(MAX_OBJECTS,
-        objects[0],   /* py_id */
-        objects[1],   /* coordinates */
-        objects[2],   /* atoms_array */
-        objects[3],   /* elements_array */
-        objects[4],   /* residues_array */
-        objects[5],   /* atoms_per_res */
-        objects[6],   /* atoms_per_chain */
-        objects[7],   /* res_per_chain */
-        objects[8],   /* chain_names_list */
-        objects[9],   /* strand_names_list */
-        objects[10],  /* polymer_count */
-        objects[11]); /* molecule_types */
+    /* polymer_count: number of polymer atoms */
+    PyObject *py_polymer = _c_int_to_py_int(cif.polymer);
+    if (py_polymer == NULL) goto cleanup;
+    if (PyDict_SetItemString(dict, "polymer_count", py_polymer) < 0) {
+        Py_DECREF(py_polymer);
+        goto cleanup;
+    }
+    Py_DECREF(py_polymer);
 
-    #undef TRACK
-    #undef MAX_OBJECTS
+    /* atoms_per_chain: computed outside registry */
+    PyObject *py_apc = _init_1d_arr_int(cif.chains, cif.atoms_per_chain);
+    if (py_apc == NULL) goto cleanup;
+    if (PyDict_SetItemString(dict, "atoms_per_chain", py_apc) < 0) {
+        Py_DECREF(py_apc);
+        goto cleanup;
+    }
+    Py_DECREF(py_apc);
 
-    /* PyTuple_Pack increments refcounts, so we don't need to DECREF on success */
-    return result;
+    /* Export all registry fields with py_export != PY_NONE */
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        const FieldDef *def = &fields[i];
+        if (def->py_export == PY_NONE) continue;
+
+        /* Get the key name (py_name if set, otherwise name) */
+        const char *key = def->py_name ? def->py_name : def->name;
+
+        PyObject *value = _export_field(&cif, def);
+        if (value == NULL) goto cleanup;
+
+        if (PyDict_SetItemString(dict, key, value) < 0) {
+            Py_DECREF(value);
+            goto cleanup;
+        }
+        Py_DECREF(value);  /* Dict owns the reference now */
+    }
+
+    return dict;
 
 cleanup:
-    /* Clean up all allocated objects on failure */
-    for (int i = 0; i < count; i++) {
-        Py_XDECREF(objects[i]);
-    }
+    Py_DECREF(dict);
     return NULL;
 }
 
@@ -270,6 +358,7 @@ static PyObject *_save(PyObject *self, PyObject *args) {
     __py_init();
 
     CifErrorContext ctx = CIF_ERROR_INIT;
+    PyObject *result = NULL;
 
     /* Parse arguments */
     const char *filename;
@@ -287,102 +376,77 @@ static PyObject *_save(PyObject *self, PyObject *args) {
         return NULL;  /* PyArg_ParseTuple sets exception */
     }
 
-    /* Build mmCIF structure from Python objects */
+    /* Build mmCIF structure from Python objects.
+     * Note: Numpy arrays are borrowed references (no copy).
+     * String arrays (names, strands) are copies that we own.
+     */
     mmCIF cif = {0};
+    int num_chains = 0;
+    int num_strands = 0;
+
     cif.polymer = polymer_count;
 
-    /* Copy ID string (we need to own it for mmCIF struct) */
+    /* Copy ID string (we own this) */
     cif.id = strdup(id);
     if (cif.id == NULL) {
-        return PyErr_NoMemory();
+        PyErr_NoMemory();
+        goto cleanup;
     }
 
-    /* Extract arrays (borrowed references - no copy needed) */
+    /* Extract numpy arrays (borrowed references - no allocation) */
     int coord_size;
     cif.coordinates = _numpy_to_float_arr(py_coords, &coord_size);
-    if (cif.coordinates == NULL) {
-        free(cif.id);
-        return NULL;  /* Exception already set */
-    }
-    cif.atoms = coord_size / 3;  /* Coordinates are N*3 */
+    if (cif.coordinates == NULL) goto cleanup;
+    cif.atoms = coord_size / 3;
 
     cif.types = _numpy_to_int_arr(py_atoms, NULL);
-    if (cif.types == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.types == NULL) goto cleanup;
 
     cif.elements = _numpy_to_int_arr(py_elements, NULL);
-    if (cif.elements == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.elements == NULL) goto cleanup;
 
     cif.sequence = _numpy_to_int_arr(py_residues, &cif.residues);
-    if (cif.sequence == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.sequence == NULL) goto cleanup;
 
     cif.atoms_per_res = _numpy_to_int_arr(py_atoms_per_res, NULL);
-    if (cif.atoms_per_res == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.atoms_per_res == NULL) goto cleanup;
 
     cif.atoms_per_chain = _numpy_to_int_arr(py_atoms_per_chain, &cif.chains);
-    if (cif.atoms_per_chain == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.atoms_per_chain == NULL) goto cleanup;
 
     cif.res_per_chain = _numpy_to_int_arr(py_res_per_chain, NULL);
-    if (cif.res_per_chain == NULL) {
-        free(cif.id);
-        return NULL;
-    }
+    if (cif.res_per_chain == NULL) goto cleanup;
 
-    /* Extract chain name lists (need to copy because we need char** format) */
-    int num_chains;
-    cif.names = _py_list_to_c_arr(py_chain_names, &num_chains);
-    if (cif.names == NULL) {
-        free(cif.id);
-        return NULL;
-    }
-
-    int num_strands;
-    cif.strands = _py_list_to_c_arr(py_strand_names, &num_strands);
-    if (cif.strands == NULL) {
-        free(cif.id);
-        _free_c_str_arr(cif.names, num_chains);
-        return NULL;
-    }
-
-    /* Extract molecule types array */
     cif.molecule_types = _numpy_to_int_arr(py_molecule_types, NULL);
-    if (cif.molecule_types == NULL) {
-        free(cif.id);
-        _free_c_str_arr(cif.names, num_chains);
-        _free_c_str_arr(cif.strands, num_strands);
-        return NULL;
-    }
+    if (cif.molecule_types == NULL) goto cleanup;
 
-    /* Calculate non-polymer count */
+    /* Extract string arrays (we own these copies) */
+    cif.names = _py_list_to_c_arr(py_chain_names, &num_chains);
+    if (cif.names == NULL) goto cleanup;
+
+    cif.strands = _py_list_to_c_arr(py_strand_names, &num_strands);
+    if (cif.strands == NULL) goto cleanup;
+
+    /* Calculate non-polymer count and write */
     cif.nonpoly = cif.atoms - cif.polymer;
 
-    /* Write to file */
     CifError err = _write_cif(&cif, filename, &ctx);
-
-    /* Cleanup (only what we allocated - id and string arrays) */
-    free(cif.id);
-    _free_c_str_arr(cif.names, num_chains);
-    _free_c_str_arr(cif.strands, num_strands);
-
     if (err != CIF_OK) {
-        return _set_py_error(&ctx, filename);
+        _set_py_error(&ctx, filename);
+        goto cleanup;
     }
 
-    Py_RETURN_NONE;
+    /* Success */
+    result = Py_None;
+    Py_INCREF(result);
+
+cleanup:
+    /* Free only what we own: id string and string arrays */
+    free(cif.id);
+    if (cif.names) _free_c_str_arr(cif.names, num_chains);
+    if (cif.strands) _free_c_str_arr(cif.strands, num_strands);
+
+    return result;
 }
 
 
@@ -393,9 +457,20 @@ static PyMethodDef methods[] = {
      "Args:\n"
      "    filename (str): Path to the mmCIF file\n\n"
      "Returns:\n"
-     "    tuple: (id, coordinates, atoms, elements, residues,\n"
-     "            atoms_per_res, atoms_per_chain, res_per_chain,\n"
-     "            chain_names, strand_names, polymer_count)\n\n"
+     "    dict: {\n"
+     "        'id': str,                    # PDB identifier\n"
+     "        'coordinates': ndarray,       # (N, 3) float32\n"
+     "        'atoms': ndarray,             # (N,) int32 atom types\n"
+     "        'elements': ndarray,          # (N,) int32 element types\n"
+     "        'residues': ndarray,          # (R,) int32 residue types\n"
+     "        'atoms_per_res': ndarray,     # (R,) int32\n"
+     "        'atoms_per_chain': ndarray,   # (C,) int32\n"
+     "        'res_per_chain': ndarray,     # (C,) int32\n"
+     "        'chain_names': list[str],     # chain names\n"
+     "        'strand_names': list[str],    # strand names\n"
+     "        'polymer_count': int,         # polymer atoms\n"
+     "        'molecule_types': ndarray,    # (C,) int32\n"
+     "    }\n\n"
      "Raises:\n"
      "    IOError: If file cannot be read\n"
      "    ValueError: If file format is invalid\n"

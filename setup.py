@@ -1,13 +1,18 @@
+"""
+Setup script for ciffy C extension.
+
+Metadata is defined in pyproject.toml. This file only handles:
+1. C extension compilation
+2. Hash table generation before build
+"""
+
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 import os
-import re
 import sys
 import subprocess
 import shutil
 import numpy
-
-NAME = 'ciffy'
 
 
 class GenerateAndBuildExt(build_ext):
@@ -63,92 +68,22 @@ class GenerateAndBuildExt(build_ext):
             print(result.stdout)
 
 
-
-def _version() -> str:
-    with open(os.path.join(os.path.dirname(__file__), NAME, '__init__.py')) as f:
-        content = f.read()
-    match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", content, re.M)
-    if match:
-        return match.group(1)
-    raise RuntimeError("Cannot find version information")
-
-
-def _readme() -> str:
-    with open(os.path.join(os.path.dirname(__file__), 'README.md'), encoding='utf-8') as f:
-        return f.read()
-
-
-VERSION = _version()
-DESCRIPTION = 'Load CIF files in a jiffy'
-LONG_DESCRIPTION = _readme()
-LICENSE = 'MIT'
-AUTHOR = 'Hamish M. Blair'
-EMAIL = 'hmblair@stanford.edu'
-URL = 'https://github.com/hmblair/ciffy'
-
-EXT = "_c"
-SOURCES = [
-    'ciffy/src/module.c',
-    'ciffy/src/io.c',
-    'ciffy/src/python.c',
-    'ciffy/src/parser.c',
-    'ciffy/src/writer.c',
-    'ciffy/src/registry.c',
-]
-module = Extension(
-    name=f"{NAME}.{EXT}",
-    sources=SOURCES,
+# C extension module
+ext_module = Extension(
+    name="ciffy._c",
+    sources=[
+        'ciffy/src/module.c',
+        'ciffy/src/io.c',
+        'ciffy/src/python.c',
+        'ciffy/src/parser.c',
+        'ciffy/src/writer.c',
+        'ciffy/src/registry.c',
+    ],
     include_dirs=[numpy.get_include()],
     extra_compile_args=['-O3'],
 )
 
-PACKAGES = [
-    NAME,
-    f'{NAME}.backend',
-    f'{NAME}.utils',
-    f'{NAME}.types',
-    f'{NAME}.biochemistry',
-    f'{NAME}.operations',
-    f'{NAME}.io',
-]
-
-CLASSIFIERS = [
-    'Development Status :: 4 - Beta',
-    'Intended Audience :: Science/Research',
-    'License :: OSI Approved :: MIT License',
-    'Topic :: Scientific/Engineering :: Bio-Informatics',
-    'Topic :: Scientific/Engineering :: Chemistry',
-    'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.9',
-    'Programming Language :: Python :: 3.10',
-    'Programming Language :: Python :: 3.11',
-    'Programming Language :: Python :: 3.12',
-    'Programming Language :: C',
-    'Operating System :: POSIX :: Linux',
-    'Operating System :: MacOS',
-]
-
 setup(
-    name=NAME,
-    version=VERSION,
-    description=DESCRIPTION,
-    long_description=LONG_DESCRIPTION,
-    long_description_content_type='text/markdown',
-    packages=PACKAGES,
-    ext_modules=[module],
+    ext_modules=[ext_module],
     cmdclass={'build_ext': GenerateAndBuildExt},
-    python_requires='>=3.9',
-    install_requires=[
-        'numpy',
-    ],
-    entry_points={
-        'console_scripts': [
-            'ciffy=ciffy.cli:main',
-        ],
-    },
-    classifiers=CLASSIFIERS,
-    author=AUTHOR,
-    author_email=EMAIL,
-    url=URL,
-    license=LICENSE,
 )

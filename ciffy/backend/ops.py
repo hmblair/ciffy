@@ -2,13 +2,11 @@
 Unified array operations with automatic backend dispatch.
 
 Functions in this module automatically detect the backend from input arrays
-and dispatch to the appropriate implementation.
+and dispatch to the appropriate implementation using a dispatch table pattern.
 """
 
 from __future__ import annotations
-from typing import Tuple, Optional, Union, TYPE_CHECKING
-
-import numpy as np
+from typing import Tuple, Optional, TYPE_CHECKING
 
 from . import get_backend, Backend, Array
 
@@ -16,11 +14,24 @@ if TYPE_CHECKING:
     import torch
 
 
-def scatter_sum(
-    src: Array,
-    index: Array,
-    dim_size: int,
-) -> Array:
+# =============================================================================
+# Dispatch Table
+# =============================================================================
+
+def _get_ops(arr: Array):
+    """Get the appropriate ops module for the array's backend."""
+    if get_backend(arr) == Backend.TORCH:
+        from . import torch_ops
+        return torch_ops
+    from . import numpy_ops
+    return numpy_ops
+
+
+# =============================================================================
+# Scatter Operations
+# =============================================================================
+
+def scatter_sum(src: Array, index: Array, dim_size: int) -> Array:
     """
     Sum values into an output array at specified indices.
 
@@ -32,18 +43,10 @@ def scatter_sum(
     Returns:
         Array of shape (dim_size, ...) with summed values.
     """
-    if get_backend(src) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.scatter_sum(src, index, dim_size)
-    from . import numpy_ops
-    return numpy_ops.scatter_sum(src, index, dim_size)
+    return _get_ops(src).scatter_sum(src, index, dim_size)
 
 
-def scatter_mean(
-    src: Array,
-    index: Array,
-    dim_size: int,
-) -> Array:
+def scatter_mean(src: Array, index: Array, dim_size: int) -> Array:
     """
     Average values into an output array at specified indices.
 
@@ -55,18 +58,10 @@ def scatter_mean(
     Returns:
         Array of shape (dim_size, ...) with averaged values.
     """
-    if get_backend(src) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.scatter_mean(src, index, dim_size)
-    from . import numpy_ops
-    return numpy_ops.scatter_mean(src, index, dim_size)
+    return _get_ops(src).scatter_mean(src, index, dim_size)
 
 
-def scatter_max(
-    src: Array,
-    index: Array,
-    dim_size: int,
-) -> Tuple[Array, Optional[Array]]:
+def scatter_max(src: Array, index: Array, dim_size: int) -> Tuple[Array, Optional[Array]]:
     """
     Maximum values at specified indices.
 
@@ -78,18 +73,10 @@ def scatter_max(
     Returns:
         Tuple of (max_values, argmax_indices). argmax_indices may be None.
     """
-    if get_backend(src) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.scatter_max(src, index, dim_size)
-    from . import numpy_ops
-    return numpy_ops.scatter_max(src, index, dim_size)
+    return _get_ops(src).scatter_max(src, index, dim_size)
 
 
-def scatter_min(
-    src: Array,
-    index: Array,
-    dim_size: int,
-) -> Tuple[Array, Optional[Array]]:
+def scatter_min(src: Array, index: Array, dim_size: int) -> Tuple[Array, Optional[Array]]:
     """
     Minimum values at specified indices.
 
@@ -101,12 +88,12 @@ def scatter_min(
     Returns:
         Tuple of (min_values, argmin_indices). argmin_indices may be None.
     """
-    if get_backend(src) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.scatter_min(src, index, dim_size)
-    from . import numpy_ops
-    return numpy_ops.scatter_min(src, index, dim_size)
+    return _get_ops(src).scatter_min(src, index, dim_size)
 
+
+# =============================================================================
+# Array Operations
+# =============================================================================
 
 def repeat_interleave(arr: Array, repeats: Array) -> Array:
     """
@@ -119,11 +106,7 @@ def repeat_interleave(arr: Array, repeats: Array) -> Array:
     Returns:
         Array with repeated elements.
     """
-    if get_backend(arr) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.repeat_interleave(arr, repeats)
-    from . import numpy_ops
-    return numpy_ops.repeat_interleave(arr, repeats)
+    return _get_ops(arr).repeat_interleave(arr, repeats)
 
 
 def cdist(x1: Array, x2: Array) -> Array:
@@ -137,11 +120,7 @@ def cdist(x1: Array, x2: Array) -> Array:
     Returns:
         Distance matrix of shape (M, N).
     """
-    if get_backend(x1) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.cdist(x1, x2)
-    from . import numpy_ops
-    return numpy_ops.cdist(x1, x2)
+    return _get_ops(x1).cdist(x1, x2)
 
 
 def cat(arrays: list, axis: int = 0) -> Array:
@@ -158,11 +137,11 @@ def cat(arrays: list, axis: int = 0) -> Array:
     if len(arrays) == 0:
         raise ValueError("Cannot concatenate empty list")
 
+    ops = _get_ops(arrays[0])
+    # Handle axis/dim naming difference
     if get_backend(arrays[0]) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.cat(arrays, dim=axis)
-    from . import numpy_ops
-    return numpy_ops.cat(arrays, axis=axis)
+        return ops.cat(arrays, dim=axis)
+    return ops.cat(arrays, axis=axis)
 
 
 def multiply(a: Array, b: Array) -> Array:
@@ -176,8 +155,4 @@ def multiply(a: Array, b: Array) -> Array:
     Returns:
         Element-wise product.
     """
-    if get_backend(a) == Backend.TORCH:
-        from . import torch_ops
-        return torch_ops.multiply(a, b)
-    from . import numpy_ops
-    return numpy_ops.multiply(a, b)
+    return _get_ops(a).multiply(a, b)

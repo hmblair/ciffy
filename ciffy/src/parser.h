@@ -54,21 +54,13 @@ typedef struct mmCIF {
 /**
  * @brief Collection of parsed mmCIF blocks.
  *
- * Groups the relevant blocks extracted from an mmCIF file
- * for subsequent data extraction.
+ * Blocks are stored in an array indexed by BlockId (defined in registry.h).
+ * Access blocks using: blocks->b[BLOCK_ATOM], blocks->b[BLOCK_POLY], etc.
  *
  * Note: Named struct for forward declaration compatibility with registry.h.
  */
 typedef struct mmBlockList {
-
-    mmBlock atom;        /**< _atom_site block (coordinates) */
-    mmBlock poly;        /**< _pdbx_poly_seq_scheme block (sequence) */
-    mmBlock nonpoly;     /**< _pdbx_nonpoly_scheme block */
-    mmBlock conn;        /**< _struct_conn block (connectivity) */
-    mmBlock chain;       /**< _struct_asym block (chain info) */
-    mmBlock entity;      /**< Entity information block */
-    mmBlock entity_poly; /**< _entity_poly block (polymer type: RNA/DNA/protein) */
-
+    mmBlock b[BLOCK_COUNT];  /**< Array of blocks indexed by BlockId */
 } mmBlockList;
 
 /**

@@ -149,30 +149,33 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
     }
 
     /* Check if _entity_poly block exists */
-    if (blocks->entity_poly.category == NULL) {
+    mmBlock *entity_poly = &blocks->b[BLOCK_ENTITY_POLY];
+    mmBlock *chain_block = &blocks->b[BLOCK_CHAIN];
+
+    if (entity_poly->category == NULL) {
         LOG_DEBUG("No _entity_poly block - molecule types defaulting to UNKNOWN");
         return CIF_OK;
     }
 
     /* Precompute lines for entity_poly block */
-    CifError err = _precompute_lines(&blocks->entity_poly, ctx);
+    CifError err = _precompute_lines(entity_poly, ctx);
     if (err != CIF_OK) return err;
 
     /* Get attribute indices for entity_poly */
-    int ep_entity_idx = _get_attr_index(&blocks->entity_poly, "entity_id", ctx);
-    int ep_type_idx = _get_attr_index(&blocks->entity_poly, "type", ctx);
+    int ep_entity_idx = _get_attr_index(entity_poly, "entity_id", ctx);
+    int ep_type_idx = _get_attr_index(entity_poly, "type", ctx);
 
     if (ep_entity_idx < 0 || ep_type_idx < 0) {
         LOG_WARNING("_entity_poly missing entity_id or type attribute");
-        _free_lines(&blocks->entity_poly);
+        _free_lines(entity_poly);
         return CIF_OK;  /* Not fatal - just use defaults */
     }
 
     /* Get attribute index for struct_asym.entity_id */
-    int sa_entity_idx = _get_attr_index(&blocks->chain, "entity_id", ctx);
+    int sa_entity_idx = _get_attr_index(chain_block, "entity_id", ctx);
     if (sa_entity_idx < 0) {
         LOG_WARNING("_struct_asym missing entity_id attribute");
-        _free_lines(&blocks->entity_poly);
+        _free_lines(entity_poly);
         return CIF_OK;
     }
 
@@ -180,14 +183,14 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
     int entity_map[100];
     for (int i = 0; i < 100; i++) entity_map[i] = 12;  /* UNKNOWN */
 
-    for (int row = 0; row < blocks->entity_poly.size; row++) {
+    for (int row = 0; row < entity_poly->size; row++) {
         /* Get entity_id using inline parser */
-        int entity_id = _parse_int_inline(&blocks->entity_poly, row, ep_entity_idx);
+        int entity_id = _parse_int_inline(entity_poly, row, ep_entity_idx);
         if (entity_id < 0 || entity_id >= 100) continue;
 
         /* Get type string pointer for hash lookup */
         size_t type_len;
-        const char *type_ptr = _get_field_ptr(&blocks->entity_poly, row, ep_type_idx, &type_len);
+        const char *type_ptr = _get_field_ptr(entity_poly, row, ep_type_idx, &type_len);
         if (!type_ptr || type_len == 0) continue;
 
         /* Copy to local buffer, stripping outer quotes, and null-terminate */
@@ -197,12 +200,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         /* Strip outer quotes if present */
         const char *src = type_ptr;
         size_t src_len = type_len;
-        if (src_len >= 2 &&
-            ((src[0] == '\'' && src[src_len - 1] == '\'') ||
-             (src[0] == '"' && src[src_len - 1] == '"'))) {
-            src++;
-            src_len -= 2;
-        }
+        _strip_outer_quotes(&src, &src_len);
         memcpy(type_buf, src, src_len);
         type_buf[src_len] = '\0';
 
@@ -216,11 +214,11 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         LOG_DEBUG("Entity %d -> molecule type %d (result=%p)", entity_id, mol_type, (void*)result);
     }
 
-    _free_lines(&blocks->entity_poly);
+    _free_lines(entity_poly);
 
     /* Map each chain to its molecule type via entity_id */
     for (int chain = 0; chain < cif->chains; chain++) {
-        int entity_id = _parse_int_inline(&blocks->chain, chain, sa_entity_idx);
+        int entity_id = _parse_int_inline(chain_block, chain, sa_entity_idx);
         if (entity_id >= 0 && entity_id < 100) {
             cif->molecule_types[chain] = entity_map[entity_id];
         }
@@ -247,59 +245,106 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
  * ============================================================================ */
 
 /* IMPORTANT: FIELDS[] must be indexed by FieldId enum value.
- * The array order must match the enum order in registry.h. */
+ * The array order must match the enum order in registry.h.
+ *
+ * Field format:
+ *   { id, name, source_block, operation, attrs, depends_on, parse_func,
+ *     batchable, batch_row_func,
+ *     storage_offset, storage_type,
+ *     size_source, element_size, elements_per_item,
+ *     py_export, py_name }
+ */
 static const FieldDef FIELDS[] = {
-    /* FIELD_MODELS = 0 */
-    { FIELD_MODELS,   "models",   BLOCK_ATOM,  OP_COUNT_UNIQUE,
-      ATTR_MODEL, NULL, NULL, false, NULL },
+    /* FIELD_MODELS = 0 - internal only, not exported to Python */
+    { FIELD_MODELS, "models", BLOCK_ATOM, OP_COUNT_UNIQUE,
+      ATTR_MODEL, NULL, NULL, false, NULL,
+      offsetof(mmCIF, models), STORAGE_INT,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL },
 
-    /* FIELD_CHAINS = 1 */
-    { FIELD_CHAINS,   "chains",   BLOCK_CHAIN, OP_BLOCK_SIZE,
-      NULL, NULL, NULL, false, NULL },
+    /* FIELD_CHAINS = 1 - internal only, not exported to Python */
+    { FIELD_CHAINS, "chains", BLOCK_CHAIN, OP_BLOCK_SIZE,
+      NULL, NULL, NULL, false, NULL,
+      offsetof(mmCIF, chains), STORAGE_INT,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL },
 
-    /* FIELD_RESIDUES = 2 */
-    { FIELD_RESIDUES, "residues", BLOCK_POLY,  OP_BLOCK_SIZE,
-      NULL, NULL, NULL, false, NULL },
+    /* FIELD_RESIDUES = 2 - internal only, not exported to Python */
+    { FIELD_RESIDUES, "residues", BLOCK_POLY, OP_BLOCK_SIZE,
+      NULL, NULL, NULL, false, NULL,
+      offsetof(mmCIF, residues), STORAGE_INT,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL },
 
-    /* FIELD_ATOMS = 3 - atoms = atom_site.size / models */
+    /* FIELD_ATOMS = 3 - atoms = atom_site.size / models, internal only */
     { FIELD_ATOMS, "atoms", BLOCK_ATOM, OP_COMPUTE,
-      NULL, DEP_MODELS, NULL, false, NULL },
+      NULL, DEP_MODELS, NULL, false, NULL,
+      offsetof(mmCIF, atoms), STORAGE_INT,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL },
 
-    /* FIELD_NAMES = 4 */
+    /* FIELD_NAMES = 4 - allocated by _get_unique, exported as "chain_names" */
     { FIELD_NAMES, "names", BLOCK_CHAIN, OP_GET_UNIQUE,
-      ATTR_CHAIN_ID, DEP_CHAINS, NULL, false, NULL },
+      ATTR_CHAIN_ID, DEP_CHAINS, NULL, false, NULL,
+      offsetof(mmCIF, names), STORAGE_STR_ARRAY,
+      SIZE_NONE, 0, 0,
+      PY_STR_LIST, "chain_names" },
 
-    /* FIELD_STRANDS = 5 */
+    /* FIELD_STRANDS = 5 - allocated by _get_unique, exported as "strand_names" */
     { FIELD_STRANDS, "strands", BLOCK_POLY, OP_GET_UNIQUE,
-      ATTR_STRAND_ID, DEP_CHAINS, NULL, false, NULL },
+      ATTR_STRAND_ID, DEP_CHAINS, NULL, false, NULL,
+      offsetof(mmCIF, strands), STORAGE_STR_ARRAY,
+      SIZE_NONE, 0, 0,
+      PY_STR_LIST, "strand_names" },
 
-    /* FIELD_SEQUENCE = 6 */
+    /* FIELD_SEQUENCE = 6 - allocated by _parse_via_lookup, exported as "residues" */
     { FIELD_SEQUENCE, "sequence", BLOCK_POLY, OP_LOOKUP,
-      ATTR_RESIDUE_NAME, DEP_RESIDUES, NULL, false, NULL },
+      ATTR_RESIDUE_NAME, DEP_RESIDUES, NULL, false, NULL,
+      offsetof(mmCIF, sequence), STORAGE_INT_PTR,
+      SIZE_NONE, 0, 0,
+      PY_1D_INT, "residues" },
 
-    /* FIELD_COORDS = 7 - batch parsed */
+    /* FIELD_COORDS = 7 - batch parsed, auto-allocated */
     { FIELD_COORDS, "coordinates", BLOCK_ATOM, OP_COMPUTE,
-      ATTR_COORDS, DEP_MODELS, NULL, true, _batch_coords },
+      ATTR_COORDS, DEP_MODELS, NULL, true, _batch_coords,
+      offsetof(mmCIF, coordinates), STORAGE_FLOAT_PTR,
+      SIZE_ATOMS, sizeof(float), 3,
+      PY_2D_FLOAT, NULL },
 
-    /* FIELD_TYPES = 8 - batch parsed */
+    /* FIELD_TYPES = 8 - batch parsed, auto-allocated, exported as "atoms" */
     { FIELD_TYPES, "types", BLOCK_ATOM, OP_COMPUTE,
-      ATTR_ATOM_TYPE, DEP_MODELS, NULL, true, _batch_types },
+      ATTR_ATOM_TYPE, DEP_MODELS, NULL, true, _batch_types,
+      offsetof(mmCIF, types), STORAGE_INT_PTR,
+      SIZE_ATOMS, sizeof(int), 1,
+      PY_1D_INT, "atoms" },
 
-    /* FIELD_ELEMENTS = 9 - batch parsed */
+    /* FIELD_ELEMENTS = 9 - batch parsed, auto-allocated */
     { FIELD_ELEMENTS, "elements", BLOCK_ATOM, OP_COMPUTE,
-      ATTR_ELEMENT, DEP_MODELS, NULL, true, _batch_elements },
+      ATTR_ELEMENT, DEP_MODELS, NULL, true, _batch_elements,
+      offsetof(mmCIF, elements), STORAGE_INT_PTR,
+      SIZE_ATOMS, sizeof(int), 1,
+      PY_1D_INT, NULL },
 
-    /* FIELD_RES_PER_CHAIN = 10 */
+    /* FIELD_RES_PER_CHAIN = 10 - allocated by _count_sizes_by_group */
     { FIELD_RES_PER_CHAIN, "res_per_chain", BLOCK_POLY, OP_COUNT_BY_GROUP,
-      ATTR_RES_PER_CHAIN, DEP_CHAINS, NULL, false, NULL },
+      ATTR_RES_PER_CHAIN, DEP_CHAINS, NULL, false, NULL,
+      offsetof(mmCIF, res_per_chain), STORAGE_INT_PTR,
+      SIZE_NONE, 0, 0,
+      PY_1D_INT, NULL },
 
-    /* FIELD_ATOMS_PER_RES = 11 - computed via _count_atoms_per_residue */
+    /* FIELD_ATOMS_PER_RES = 11 - computed externally via _count_atoms_per_residue */
     { FIELD_ATOMS_PER_RES, "atoms_per_res", BLOCK_ATOM, OP_COMPUTE,
-      NULL, NULL, NULL, false, NULL },
+      NULL, NULL, NULL, false, NULL,
+      offsetof(mmCIF, atoms_per_res), STORAGE_INT_PTR,
+      SIZE_NONE, 0, 0,
+      PY_1D_INT, NULL },
 
-    /* FIELD_MOL_TYPES = 12 - depends on chains being parsed first */
+    /* FIELD_MOL_TYPES = 12 - allocated in parse_func */
     { FIELD_MOL_TYPES, "molecule_types", BLOCK_ENTITY_POLY, OP_COMPUTE,
-      NULL, DEP_CHAINS, _parse_molecule_types, false, NULL },
+      NULL, DEP_CHAINS, _parse_molecule_types, false, NULL,
+      offsetof(mmCIF, molecule_types), STORAGE_INT_PTR,
+      SIZE_NONE, 0, 0,
+      PY_1D_INT, NULL },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -380,16 +425,8 @@ CifError _plan_parse(ParsePlan *plan, CifErrorContext *ctx) {
  * ============================================================================ */
 
 mmBlock *_get_block_by_id(mmBlockList *blocks, BlockId id) {
-    switch (id) {
-        case BLOCK_ATOM:        return &blocks->atom;
-        case BLOCK_POLY:        return &blocks->poly;
-        case BLOCK_CHAIN:       return &blocks->chain;
-        case BLOCK_NONPOLY:     return &blocks->nonpoly;
-        case BLOCK_CONN:        return &blocks->conn;
-        case BLOCK_ENTITY_POLY: return &blocks->entity_poly;
-        case BLOCK_ENTITY:      return &blocks->entity;
-        default:                return NULL;
-    }
+    if (id < 0 || id >= BLOCK_COUNT) return NULL;
+    return &blocks->b[id];
 }
 
 CifError _validate_blocks_registry(mmBlockList *blocks, CifErrorContext *ctx) {
@@ -423,14 +460,7 @@ static CifError _op_block_size(mmCIF *cif, mmBlock *block, const FieldDef *def,
     int value = block->size;
     LOG_DEBUG("OP_BLOCK_SIZE: %s = %d", def->name, value);
 
-    switch (def->id) {
-        case FIELD_CHAINS:   cif->chains = value;   break;
-        case FIELD_RESIDUES: cif->residues = value; break;
-        default:
-            LOG_WARNING("OP_BLOCK_SIZE: Unknown field %d", def->id);
-            break;
-    }
-
+    _store_int(cif, def, value);
     return CIF_OK;
 }
 
@@ -447,21 +477,15 @@ static CifError _op_count_unique(mmCIF *cif, mmBlock *block, const FieldDef *def
     int count = _count_unique(block, def->attrs[0], ctx);
     if (count < 0) return ctx->code;
 
-    LOG_DEBUG("OP_COUNT_UNIQUE: %s = %d (attr=%s)", def->name, count, def->attrs[0]);
-
-    switch (def->id) {
-        case FIELD_MODELS:
-            if (count == 0) {
-                CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid model count: 0");
-                return CIF_ERR_PARSE;
-            }
-            cif->models = count;
-            break;
-        default:
-            LOG_WARNING("OP_COUNT_UNIQUE: Unknown field %d", def->id);
-            break;
+    /* Validate non-zero for count fields */
+    if (count == 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid %s count: 0", def->name);
+        return CIF_ERR_PARSE;
     }
 
+    LOG_DEBUG("OP_COUNT_UNIQUE: %s = %d (attr=%s)", def->name, count, def->attrs[0]);
+
+    _store_int(cif, def, count);
     return CIF_OK;
 }
 
@@ -481,16 +505,7 @@ static CifError _op_get_unique(mmCIF *cif, mmBlock *block, const FieldDef *def,
 
     LOG_DEBUG("OP_GET_UNIQUE: %s = %d unique values (attr=%s)", def->name, size, def->attrs[0]);
 
-    switch (def->id) {
-        case FIELD_NAMES:   cif->names = result;   break;
-        case FIELD_STRANDS: cif->strands = result; break;
-        default:
-            LOG_WARNING("OP_GET_UNIQUE: Unknown field %d, freeing result", def->id);
-            for (int i = 0; i < size; i++) free(result[i]);
-            free(result);
-            break;
-    }
-
+    _store_ptr(cif, def, result);
     return CIF_OK;
 }
 
@@ -510,19 +525,15 @@ static CifError _op_count_by_group(mmCIF *cif, mmBlock *block, const FieldDef *d
 
     LOG_DEBUG("OP_COUNT_BY_GROUP: %s (attr=%s)", def->name, def->attrs[0]);
 
-    switch (def->id) {
-        case FIELD_RES_PER_CHAIN: cif->res_per_chain = result; break;
-        default:
-            LOG_WARNING("OP_COUNT_BY_GROUP: Unknown field %d, freeing result", def->id);
-            free(result);
-            break;
-    }
-
+    _store_ptr(cif, def, result);
     return CIF_OK;
 }
 
 /**
  * OP_LOOKUP: Parse values via hash table lookup.
+ *
+ * Note: Currently only supports residue lookup. To support other lookup
+ * types, add a lookup_func field to FieldDef.
  */
 static CifError _op_lookup(mmCIF *cif, mmBlock *block, const FieldDef *def,
                            CifErrorContext *ctx) {
@@ -531,25 +542,21 @@ static CifError _op_lookup(mmCIF *cif, mmBlock *block, const FieldDef *def,
         return CIF_ERR_PARSE;
     }
 
-    /* For now, only FIELD_SEQUENCE uses OP_LOOKUP with residue lookup */
-    if (def->id != FIELD_SEQUENCE) {
-        LOG_WARNING("OP_LOOKUP: Unsupported field %d", def->id);
-        return CIF_OK;
-    }
-
+    /* TODO: Add lookup_func to FieldDef to support different hash tables */
     int *result = _parse_via_lookup(block, _lookup_residue, def->attrs[0], ctx);
     if (result == NULL) return ctx->code;
 
     LOG_DEBUG("OP_LOOKUP: %s (attr=%s)", def->name, def->attrs[0]);
-    cif->sequence = result;
 
+    _store_ptr(cif, def, result);
     return CIF_OK;
 }
 
 /**
  * OP_COMPUTE: Custom computation for atoms field.
  */
-static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block, CifErrorContext *ctx) {
+static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
+                                   const FieldDef *def, CifErrorContext *ctx) {
     /* Validate block size */
     if (block->size == 0) {
         LOG_ERROR("Empty _atom_site block");
@@ -568,10 +575,11 @@ static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block, CifErrorContext *c
         /* Note: We modify block->size here for subsequent operations */
         block->size = atom_count;
     }
-    cif->atoms = atom_count;
+
+    _store_int(cif, def, atom_count);
 
     LOG_DEBUG("OP_COMPUTE: atoms = %d (from %d total / %d models)",
-              cif->atoms, block->size * cif->models, cif->models);
+              atom_count, block->size * cif->models, cif->models);
 
     return CIF_OK;
 }
@@ -621,7 +629,7 @@ static CifError _execute_field(mmCIF *cif, mmBlockList *blocks,
             }
             /* Handle FIELD_ATOMS compute */
             if (def->id == FIELD_ATOMS) {
-                return _op_compute_atoms(cif, block, ctx);
+                return _op_compute_atoms(cif, block, def, ctx);
             }
             /* Skip other OP_COMPUTE fields (batch-parsed or external) */
             return CIF_OK;
@@ -773,4 +781,83 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
 
 bool _field_executed(FieldId fid, const bool *executed) {
     return executed[fid];
+}
+
+
+/* ============================================================================
+ * STORAGE AND ALLOCATION
+ * Generic functions for storing values and allocating arrays.
+ * ============================================================================ */
+
+void _store_int(mmCIF *cif, const FieldDef *def, int value) {
+    if (def->storage_type != STORAGE_INT) {
+        LOG_WARNING("_store_int called on non-int field '%s'", def->name);
+        return;
+    }
+    int *dest = (int *)((char *)cif + def->storage_offset);
+    *dest = value;
+    LOG_DEBUG("Stored %s = %d", def->name, value);
+}
+
+void _store_ptr(mmCIF *cif, const FieldDef *def, void *ptr) {
+    void **dest = (void **)((char *)cif + def->storage_offset);
+
+    switch (def->storage_type) {
+        case STORAGE_INT_PTR:
+        case STORAGE_FLOAT_PTR:
+        case STORAGE_STR_ARRAY:
+            *dest = ptr;
+            LOG_DEBUG("Stored %s = %p", def->name, ptr);
+            break;
+        default:
+            LOG_WARNING("_store_ptr called on incompatible field '%s'", def->name);
+            break;
+    }
+}
+
+int _get_alloc_size(const mmCIF *cif, const FieldDef *def) {
+    if (def->size_source == SIZE_NONE || def->element_size == 0) {
+        return 0;
+    }
+
+    int count = 0;
+    switch (def->size_source) {
+        case SIZE_ATOMS:    count = cif->atoms;    break;
+        case SIZE_CHAINS:   count = cif->chains;   break;
+        case SIZE_RESIDUES: count = cif->residues; break;
+        default:            return 0;
+    }
+
+    return count * def->elements_per_item;
+}
+
+CifError _allocate_field_arrays(mmCIF *cif, CifErrorContext *ctx) {
+    LOG_DEBUG("Allocating field arrays");
+
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        const FieldDef *def = &FIELDS[i];
+
+        if (def->size_source == SIZE_NONE || def->element_size == 0) {
+            continue;
+        }
+
+        int count = _get_alloc_size(cif, def);
+        if (count <= 0) {
+            LOG_WARNING("Invalid allocation size for field '%s'", def->name);
+            continue;
+        }
+
+        void *ptr = calloc((size_t)count, def->element_size);
+        if (ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+                "Failed to allocate %s array (%d elements)", def->name, count);
+            return CIF_ERR_ALLOC;
+        }
+
+        _store_ptr(cif, def, ptr);
+        LOG_DEBUG("Allocated %s: %d elements of size %zu",
+                  def->name, count, def->element_size);
+    }
+
+    return CIF_OK;
 }

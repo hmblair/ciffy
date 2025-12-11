@@ -10,6 +10,7 @@
 #include "python.h"
 #include "parser.h"
 #include "writer.h"
+#include "registry.h"
 
 #define __py_init() if (PyArray_API == NULL) { import_array(); }
 

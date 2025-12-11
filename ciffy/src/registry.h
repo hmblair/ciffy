@@ -6,30 +6,24 @@
  * of mmCIF blocks, fields, and their dependencies. The parsing order is computed
  * via topological sort based on declared field dependencies.
  *
+ * Storage mapping and automatic allocation are handled via FieldDef metadata,
+ * eliminating the need for switch statements when adding new fields.
+ *
  * ============================================================================
  * HOW TO ADD A NEW BLOCK
  * ============================================================================
  *
- * Example: Adding _entity block
+ * 1. Add to BLOCK_LIST macro (io.h):
  *
- * 1. Add to BlockId enum (registry.h):
+ *        X(ENTITY, "_entity.", false)  // false = optional
  *
- *        BLOCK_ENTITY,    // _entity - molecular entities
- *
- * 2. Add to BLOCKS[] array (registry.c):
- *
- *        { BLOCK_ENTITY, "_entity.", false },  // false = optional
- *
- * 3. Add slot to mmBlockList struct (parser.h):
- *
- *        mmBlock entity;
- *
- * 4. Add case to _get_block_by_id() (registry.c):
- *
- *        case BLOCK_ENTITY: return &blocks->entity;
+ *    This auto-generates:
+ *    - BLOCK_ENTITY enum value
+ *    - Entry in BLOCKS[] array
+ *    - Slot in mmBlockList.b[] array
  *
  * ============================================================================
- * HOW TO ADD A NEW METADATA FIELD
+ * HOW TO ADD A NEW METADATA FIELD (int)
  * ============================================================================
  *
  * Example: Adding entity_count field
@@ -38,29 +32,63 @@
  *
  *        FIELD_ENTITY_COUNT,  // cif->entity_count
  *
- * 2. Add attribute constant (registry.c, if needed):
- *
- *        static const char *ATTR_ENTITY_ID[] = { "id", NULL };
- *
- * 3. Add to FIELDS[] array (registry.c):
- *
- *        { FIELD_ENTITY_COUNT, "entity_count", BLOCK_ENTITY, OP_COUNT_UNIQUE,
- *          ATTR_ENTITY_ID, NULL, NULL },
- *
- *    Or with dependencies:
- *
- *        { FIELD_ENTITY_COUNT, "entity_count", BLOCK_ENTITY, OP_COUNT_UNIQUE,
- *          ATTR_ENTITY_ID, DEP_CHAINS, NULL },  // runs after FIELD_CHAINS
- *
- * 4. Add case to appropriate _op_* function (registry.c):
- *
- *        case FIELD_ENTITY_COUNT: cif->entity_count = count; break;
- *
- * 5. Add storage to mmCIF struct (parser.h):
+ * 2. Add storage to mmCIF struct (parser.h):
  *
  *        int entity_count;
  *
+ * 3. Add to FIELDS[] array (registry.c) with storage info:
+ *
+ *        { FIELD_ENTITY_COUNT, "entity_count", BLOCK_ENTITY, OP_COUNT_UNIQUE,
+ *          ATTR_ENTITY_ID, NULL, NULL, false, NULL,
+ *          offsetof(mmCIF, entity_count), STORAGE_INT,
+ *          SIZE_NONE, 0, 0 },
+ *
+ * 4. Update _c_to_py() to export to Python (module.c)
+ *
+ * That's it! No switch statements needed - storage_offset handles assignment.
+ *
+ * ============================================================================
+ * HOW TO ADD A NEW BATCH-PARSED FIELD (array)
+ * ============================================================================
+ *
+ * Batch fields are parsed together in a single pass over the block data.
+ * Arrays are automatically allocated based on size_source metadata.
+ *
+ * Example: Adding a new per-atom field (e.g., b_factor)
+ *
+ * 1. Add to FieldId enum (registry.h):
+ *
+ *        FIELD_B_FACTOR,  // cif->b_factors - B-factor per atom
+ *
+ * 2. Add storage to mmCIF struct (parser.h):
+ *
+ *        float *b_factors;
+ *
+ * 3. Add attribute constant (registry.c):
+ *
+ *        static const char *ATTR_B_FACTOR[] = { "B_iso_or_equiv", NULL };
+ *
+ * 4. Add batch row callback (registry.c):
+ *
+ *        static void _batch_b_factor(mmCIF *cif, mmBlock *block,
+ *                                    int row, const int *idx, char *scratch) {
+ *            (void)scratch;
+ *            cif->b_factors[row] = _parse_float_inline(block, row, idx[0]);
+ *        }
+ *
+ * 5. Add to FIELDS[] array with storage AND allocation info (registry.c):
+ *
+ *        { FIELD_B_FACTOR, "b_factors", BLOCK_ATOM, OP_COMPUTE,
+ *          ATTR_B_FACTOR, DEP_ATOMS, NULL, true, _batch_b_factor,
+ *          offsetof(mmCIF, b_factors), STORAGE_FLOAT_PTR,
+ *          SIZE_ATOMS, sizeof(float), 1 },
+ *
  * 6. Update _c_to_py() to export to Python (module.c)
+ *
+ * The array is automatically allocated by _allocate_field_arrays() based on:
+ *   - size_source: SIZE_ATOMS means size = cif->atoms
+ *   - element_size: sizeof(float)
+ *   - elements_per_item: 1 (use 3 for xyz coordinates)
  *
  * ============================================================================
  * AVAILABLE OPERATIONS (ParseOp)
@@ -75,46 +103,6 @@
  * OP_COMPUTE       - field = custom computation via parse_func
  *
  * ============================================================================
- * HOW TO ADD A NEW BATCH-PARSED FIELD
- * ============================================================================
- *
- * Batch fields are parsed together in a single pass over the block data.
- * Use this for per-row data that benefits from cache-efficient iteration.
- *
- * Example: Adding a new per-atom field (e.g., b_factor)
- *
- * 1. Add to FieldId enum (registry.h):
- *
- *        FIELD_B_FACTOR,  // cif->b_factors - B-factor per atom
- *
- * 2. Add attribute constant (registry.c):
- *
- *        static const char *ATTR_B_FACTOR[] = { "B_iso_or_equiv", NULL };
- *
- * 3. Add batch row callback (registry.c):
- *
- *        static void _batch_b_factor(mmCIF *cif, const mmBlock *block,
- *                                    int row, const int *idx, char *scratch) {
- *            (void)scratch;
- *            cif->b_factors[row] = _parse_float_inline(block, row, idx[0]);
- *        }
- *
- * 4. Add to FIELDS[] array with batchable=true (registry.c):
- *
- *        { FIELD_B_FACTOR, "b_factors", BLOCK_ATOM, OP_COMPUTE,
- *          ATTR_B_FACTOR, DEP_ATOMS, NULL, true, _batch_b_factor },
- *
- * 5. Add storage to mmCIF struct (parser.h):
- *
- *        float *b_factors;
- *
- * 6. Allocate array in _fill_cif() before batch execution (parser.c):
- *
- *        cif->b_factors = calloc(cif->atoms, sizeof(float));
- *
- * 7. Update _c_to_py() to export to Python (module.c)
- *
- * ============================================================================
  * DEPENDENCY SYSTEM
  * ============================================================================
  *
@@ -127,7 +115,7 @@
  *
  * Use in field definition:
  *
- *     { FIELD_FOO, "foo", BLOCK_X, OP_Y, ATTR_Z, DEP_ENTITY, NULL },
+ *     { FIELD_FOO, "foo", ..., DEP_ENTITY, ... },
  *
  * Circular dependencies are detected and reported as errors.
  */
@@ -142,43 +130,10 @@
 /* ============================================================================
  * BLOCK REGISTRY
  * Blocks are independent - just parsed and counted, no dependencies.
+ *
+ * Note: BlockId enum and BLOCK_LIST macro are defined in io.h since they're
+ * needed by both parser.h (for mmBlockList) and registry.h.
  * ============================================================================ */
-
-/**
- * @brief Block definition list using X-macro pattern.
- *
- * This macro defines all mmCIF blocks in one place. It auto-generates:
- * - BlockId enum values
- * - BLOCKS[] array in registry.c
- *
- * Format: X(NAME, category_prefix, is_required)
- *
- * To add a new block:
- * 1. Add entry here: X(NEW_BLOCK, "_new_category.", false)
- * 2. Add slot to mmBlockList struct in parser.h
- * 3. Add case to _get_block_by_id() in registry.c
- */
-#define BLOCK_LIST \
-    X(ATOM,        "_atom_site.",            true)  \
-    X(POLY,        "_pdbx_poly_seq_scheme.", true)  \
-    X(CHAIN,       "_struct_asym.",          true)  \
-    X(NONPOLY,     "_pdbx_nonpoly_scheme.",  false) \
-    X(CONN,        "_struct_conn.",          false) \
-    X(ENTITY_POLY, "_entity_poly.",          false) \
-    X(ENTITY,      "_entity.",               false)
-
-/**
- * @brief Block identifier enum.
- *
- * Each value corresponds to an mmCIF category block.
- * Auto-generated from BLOCK_LIST macro.
- */
-typedef enum {
-    #define X(name, category, required) BLOCK_##name,
-    BLOCK_LIST
-    #undef X
-    BLOCK_COUNT        /**< Total number of block types */
-} BlockId;
 
 /**
  * @brief Block definition structure.
@@ -235,6 +190,47 @@ typedef enum {
     OP_COMPUTE,          /**< field = custom computation via function pointer */
 } ParseOp;
 
+/**
+ * @brief Storage type for field values.
+ *
+ * Specifies the C type of the storage location in mmCIF struct.
+ * Used by generic storage functions to correctly assign values.
+ */
+typedef enum {
+    STORAGE_NONE = 0,    /**< No automatic storage (custom handling) */
+    STORAGE_INT,         /**< int field (e.g., cif->chains) */
+    STORAGE_INT_PTR,     /**< int* field (e.g., cif->sequence) */
+    STORAGE_FLOAT_PTR,   /**< float* field (e.g., cif->coordinates) */
+    STORAGE_STR_ARRAY,   /**< char** field (e.g., cif->names) */
+} StorageType;
+
+/**
+ * @brief Size source for array allocation.
+ *
+ * Specifies which count field determines the array size.
+ */
+typedef enum {
+    SIZE_NONE = 0,       /**< No allocation needed */
+    SIZE_ATOMS,          /**< Size = cif->atoms */
+    SIZE_CHAINS,         /**< Size = cif->chains */
+    SIZE_RESIDUES,       /**< Size = cif->residues */
+} SizeSource;
+
+/**
+ * @brief Python export type for automatic dict generation.
+ *
+ * Specifies how to convert a field to a Python object.
+ */
+typedef enum {
+    PY_NONE = 0,         /**< Not exported to Python */
+    PY_INT,              /**< Scalar int -> Python int */
+    PY_STRING,           /**< char* -> Python str */
+    PY_1D_INT,           /**< int* -> 1D numpy int32 array */
+    PY_1D_FLOAT,         /**< float* -> 1D numpy float32 array */
+    PY_2D_FLOAT,         /**< float* -> 2D numpy array [size, elements_per_item] */
+    PY_STR_LIST,         /**< char** -> Python list of str */
+} PyExportType;
+
 /* Forward declarations - defined in parser.h */
 typedef struct mmCIF mmCIF;
 typedef struct mmBlockList mmBlockList;
@@ -266,6 +262,10 @@ typedef void (*BatchRowFunc)(mmCIF *cif, mmBlock *block, int row,
  * Declares a field's source block, operation, required attributes,
  * and dependencies on other fields. For batch-parsed fields, also
  * includes the per-row callback.
+ *
+ * Storage mapping fields allow generic value assignment without
+ * switch statements on field ID. Allocation fields enable automatic
+ * array allocation before batch parsing.
  */
 typedef struct {
     FieldId      id;            /**< Field identifier */
@@ -279,6 +279,19 @@ typedef struct {
     /* Batch parsing support */
     bool         batchable;     /**< Can be batched with other fields from same block */
     BatchRowFunc batch_row_func;/**< Per-row callback for batch iteration */
+
+    /* Storage mapping - eliminates switch statements */
+    size_t       storage_offset;/**< offsetof(mmCIF, field) for direct assignment */
+    StorageType  storage_type;  /**< Type of storage location */
+
+    /* Allocation support - enables automatic array allocation */
+    SizeSource   size_source;   /**< What count determines array size */
+    size_t       element_size;  /**< sizeof(element), 0 if no allocation */
+    int          elements_per_item; /**< Elements per item (3 for coords, 1 for others) */
+
+    /* Python export - enables automatic dict generation */
+    PyExportType py_export;     /**< How to convert to Python object */
+    const char  *py_name;       /**< Key name in returned dict (NULL = use 'name') */
 } FieldDef;
 
 
@@ -430,5 +443,57 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
  * @return true if field was already executed
  */
 bool _field_executed(FieldId fid, const bool *executed);
+
+
+/* ============================================================================
+ * STORAGE AND ALLOCATION API
+ * Generic functions for storing values and allocating arrays.
+ * ============================================================================ */
+
+/**
+ * @brief Store an integer value into mmCIF using field definition.
+ *
+ * Uses storage_offset and storage_type to assign value directly
+ * without switch statements.
+ *
+ * @param cif Output structure
+ * @param def Field definition with storage info
+ * @param value Integer value to store
+ */
+void _store_int(mmCIF *cif, const FieldDef *def, int value);
+
+/**
+ * @brief Store a pointer value into mmCIF using field definition.
+ *
+ * Uses storage_offset and storage_type to assign pointer directly.
+ * Works for int*, float*, and char**.
+ *
+ * @param cif Output structure
+ * @param def Field definition with storage info
+ * @param ptr Pointer value to store
+ */
+void _store_ptr(mmCIF *cif, const FieldDef *def, void *ptr);
+
+/**
+ * @brief Get the size for array allocation based on field definition.
+ *
+ * @param cif Structure with count fields already populated
+ * @param def Field definition with size_source
+ * @return Array size (count * elements_per_item), or 0 if no allocation
+ */
+int _get_alloc_size(const mmCIF *cif, const FieldDef *def);
+
+/**
+ * @brief Allocate arrays for all fields that require allocation.
+ *
+ * Iterates through FIELDS[] and allocates arrays based on size_source,
+ * element_size, and elements_per_item. Must be called after count
+ * fields (atoms, chains, residues) are populated.
+ *
+ * @param cif Structure with count fields already populated
+ * @param ctx Error context
+ * @return CIF_OK on success, CIF_ERR_ALLOC on failure
+ */
+CifError _allocate_field_arrays(mmCIF *cif, CifErrorContext *ctx);
 
 #endif /* _CIFFY_REGISTRY_H */

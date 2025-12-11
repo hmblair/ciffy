@@ -519,24 +519,24 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     if (val_err != CIF_OK) return val_err;
 
     LOG_DEBUG("Block validation complete: atom=%d rows, poly=%d rows, chain=%d rows",
-              blocks->atom.size, blocks->poly.size, blocks->chain.size);
+              blocks->b[BLOCK_ATOM].size, blocks->b[BLOCK_POLY].size, blocks->b[BLOCK_CHAIN].size);
 
     /* ── Precompute Line Pointers ────────────────────────────────────────── */
     /* Required for _get_field_ptr used in counting and metadata extraction */
 
-    CifError err = _precompute_lines(&blocks->atom, ctx);
+    CifError err = _precompute_lines(&blocks->b[BLOCK_ATOM], ctx);
     if (err != CIF_OK) return err;
 
-    err = _precompute_lines(&blocks->poly, ctx);
+    err = _precompute_lines(&blocks->b[BLOCK_POLY], ctx);
     if (err != CIF_OK) {
-        _free_lines(&blocks->atom);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
         return err;
     }
 
-    err = _precompute_lines(&blocks->chain, ctx);
+    err = _precompute_lines(&blocks->b[BLOCK_CHAIN], ctx);
     if (err != CIF_OK) {
-        _free_lines(&blocks->atom);
-        _free_lines(&blocks->poly);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
         return err;
     }
 
@@ -549,17 +549,17 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     ParsePlan plan;
     err = _plan_parse(&plan, ctx);
     if (err != CIF_OK) {
-        _free_lines(&blocks->atom);
-        _free_lines(&blocks->poly);
-        _free_lines(&blocks->chain);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
         return err;
     }
 
     err = _execute_plan(cif, blocks, &plan, ctx);
     if (err != CIF_OK) {
-        _free_lines(&blocks->atom);
-        _free_lines(&blocks->poly);
-        _free_lines(&blocks->chain);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
         return err;
     }
 
@@ -574,20 +574,13 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
 
-    /* Allocate atom arrays before batch execution */
-    cif->coordinates = calloc(COORDS * (size_t)cif->atoms, sizeof(float));
-    cif->elements = calloc((size_t)cif->atoms, sizeof(int));
-    cif->types = calloc((size_t)cif->atoms, sizeof(int));
-
-    if (!cif->coordinates || !cif->elements || !cif->types) {
-        free(cif->coordinates);
-        free(cif->elements);
-        free(cif->types);
-        _free_lines(&blocks->atom);
-        _free_lines(&blocks->poly);
-        _free_lines(&blocks->chain);
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate atom arrays");
-        return CIF_ERR_ALLOC;
+    /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
+    err = _allocate_field_arrays(cif, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
+        return err;
     }
 
     /* Compute and execute batch groups */
@@ -598,19 +591,16 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     for (int g = 0; g < batch_group_count; g++) {
         err = _execute_batch_group(cif, blocks, &batch_groups[g], ctx);
         if (err != CIF_OK) {
-            free(cif->coordinates);
-            free(cif->elements);
-            free(cif->types);
-            _free_lines(&blocks->atom);
-            _free_lines(&blocks->poly);
-            _free_lines(&blocks->chain);
+            _free_lines(&blocks->b[BLOCK_ATOM]);
+            _free_lines(&blocks->b[BLOCK_POLY]);
+            _free_lines(&blocks->b[BLOCK_CHAIN]);
             return err;
         }
     }
 
     /* Free poly and chain line pointers - no longer needed */
-    _free_lines(&blocks->poly);
-    _free_lines(&blocks->chain);
+    _free_lines(&blocks->b[BLOCK_POLY]);
+    _free_lines(&blocks->b[BLOCK_CHAIN]);
 
     /* Validate parsed coordinates - check for NaN values */
     int nan_count = 0;
@@ -636,7 +626,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     }
 
     cif->nonpoly = 0;
-    cif->atoms_per_res = _count_atoms_per_residue(&blocks->atom, cif->residues,
+    cif->atoms_per_res = _count_atoms_per_residue(&blocks->b[BLOCK_ATOM], cif->residues,
                                                   &cif->nonpoly, is_nonpoly,
                                                   cif->res_per_chain, ctx);
     if (cif->atoms_per_res == NULL) {
@@ -650,7 +640,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     free(is_nonpoly);
     if (err != CIF_OK) return err;
 
-    cif->atoms_per_chain = _count_sizes_by_group(&blocks->atom, ATTR_LABEL_ASYM,
+    cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
                                                  &cif->chains, ctx);
     if (cif->atoms_per_chain == NULL) return ctx->code;
 
@@ -842,12 +832,8 @@ void _store_or_free_block(mmBlock *block, mmBlockList *blocks) {
 }
 
 
-// TODO: Is this still needed? Is mmBlockList used anywhere? I thought that
-// we were no longer hard-coding the list of blocks.
 void _free_block_list(mmBlockList *blocks) {
-    _free_block(&blocks->atom);
-    _free_block(&blocks->poly);
-    _free_block(&blocks->nonpoly);
-    _free_block(&blocks->conn);
-    _free_block(&blocks->chain);
+    for (int i = 0; i < BLOCK_COUNT; i++) {
+        _free_block(&blocks->b[i]);
+    }
 }

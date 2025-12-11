@@ -5,7 +5,12 @@ A Python package for loading and manipulating molecular structures from
 CIF (Crystallographic Information File) format files.
 """
 
-__version__ = "0.7.3"
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("ciffy")
+except PackageNotFoundError:
+    __version__ = "0.0.0.dev0"  # Fallback for editable installs without scm
 
 # Core types
 from .polymer import Polymer

@@ -50,20 +50,22 @@ def load(file: str, backend: str | None = None) -> "Polymer":
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')
 
-    (
-        id,
-        coordinates,
-        atoms,
-        elements,
-        residues,
-        atoms_per_res,
-        atoms_per_chain,
-        res_per_chain,
-        chain_names,
-        strand_names,
-        polymer_count,
-        molecule_types,
-    ) = _load(file)
+    # Load returns a dict with all parsed data
+    data = _load(file)
+
+    # Extract fields from dict
+    id = data["id"]
+    coordinates = data["coordinates"]
+    atoms = data["atoms"]
+    elements = data["elements"]
+    residues = data["residues"]
+    atoms_per_res = data["atoms_per_res"]
+    atoms_per_chain = data["atoms_per_chain"]
+    res_per_chain = data["res_per_chain"]
+    chain_names = data["chain_names"]
+    strand_names = data["strand_names"]
+    polymer_count = data["polymer_count"]
+    molecule_types = data["molecule_types"]
 
     mol_sizes = np.array([len(coordinates)], dtype=np.int64)
 

@@ -24,6 +24,45 @@
 /** Sentinel value for failed inline parsing */
 #define PARSE_FAIL -1
 
+
+/* ============================================================================
+ * BLOCK REGISTRY
+ * Block identifiers and category prefixes. Defined here (in io.h) because
+ * both parser.h and registry.h need access to BLOCK_COUNT.
+ * ============================================================================ */
+
+/**
+ * @brief Block definition list using X-macro pattern.
+ *
+ * This macro defines all mmCIF blocks in one place. It auto-generates:
+ * - BlockId enum values
+ * - BLOCKS[] array in registry.c
+ *
+ * Format: X(NAME, category_prefix, is_required)
+ */
+#define BLOCK_LIST \
+    X(ATOM,        "_atom_site.",            true)  \
+    X(POLY,        "_pdbx_poly_seq_scheme.", true)  \
+    X(CHAIN,       "_struct_asym.",          true)  \
+    X(NONPOLY,     "_pdbx_nonpoly_scheme.",  false) \
+    X(CONN,        "_struct_conn.",          false) \
+    X(ENTITY_POLY, "_entity_poly.",          false) \
+    X(ENTITY,      "_entity.",               false)
+
+/**
+ * @brief Block identifier enum.
+ *
+ * Each value corresponds to an mmCIF category block.
+ * Auto-generated from BLOCK_LIST macro.
+ */
+typedef enum {
+    #define X(name, category, required) BLOCK_##name,
+    BLOCK_LIST
+    #undef X
+    BLOCK_COUNT        /**< Total number of block types */
+} BlockId;
+
+
 /**
  * @brief Represents a parsed mmCIF block (loop or single-value).
  *
@@ -346,5 +385,31 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
 
 /** Size of thread-local buffer for combined lookups */
 #define MAX_INLINE_BUFFER 128
+
+
+/* ============================================================================
+ * QUOTE STRIPPING
+ * CIF uses "..." or '...' to quote strings containing special characters.
+ * ============================================================================ */
+
+/**
+ * @brief Strip outer quotes from a field by adjusting pointer and length.
+ *
+ * CIF uses double quotes ("...") or single quotes ('...') to protect
+ * strings containing special characters. This function adjusts the pointer
+ * and length to exclude the outer quotes if present.
+ *
+ * @param ptr Input/output: pointer to field start (adjusted if quoted)
+ * @param len Input/output: field length (reduced by 2 if quoted)
+ */
+static inline void _strip_outer_quotes(const char **ptr, size_t *len) {
+    if (*len >= 2 &&
+        (((*ptr)[0] == '\'' && (*ptr)[*len - 1] == '\'') ||
+         ((*ptr)[0] == '"' && (*ptr)[*len - 1] == '"'))) {
+        (*ptr)++;
+        *len -= 2;
+    }
+}
+
 
 #endif /* _CIFFY_IO_H */

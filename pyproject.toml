@@ -1,6 +1,44 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "numpy"]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel", "numpy"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "ciffy"
+dynamic = ["version"]
+description = "Fast mmCIF parser for structural biology"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    {name = "Hamish M. Blair"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+torch = ["torch"]
+dev = ["pytest", "torch"]
+
+[project.urls]
+Homepage = "https://github.com/hmblair/ciffy"
+Repository = "https://github.com/hmblair/ciffy"
+
+[tool.setuptools]
+packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io"]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+tag_regex = "^v(?P<version>.*)$"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

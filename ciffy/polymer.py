@@ -14,6 +14,7 @@ import numpy as np
 
 from .backend import Array, is_torch, get_backend, size as arr_size
 from .backend import ops as backend
+from .backend import array_protocol as _ap
 from .types import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -35,49 +36,54 @@ from .utils import all_equal, filter_by_mask
 UNKNOWN = "UNKNOWN"
 
 
+# =============================================================================
+# Backend-Aware Array Helpers
+# Thin wrappers around array_protocol functions preserving old calling convention
+# =============================================================================
+
 def _ones_like_backend(template: Array, size: int) -> Array:
     """Create a ones array matching the backend of template."""
-    if is_torch(template):
-        import torch
-        return torch.ones(size, dtype=torch.long)
-    return np.ones(size, dtype=np.int64)
+    return _ap.ones(size, like=template, dtype='int64')
 
 
 def _zeros_like_backend(template: Array, size: int) -> Array:
     """Create a zeros array matching the backend of template."""
-    if is_torch(template):
-        import torch
-        return torch.zeros(size, dtype=torch.long)
-    return np.zeros(size, dtype=np.int64)
+    return _ap.zeros(size, like=template, dtype='int64')
 
 
 def _array_like_backend(template: Array, data: list) -> Array:
     """Create an array from data matching the backend of template."""
-    if is_torch(template):
-        import torch
-        return torch.tensor(data, dtype=torch.long)
-    return np.array(data, dtype=np.int64)
+    return _ap.array(data, like=template, dtype='int64')
 
 
 def _bool_zeros_like_backend(template: Array, size: int) -> Array:
     """Create a boolean zeros array matching the backend of template."""
-    if is_torch(template):
-        import torch
-        return torch.zeros(size, dtype=torch.bool)
-    return np.zeros(size, dtype=bool)
+    return _ap.zeros(size, like=template, dtype='bool')
 
 
 def _as_backend(template: Array, arr: Array) -> Array:
     """Convert arr to match the backend of template."""
-    if is_torch(template):
-        if not is_torch(arr):
-            import torch
-            return torch.from_numpy(np.asarray(arr))
-        return arr
-    else:
-        if is_torch(arr):
-            return arr.numpy()
-        return np.asarray(arr)
+    return _ap.convert_backend(arr, template)
+
+
+def _eigh(arr: Array) -> tuple[Array, Array]:
+    """Compute eigendecomposition, backend-agnostic."""
+    return _ap.eigh(arr)
+
+
+def _det(arr: Array) -> Array:
+    """Compute determinant, backend-agnostic."""
+    return _ap.det(arr)
+
+
+def _nonzero_1d(arr: Array) -> Array:
+    """Get indices of non-zero elements in a 1D array, backend-agnostic."""
+    return _ap.nonzero_1d(arr)
+
+
+def _to_int64(arr: Array) -> Array:
+    """Convert array to int64 dtype, backend-agnostic."""
+    return _ap.to_int64(arr)
 
 
 def _cdist(x1: Array, x2: Array) -> Array:
@@ -85,40 +91,31 @@ def _cdist(x1: Array, x2: Array) -> Array:
     return backend.cdist(x1, x2)
 
 
-def _eigh(arr: Array) -> tuple[Array, Array]:
+def _classify_chain_type(min_idx: int, max_idx: int,
+                         large_sentinel: int, small_sentinel: int) -> int:
     """
-    Compute eigendecomposition, backend-agnostic.
+    Classify a chain's molecule type from its min/max residue indices.
+
+    Args:
+        min_idx: Minimum residue index in the chain.
+        max_idx: Maximum residue index in the chain.
+        large_sentinel: Sentinel value indicating all residues were unknown (for min).
+        small_sentinel: Sentinel value indicating all residues were unknown (for max).
 
     Returns:
-        Tuple of (eigenvalues, eigenvectors).
+        Molecule enum value as int.
     """
-    if is_torch(arr):
-        import torch
-        return torch.linalg.eigh(arr)
-    return np.linalg.eigh(arr)
+    # Handle case where all residues were unknown
+    if min_idx == large_sentinel or max_idx == small_sentinel:
+        return Molecule.UNKNOWN.value
 
+    min_type = RESIDUE_MOLECULE_TYPE.get(min_idx, Molecule.UNKNOWN)
+    max_type = RESIDUE_MOLECULE_TYPE.get(max_idx, Molecule.UNKNOWN)
 
-def _det(arr: Array) -> Array:
-    """Compute determinant, backend-agnostic."""
-    if is_torch(arr):
-        import torch
-        return torch.linalg.det(arr)
-    return np.linalg.det(arr)
-
-
-def _nonzero_1d(arr: Array) -> Array:
-    """Get indices of non-zero elements in a 1D array, backend-agnostic."""
-    if is_torch(arr):
-        return arr.nonzero().squeeze(-1)
-    # NumPy nonzero returns a tuple of arrays, one per dimension
-    return arr.nonzero()[0]
-
-
-def _to_int64(arr: Array) -> Array:
-    """Convert array to int64 dtype, backend-agnostic."""
-    if is_torch(arr):
-        return arr.long()
-    return arr.astype(np.int64)
+    # If min and max agree, use that type; otherwise mark as OTHER (mixed)
+    if min_type == max_type:
+        return min_type.value
+    return Molecule.OTHER.value
 
 
 class Polymer:
@@ -356,45 +353,37 @@ class Polymer:
             Array of Molecule enum values, one per chain.
         """
         n_chains = self.size(Scale.CHAIN)
-        types = _zeros_like_backend(self.coordinates, n_chains)
 
-        # Filter out unknown residues (-1) for molecule type detection
-        # Replace -1 with a large value for MIN, small value for MAX
-        from .backend import is_torch
-        if is_torch(self.sequence):
-            seq_for_min = self.sequence.clone()
-            seq_for_max = self.sequence.clone()
-        else:
-            seq_for_min = self.sequence.copy()
-            seq_for_max = self.sequence.copy()
+        # Sentinel values for masking unknown residues (-1)
+        LARGE_SENTINEL = 9999   # Won't be selected as min
+        SMALL_SENTINEL = -9999  # Won't be selected as max
+
+        # Create masked copies for min/max reduction
         unknown_mask = self.sequence == -1
-        seq_for_min[unknown_mask] = 9999  # Large value won't be min
-        seq_for_max[unknown_mask] = -9999  # Small value won't be max
+        seq_for_min = _ap.to_backend(
+            np.where(_ap.as_numpy(unknown_mask), LARGE_SENTINEL, _ap.as_numpy(self.sequence)),
+            self.sequence
+        )
+        seq_for_max = _ap.to_backend(
+            np.where(_ap.as_numpy(unknown_mask), SMALL_SENTINEL, _ap.as_numpy(self.sequence)),
+            self.sequence
+        )
 
         # Get min and max residue index per chain (ignoring unknowns)
         min_res, _ = self.rreduce(seq_for_min, Scale.CHAIN, Reduction.MIN)
         max_res, _ = self.rreduce(seq_for_max, Scale.CHAIN, Reduction.MAX)
 
-        # Classify based on residue index ranges
+        # Convert to numpy for classification (simpler than per-element backend checks)
+        min_np = _ap.as_numpy(min_res)
+        max_np = _ap.as_numpy(max_res)
+
+        # Classify each chain
+        result = np.empty(n_chains, dtype=np.int64)
         for i in range(n_chains):
-            min_idx = int(min_res[i].item() if hasattr(min_res[i], 'item') else min_res[i])
-            max_idx = int(max_res[i].item() if hasattr(max_res[i], 'item') else max_res[i])
+            result[i] = _classify_chain_type(int(min_np[i]), int(max_np[i]),
+                                              LARGE_SENTINEL, SMALL_SENTINEL)
 
-            # Handle case where all residues were unknown
-            if min_idx == 9999 or max_idx == -9999:
-                types[i] = Molecule.UNKNOWN.value
-                continue
-
-            min_type = RESIDUE_MOLECULE_TYPE.get(min_idx, Molecule.UNKNOWN)
-            max_type = RESIDUE_MOLECULE_TYPE.get(max_idx, Molecule.UNKNOWN)
-
-            # If min and max agree, use that type; otherwise mark as OTHER (mixed)
-            if min_type == max_type:
-                types[i] = min_type.value
-            else:
-                types[i] = Molecule.OTHER.value
-
-        return types
+        return _ap.to_backend(result, self.coordinates)
 
     def type(self: Polymer) -> Array:
         """

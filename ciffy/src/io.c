@@ -518,9 +518,9 @@ FloatParseResult _parse_float_safe(mmBlock *block, int line, int index, float *r
 /**
  * @brief Copy field to buffer, stripping only outer quotes.
  *
- * CIF uses "..." to quote strings containing special characters.
+ * CIF uses "..." or '...' to quote strings containing special characters.
  * For example, "C2'" is the string C2' (with an internal prime).
- * We must preserve internal ' characters while removing outer quotes.
+ * Uses _strip_outer_quotes() from io.h for the quote detection.
  *
  * @param ptr Source field pointer
  * @param len Length of source field
@@ -529,23 +529,9 @@ FloatParseResult _parse_float_safe(mmBlock *block, int line, int index, float *r
  */
 static void _copy_field_strip_outer_quotes(const char *ptr, size_t len,
                                             char *buffer, size_t *out_len) {
-    /* Check for outer double quotes: "..." */
-    if (len >= 2 && ptr[0] == '"' && ptr[len - 1] == '"') {
-        for (size_t i = 1; i < len - 1; i++) {
-            buffer[(*out_len)++] = ptr[i];
-        }
-    }
-    /* Check for outer single quotes: '...' */
-    else if (len >= 2 && ptr[0] == '\'' && ptr[len - 1] == '\'') {
-        for (size_t i = 1; i < len - 1; i++) {
-            buffer[(*out_len)++] = ptr[i];
-        }
-    }
-    /* No outer quotes - copy as-is */
-    else {
-        for (size_t i = 0; i < len; i++) {
-            buffer[(*out_len)++] = ptr[i];
-        }
+    _strip_outer_quotes(&ptr, &len);
+    for (size_t i = 0; i < len; i++) {
+        buffer[(*out_len)++] = ptr[i];
     }
 }
 

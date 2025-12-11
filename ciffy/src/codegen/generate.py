@@ -378,7 +378,20 @@ from ..utils import IndexEnum
     code += '    AsparticAcid.dict("ASP_") | GlutamicAcid.dict("GLU_") |\n'
     code += '    Lysine.dict("LYS_") | Arginine.dict("ARG_") |\n'
     code += '    Histidine.dict("HIS_") | Tyrosine.dict("TYR_")\n'
-    code += ")\n"
+    code += ")\n\n"
+
+    # Generate reverse lookup dict (index -> atom_name)
+    code += "# " + "=" * 77 + "\n"
+    code += "# REVERSE LOOKUP\n"
+    code += "# " + "=" * 77 + "\n\n"
+    code += "# Maps atom index -> atom name (for all residue types)\n"
+    code += "ATOM_NAMES: dict[int, str] = {\n"
+
+    # Sort by index for readable output
+    for (residue, atom), idx in sorted(atom_index.items(), key=lambda x: x[1]):
+        code += f"    {idx}: \"{atom}\",\n"
+
+    code += "}\n"
 
     with open(biochem_dir / "_generated_atoms.py", "w") as f:
         f.write(code)

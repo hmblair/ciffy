@@ -43,12 +43,17 @@ NUM_RESIDUES: int = max(r.value for r in Residue) + 1
 from .atoms import ALL_ATOMS
 NUM_ATOMS: int = sum(len(atoms) for atoms in ALL_ATOMS.values()) + 1  # +1 for unknown
 
+# Reverse lookup: atom index -> atom name
+from ._generated_atoms import ATOM_NAMES
+
 
 __all__ = [
     # Vocabulary sizes
     "NUM_ELEMENTS",
     "NUM_RESIDUES",
     "NUM_ATOMS",
+    # Reverse lookup
+    "ATOM_NAMES",
     # Elements
     "Element",
     # Residues

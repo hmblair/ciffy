@@ -24,11 +24,7 @@ from .biochemistry import (
     Residue,
     RES_ABBREV,
     RESIDUE_MOLECULE_TYPE,
-    RibonucleicAcid,
-    Adenosine,
-    Guanosine,
-    Cytosine,
-    Uridine,
+    ATOM_NAMES,
     Element,
     FRAMES,
     Backbone,
@@ -305,24 +301,17 @@ class Polymer:
         if inner == outer:
             return _ones_like_backend(self.coordinates, self.size(inner))
 
+        # Atoms per {residue, chain, molecule} are stored in _sizes
         if inner == Scale.ATOM:
-            # TODO: why is this not just a dictionary lookup?
-            if outer == Scale.RESIDUE:
-                return self._sizes[Scale.RESIDUE]
-            if outer == Scale.CHAIN:
-                return self._sizes[Scale.CHAIN]
-            if outer == Scale.MOLECULE:
-                return self._sizes[Scale.MOLECULE]
+            return self._sizes[outer]
 
-        if inner == Scale.RESIDUE:
-            if outer == Scale.CHAIN:
-                return self.lengths
-            if outer == Scale.MOLECULE:
-                return _array_like_backend(self.coordinates, [self.size(Scale.RESIDUE)])
+        # Residues per chain are stored in lengths
+        if inner == Scale.RESIDUE and outer == Scale.CHAIN:
+            return self.lengths
 
-        if inner == Scale.CHAIN:
-            if outer == Scale.MOLECULE:
-                return _array_like_backend(self.coordinates, [self.size(Scale.CHAIN)])
+        # Single-value cases: total count as 1-element array
+        if outer == Scale.MOLECULE:
+            return _array_like_backend(self.coordinates, [self.size(inner)])
 
         raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
 
@@ -339,28 +328,33 @@ class Polymer:
         - Ion: indices 26-27 (MG, CS)
         - Other: modified nucleotides (28+)
 
-        Uses MAX residue index per chain to determine type, which works because
-        chains are typically homogeneous in molecular composition.
+        Uses both MIN and MAX residue index per chain to robustly detect type.
+        If min and max map to different molecule types, the chain is classified
+        as OTHER (mixed/heterogeneous composition).
 
         Returns:
             Array of Molecule enum values, one per chain.
         """
-
-        # TODO: max_res is not a good way to check molecule types
-        # (cannot detect e.g. mixed/malformed residues as an edge case)
-        # Need to consider how else to compute molecule type
-
         n_chains = self.size(Scale.CHAIN)
         types = _zeros_like_backend(self.coordinates, n_chains)
 
-        # Get the maximum residue index per chain
+        # Get min and max residue index per chain
+        min_res, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MIN)
         max_res, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
 
         # Classify based on residue index ranges
         for i in range(n_chains):
-            res_idx = int(max_res[i].item() if hasattr(max_res[i], 'item') else max_res[i])
-            mol_type = RESIDUE_MOLECULE_TYPE.get(res_idx, Molecule.UNKNOWN)
-            types[i] = mol_type.value
+            min_idx = int(min_res[i].item() if hasattr(min_res[i], 'item') else min_res[i])
+            max_idx = int(max_res[i].item() if hasattr(max_res[i], 'item') else max_res[i])
+
+            min_type = RESIDUE_MOLECULE_TYPE.get(min_idx, Molecule.UNKNOWN)
+            max_type = RESIDUE_MOLECULE_TYPE.get(max_idx, Molecule.UNKNOWN)
+
+            # If min and max agree, use that type; otherwise mark as OTHER (mixed)
+            if min_type == max_type:
+                types[i] = min_type.value
+            else:
+                types[i] = Molecule.OTHER.value
 
         return types
 
@@ -375,7 +369,7 @@ class Polymer:
         """
         import warnings
         warnings.warn(
-            "Polymer.type() is deprecated and will be removed in v0.7.0. "
+            "Polymer.type() is deprecated and will be removed in v0.8.0. "
             "Use the molecule_type property instead: polymer.molecule_type",
             DeprecationWarning,
             stacklevel=2
@@ -534,7 +528,7 @@ class Polymer:
 
         return centered, means
 
-    def pd(self: Polymer, scale: Scale | None = None) -> Array:
+    def pairwise_distances(self: Polymer, scale: Scale | None = None) -> Array:
         """
         Compute pairwise distances.
 
@@ -547,13 +541,26 @@ class Polymer:
         Returns:
             Pairwise distance matrix.
         """
-        # TODO: rename to a more informative name
         if scale is not None:
             coords = self.reduce(self.coordinates, scale)
         else:
             coords = self.coordinates
 
         return _cdist(coords, coords)
+
+    def pd(self: Polymer, scale: Scale | None = None) -> Array:
+        """
+        Compute pairwise distances.
+
+        Deprecated: Use pairwise_distances() instead.
+        """
+        import warnings
+        warnings.warn(
+            "Polymer.pd() is deprecated. Use pairwise_distances() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return self.pairwise_distances(scale)
 
     def _pc(
         self: Polymer,
@@ -664,7 +671,7 @@ class Polymer:
         Returns:
             New Polymer with selected atoms.
         """
-        # TODO: simplify this, reduce overhead
+        # NOTE: Potential optimization target - mask generation and slicing overhead
         coordinates = self.coordinates[mask]
         atoms = self.atoms[mask]
         elements = self.elements[mask]
@@ -783,17 +790,18 @@ class Polymer:
         """
         Return a new Polymer with non-polymer atoms removed.
 
-        Non-polymer atoms include water, ions, ligands, and any atoms
-        with unknown types (e.g., modified residues not in standard tables).
+        Deprecated: Use poly() instead, which is simpler and doesn't filter
+        unknown atom types (useful for modified residues).
 
         Returns:
             New Polymer containing only recognized polymer atoms.
-
-        Note:
-            Prefer `poly()` for a simpler interface that doesn't filter
-            unknown atom types.
         """
-        # TODO: deprecate -> remove
+        import warnings
+        warnings.warn(
+            "Polymer.polymer_only() is deprecated. Use poly() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         # With reordered atoms, polymer atoms are [0, polymer_count)
         # Also filter out unknown atom types (-1)
         if self.nonpoly == 0:
@@ -915,8 +923,17 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     def frame(self: Polymer) -> Polymer:
-        """Select frame atoms for structural alignment."""
-        # TODO: deprecate -> remove
+        """
+        Select frame atoms for structural alignment.
+
+        Deprecated: Use get_by_name(FRAMES) instead.
+        """
+        import warnings
+        warnings.warn(
+            "Polymer.frame() is deprecated. Use get_by_name(FRAMES) instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         return self.get_by_name(FRAMES)
 
     def backbone(self: Polymer) -> Polymer:
@@ -945,14 +962,7 @@ class Polymer:
         Returns:
             List of atom name strings.
         """
-        # TODO: use the updated reverse.h parser (works for proteins; faster)
-        revdict = (
-            Adenosine.revdict() |
-            Guanosine.revdict() |
-            Cytosine.revdict() |
-            Uridine.revdict()
-        )
-        return [revdict.get(ix.item(), '?') for ix in self.atoms]
+        return [ATOM_NAMES.get(ix.item(), '?') for ix in self.atoms]
 
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""

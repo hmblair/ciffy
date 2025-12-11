@@ -1118,12 +1118,15 @@ class Polymer:
             filename: Output file path (must have .cif extension).
 
         Raises:
-            ValueError: If filename does not end with .cif extension.
+            ValueError: If filename does not end with .cif extension,
+                or if the polymer is empty.
 
         Example:
             >>> polymer = ciffy.load("structure.cif", backend="numpy")
             >>> polymer.write("output.cif")
         """
+        if self.empty():
+            raise ValueError("Cannot write empty polymer to CIF file")
         if not filename.lower().endswith('.cif'):
             raise ValueError(
                 f"Output file must have .cif extension, got: {filename!r}"

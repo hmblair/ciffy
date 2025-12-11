@@ -329,6 +329,7 @@ class Polymer:
         - Other: modified nucleotides (28+)
 
         Uses both MIN and MAX residue index per chain to robustly detect type.
+        Unknown residues (index -1) are ignored when determining molecule type.
         If min and max map to different molecule types, the chain is classified
         as OTHER (mixed/heterogeneous composition).
 
@@ -338,14 +339,32 @@ class Polymer:
         n_chains = self.size(Scale.CHAIN)
         types = _zeros_like_backend(self.coordinates, n_chains)
 
-        # Get min and max residue index per chain
-        min_res, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MIN)
-        max_res, _ = self.rreduce(self.sequence, Scale.CHAIN, Reduction.MAX)
+        # Filter out unknown residues (-1) for molecule type detection
+        # Replace -1 with a large value for MIN, small value for MAX
+        from .backend import is_torch
+        if is_torch(self.sequence):
+            seq_for_min = self.sequence.clone()
+            seq_for_max = self.sequence.clone()
+        else:
+            seq_for_min = self.sequence.copy()
+            seq_for_max = self.sequence.copy()
+        unknown_mask = self.sequence == -1
+        seq_for_min[unknown_mask] = 9999  # Large value won't be min
+        seq_for_max[unknown_mask] = -9999  # Small value won't be max
+
+        # Get min and max residue index per chain (ignoring unknowns)
+        min_res, _ = self.rreduce(seq_for_min, Scale.CHAIN, Reduction.MIN)
+        max_res, _ = self.rreduce(seq_for_max, Scale.CHAIN, Reduction.MAX)
 
         # Classify based on residue index ranges
         for i in range(n_chains):
             min_idx = int(min_res[i].item() if hasattr(min_res[i], 'item') else min_res[i])
             max_idx = int(max_res[i].item() if hasattr(max_res[i], 'item') else max_res[i])
+
+            # Handle case where all residues were unknown
+            if min_idx == 9999 or max_idx == -9999:
+                types[i] = Molecule.UNKNOWN.value
+                continue
 
             min_type = RESIDUE_MOLECULE_TYPE.get(min_idx, Molecule.UNKNOWN)
             max_type = RESIDUE_MOLECULE_TYPE.get(max_idx, Molecule.UNKNOWN)

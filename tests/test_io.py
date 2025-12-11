@@ -445,13 +445,37 @@ class TestCifSave:
 
     def test_write_empty_polymer_raises(self):
         """Test that writing an empty polymer raises ValueError."""
-        from ciffy import load, RNA
+        from ciffy import load, from_sequence
 
-        # 9MDS has no RNA chains
-        polymer = load("tests/data/9MDS.cif", backend="numpy")
-        empty_rna = polymer.subset(RNA)
+        # Create an empty polymer by subsetting with impossible mask
+        template = from_sequence("acgu")
+        empty = template[template.atoms < 0]  # Empty mask
 
-        assert empty_rna.empty()
+        assert empty.empty()
 
         with pytest.raises(ValueError, match="Cannot write empty polymer"):
-            empty_rna.write("/tmp/should_not_exist.cif")
+            empty.write("/tmp/should_not_exist.cif")
+
+
+class TestMoleculeTypeDetection:
+    """Test molecule type detection for various structures."""
+
+    def test_9mds_is_rna(self):
+        """Test that 9MDS (8 RNA chains) is correctly identified as RNA."""
+        from ciffy import load, RNA, Scale
+        from ciffy.types import Molecule
+
+        polymer = load("tests/data/9MDS.cif", backend="numpy")
+
+        # 9MDS has 8 chains, all RNA
+        assert polymer.size(Scale.CHAIN) == 8
+
+        # All chains should be RNA
+        mol_types = polymer.molecule_type
+        for i in range(8):
+            assert mol_types[i] == Molecule.RNA.value, \
+                f"Chain {i} should be RNA, got {Molecule(mol_types[i])}"
+
+        # Subset by RNA should return all chains
+        rna = polymer.subset(RNA)
+        assert rna.size(Scale.CHAIN) == 8

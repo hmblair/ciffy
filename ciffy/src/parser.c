@@ -778,3 +778,196 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     return CIF_OK;
 }
+
+
+/* ============================================================================
+ * BLOCK PARSING API
+ * Public functions for reading and managing mmCIF blocks.
+ * ============================================================================ */
+
+void _skip_multiline_attr(char **buffer) {
+    _advance_line(buffer);
+    int lines = 0;
+    const int MAX_MULTILINE_LINES = 10000;
+    while (**buffer != ';' && **buffer != '\0' && lines < MAX_MULTILINE_LINES) {
+        _advance_line(buffer);
+        lines++;
+    }
+    if (lines >= MAX_MULTILINE_LINES) {
+        LOG_WARNING("Unterminated multiline attribute (exceeded %d lines)", MAX_MULTILINE_LINES);
+    }
+    if (**buffer == ';') {
+        _advance_line(buffer);
+    }
+}
+
+
+void _next_block(char **buffer) {
+    while (**buffer != '\0' && !_is_section_end(*buffer)) {
+        _advance_line(buffer);
+    }
+    if (**buffer != '\0') {
+        _advance_line(buffer);
+    }
+}
+
+
+mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
+
+    mmBlock block = {0};
+
+    /* Check if this is a single-entry block (no "loop_" prefix) */
+    if (_eq(*buffer, "loop_")) {
+        _advance_line(buffer);
+    } else {
+        block.single = true;
+        block.size = 1;
+    }
+
+    block.head = *buffer;
+    block.category = _get_category(block.head, ctx);
+    if (block.category == NULL) {
+        return block;  /* Error - ctx is already set */
+    }
+
+    /* Count attributes by scanning header lines */
+    while (**buffer != '\0' && _eq(*buffer, block.category)) {
+        block.attributes++;
+        _advance_line(buffer);
+        if (**buffer == ';') {
+            _skip_multiline_attr(buffer);
+        }
+    }
+
+    /* Validate attribute count */
+    if (block.attributes == 0) {
+        LOG_ERROR("Block %s has no attributes", block.category);
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Block has no attributes");
+        free(block.category);
+        block.category = NULL;
+        return block;
+    }
+
+    if (!block.single) {
+        /* Multi-entry block: calculate offsets and line width */
+        block.start = *buffer;
+        block.variable_width = false;
+        block.offsets = _get_offsets(block.start, block.attributes, ctx);
+        if (block.offsets == NULL) {
+            free(block.category);
+            block.category = NULL;
+            return block;  /* Error - ctx is already set */
+        }
+        block.width = block.offsets[block.attributes] + 1;
+
+        /* Validate width is positive */
+        if (block.width <= 0) {
+            LOG_ERROR("Invalid block width %d", block.width);
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Invalid block line width");
+            free(block.category);
+            free(block.offsets);
+            block.category = NULL;
+            block.offsets = NULL;
+            return block;
+        }
+
+        /* Count entries until section end (assuming fixed-width) */
+        while (**buffer != '\0' && !_is_section_end(*buffer)) {
+            /* Check if we're at a valid position (previous char should be newline) */
+            if (*buffer > block.start && (*buffer)[-1] != '\n') {
+                /* Variable-width detected - fall back to line scanning */
+                LOG_INFO("Variable line widths in block %s, using fallback parser",
+                         block.category);
+                block.variable_width = true;
+
+                CifError err = _scan_lines(&block, ctx);
+                if (err != CIF_OK) {
+                    free(block.category);
+                    free(block.offsets);
+                    block.category = NULL;
+                    block.offsets = NULL;
+                    return block;
+                }
+
+                /* Advance buffer to end of data section */
+                *buffer = block.end;
+                break;
+            }
+
+            *buffer += block.width;
+            block.size++;
+        }
+    }
+
+    /* Skip past section end marker */
+    _next_block(buffer);
+
+    LOG_DEBUG("Block '%s': size=%d, attrs=%d, width=%d, var_width=%d, single=%d",
+              block.category, block.size, block.attributes,
+              block.width, block.variable_width, block.single);
+
+    return block;
+}
+
+
+void _free_block(mmBlock *block) {
+    block->head = NULL;
+    block->start = NULL;
+    block->end = NULL;
+    block->variable_width = false;
+
+    if (block->category != NULL) {
+        free(block->category);
+        block->category = NULL;
+    }
+
+    if (block->offsets != NULL) {
+        free(block->offsets);
+        block->offsets = NULL;
+    }
+
+    if (block->lines != NULL) {
+        free(block->lines);
+        block->lines = NULL;
+    }
+}
+
+
+void _store_or_free_block(mmBlock *block, mmBlockList *blocks) {
+
+    if (_eq(block->category, "_atom_site.")) {
+        blocks->atom = *block;
+        return;
+    }
+
+    if (_eq(block->category, "_struct_asym.")) {
+        blocks->chain = *block;
+        return;
+    }
+
+    if (_eq(block->category, "_pdbx_poly_seq_scheme.")) {
+        blocks->poly = *block;
+        return;
+    }
+
+    if (_eq(block->category, "_pdbx_nonpoly_scheme.")) {
+        blocks->nonpoly = *block;
+        return;
+    }
+
+    if (_eq(block->category, "_struct_conn.")) {
+        blocks->conn = *block;
+        return;
+    }
+
+    _free_block(block);
+}
+
+
+void _free_block_list(mmBlockList *blocks) {
+    _free_block(&blocks->atom);
+    _free_block(&blocks->poly);
+    _free_block(&blocks->nonpoly);
+    _free_block(&blocks->conn);
+    _free_block(&blocks->chain);
+}

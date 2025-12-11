@@ -89,4 +89,64 @@ char *_get_id(char *buffer, CifErrorContext *ctx);
  */
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx);
 
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Block Parsing API
+ * Functions for reading and managing mmCIF blocks.
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Parse a single mmCIF block.
+ *
+ * Reads block header, counts attributes, and for multi-entry blocks,
+ * calculates line width and entry count.
+ *
+ * @param buffer Pointer to buffer pointer (modified in place)
+ * @param ctx Error context for allocation failures
+ * @return Parsed block structure (check category for NULL on error)
+ */
+mmBlock _read_block(char **buffer, CifErrorContext *ctx);
+
+/**
+ * @brief Free resources associated with a block.
+ *
+ * @param block Block to free (fields are set to NULL)
+ */
+void _free_block(mmBlock *block);
+
+/**
+ * @brief Skip past a multi-line attribute value.
+ *
+ * Multi-line values start and end with ';' on their own line.
+ *
+ * @param buffer Pointer to buffer pointer (modified in place)
+ */
+void _skip_multiline_attr(char **buffer);
+
+/**
+ * @brief Advance to the next block (skip to section end marker).
+ *
+ * Skips until finding a line starting with '#' or reaching end of buffer.
+ *
+ * @param buffer Pointer to buffer pointer (modified in place)
+ */
+void _next_block(char **buffer);
+
+/**
+ * @brief Store a block if it's needed, otherwise free it.
+ *
+ * Routes blocks to appropriate slots in the block list based on category.
+ *
+ * @param block Block to store or free
+ * @param blocks Block list to store in
+ */
+void _store_or_free_block(mmBlock *block, mmBlockList *blocks);
+
+/**
+ * @brief Free all blocks in a block list.
+ *
+ * @param blocks Block list to free
+ */
+void _free_block_list(mmBlockList *blocks);
+
 #endif /* _CIFFY_PARSER_H */

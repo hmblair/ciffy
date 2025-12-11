@@ -2,8 +2,9 @@
 Command-line interface for ciffy.
 
 Usage:
-    ciffy <file.cif>          # Load and print polymer summary
-    ciffy <file.cif> --atoms  # Also show atom counts per residue
+    ciffy <file.cif>              # Load and print polymer summary
+    ciffy <file1> <file2> ...     # Load and print multiple files
+    ciffy <file.cif> --atoms      # Also show atom counts per residue
 """
 
 import argparse
@@ -17,8 +18,9 @@ def main():
         description="Load and inspect CIF files.",
     )
     parser.add_argument(
-        "file",
-        help="Path to CIF file",
+        "files",
+        nargs="+",
+        help="Path(s) to CIF file(s)",
     )
     parser.add_argument(
         "--atoms", "-a",
@@ -33,27 +35,33 @@ def main():
 
     args = parser.parse_args()
 
-    try:
-        from ciffy import load
-        polymer = load(args.file)
-    except FileNotFoundError:
-        print(f"Error: File not found: {args.file}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error loading {args.file}: {e}", file=sys.stderr)
-        sys.exit(1)
+    from ciffy import load
 
-    # Print polymer summary
-    print(polymer)
+    for i, filepath in enumerate(args.files):
+        # Add separator between multiple files
+        if i > 0:
+            print("\n" + "=" * 40 + "\n")
 
-    # Optional: show sequence
-    if args.sequence:
-        print(f"\nSequence: {polymer.str()}")
+        try:
+            polymer = load(filepath)
+        except FileNotFoundError:
+            print(f"Error: File not found: {filepath}", file=sys.stderr)
+            continue
+        except Exception as e:
+            print(f"Error loading {filepath}: {e}", file=sys.stderr)
+            continue
 
-    # Optional: show atom details
-    if args.atoms:
-        from ciffy import Scale
-        print(f"\nAtoms per residue: {list(polymer.per(Scale.ATOM, Scale.RESIDUE))}")
+        # Print polymer summary
+        print(polymer)
+
+        # Optional: show sequence
+        if args.sequence:
+            print(f"\nSequence: {polymer.str()}")
+
+        # Optional: show atom details
+        if args.atoms:
+            from ciffy import Scale
+            print(f"\nAtoms per residue: {list(polymer.per(Scale.ATOM, Scale.RESIDUE))}")
 
 
 if __name__ == "__main__":

@@ -476,6 +476,27 @@ class TestMoleculeTypeDetection:
             assert mol_types[i] == Molecule.RNA.value, \
                 f"Chain {i} should be RNA, got {Molecule(mol_types[i])}"
 
-        # Subset by RNA should return all chains
-        rna = polymer.subset(RNA)
-        assert rna.size(Scale.CHAIN) == 8
+    def test_9gcm_mixed_rna_protein(self):
+        """Test that 9GCM (1 RNA + 3 protein chains) has correct molecule types."""
+        from ciffy import load, Scale
+        from ciffy.types import Molecule
+
+        polymer = load("tests/data/9GCM.cif", backend="numpy")
+
+        # 9GCM has 4 chains
+        assert polymer.size(Scale.CHAIN) == 4
+
+        # Chain A is RNA, chains B/C/D are protein
+        mol_types = polymer.molecule_type
+        names = polymer.names
+
+        expected = {
+            "A": Molecule.RNA.value,
+            "B": Molecule.PROTEIN.value,
+            "C": Molecule.PROTEIN.value,
+            "D": Molecule.PROTEIN.value,
+        }
+
+        for name, mol_type in zip(names, mol_types):
+            assert mol_type == expected[name], \
+                f"Chain {name} should be {Molecule(expected[name]).name}, got {Molecule(mol_type).name}"

@@ -110,12 +110,13 @@
  * Each value corresponds to an mmCIF category block.
  */
 typedef enum {
-    BLOCK_ATOM,      /**< _atom_site - atomic coordinates */
-    BLOCK_POLY,      /**< _pdbx_poly_seq_scheme - polymer sequence */
-    BLOCK_CHAIN,     /**< _struct_asym - chain definitions */
-    BLOCK_NONPOLY,   /**< _pdbx_nonpoly_scheme - non-polymer entities */
-    BLOCK_CONN,      /**< _struct_conn - connectivity/bonds */
-    BLOCK_COUNT      /**< Total number of block types */
+    BLOCK_ATOM,        /**< _atom_site - atomic coordinates */
+    BLOCK_POLY,        /**< _pdbx_poly_seq_scheme - polymer sequence */
+    BLOCK_CHAIN,       /**< _struct_asym - chain definitions */
+    BLOCK_NONPOLY,     /**< _pdbx_nonpoly_scheme - non-polymer entities */
+    BLOCK_CONN,        /**< _struct_conn - connectivity/bonds */
+    BLOCK_ENTITY_POLY, /**< _entity_poly - polymer entity types (RNA/DNA/protein) */
+    BLOCK_COUNT        /**< Total number of block types */
 } BlockId;
 
 /**
@@ -154,6 +155,7 @@ typedef enum {
     FIELD_ELEMENTS,      /**< cif->elements - element type indices */
     FIELD_RES_PER_CHAIN, /**< cif->res_per_chain - residue counts per chain */
     FIELD_ATOMS_PER_RES, /**< cif->atoms_per_res - atom counts per residue */
+    FIELD_MOL_TYPES,     /**< cif->molecule_types - molecule type per chain */
     FIELD_COUNT          /**< Total number of field types */
 } FieldId;
 

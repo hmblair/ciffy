@@ -23,6 +23,7 @@
 #include "hash/atom.c"
 #include "hash/residue.c"
 #include "hash/element.c"
+#include "hash/molecule.c"
 
 
 /* ============================================================================
@@ -578,6 +579,119 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
 
 
 /* ============================================================================
+ * MOLECULE TYPE PARSING
+ * Parse chain molecule types from _entity_poly and _struct_asym blocks.
+ * ============================================================================ */
+
+/**
+ * @brief Parse molecule types for each chain from _entity_poly block.
+ *
+ * Uses entity_id to link chains (_struct_asym) to their polymer type
+ * (_entity_poly.type). Falls back to UNKNOWN if block is missing.
+ *
+ * @param cif Structure with chains count already set
+ * @param blocks Parsed block collection
+ * @param ctx Error context
+ * @return CIF_OK on success
+ */
+static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
+    /* Allocate molecule_types array */
+    cif->molecule_types = calloc((size_t)cif->chains, sizeof(int));
+    if (!cif->molecule_types) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate molecule_types");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Default to UNKNOWN (12) for all chains */
+    for (int i = 0; i < cif->chains; i++) {
+        cif->molecule_types[i] = 12;  /* Molecule.UNKNOWN */
+    }
+
+    /* Check if _entity_poly block exists */
+    if (blocks->entity_poly.category == NULL) {
+        LOG_DEBUG("No _entity_poly block - molecule types defaulting to UNKNOWN");
+        return CIF_OK;
+    }
+
+    /* Precompute lines for entity_poly block */
+    CifError err = _precompute_lines(&blocks->entity_poly, ctx);
+    if (err != CIF_OK) return err;
+
+    /* Get attribute indices for entity_poly */
+    int ep_entity_idx = _get_attr_index(&blocks->entity_poly, "entity_id", ctx);
+    int ep_type_idx = _get_attr_index(&blocks->entity_poly, "type", ctx);
+
+    if (ep_entity_idx < 0 || ep_type_idx < 0) {
+        LOG_WARNING("_entity_poly missing entity_id or type attribute");
+        _free_lines(&blocks->entity_poly);
+        return CIF_OK;  /* Not fatal - just use defaults */
+    }
+
+    /* Get attribute index for struct_asym.entity_id */
+    int sa_entity_idx = _get_attr_index(&blocks->chain, "entity_id", ctx);
+    if (sa_entity_idx < 0) {
+        LOG_WARNING("_struct_asym missing entity_id attribute");
+        _free_lines(&blocks->entity_poly);
+        return CIF_OK;
+    }
+
+    /* Build entity_id -> molecule_type map from _entity_poly */
+    /* We'll use a simple approach: max 100 entities should be enough */
+    int entity_map[100];
+    for (int i = 0; i < 100; i++) entity_map[i] = 12;  /* UNKNOWN */
+
+    for (int row = 0; row < blocks->entity_poly.size; row++) {
+        /* Get entity_id using inline parser */
+        int entity_id = _parse_int_inline(&blocks->entity_poly, row, ep_entity_idx);
+        if (entity_id < 0 || entity_id >= 100) continue;
+
+        /* Get type string pointer for hash lookup */
+        size_t type_len;
+        const char *type_ptr = _get_field_ptr(&blocks->entity_poly, row, ep_type_idx, &type_len);
+        if (!type_ptr || type_len == 0) continue;
+
+        /* Copy to local buffer, stripping outer quotes, and null-terminate */
+        char type_buf[64];
+        if (type_len >= sizeof(type_buf)) continue;  /* Skip if too long */
+
+        /* Strip outer quotes if present (e.g., 'polypeptide(L)' -> polypeptide(L)) */
+        const char *src = type_ptr;
+        size_t src_len = type_len;
+        if (src_len >= 2 &&
+            ((src[0] == '\'' && src[src_len - 1] == '\'') ||
+             (src[0] == '"' && src[src_len - 1] == '"'))) {
+            src++;
+            src_len -= 2;
+        }
+        memcpy(type_buf, src, src_len);
+        type_buf[src_len] = '\0';
+
+        LOG_DEBUG("Entity %d type field: '%s' (len=%zu)", entity_id, type_buf, src_len);
+
+        /* Look up molecule type via hash table */
+        struct _LOOKUP *result = _lookup_molecule(type_buf, src_len);
+        int mol_type = result ? result->value : 11;  /* OTHER if not found */
+
+        entity_map[entity_id] = mol_type;
+        LOG_DEBUG("Entity %d -> molecule type %d (result=%p)", entity_id, mol_type, (void*)result);
+    }
+
+    _free_lines(&blocks->entity_poly);
+
+    /* Map each chain to its molecule type via entity_id */
+    for (int chain = 0; chain < cif->chains; chain++) {
+        int entity_id = _parse_int_inline(&blocks->chain, chain, sa_entity_idx);
+        if (entity_id >= 0 && entity_id < 100) {
+            cif->molecule_types[chain] = entity_map[entity_id];
+        }
+    }
+
+    LOG_DEBUG("Molecule types parsed for %d chains", cif->chains);
+    return CIF_OK;
+}
+
+
+/* ============================================================================
  * PUBLIC INTERFACE
  * Main entry point for populating mmCIF structure from parsed blocks.
  * ============================================================================ */
@@ -650,6 +764,17 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     LOG_DEBUG("Metadata extracted: %d chains, %d residues in sequence",
               cif->chains, cif->residues);
+
+    /* ── Parse Molecule Types ─────────────────────────────────────────────── */
+    /* Extract molecule types from _entity_poly block (if present) */
+
+    err = _parse_molecule_types(cif, blocks, ctx);
+    if (err != CIF_OK) {
+        _free_lines(&blocks->atom);
+        _free_lines(&blocks->poly);
+        _free_lines(&blocks->chain);
+        return err;
+    }
 
     /* ── Batch Atom Parsing ───────────────────────────────────────────────── */
     /* Note: lines already precomputed at start of function */

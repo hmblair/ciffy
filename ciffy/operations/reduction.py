@@ -106,13 +106,14 @@ ReductionResult = Union[
 ]
 
 
-def create_reduction_index(count: int, sizes: Array) -> Array:
+def create_reduction_index(count: int, sizes: Array, device=None) -> Array:
     """
     Create an index array for scatter reduction.
 
     Args:
         count: Number of unique groups.
         sizes: Number of elements in each group.
+        device: Target device for the index (torch only). If None, uses sizes.device.
 
     Returns:
         Array where element i contains the group index for that element.
@@ -123,5 +124,8 @@ def create_reduction_index(count: int, sizes: Array) -> Array:
     """
     if is_torch(sizes):
         import torch
-        return torch.arange(count).repeat_interleave(sizes)
+        target_device = device if device is not None else sizes.device
+        return torch.arange(count, device=target_device).repeat_interleave(
+            sizes.to(target_device)
+        )
     return np.repeat(np.arange(count), sizes)

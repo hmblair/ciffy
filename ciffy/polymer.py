@@ -157,6 +157,7 @@ class Polymer:
         strands: list[str],
         lengths: Array,
         polymer_count: int | None = None,
+        molecule_types: Array | None = None,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -173,6 +174,8 @@ class Polymer:
             lengths: (C,) tensor of residues per chain.
             polymer_count: Number of polymer atoms. If None, all atoms
                 are assumed to be polymer atoms.
+            molecule_types: (C,) array of molecule types per chain from CIF.
+                If None, molecule types will be inferred from residue indices.
 
         Raises:
             ValueError: If tensor sizes are inconsistent.
@@ -217,6 +220,7 @@ class Polymer:
         self.sequence = sequence
         self._sizes = sizes
         self.lengths = lengths
+        self._molecule_types = molecule_types
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -320,13 +324,28 @@ class Polymer:
         """
         Get the molecule type of each chain.
 
-        Determines molecule type by examining residue indices in each chain:
+        If molecule types were parsed from the CIF file (_entity_poly.type),
+        returns those directly. Otherwise, infers types from residue indices:
         - RNA: indices 0-3 (A, C, G, U)
         - DNA: index 4 (T/DT)
         - Protein: indices 5-24 (amino acids)
         - Water: index 25 (HOH)
         - Ion: indices 26-27 (MG, CS)
         - Other: modified nucleotides (28+)
+
+        Returns:
+            Array of Molecule enum values, one per chain.
+        """
+        # Use stored molecule types if available (from CIF parsing)
+        if self._molecule_types is not None:
+            return self._molecule_types
+
+        # Fallback: infer from residue indices
+        return self._infer_molecule_type()
+
+    def _infer_molecule_type(self: Polymer) -> Array:
+        """
+        Infer molecule type from residue indices (fallback when CIF doesn't have _entity_poly).
 
         Uses both MIN and MAX residue index per chain to robustly detect type.
         Unknown residues (index -1) are ignored when determining molecule type.
@@ -446,7 +465,9 @@ class Polymer:
 
         count = self.size(scale)
         sizes = self._sizes[scale]
-        ix = create_reduction_index(count, sizes)
+        # Pass device to ensure index is on same device as features
+        device = getattr(features, 'device', None)
+        ix = create_reduction_index(count, sizes, device=device)
 
         return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
 
@@ -471,7 +492,9 @@ class Polymer:
             Reduced features.
         """
         count = self.size(scale)
-        ix = create_reduction_index(count, self.lengths)
+        # Pass device to ensure index is on same device as features
+        device = getattr(features, 'device', None)
+        ix = create_reduction_index(count, self.lengths, device=device)
 
         return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
 

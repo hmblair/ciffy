@@ -21,11 +21,12 @@
  * ============================================================================ */
 
 static const BlockDef BLOCKS[] = {
-    { BLOCK_ATOM,    "_atom_site.",            true  },
-    { BLOCK_POLY,    "_pdbx_poly_seq_scheme.", true  },
-    { BLOCK_CHAIN,   "_struct_asym.",          true  },
-    { BLOCK_NONPOLY, "_pdbx_nonpoly_scheme.",  false },
-    { BLOCK_CONN,    "_struct_conn.",          false },
+    { BLOCK_ATOM,        "_atom_site.",            true  },
+    { BLOCK_POLY,        "_pdbx_poly_seq_scheme.", true  },
+    { BLOCK_CHAIN,       "_struct_asym.",          true  },
+    { BLOCK_NONPOLY,     "_pdbx_nonpoly_scheme.",  false },
+    { BLOCK_CONN,        "_struct_conn.",          false },
+    { BLOCK_ENTITY_POLY, "_entity_poly.",          false }, /* molecule types */
 };
 
 _Static_assert(sizeof(BLOCKS) / sizeof(BLOCKS[0]) == BLOCK_COUNT,
@@ -130,6 +131,10 @@ static const FieldDef FIELDS[] = {
 
     { FIELD_ATOMS_PER_RES, "atoms_per_res", BLOCK_ATOM, OP_COMPUTE,
       NULL, NULL, NULL },
+
+    /* Molecule types - parsed directly in _fill_cif(), not registry-driven */
+    { FIELD_MOL_TYPES, "molecule_types", BLOCK_ENTITY_POLY, OP_COMPUTE,
+      NULL, NULL, NULL },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -211,12 +216,13 @@ CifError _plan_parse(ParsePlan *plan, CifErrorContext *ctx) {
 
 mmBlock *_get_block_by_id(mmBlockList *blocks, BlockId id) {
     switch (id) {
-        case BLOCK_ATOM:    return &blocks->atom;
-        case BLOCK_POLY:    return &blocks->poly;
-        case BLOCK_CHAIN:   return &blocks->chain;
-        case BLOCK_NONPOLY: return &blocks->nonpoly;
-        case BLOCK_CONN:    return &blocks->conn;
-        default:            return NULL;
+        case BLOCK_ATOM:        return &blocks->atom;
+        case BLOCK_POLY:        return &blocks->poly;
+        case BLOCK_CHAIN:       return &blocks->chain;
+        case BLOCK_NONPOLY:     return &blocks->nonpoly;
+        case BLOCK_CONN:        return &blocks->conn;
+        case BLOCK_ENTITY_POLY: return &blocks->entity_poly;
+        default:                return NULL;
     }
 }
 

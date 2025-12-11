@@ -112,7 +112,7 @@ static PyObject *_init_2d_arr_float(int size1, int size2, float *data) {
 static PyObject *_c_to_py(mmCIF cif) {
 
     /* Track all allocated objects for cleanup on error */
-    #define MAX_OBJECTS 11
+    #define MAX_OBJECTS 12
     PyObject *objects[MAX_OBJECTS] = {NULL};
     int count = 0;
 
@@ -135,6 +135,7 @@ static PyObject *_c_to_py(mmCIF cif) {
     TRACK(_c_arr_to_py_list(cif.names, cif.chains));              /* 8: chain_names_list */
     TRACK(_c_arr_to_py_list(cif.strands, cif.chains));            /* 9: strand_names_list */
     TRACK(_c_int_to_py_int(cif.polymer));                         /* 10: polymer_count */
+    TRACK(_init_1d_arr_int(cif.chains, cif.molecule_types));      /* 11: molecule_types */
 
     /* All allocations succeeded - build the result tuple */
     PyObject *result = PyTuple_Pack(MAX_OBJECTS,
@@ -148,7 +149,8 @@ static PyObject *_c_to_py(mmCIF cif) {
         objects[7],   /* res_per_chain */
         objects[8],   /* chain_names_list */
         objects[9],   /* strand_names_list */
-        objects[10]); /* polymer_count */
+        objects[10],  /* polymer_count */
+        objects[11]); /* molecule_types */
 
     #undef TRACK
     #undef MAX_OBJECTS

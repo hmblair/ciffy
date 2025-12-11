@@ -51,6 +51,7 @@ def generate_all():
     from ciffy.biochemistry.atoms import ALL_ATOMS
     from ciffy.biochemistry.residues import Residue
     from ciffy.biochemistry.elements import Element
+    from ciffy.biochemistry.molecule_types import ENTITY_POLY_TYPES
 
     # Output directories
     hash_dir = Path(__file__).parent.parent / "hash"
@@ -122,7 +123,28 @@ struct _LOOKUP;
     with open(hash_dir / "element.gperf", "w") as f:
         f.write(element_gperf)
 
-    print("Generated: hash/atom.gperf, hash/residue.gperf, hash/element.gperf")
+    # === Generate molecule.gperf ===
+    molecule_gperf = """%define lookup-function-name _lookup_molecule
+%define hash-function-name _hash_molecule
+%define constants-prefix MOLECULE
+%struct-type
+%{
+#include "../codegen/lookup.h"
+%}
+struct _LOOKUP;
+%%
+"""
+    for type_str, mol_value in ENTITY_POLY_TYPES.items():
+        # Quote strings with special characters
+        if "(" in type_str or "/" in type_str or " " in type_str:
+            molecule_gperf += f'"{type_str}", {mol_value}\n'
+        else:
+            molecule_gperf += f"{type_str}, {mol_value}\n"
+
+    with open(hash_dir / "molecule.gperf", "w") as f:
+        f.write(molecule_gperf)
+
+    print("Generated: hash/atom.gperf, hash/residue.gperf, hash/element.gperf, hash/molecule.gperf")
 
     # === Generate reverse.h ===
     generate_reverse_header(hash_dir, atom_index, Residue, Element)
@@ -403,7 +425,7 @@ def run_gperf(gperf_path):
     """Run gperf to generate .c files from .gperf files."""
     hash_dir = Path(__file__).parent.parent / "hash"
 
-    for name in ["element", "residue", "atom"]:
+    for name in ["element", "residue", "atom", "molecule"]:
         input_file = hash_dir / f"{name}.gperf"
         output_file = hash_dir / f"{name}.c"
 
@@ -419,7 +441,7 @@ def run_gperf(gperf_path):
         with open(output_file, "w") as f:
             f.write(result.stdout)
 
-    print("Generated: hash/atom.c, hash/residue.c, hash/element.c")
+    print("Generated: hash/atom.c, hash/residue.c, hash/element.c, hash/molecule.c")
 
 
 def main():

@@ -36,7 +36,7 @@ pip install -e .
 `ciffy` supports two array backends:
 
 - **NumPy**: Lightweight, no additional dependencies required
-- **PyTorch**: For GPU support and integration with deep learning workflows
+- **PyTorch**: For GPU support (CUDA/MPS) and integration with deep learning workflows
 
 Specify the backend when loading structures:
 
@@ -58,6 +58,16 @@ torch_polymer = polymer.torch()
 
 # Convert to NumPy arrays
 numpy_polymer = polymer.numpy()
+```
+
+For PyTorch, move tensors to GPU:
+
+```python
+# Move to CUDA
+polymer_gpu = polymer.torch().to("cuda")
+
+# Move to Apple Silicon (MPS)
+polymer_mps = polymer.torch().to("mps")
 ```
 
 **Note:** The default backend is `"numpy"` as of v0.6.0. Specify the backend explicitly for clarity.
@@ -86,6 +96,9 @@ distances = polymer.pd(ciffy.RESIDUE)
 # Selection
 rna_chains = polymer.subset(ciffy.RNA)
 backbone = polymer.backbone()
+
+# Molecule type per chain (parsed from CIF _entity_poly block)
+mol_types = polymer.molecule_type  # Array of Molecule enum values
 
 # Iterate over chains
 for chain in polymer.chains(ciffy.RNA):

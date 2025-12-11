@@ -47,6 +47,7 @@ typedef struct mmCIF {
     int *res_per_chain;     /**< Residues per chain [chains] */
     int *atoms_per_chain;   /**< Atoms per chain [chains] */
     int *atoms_per_res;     /**< Atoms per residue [residues] */
+    int *molecule_types;    /**< Molecule type per chain [chains] (from _entity_poly.type) */
 
 } mmCIF;
 
@@ -60,12 +61,13 @@ typedef struct mmCIF {
  */
 typedef struct mmBlockList {
 
-    mmBlock atom;       /**< _atom_site block (coordinates) */
-    mmBlock poly;       /**< _pdbx_poly_seq_scheme block (sequence) */
-    mmBlock nonpoly;    /**< _pdbx_nonpoly_scheme block */
-    mmBlock conn;       /**< _struct_conn block (connectivity) */
-    mmBlock chain;      /**< _struct_asym block (chain info) */
-    mmBlock entity;     /**< Entity information block */
+    mmBlock atom;        /**< _atom_site block (coordinates) */
+    mmBlock poly;        /**< _pdbx_poly_seq_scheme block (sequence) */
+    mmBlock nonpoly;     /**< _pdbx_nonpoly_scheme block */
+    mmBlock conn;        /**< _struct_conn block (connectivity) */
+    mmBlock chain;       /**< _struct_asym block (chain info) */
+    mmBlock entity;      /**< Entity information block */
+    mmBlock entity_poly; /**< _entity_poly block (polymer type: RNA/DNA/protein) */
 
 } mmBlockList;
 

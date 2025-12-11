@@ -13,6 +13,13 @@ if TYPE_CHECKING:
     pass
 
 
+def _ensure_same_device(index: torch.Tensor, src: torch.Tensor) -> torch.Tensor:
+    """Move index to same device as src if needed."""
+    if index.device != src.device:
+        return index.to(src.device)
+    return index
+
+
 def scatter_sum(
     src: torch.Tensor,
     index: torch.Tensor,
@@ -29,6 +36,7 @@ def scatter_sum(
     Returns:
         Tensor of shape (dim_size, ...) with summed values.
     """
+    index = _ensure_same_device(index, src)
     result = torch.zeros(
         (dim_size, *src.shape[1:]),
         dtype=src.dtype,
@@ -56,6 +64,7 @@ def scatter_mean(
     Returns:
         Tensor of shape (dim_size, ...) with averaged values.
     """
+    index = _ensure_same_device(index, src)
     sums = scatter_sum(src, index, dim_size)
     counts = torch.zeros(dim_size, dtype=torch.long, device=src.device)
     counts.scatter_add_(0, index, torch.ones_like(index))
@@ -81,6 +90,7 @@ def scatter_max(
     Returns:
         Tuple of (max_values, argmax_indices). argmax_indices may be None.
     """
+    index = _ensure_same_device(index, src)
     # Use appropriate min value based on dtype
     if src.dtype.is_floating_point:
         fill_value = float('-inf')
@@ -118,6 +128,7 @@ def scatter_min(
     Returns:
         Tuple of (min_values, argmin_indices). argmin_indices may be None.
     """
+    index = _ensure_same_device(index, src)
     # Use appropriate max value based on dtype
     if src.dtype.is_floating_point:
         fill_value = float('inf')

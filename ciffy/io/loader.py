@@ -62,6 +62,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         chain_names,
         strand_names,
         polymer_count,
+        molecule_types,
     ) = _load(file)
 
     mol_sizes = np.array([len(coordinates)], dtype=np.int64)
@@ -84,6 +85,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         strand_names,
         res_per_chain.astype(np.int64),
         polymer_count,
+        molecule_types.astype(np.int64),
     )
 
     # Convert to torch if requested

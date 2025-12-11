@@ -161,6 +161,9 @@ def repeat_interleave(arr: torch.Tensor, repeats: torch.Tensor) -> torch.Tensor:
     Returns:
         Tensor with repeated elements.
     """
+    # Ensure repeats is on same device as arr
+    if repeats.device != arr.device:
+        repeats = repeats.to(arr.device)
     return arr.repeat_interleave(repeats, dim=0)
 
 

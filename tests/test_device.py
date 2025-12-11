@@ -113,6 +113,36 @@ class TestDeviceOperations:
         assert centered.coordinates.device.type == "mps"
 
     @requires_cuda
+    def test_expand_on_cuda(self, polymer_torch):
+        """Test expand on CUDA."""
+        from ciffy import Scale
+        import torch
+
+        p_cuda = polymer_torch.to("cuda")
+
+        # Create per-chain features and expand to per-atom
+        chain_features = torch.randn(p_cuda.size(Scale.CHAIN), 16, device="cuda")
+        expanded = p_cuda.expand(chain_features, Scale.CHAIN)
+
+        assert expanded.device.type == "cuda"
+        assert expanded.shape[0] == p_cuda.size()
+
+    @requires_mps
+    def test_expand_on_mps(self, polymer_torch):
+        """Test expand on MPS."""
+        from ciffy import Scale
+        import torch
+
+        p_mps = polymer_torch.to("mps")
+
+        # Create per-chain features and expand to per-atom
+        chain_features = torch.randn(p_mps.size(Scale.CHAIN), 16, device="mps")
+        expanded = p_mps.expand(chain_features, Scale.CHAIN)
+
+        assert expanded.device.type == "mps"
+        assert expanded.shape[0] == p_mps.size()
+
+    @requires_cuda
     def test_rmsd_on_cuda(self, polymer_torch):
         """Test RMSD calculation on CUDA."""
         import ciffy
@@ -215,6 +245,42 @@ class TestMixedDeviceHandling:
             device=torch.device("cpu")
         )
         assert index.device.type == "cpu"
+
+    @requires_cuda
+    def test_with_coordinates_gpu_on_cpu_polymer_cuda(self, polymer_torch):
+        """Test with_coordinates with GPU coords on CPU polymer works for center/expand."""
+        import torch
+        from ciffy import Scale
+
+        # CPU polymer with GPU coordinates (common pattern in ML workflows)
+        gpu_coords = polymer_torch.coordinates.to("cuda")
+        mixed_polymer = polymer_torch.with_coordinates(gpu_coords)
+
+        # Internal sizes are on CPU, coordinates on CUDA
+        assert mixed_polymer.coordinates.device.type == "cuda"
+        assert mixed_polymer._sizes[Scale.CHAIN].device.type == "cpu"
+
+        # center() should work (uses reduce + expand internally)
+        centered, means = mixed_polymer.center(Scale.MOLECULE)
+        assert centered.coordinates.device.type == "cuda"
+
+    @requires_mps
+    def test_with_coordinates_gpu_on_cpu_polymer_mps(self, polymer_torch):
+        """Test with_coordinates with MPS coords on CPU polymer works for center/expand."""
+        import torch
+        from ciffy import Scale
+
+        # CPU polymer with MPS coordinates (common pattern in ML workflows)
+        mps_coords = polymer_torch.coordinates.to("mps")
+        mixed_polymer = polymer_torch.with_coordinates(mps_coords)
+
+        # Internal sizes are on CPU, coordinates on MPS
+        assert mixed_polymer.coordinates.device.type == "mps"
+        assert mixed_polymer._sizes[Scale.CHAIN].device.type == "cpu"
+
+        # center() should work (uses reduce + expand internally)
+        centered, means = mixed_polymer.center(Scale.MOLECULE)
+        assert centered.coordinates.device.type == "mps"
 
 
 class TestScatterOperations:

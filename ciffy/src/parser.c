@@ -13,6 +13,7 @@
  */
 
 #include "parser.h"
+#include "registry.h"
 #include "log.h"
 
 #include <math.h>    /* for isnan */
@@ -596,23 +597,10 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
 CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     LOG_DEBUG("Starting CIF structure parsing");
 
-    /* ── Block Validation ─────────────────────────────────────────────────── */
+    /* ── Block Validation (registry-driven) ────────────────────────────────── */
 
-    if (blocks->atom.category == NULL) {
-        LOG_ERROR("Missing required _atom_site block");
-        CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _atom_site block");
-        return CIF_ERR_BLOCK;
-    }
-    if (blocks->poly.category == NULL) {
-        LOG_ERROR("Missing required _pdbx_poly_seq_scheme block");
-        CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _pdbx_poly_seq_scheme block");
-        return CIF_ERR_BLOCK;
-    }
-    if (blocks->chain.category == NULL) {
-        LOG_ERROR("Missing required _struct_asym block");
-        CIF_SET_ERROR(ctx, CIF_ERR_BLOCK, "Missing required _struct_asym block");
-        return CIF_ERR_BLOCK;
-    }
+    CifError val_err = _validate_blocks_registry(blocks, ctx);
+    if (val_err != CIF_OK) return val_err;
 
     LOG_DEBUG("Block validation complete: atom=%d rows, poly=%d rows, chain=%d rows",
               blocks->atom.size, blocks->poly.size, blocks->chain.size);
@@ -946,32 +934,20 @@ void _free_block(mmBlock *block) {
 
 
 void _store_or_free_block(mmBlock *block, mmBlockList *blocks) {
+    /* Route block to correct slot using registry */
+    const BlockDef *defs = _get_blocks();
 
-    if (_eq(block->category, "_atom_site.")) {
-        blocks->atom = *block;
-        return;
+    for (int i = 0; i < BLOCK_COUNT; i++) {
+        if (_eq(block->category, defs[i].category)) {
+            mmBlock *slot = _get_block_by_id(blocks, defs[i].id);
+            if (slot != NULL) {
+                *slot = *block;
+                return;
+            }
+        }
     }
 
-    if (_eq(block->category, "_struct_asym.")) {
-        blocks->chain = *block;
-        return;
-    }
-
-    if (_eq(block->category, "_pdbx_poly_seq_scheme.")) {
-        blocks->poly = *block;
-        return;
-    }
-
-    if (_eq(block->category, "_pdbx_nonpoly_scheme.")) {
-        blocks->nonpoly = *block;
-        return;
-    }
-
-    if (_eq(block->category, "_struct_conn.")) {
-        blocks->conn = *block;
-        return;
-    }
-
+    /* Block not in registry - free it */
     _free_block(block);
 }
 

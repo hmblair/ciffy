@@ -21,8 +21,10 @@
  *
  * Contains all extracted information from an mmCIF file including
  * coordinates, atom types, residue sequences, and chain organization.
+ *
+ * Note: Named struct for forward declaration compatibility with registry.h.
  */
-typedef struct {
+typedef struct mmCIF {
 
     char *id;               /**< PDB identifier (e.g., "4V5D") */
     char **names;           /**< Chain names array */
@@ -53,8 +55,10 @@ typedef struct {
  *
  * Groups the relevant blocks extracted from an mmCIF file
  * for subsequent data extraction.
+ *
+ * Note: Named struct for forward declaration compatibility with registry.h.
  */
-typedef struct {
+typedef struct mmBlockList {
 
     mmBlock atom;       /**< _atom_site block (coordinates) */
     mmBlock poly;       /**< _pdbx_poly_seq_scheme block (sequence) */

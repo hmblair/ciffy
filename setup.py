@@ -93,6 +93,7 @@ SOURCES = [
     'ciffy/src/python.c',
     'ciffy/src/parser.c',
     'ciffy/src/writer.c',
+    'ciffy/src/registry.c',
 ]
 module = Extension(
     name=f"{NAME}.{EXT}",

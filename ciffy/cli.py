@@ -58,7 +58,9 @@ def main():
         if args.sequence:
             print("\nSequence:")
             for chain in polymer.chains():
-                print(f"  {chain.names[0]}: {chain.str()}")
+                seq = chain.str()
+                if seq:
+                    print(f"  {chain.names[0]}: {seq}")
 
         # Optional: show atom details
         if args.atoms:

@@ -1036,15 +1036,15 @@ class Polymer:
 
         # Ensure minimum widths for headers
         type_w = max(type_w, 4)  # "Type"
-        res_w = max(res_w, 5)    # "# Res"
-        atom_w = max(atom_w, 6)  # "# Atom"
+        res_w = max(res_w, 3)    # "Res"
+        atom_w = max(atom_w, 5)  # "Atoms"
 
         # Build output
         header = f"PDB {self.id()} with {self.size()} atoms ({self.backend})."
         sep = "─" * len(header)  # U+2500 box-drawing horizontal
 
         out = f"{header}\n{sep}\n"
-        out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'# Res':>{res_w}s}  {'# Atom':>{atom_w}s}\n"
+        out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'Res':>{res_w}s}  {'Atoms':>{atom_w}s}\n"
 
         for r in rows:
             out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res']:{res_w}d}  {r['atoms']:{atom_w}d}\n"

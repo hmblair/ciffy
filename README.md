@@ -118,16 +118,30 @@ polymer.write("output.cif")
 polymer.poly().write("polymer_only.cif")
 ```
 
-## Module Structure
+## Command Line Interface
 
+```bash
+# View structure summary
+ciffy structure.cif
+
+# Show sequences per chain
+ciffy structure.cif --sequence
+
+# Multiple files
+ciffy file1.cif file2.cif
 ```
-ciffy/
-├── backend/        # NumPy/PyTorch abstraction layer
-├── types/          # Scale, Molecule enums
-├── biochemistry/   # Element, Residue, nucleotide definitions
-├── operations/     # Reduction, alignment operations
-├── io/             # File loading and writing
-└── utils/          # Helper functions and base classes
+
+Example output:
+```
+PDB 9GCM (numpy)
+──────────────────────
+   Type     Res  Atoms
+A  RNA      135   1413
+B  PROTEIN  132   1032
+C  PROTEIN  246   1261
+D  PROTEIN  485    760
+──────────────────────
+            998   4466
 ```
 
 ## Testing

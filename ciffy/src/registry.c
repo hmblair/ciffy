@@ -45,6 +45,11 @@ static const char *ATTR_RES_PER_CHAIN[] = { "asym_id", NULL };
 static const char *ATTR_STRAND_ID[]     = { "pdb_strand_id", NULL };
 static const char *ATTR_RESIDUE_NAME[]  = { "mon_id", NULL };
 
+/* Batch-parsed field attributes */
+static const char *ATTR_COORDS[]   = { "Cartn_x", "Cartn_y", "Cartn_z", NULL };
+static const char *ATTR_ELEMENT[]  = { "type_symbol", NULL };
+static const char *ATTR_ATOM_TYPE[] = { "label_comp_id", "label_atom_id", NULL };
+
 
 /* ============================================================================
  * DEPENDENCY ARRAYS
@@ -70,6 +75,48 @@ extern int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr, 
 /* Hash lookup function - defined in hash/residue.c, included by parser.c */
 extern struct _LOOKUP *_lookup_residue(const char *str, size_t len);
 
+/* Hash lookup functions for batch parsing - defined in parser.c via includes */
+extern struct _LOOKUP *_lookup_element(const char *str, size_t len);
+extern struct _LOOKUP *_lookup_atom(const char *str, size_t len);
+
+
+/* ============================================================================
+ * BATCH ROW CALLBACKS
+ * Per-row parsing functions for batch-parsed fields.
+ * ============================================================================ */
+
+/**
+ * @brief Parse coordinates for a single row.
+ * attr_indices: [0]=x, [1]=y, [2]=z
+ */
+static void _batch_coords(mmCIF *cif, mmBlock *block, int row,
+                          const int *idx, char *scratch) {
+    (void)scratch;
+    cif->coordinates[3 * row + 0] = _parse_float_inline(block, row, idx[0]);
+    cif->coordinates[3 * row + 1] = _parse_float_inline(block, row, idx[1]);
+    cif->coordinates[3 * row + 2] = _parse_float_inline(block, row, idx[2]);
+}
+
+/**
+ * @brief Parse element type for a single row.
+ * attr_indices: [0]=type_symbol
+ */
+static void _batch_elements(mmCIF *cif, mmBlock *block, int row,
+                            const int *idx, char *scratch) {
+    (void)scratch;
+    cif->elements[row] = _lookup_inline(block, row, idx[0], _lookup_element);
+}
+
+/**
+ * @brief Parse atom type for a single row.
+ * attr_indices: [0]=label_comp_id, [1]=label_atom_id
+ */
+static void _batch_types(mmCIF *cif, mmBlock *block, int row,
+                         const int *idx, char *scratch) {
+    cif->types[row] = _lookup_double_inline(block, row, idx[0], idx[1],
+                                            _lookup_atom, scratch);
+}
+
 
 /* ============================================================================
  * FIELD DEFINITIONS
@@ -81,61 +128,65 @@ extern struct _LOOKUP *_lookup_residue(const char *str, size_t len);
  *
  * The topological sort will compute the actual execution order.
  *
- * Note: Atom-level fields (COORDS, ELEMENTS, TYPES, ATOMS_PER_RES) are
- * handled by the batch atom parser, not individual operations.
+ * Batch-parsed fields (batchable=true) are grouped by source block and
+ * parsed in a single pass for cache efficiency. Each has a batch_row_func
+ * callback that is called once per row.
  * ============================================================================ */
 
+/* IMPORTANT: FIELDS[] must be indexed by FieldId enum value.
+ * The array order must match the enum order in registry.h. */
 static const FieldDef FIELDS[] = {
-    /* ── Level 0: Leaf fields (no dependencies) ─────────────────────────────── */
-
-    { FIELD_CHAINS,   "chains",   BLOCK_CHAIN, OP_BLOCK_SIZE,
-      NULL, NULL, NULL },
-
-    { FIELD_RESIDUES, "residues", BLOCK_POLY,  OP_BLOCK_SIZE,
-      NULL, NULL, NULL },
-
+    /* FIELD_MODELS = 0 */
     { FIELD_MODELS,   "models",   BLOCK_ATOM,  OP_COUNT_UNIQUE,
-      ATTR_MODEL, NULL, NULL },
+      ATTR_MODEL, NULL, NULL, false, NULL },
 
-    /* ── Level 1: Depends on models ─────────────────────────────────────────── */
+    /* FIELD_CHAINS = 1 */
+    { FIELD_CHAINS,   "chains",   BLOCK_CHAIN, OP_BLOCK_SIZE,
+      NULL, NULL, NULL, false, NULL },
 
+    /* FIELD_RESIDUES = 2 */
+    { FIELD_RESIDUES, "residues", BLOCK_POLY,  OP_BLOCK_SIZE,
+      NULL, NULL, NULL, false, NULL },
+
+    /* FIELD_ATOMS = 3 - atoms = atom_site.size / models */
     { FIELD_ATOMS, "atoms", BLOCK_ATOM, OP_COMPUTE,
-      NULL, DEP_MODELS, NULL },  /* atoms = atom_site.size / models */
+      NULL, DEP_MODELS, NULL, false, NULL },
 
-    /* ── Level 1: Depends on chains ─────────────────────────────────────────── */
-
+    /* FIELD_NAMES = 4 */
     { FIELD_NAMES, "names", BLOCK_CHAIN, OP_GET_UNIQUE,
-      ATTR_CHAIN_ID, DEP_CHAINS, NULL },
+      ATTR_CHAIN_ID, DEP_CHAINS, NULL, false, NULL },
 
-    { FIELD_RES_PER_CHAIN, "res_per_chain", BLOCK_POLY, OP_COUNT_BY_GROUP,
-      ATTR_RES_PER_CHAIN, DEP_CHAINS, NULL },
-
+    /* FIELD_STRANDS = 5 */
     { FIELD_STRANDS, "strands", BLOCK_POLY, OP_GET_UNIQUE,
-      ATTR_STRAND_ID, DEP_CHAINS, NULL },
+      ATTR_STRAND_ID, DEP_CHAINS, NULL, false, NULL },
 
-    /* ── Level 1: Depends on residues ───────────────────────────────────────── */
-
+    /* FIELD_SEQUENCE = 6 */
     { FIELD_SEQUENCE, "sequence", BLOCK_POLY, OP_LOOKUP,
-      ATTR_RESIDUE_NAME, DEP_RESIDUES, NULL },
+      ATTR_RESIDUE_NAME, DEP_RESIDUES, NULL, false, NULL },
 
-    /* ── Atom-level fields (batch parsed, not registry-driven) ──────────────── */
-    /* These are populated by the batch atom parser in _fill_cif_atoms() */
-
+    /* FIELD_COORDS = 7 - batch parsed */
     { FIELD_COORDS, "coordinates", BLOCK_ATOM, OP_COMPUTE,
-      NULL, NULL, NULL },
+      ATTR_COORDS, DEP_MODELS, NULL, true, _batch_coords },
 
-    { FIELD_ELEMENTS, "elements", BLOCK_ATOM, OP_COMPUTE,
-      NULL, NULL, NULL },
-
+    /* FIELD_TYPES = 8 - batch parsed */
     { FIELD_TYPES, "types", BLOCK_ATOM, OP_COMPUTE,
-      NULL, NULL, NULL },
+      ATTR_ATOM_TYPE, DEP_MODELS, NULL, true, _batch_types },
 
+    /* FIELD_ELEMENTS = 9 - batch parsed */
+    { FIELD_ELEMENTS, "elements", BLOCK_ATOM, OP_COMPUTE,
+      ATTR_ELEMENT, DEP_MODELS, NULL, true, _batch_elements },
+
+    /* FIELD_RES_PER_CHAIN = 10 */
+    { FIELD_RES_PER_CHAIN, "res_per_chain", BLOCK_POLY, OP_COUNT_BY_GROUP,
+      ATTR_RES_PER_CHAIN, DEP_CHAINS, NULL, false, NULL },
+
+    /* FIELD_ATOMS_PER_RES = 11 - computed via _count_atoms_per_residue */
     { FIELD_ATOMS_PER_RES, "atoms_per_res", BLOCK_ATOM, OP_COMPUTE,
-      NULL, NULL, NULL },
+      NULL, NULL, NULL, false, NULL },
 
-    /* Molecule types - parsed directly in _fill_cif(), not registry-driven */
+    /* FIELD_MOL_TYPES = 12 - parsed directly in _fill_cif() */
     { FIELD_MOL_TYPES, "molecule_types", BLOCK_ENTITY_POLY, OP_COMPUTE,
-      NULL, NULL, NULL },
+      NULL, NULL, NULL, false, NULL },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -423,6 +474,11 @@ static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block, CifErrorContext *c
  */
 static CifError _execute_field(mmCIF *cif, mmBlockList *blocks,
                                const FieldDef *def, CifErrorContext *ctx) {
+    /* Skip batchable fields - they're handled by _execute_batch_group() */
+    if (def->batchable) {
+        return CIF_OK;
+    }
+
     mmBlock *block = _get_block_by_id(blocks, def->source_block);
     if (block == NULL) {
         LOG_WARNING("No block for field %s", def->name);
@@ -446,15 +502,15 @@ static CifError _execute_field(mmCIF *cif, mmBlockList *blocks,
             return _op_lookup(cif, block, def, ctx);
 
         case OP_COMPUTE:
-            /* Only handle FIELD_ATOMS here; other COMPUTE fields are batch-parsed */
+            /* Handle FIELD_ATOMS compute */
             if (def->id == FIELD_ATOMS) {
                 return _op_compute_atoms(cif, block, ctx);
             }
-            /* Skip other OP_COMPUTE fields - they're handled by batch parser */
+            /* Skip other OP_COMPUTE fields without batch callbacks */
             return CIF_OK;
 
         case OP_PARSE_FLOAT:
-            /* Coordinates are batch-parsed, skip here */
+            /* Float parsing now handled via batch system */
             return CIF_OK;
 
         default:
@@ -480,4 +536,124 @@ CifError _execute_plan(mmCIF *cif, mmBlockList *blocks,
 
     LOG_DEBUG("Parse plan execution complete");
     return CIF_OK;
+}
+
+
+/* ============================================================================
+ * BATCH EXECUTION
+ * Runtime batch grouping and single-pass iteration.
+ * ============================================================================ */
+
+/**
+ * Count number of attributes in a NULL-terminated array.
+ */
+static int _count_attrs(const char **attrs) {
+    if (attrs == NULL) return 0;
+    int count = 0;
+    while (attrs[count] != NULL) count++;
+    return count;
+}
+
+void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups) {
+    *group_count = 0;
+
+    /* Group batchable fields by source block */
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        const FieldDef *def = &FIELDS[i];
+        if (!def->batchable || def->batch_row_func == NULL) continue;
+
+        /* Find existing group for this block, or create new one */
+        BatchGroup *group = NULL;
+        for (int g = 0; g < *group_count; g++) {
+            if (groups[g].block_id == def->source_block) {
+                group = &groups[g];
+                break;
+            }
+        }
+
+        if (group == NULL) {
+            if (*group_count >= max_groups) {
+                LOG_WARNING("Max batch groups exceeded, some fields won't be batched");
+                continue;
+            }
+            group = &groups[(*group_count)++];
+            group->block_id = def->source_block;
+            group->field_count = 0;
+            group->attr_count = 0;
+        }
+
+        if (group->field_count >= MAX_BATCH_FIELDS) {
+            LOG_WARNING("Max fields per batch exceeded for block %d", def->source_block);
+            continue;
+        }
+
+        /* Add field to group */
+        int field_idx = group->field_count++;
+        group->fields[field_idx] = def->id;
+
+        /* Add this field's attributes to the group's attr list */
+        int field_attr_count = _count_attrs(def->attrs);
+
+        for (int a = 0; a < field_attr_count && group->attr_count < MAX_BATCH_ATTRS; a++) {
+            group->attrs[group->attr_count] = def->attrs[a];
+            group->attr_map[field_idx][a] = group->attr_count;
+            group->attr_count++;
+        }
+
+        LOG_DEBUG("Batch group %d: added field '%s' with %d attrs (total attrs: %d)",
+                  (int)(group - groups), def->name, field_attr_count, group->attr_count);
+    }
+
+    LOG_DEBUG("Computed %d batch groups", *group_count);
+}
+
+CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
+                               const BatchGroup *group, CifErrorContext *ctx) {
+    mmBlock *block = _get_block_by_id(blocks, group->block_id);
+    if (block == NULL || block->size == 0) {
+        LOG_WARNING("Empty or missing block for batch group");
+        return CIF_OK;
+    }
+
+    LOG_DEBUG("Executing batch group for block %d: %d fields, %d rows",
+              group->block_id, group->field_count, block->size);
+
+    /* Pre-compute all attribute indices */
+    int attr_indices[MAX_BATCH_ATTRS];
+    for (int a = 0; a < group->attr_count; a++) {
+        attr_indices[a] = _get_attr_index(block, group->attrs[a], ctx);
+        if (attr_indices[a] == BAD_IX) {
+            CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
+                "Missing batch attribute '%s'", group->attrs[a]);
+            return CIF_ERR_ATTR;
+        }
+    }
+
+    /* Scratch buffer for combined lookups */
+    char scratch[MAX_INLINE_BUFFER];
+
+    /* Single pass over all rows */
+    for (int row = 0; row < block->size; row++) {
+        /* Call each field's batch callback */
+        for (int f = 0; f < group->field_count; f++) {
+            FieldId fid = group->fields[f];
+            const FieldDef *def = &FIELDS[fid];
+
+            /* Build attr indices for this field from the attr_map */
+            int field_indices[MAX_BATCH_ATTRS];
+            int field_attr_count = _count_attrs(def->attrs);
+            for (int a = 0; a < field_attr_count; a++) {
+                field_indices[a] = attr_indices[group->attr_map[f][a]];
+            }
+
+            def->batch_row_func(cif, block, row, field_indices, scratch);
+        }
+    }
+
+    LOG_DEBUG("Batch group execution complete");
+    return CIF_OK;
+}
+
+bool _field_executed(FieldId fid, const bool *executed) {
+    return executed[fid];
 }

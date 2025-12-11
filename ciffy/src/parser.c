@@ -28,47 +28,18 @@
 
 /* ============================================================================
  * CONSTANTS
- * mmCIF attribute names used throughout parsing.
+ * mmCIF attribute names used in atom classification and reordering.
+ * Note: Batch-parsed field attributes are now defined in registry.c.
  * ============================================================================ */
 
 static const size_t COORDS = 3;
 
-/* Coordinate attributes */
-static const char *ATTR_X = "Cartn_x";
-static const char *ATTR_Y = "Cartn_y";
-static const char *ATTR_Z = "Cartn_z";
-
-/* Atom-level attributes (used by batch parser) */
-static const char *ATTR_ELEMENT       = "type_symbol";
-static const char *ATTR_ATOM_NAME     = "label_atom_id";
+/* Atom-level attributes (used by atom reordering/classification) */
 static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
-static const char *ATTR_COMP_ID       = "label_comp_id";
 static const char *ATTR_GROUP_PDB     = "group_PDB";
 
-/* Note: Metadata attributes (MODEL, CHAIN_ID, RES_PER_CHAIN, STRAND_ID, RESIDUE_NAME)
- * are now defined in registry.c and used via _execute_plan() */
 
-
-/* ============================================================================
- * TYPES
- * Internal structures for parsing state.
- * ============================================================================ */
-
-/**
- * Pre-computed attribute indices for single-pass atom parsing.
- *
- * Storing indices avoids repeated string lookups in the hot loop.
- * Extend this struct to add new per-atom features (b-factor, occupancy, etc).
- */
-typedef struct {
-    int x, y, z;              /* Coordinate column indices */
-    int element;              /* Element symbol (C, N, O, etc.) */
-    int comp_id;              /* Residue/component name */
-    int atom_name;            /* Atom name within residue */
-    int seq_id;               /* Sequence ID for polymer detection */
-    int label_asym;           /* Chain label */
-} AtomIndices;
 
 
 /* ============================================================================
@@ -445,76 +416,6 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
 
 
 /* ============================================================================
- * BATCH ATOM PARSING
- * Single-pass parallel parsing of all per-atom data.
- * Maximizes cache efficiency by processing each line once.
- * ============================================================================ */
-
-/**
- * Initialize attribute indices for batch parsing.
- *
- * Pre-computes column indices to avoid repeated string lookups in hot loop.
- */
-static CifError _init_atom_indices(mmBlock *block, AtomIndices *idx,
-                                   CifErrorContext *ctx) {
-    idx->x = _get_attr_index(block, ATTR_X, ctx);
-    idx->y = _get_attr_index(block, ATTR_Y, ctx);
-    idx->z = _get_attr_index(block, ATTR_Z, ctx);
-    idx->element = _get_attr_index(block, ATTR_ELEMENT, ctx);
-    idx->comp_id = _get_attr_index(block, ATTR_COMP_ID, ctx);
-    idx->atom_name = _get_attr_index(block, ATTR_ATOM_NAME, ctx);
-    idx->seq_id = _get_attr_index(block, ATTR_SEQ_ID, ctx);
-    idx->label_asym = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
-
-    /* Validate required indices */
-    if (idx->x == BAD_IX || idx->y == BAD_IX || idx->z == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing coordinate attributes");
-        return CIF_ERR_ATTR;
-    }
-    if (idx->element == BAD_IX || idx->comp_id == BAD_IX || idx->atom_name == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing atom type attributes");
-        return CIF_ERR_ATTR;
-    }
-    if (idx->seq_id == BAD_IX || idx->label_asym == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing chain/residue attributes");
-        return CIF_ERR_ATTR;
-    }
-
-    return CIF_OK;
-}
-
-/**
- * Parse all per-atom data in a single parallel pass.
- *
- * For each atom line, parses:
- *   - Coordinates (x, y, z)
- *   - Element type via hash lookup
- *   - Atom type via combined hash lookup (residue_atom)
- *
- * Uses pre-computed line pointers for O(1) row access.
- * Unknown types return -1 (valid for non-standard residues/ligands).
- */
-static CifError _parse_atoms_batch(mmBlock *block, AtomIndices *idx,
-                                   float *coords, int *elements, int *types) {
-    char combine_buf[MAX_INLINE_BUFFER];
-
-    for (int line = 0; line < block->size; line++) {
-        /* Parse coordinates */
-        coords[COORDS * line + 0] = _parse_float_inline(block, line, idx->x);
-        coords[COORDS * line + 1] = _parse_float_inline(block, line, idx->y);
-        coords[COORDS * line + 2] = _parse_float_inline(block, line, idx->z);
-
-        /* Parse types (-1 for unknown) */
-        elements[line] = _lookup_inline(block, line, idx->element, _lookup_element);
-        types[line] = _lookup_double_inline(block, line, idx->comp_id,
-                                            idx->atom_name, _lookup_atom, combine_buf);
-    }
-
-    return CIF_OK;
-}
-
-
-/* ============================================================================
  * ATOM REORDERING
  * Separate polymer atoms from non-polymer (ligands, water, ions).
  * Enables simple slicing: polymer = atoms[0:polymer_count]
@@ -776,20 +677,12 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return err;
     }
 
-    /* ── Batch Atom Parsing ───────────────────────────────────────────────── */
+    /* ── Batch Atom Parsing (registry-driven) ─────────────────────────────── */
     /* Note: lines already precomputed at start of function */
 
     LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
 
-    AtomIndices idx;
-    err = _init_atom_indices(&blocks->atom, &idx, ctx);
-    if (err != CIF_OK) {
-        _free_lines(&blocks->atom);
-        _free_lines(&blocks->poly);
-        _free_lines(&blocks->chain);
-        return err;
-    }
-
+    /* Allocate atom arrays before batch execution */
     cif->coordinates = calloc(COORDS * (size_t)cif->atoms, sizeof(float));
     cif->elements = calloc((size_t)cif->atoms, sizeof(int));
     cif->types = calloc((size_t)cif->atoms, sizeof(int));
@@ -805,18 +698,27 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return CIF_ERR_ALLOC;
     }
 
-    err = _parse_atoms_batch(&blocks->atom, &idx,
-                             cif->coordinates, cif->elements, cif->types);
+    /* Compute and execute batch groups */
+    BatchGroup batch_groups[BLOCK_COUNT];
+    int batch_group_count = 0;
+    _compute_batch_groups(batch_groups, &batch_group_count, BLOCK_COUNT);
+
+    for (int g = 0; g < batch_group_count; g++) {
+        err = _execute_batch_group(cif, blocks, &batch_groups[g], ctx);
+        if (err != CIF_OK) {
+            free(cif->coordinates);
+            free(cif->elements);
+            free(cif->types);
+            _free_lines(&blocks->atom);
+            _free_lines(&blocks->poly);
+            _free_lines(&blocks->chain);
+            return err;
+        }
+    }
 
     /* Free poly and chain line pointers - no longer needed */
     _free_lines(&blocks->poly);
     _free_lines(&blocks->chain);
-    if (err != CIF_OK) {
-        free(cif->coordinates);
-        free(cif->elements);
-        free(cif->types);
-        return err;
-    }
 
     /* Validate parsed coordinates - check for NaN values */
     int nan_count = 0;

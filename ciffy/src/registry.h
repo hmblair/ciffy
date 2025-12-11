@@ -75,6 +75,46 @@
  * OP_COMPUTE       - field = custom computation via parse_func
  *
  * ============================================================================
+ * HOW TO ADD A NEW BATCH-PARSED FIELD
+ * ============================================================================
+ *
+ * Batch fields are parsed together in a single pass over the block data.
+ * Use this for per-row data that benefits from cache-efficient iteration.
+ *
+ * Example: Adding a new per-atom field (e.g., b_factor)
+ *
+ * 1. Add to FieldId enum (registry.h):
+ *
+ *        FIELD_B_FACTOR,  // cif->b_factors - B-factor per atom
+ *
+ * 2. Add attribute constant (registry.c):
+ *
+ *        static const char *ATTR_B_FACTOR[] = { "B_iso_or_equiv", NULL };
+ *
+ * 3. Add batch row callback (registry.c):
+ *
+ *        static void _batch_b_factor(mmCIF *cif, const mmBlock *block,
+ *                                    int row, const int *idx, char *scratch) {
+ *            (void)scratch;
+ *            cif->b_factors[row] = _parse_float_inline(block, row, idx[0]);
+ *        }
+ *
+ * 4. Add to FIELDS[] array with batchable=true (registry.c):
+ *
+ *        { FIELD_B_FACTOR, "b_factors", BLOCK_ATOM, OP_COMPUTE,
+ *          ATTR_B_FACTOR, DEP_ATOMS, NULL, true, _batch_b_factor },
+ *
+ * 5. Add storage to mmCIF struct (parser.h):
+ *
+ *        float *b_factors;
+ *
+ * 6. Allocate array in _fill_cif() before batch execution (parser.c):
+ *
+ *        cif->b_factors = calloc(cif->atoms, sizeof(float));
+ *
+ * 7. Update _c_to_py() to export to Python (module.c)
+ *
+ * ============================================================================
  * DEPENDENCY SYSTEM
  * ============================================================================
  *
@@ -186,10 +226,26 @@ typedef CifError (*ParseFunc)(mmCIF *cif, mmBlockList *blocks,
                               const void *def, CifErrorContext *ctx);
 
 /**
+ * @brief Batch row parsing callback signature.
+ *
+ * Called once per row during batch iteration. Implementations should parse
+ * their specific field(s) from the block row and store results in cif.
+ *
+ * @param cif Output structure to populate
+ * @param block Source block being iterated (non-const for inline parser functions)
+ * @param row Current row index (0-based)
+ * @param attr_indices Pre-computed attribute column indices
+ * @param scratch Scratch buffer for combined lookups (MAX_INLINE_BUFFER size)
+ */
+typedef void (*BatchRowFunc)(mmCIF *cif, mmBlock *block, int row,
+                             const int *attr_indices, char *scratch);
+
+/**
  * @brief Field definition structure.
  *
  * Declares a field's source block, operation, required attributes,
- * and dependencies on other fields.
+ * and dependencies on other fields. For batch-parsed fields, also
+ * includes the per-row callback.
  */
 typedef struct {
     FieldId      id;            /**< Field identifier */
@@ -199,6 +255,10 @@ typedef struct {
     const char **attrs;         /**< Required attribute names (NULL-terminated) */
     const FieldId *depends_on;  /**< Field dependencies (-1 terminated) */
     ParseFunc    parse_func;    /**< Custom function for OP_COMPUTE */
+
+    /* Batch parsing support */
+    bool         batchable;     /**< Can be batched with other fields from same block */
+    BatchRowFunc batch_row_func;/**< Per-row callback for batch iteration */
 } FieldDef;
 
 
@@ -216,6 +276,36 @@ typedef struct {
     FieldId order[FIELD_COUNT]; /**< Fields in execution order */
     int     count;              /**< Number of fields to execute */
 } ParsePlan;
+
+
+/* ============================================================================
+ * BATCH EXECUTION
+ * Runtime batch grouping and execution for fields from the same block.
+ * ============================================================================ */
+
+/**
+ * @brief Maximum number of fields that can be batched together.
+ */
+#define MAX_BATCH_FIELDS 16
+
+/**
+ * @brief Maximum number of attributes across all fields in a batch.
+ */
+#define MAX_BATCH_ATTRS 32
+
+/**
+ * @brief Batch group for fields from the same block.
+ *
+ * Groups batchable fields together for single-pass iteration.
+ */
+typedef struct {
+    BlockId      block_id;                    /**< Source block for all fields */
+    int          field_count;                 /**< Number of fields in batch */
+    FieldId      fields[MAX_BATCH_FIELDS];    /**< Field IDs in this batch */
+    int          attr_count;                  /**< Total unique attributes */
+    const char  *attrs[MAX_BATCH_ATTRS];      /**< Unique attribute names */
+    int          attr_map[MAX_BATCH_FIELDS][MAX_BATCH_ATTRS]; /**< Per-field attr indices */
+} BatchGroup;
 
 
 /* ============================================================================
@@ -282,5 +372,43 @@ CifError _validate_blocks_registry(mmBlockList *blocks, CifErrorContext *ctx);
  * @return Pointer to the block, or NULL if invalid ID
  */
 mmBlock *_get_block_by_id(mmBlockList *blocks, BlockId id);
+
+/**
+ * @brief Compute batch groups from batchable fields.
+ *
+ * Groups batchable fields by source block for efficient single-pass parsing.
+ * Called once before plan execution.
+ *
+ * @param groups Output array of batch groups (caller provides storage)
+ * @param group_count Output: number of batch groups created
+ * @param max_groups Maximum groups allowed
+ */
+void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups);
+
+/**
+ * @brief Execute a batch group.
+ *
+ * Pre-computes attribute indices and iterates over all rows, calling each
+ * field's batch_row_func for efficient single-pass parsing.
+ *
+ * @param cif Output structure to populate
+ * @param blocks Block collection
+ * @param group Batch group to execute
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
+                               const BatchGroup *group, CifErrorContext *ctx);
+
+/**
+ * @brief Check if a field has been executed via batch.
+ *
+ * Used by _execute_plan to skip fields already parsed in a batch.
+ *
+ * @param fid Field identifier
+ * @param executed Bitmap of executed fields
+ * @return true if field was already executed
+ */
+bool _field_executed(FieldId fid, const bool *executed);
 
 #endif /* _CIFFY_REGISTRY_H */

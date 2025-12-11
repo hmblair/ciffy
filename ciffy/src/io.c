@@ -498,6 +498,29 @@ int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
 }
 
 
+LookupResult _lookup_inline_safe(mmBlock *block, int line, int index,
+                                  HashTable func, int *result) {
+
+    size_t len;
+    char *ptr = _get_field_ptr(block, line, index, &len);
+    if (ptr == NULL) return LOOKUP_ERROR;           /* Field access failed */
+    if (len == 0) return LOOKUP_NOT_FOUND;          /* Empty field */
+    if (len + 1 > MAX_INLINE_BUFFER) return LOOKUP_ERROR;  /* Buffer overflow */
+
+    /* Copy field to buffer, stripping only outer quotes */
+    char buffer[MAX_INLINE_BUFFER];
+    size_t out_len = 0;
+    _copy_field_strip_outer_quotes(ptr, len, buffer, &out_len);
+    buffer[out_len] = '\0';
+
+    struct _LOOKUP *lookup = func(buffer, out_len);
+    if (lookup == NULL) return LOOKUP_NOT_FOUND;    /* Not in hash table */
+
+    *result = lookup->value;
+    return LOOKUP_OK;
+}
+
+
 int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
                           HashTable func, char *buffer) {
 

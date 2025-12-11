@@ -5,7 +5,7 @@ A Python package for loading and manipulating molecular structures from
 CIF (Crystallographic Information File) format files.
 """
 
-__version__ = "0.5.9"
+__version__ = "0.5.10"
 
 # Core types
 from .polymer import Polymer

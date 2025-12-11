@@ -159,6 +159,18 @@ int _str_to_int(const char *str);
 /** Function pointer type for gperf hash table lookup functions */
 typedef struct _LOOKUP *(*HashTable)(const char *, size_t);
 
+/**
+ * @brief Result codes for lookup operations.
+ *
+ * Distinguishes between "value not found" (expected) and "error" (unexpected).
+ * This prevents callers from conflating missing data with system failures.
+ */
+typedef enum {
+    LOOKUP_OK = 0,           /**< Lookup succeeded, value is valid */
+    LOOKUP_NOT_FOUND = 1,    /**< Value not in hash table (not an error) */
+    LOOKUP_ERROR = -1        /**< Field access or buffer error */
+} LookupResult;
+
 /* ─────────────────────────────────────────────────────────────────────────────
  * Inline parsing functions (no allocation, cache-friendly)
  * ───────────────────────────────────────────────────────────────────────────── */
@@ -240,6 +252,24 @@ int _parse_int_inline(mmBlock *block, int line, int index);
  * @return Lookup result, or PARSE_FAIL if not found
  */
 int _lookup_inline(mmBlock *block, int line, int index, HashTable func);
+
+/**
+ * @brief Lookup value from block with distinct error handling.
+ *
+ * Unlike _lookup_inline(), this function distinguishes between:
+ * - LOOKUP_OK: Value found, result is valid
+ * - LOOKUP_NOT_FOUND: Field accessible but value not in hash table
+ * - LOOKUP_ERROR: Field access failed (bounds, allocation, etc.)
+ *
+ * @param block Block to read from
+ * @param line Line index
+ * @param index Attribute index
+ * @param func Hash table lookup function
+ * @param result Output: lookup value (valid only if LOOKUP_OK returned)
+ * @return LOOKUP_OK, LOOKUP_NOT_FOUND, or LOOKUP_ERROR
+ */
+LookupResult _lookup_inline_safe(mmBlock *block, int line, int index,
+                                  HashTable func, int *result);
 
 /**
  * @brief Lookup combined value from two fields without allocation.

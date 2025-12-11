@@ -248,10 +248,10 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
     }
 
     for (int line = 0; line < block->size; line++) {
-        /* First verify field access works */
-        size_t len;
-        char *ptr = _get_field_ptr(block, line, index, &len);
-        if (ptr == NULL) {
+        int value;
+        LookupResult res = _lookup_inline_safe(block, line, index, func, &value);
+
+        if (res == LOOKUP_ERROR) {
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
                 "Failed to access '%s' in block '%s' at line %d/%d",
                 attr, block->category ? block->category : "unknown",
@@ -259,8 +259,8 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
             free(array);
             return NULL;
         }
-        /* Lookup may return -1 for unknown values - that's OK */
-        array[line] = _lookup_inline(block, line, index, func);
+        /* LOOKUP_NOT_FOUND is OK - store -1 for unknown values */
+        array[line] = (res == LOOKUP_OK) ? value : -1;
     }
 
     return array;

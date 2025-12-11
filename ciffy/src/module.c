@@ -63,16 +63,30 @@ static PyObject *_set_py_error(CifErrorContext *ctx, const char *filename) {
 
 
 /**
- * @brief Create a 1D NumPy array from int data.
+ * @brief Create a 1D NumPy int64 array from int data.
  *
+ * Converts int32 data to int64 for Python compatibility (indexing, etc).
  * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
  * is garbage collected.
  */
 static PyObject *_init_1d_arr_int(int size, int *data) {
-    npy_intp dims[1] = {size};
-    PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_INT, data);
-    if (arr == NULL) {
+    /* Allocate int64 array */
+    int64_t *data64 = malloc(size * sizeof(int64_t));
+    if (data64 == NULL) {
         free(data);
+        return PyErr_NoMemory();
+    }
+
+    /* Copy int32 -> int64 */
+    for (int i = 0; i < size; i++) {
+        data64[i] = data[i];
+    }
+    free(data);
+
+    npy_intp dims[1] = {size};
+    PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_INT64, data64);
+    if (arr == NULL) {
+        free(data64);
         PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
         return NULL;
     }

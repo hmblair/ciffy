@@ -736,10 +736,8 @@ class Polymer:
         strands = filter_by_mask(self.strands, chn_mask)
 
         # Calculate new polymer_count: count how many of the first
-        # polymer_count atoms survive the mask
-        polymer_mask = _bool_zeros_like_backend(self.coordinates, self.size())
-        polymer_mask[:self.polymer_count] = True
-        new_polymer_count = (mask & polymer_mask).sum().item()
+        # polymer_count atoms survive the mask (direct slice avoids O(N) allocation)
+        new_polymer_count = mask[:self.polymer_count].sum().item()
 
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
@@ -1006,14 +1004,18 @@ class Polymer:
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
         # Gather data for all chains
-        types = self.molecule_type
+        # Convert to numpy once to avoid repeated .item() calls in loop
+        types_np = _ap.as_numpy(self.molecule_type)
+        lengths_np = _ap.as_numpy(self.lengths)
+        atoms_np = _ap.as_numpy(self._sizes[Scale.CHAIN])
+
         rows = []
         total_res = 0
         total_atoms = 0
         for ix in range(self.size(Scale.CHAIN)):
-            mol = molecule_type(types[ix].item())
-            res = self.lengths[ix].item()
-            atoms = self._sizes[Scale.CHAIN][ix].item()
+            mol = molecule_type(int(types_np[ix]))
+            res = int(lengths_np[ix])
+            atoms = int(atoms_np[ix])
             total_res += res
             total_atoms += atoms
             # Non-poly chains (res=0) show "-" for residue count

@@ -75,19 +75,19 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         Scale.MOLECULE: mol_sizes,
     }
 
-    # Create Polymer with NumPy arrays (what the C extension returns)
+    # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(
         coordinates,
-        atoms.astype(np.int64),
-        elements.astype(np.int64),
-        residues.astype(np.int64),
-        {key: value.astype(np.int64) for key, value in sizes.items()},
+        atoms,
+        elements,
+        residues,
+        sizes,
         id,
         chain_names,
         strand_names,
-        res_per_chain.astype(np.int64),
+        res_per_chain,
         polymer_count,
-        molecule_types.astype(np.int64),
+        molecule_types,
     )
 
     # Convert to torch if requested

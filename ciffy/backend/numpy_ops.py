@@ -88,10 +88,8 @@ def scatter_max(
     result = np.full((dim_size, *src.shape[1:]), fill_value, dtype=src.dtype)
     np.maximum.at(result, index, src)
 
-    # Zero out only unfilled bins (not bins that happen to equal sentinel)
-    for i in range(dim_size):
-        if not has_value[i]:
-            result[i] = 0
+    # Zero out unfilled bins using vectorized boolean indexing
+    result[~has_value] = 0
 
     return result, None
 
@@ -125,10 +123,8 @@ def scatter_min(
     result = np.full((dim_size, *src.shape[1:]), fill_value, dtype=src.dtype)
     np.minimum.at(result, index, src)
 
-    # Zero out only unfilled bins (not bins that happen to equal sentinel)
-    for i in range(dim_size):
-        if not has_value[i]:
-            result[i] = 0
+    # Zero out unfilled bins using vectorized boolean indexing
+    result[~has_value] = 0
 
     return result, None
 

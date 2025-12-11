@@ -105,118 +105,63 @@ static PyObject *_init_2d_arr_float(int size1, int size2, float *data) {
  *
  * Creates NumPy arrays and Python objects from the parsed C data.
  * Returns NULL and sets Python exception on error.
+ *
+ * Uses tracked allocation pattern: all objects are stored in an array
+ * for centralized cleanup on error, avoiding cascading Py_DECREF calls.
  */
 static PyObject *_c_to_py(mmCIF cif) {
 
-    PyObject *py_id = _c_str_to_py_str(cif.id);
-    if (py_id == NULL) return NULL;
+    /* Track all allocated objects for cleanup on error */
+    #define MAX_OBJECTS 11
+    PyObject *objects[MAX_OBJECTS] = {NULL};
+    int count = 0;
 
-    PyObject *chain_names_list = _c_arr_to_py_list(cif.names, cif.chains);
-    if (chain_names_list == NULL) { Py_DECREF(py_id); return NULL; }
+    /* Helper macro: allocate, track, and return NULL on failure */
+    #define TRACK(obj) do { \
+        objects[count] = (obj); \
+        if (objects[count] == NULL) goto cleanup; \
+        count++; \
+    } while(0)
 
-    PyObject *strand_names_list = _c_arr_to_py_list(cif.strands, cif.chains);
-    if (strand_names_list == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        return NULL;
+    /* Allocate all objects (order must match PyTuple_Pack below) */
+    TRACK(_c_str_to_py_str(cif.id));                              /* 0: py_id */
+    TRACK(_init_2d_arr_float(cif.atoms, 3, cif.coordinates));     /* 1: coordinates */
+    TRACK(_init_1d_arr_int(cif.atoms, cif.types));                /* 2: atoms_array */
+    TRACK(_init_1d_arr_int(cif.atoms, cif.elements));             /* 3: elements_array */
+    TRACK(_init_1d_arr_int(cif.residues, cif.sequence));          /* 4: residues_array */
+    TRACK(_init_1d_arr_int(cif.residues, cif.atoms_per_res));     /* 5: atoms_per_res */
+    TRACK(_init_1d_arr_int(cif.chains, cif.atoms_per_chain));     /* 6: atoms_per_chain */
+    TRACK(_init_1d_arr_int(cif.chains, cif.res_per_chain));       /* 7: res_per_chain */
+    TRACK(_c_arr_to_py_list(cif.names, cif.chains));              /* 8: chain_names_list */
+    TRACK(_c_arr_to_py_list(cif.strands, cif.chains));            /* 9: strand_names_list */
+    TRACK(_c_int_to_py_int(cif.polymer));                         /* 10: polymer_count */
+
+    /* All allocations succeeded - build the result tuple */
+    PyObject *result = PyTuple_Pack(MAX_OBJECTS,
+        objects[0],   /* py_id */
+        objects[1],   /* coordinates */
+        objects[2],   /* atoms_array */
+        objects[3],   /* elements_array */
+        objects[4],   /* residues_array */
+        objects[5],   /* atoms_per_res */
+        objects[6],   /* atoms_per_chain */
+        objects[7],   /* res_per_chain */
+        objects[8],   /* chain_names_list */
+        objects[9],   /* strand_names_list */
+        objects[10]); /* polymer_count */
+
+    #undef TRACK
+    #undef MAX_OBJECTS
+
+    /* PyTuple_Pack increments refcounts, so we don't need to DECREF on success */
+    return result;
+
+cleanup:
+    /* Clean up all allocated objects on failure */
+    for (int i = 0; i < count; i++) {
+        Py_XDECREF(objects[i]);
     }
-
-    PyObject *coordinates = _init_2d_arr_float(cif.atoms, 3, cif.coordinates);
-    if (coordinates == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        return NULL;
-    }
-
-    PyObject *atoms_array = _init_1d_arr_int(cif.atoms, cif.types);
-    if (atoms_array == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        return NULL;
-    }
-
-    PyObject *elements_array = _init_1d_arr_int(cif.atoms, cif.elements);
-    if (elements_array == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        return NULL;
-    }
-
-    PyObject *residues_array = _init_1d_arr_int(cif.residues, cif.sequence);
-    if (residues_array == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        Py_DECREF(elements_array);
-        return NULL;
-    }
-
-    PyObject *atoms_per_res = _init_1d_arr_int(cif.residues, cif.atoms_per_res);
-    if (atoms_per_res == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        Py_DECREF(elements_array);
-        Py_DECREF(residues_array);
-        return NULL;
-    }
-
-    PyObject *atoms_per_chain = _init_1d_arr_int(cif.chains, cif.atoms_per_chain);
-    if (atoms_per_chain == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        Py_DECREF(elements_array);
-        Py_DECREF(residues_array);
-        Py_DECREF(atoms_per_res);
-        return NULL;
-    }
-
-    PyObject *res_per_chain = _init_1d_arr_int(cif.chains, cif.res_per_chain);
-    if (res_per_chain == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        Py_DECREF(elements_array);
-        Py_DECREF(residues_array);
-        Py_DECREF(atoms_per_res);
-        Py_DECREF(atoms_per_chain);
-        return NULL;
-    }
-
-    PyObject *polymer_count = _c_int_to_py_int(cif.polymer);
-    if (polymer_count == NULL) {
-        Py_DECREF(py_id);
-        Py_DECREF(chain_names_list);
-        Py_DECREF(strand_names_list);
-        Py_DECREF(coordinates);
-        Py_DECREF(atoms_array);
-        Py_DECREF(elements_array);
-        Py_DECREF(residues_array);
-        Py_DECREF(atoms_per_res);
-        Py_DECREF(atoms_per_chain);
-        Py_DECREF(res_per_chain);
-        return NULL;
-    }
-
-    return PyTuple_Pack(11,
-        py_id, coordinates, atoms_array, elements_array, residues_array,
-        atoms_per_res, atoms_per_chain, res_per_chain,
-        chain_names_list, strand_names_list, polymer_count);
+    return NULL;
 }
 
 

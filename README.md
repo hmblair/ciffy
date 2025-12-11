@@ -144,6 +144,18 @@ D  PROTEIN  485    760
             998   4466
 ```
 
+## Module Structure
+
+```
+ciffy/
+├── backend/        # NumPy/PyTorch abstraction layer
+├── types/          # Scale, Molecule enums
+├── biochemistry/   # Element, Residue, nucleotide definitions
+├── operations/     # Reduction, alignment operations
+├── io/             # File loading and writing
+└── utils/          # Helper functions and base classes
+```
+
 ## Testing
 
 ```bash

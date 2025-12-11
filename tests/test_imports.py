@@ -417,3 +417,63 @@ class TestBackendOperations:
 
         assert isinstance(result, torch.Tensor)
         assert torch.allclose(result, torch.tensor([2.0, 6.0, 12.0]))
+
+
+class TestKabschDistance:
+    """Test Kabsch distance (aligned RMSD) computation."""
+
+    def test_rotation_zero_rmsd(self):
+        """Rotating a polymer should give zero RMSD after alignment."""
+        import copy
+        from ciffy import load, Scale
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+
+        # Create a rotation matrix (90 degrees around z-axis)
+        theta = np.pi / 2
+        rotation = np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        # Create rotated copy
+        rotated = copy.deepcopy(polymer)
+        rotated.coordinates = polymer.coordinates @ rotation.T
+
+        # Kabsch distance should be ~0 (rotation is aligned out)
+        dist = kabsch_distance(polymer, rotated, Scale.MOLECULE)
+        assert np.allclose(dist, 0, atol=1e-5)
+
+    def test_translation_zero_rmsd(self):
+        """Translating a polymer should give zero RMSD after alignment."""
+        import copy
+        from ciffy import load, Scale
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+
+        # Create translated copy
+        translated = copy.deepcopy(polymer)
+        translated.coordinates = polymer.coordinates + np.array([100.0, -50.0, 25.0])
+
+        # Kabsch distance should be ~0 (translation is centered out)
+        dist = kabsch_distance(polymer, translated, Scale.MOLECULE)
+        assert np.allclose(dist, 0, atol=1e-5)
+
+    def test_flip_nonzero_rmsd(self):
+        """Flipping/reflecting coordinates should give nonzero RMSD."""
+        import copy
+        from ciffy import load, Scale
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+
+        # Create reflected copy (mirror across xy-plane)
+        flipped = copy.deepcopy(polymer)
+        flipped.coordinates = polymer.coordinates * np.array([1, 1, -1])
+
+        # Kabsch distance should be nonzero (reflection cannot be aligned)
+        dist = kabsch_distance(polymer, flipped, Scale.MOLECULE)
+        assert dist > 0.1  # Should be significantly nonzero

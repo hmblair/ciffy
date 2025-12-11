@@ -1047,8 +1047,12 @@ class Polymer:
         res_w = max(res_w, 3)    # "Res"
         atom_w = max(atom_w, 5)  # "Atoms"
 
+        # ANSI color codes
+        GREY = "\033[90m"
+        RESET = "\033[0m"
+
         # Build output
-        header = f"PDB {self.id()} ({self.backend})"
+        header = f"PDB {self.id()} {GREY}({self.backend}){RESET}"
         table_w = chain_w + 2 + type_w + 2 + res_w + 2 + atom_w
         sep = "─" * table_w
 

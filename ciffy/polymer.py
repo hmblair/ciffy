@@ -1016,22 +1016,38 @@ class Polymer:
 
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
-        out = f"PDB {self.id()} with {self.size()} atoms ({self.backend}).\n"
-        out += "-" * 39 + "\n"
-
-        header_pad = len(str(self.size(Scale.CHAIN)))
-        out += " " * header_pad + "  Type     # Res  # Atom\n"
-
+        # Gather data for all chains
         types = self.molecule_type
-
+        rows = []
         for ix in range(self.size(Scale.CHAIN)):
             mol = molecule_type(types[ix].item())
-            chain = self.names[ix]
-            mol_name = mol.name
-            residues = str(self.lengths[ix].item())
-            atoms = str(self._sizes[Scale.CHAIN][ix].item())
+            rows.append({
+                'chain': self.names[ix],
+                'type': mol.name,
+                'res': self.lengths[ix].item(),
+                'atoms': self._sizes[Scale.CHAIN][ix].item(),
+            })
 
-            out += f"{chain:2s}  {mol_name:9s}{residues:7s}{atoms}\n"
+        # Calculate column widths
+        chain_w = max(len(r['chain']) for r in rows) if rows else 1
+        type_w = max(len(r['type']) for r in rows) if rows else 4
+        res_w = max(len(str(r['res'])) for r in rows) if rows else 1
+        atom_w = max(len(str(r['atoms'])) for r in rows) if rows else 1
+
+        # Ensure minimum widths for headers
+        type_w = max(type_w, 4)  # "Type"
+        res_w = max(res_w, 5)    # "# Res"
+        atom_w = max(atom_w, 6)  # "# Atom"
+
+        # Build output
+        header = f"PDB {self.id()} with {self.size()} atoms ({self.backend})."
+        sep = "-" * len(header)
+
+        out = f"{header}\n{sep}\n"
+        out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'# Res':>{res_w}s}  {'# Atom':>{atom_w}s}\n"
+
+        for r in rows:
+            out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res']:{res_w}d}  {r['atoms']:{atom_w}d}\n"
 
         return out
 

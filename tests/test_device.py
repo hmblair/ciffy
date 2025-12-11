@@ -283,6 +283,108 @@ class TestMixedDeviceHandling:
         assert centered.coordinates.device.type == "mps"
 
 
+class TestDifferentiability:
+    """Test that operations are differentiable for use with autograd."""
+
+    @pytest.fixture
+    def polymer_torch(self):
+        """Create a test polymer with torch backend."""
+        from ciffy import load
+        return load("tests/data/9GCM.cif", backend="torch")
+
+    def test_rmsd_is_differentiable(self, polymer_torch):
+        """Test that ciffy.rmsd supports backpropagation."""
+        import torch
+        import ciffy
+
+        # Create two polymers with coordinates that require gradients
+        p1 = polymer_torch
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+
+        # Add small perturbation to make them different
+        coords2_perturbed = coords2 + torch.randn_like(coords2) * 0.1
+        p2 = p1.with_coordinates(coords2_perturbed)
+
+        # Compute RMSD
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+
+        # Verify we can backpropagate
+        rmsd_sq.sum().backward()
+
+        # Gradients should exist and not be all zeros
+        assert coords2.grad is not None, "Gradients were not computed"
+        assert not torch.all(coords2.grad == 0), "Gradients are all zero"
+
+    def test_rmsd_gradient_correctness(self, polymer_torch):
+        """Test that RMSD gradients point toward alignment."""
+        import torch
+        import ciffy
+
+        p1 = polymer_torch
+
+        # Create p2 with a known translation
+        translation = torch.tensor([10.0, 0.0, 0.0])
+        coords2 = (p1.coordinates + translation).requires_grad_(True)
+        p2 = p1.with_coordinates(coords2)
+
+        # Compute RMSD
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+        rmsd_sq.sum().backward()
+
+        # The gradient should point back toward p1 (negative x direction)
+        # since that would reduce the RMSD
+        mean_grad = coords2.grad.mean(dim=0)
+        assert mean_grad[0] < 0, "Gradient should point toward reducing distance"
+
+    def test_center_is_differentiable(self, polymer_torch):
+        """Test that center() supports backpropagation."""
+        import torch
+        from ciffy import Scale
+
+        coords = polymer_torch.coordinates.clone().detach().requires_grad_(True)
+        p = polymer_torch.with_coordinates(coords)
+
+        centered, means = p.center(Scale.MOLECULE)
+
+        # Compute a loss on centered coordinates
+        loss = centered.coordinates.sum()
+        loss.backward()
+
+        assert coords.grad is not None, "Gradients were not computed"
+
+    def test_reduce_is_differentiable(self, polymer_torch):
+        """Test that reduce() supports backpropagation."""
+        import torch
+        from ciffy import Scale
+
+        coords = polymer_torch.coordinates.clone().detach().requires_grad_(True)
+        p = polymer_torch.with_coordinates(coords)
+
+        # Reduce to chain level
+        chain_means = p.reduce(coords, Scale.CHAIN)
+
+        loss = chain_means.sum()
+        loss.backward()
+
+        assert coords.grad is not None, "Gradients were not computed"
+
+    @requires_cuda
+    def test_rmsd_differentiable_on_cuda(self, polymer_torch):
+        """Test RMSD differentiability on CUDA."""
+        import torch
+        import ciffy
+
+        p1 = polymer_torch.to("cuda")
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
+
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+        rmsd_sq.sum().backward()
+
+        assert coords2.grad is not None
+        assert coords2.grad.device.type == "cuda"
+
+
 class TestScatterOperations:
     """Test scatter operations directly."""
 

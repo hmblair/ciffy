@@ -6,10 +6,90 @@
  * of mmCIF blocks, fields, and their dependencies. The parsing order is computed
  * via topological sort based on declared field dependencies.
  *
- * Adding new fields:
- *   1. Add to FieldId enum
- *   2. Add definition to FIELDS[] in registry.c
- *   3. Add storage to mmCIF struct in parser.h
+ * ============================================================================
+ * HOW TO ADD A NEW BLOCK
+ * ============================================================================
+ *
+ * Example: Adding _entity block
+ *
+ * 1. Add to BlockId enum (registry.h):
+ *
+ *        BLOCK_ENTITY,    // _entity - molecular entities
+ *
+ * 2. Add to BLOCKS[] array (registry.c):
+ *
+ *        { BLOCK_ENTITY, "_entity.", false },  // false = optional
+ *
+ * 3. Add slot to mmBlockList struct (parser.h):
+ *
+ *        mmBlock entity;
+ *
+ * 4. Add case to _get_block_by_id() (registry.c):
+ *
+ *        case BLOCK_ENTITY: return &blocks->entity;
+ *
+ * ============================================================================
+ * HOW TO ADD A NEW METADATA FIELD
+ * ============================================================================
+ *
+ * Example: Adding entity_count field
+ *
+ * 1. Add to FieldId enum (registry.h):
+ *
+ *        FIELD_ENTITY_COUNT,  // cif->entity_count
+ *
+ * 2. Add attribute constant (registry.c, if needed):
+ *
+ *        static const char *ATTR_ENTITY_ID[] = { "id", NULL };
+ *
+ * 3. Add to FIELDS[] array (registry.c):
+ *
+ *        { FIELD_ENTITY_COUNT, "entity_count", BLOCK_ENTITY, OP_COUNT_UNIQUE,
+ *          ATTR_ENTITY_ID, NULL, NULL },
+ *
+ *    Or with dependencies:
+ *
+ *        { FIELD_ENTITY_COUNT, "entity_count", BLOCK_ENTITY, OP_COUNT_UNIQUE,
+ *          ATTR_ENTITY_ID, DEP_CHAINS, NULL },  // runs after FIELD_CHAINS
+ *
+ * 4. Add case to appropriate _op_* function (registry.c):
+ *
+ *        case FIELD_ENTITY_COUNT: cif->entity_count = count; break;
+ *
+ * 5. Add storage to mmCIF struct (parser.h):
+ *
+ *        int entity_count;
+ *
+ * 6. Update _c_to_py() to export to Python (module.c)
+ *
+ * ============================================================================
+ * AVAILABLE OPERATIONS (ParseOp)
+ * ============================================================================
+ *
+ * OP_BLOCK_SIZE    - field = block.size (int)
+ * OP_COUNT_UNIQUE  - field = count of unique consecutive values (int)
+ * OP_GET_UNIQUE    - field = array of unique strings (char**)
+ * OP_COUNT_BY_GROUP- field = count of items per group (int*)
+ * OP_LOOKUP        - field = hash table lookup results (int*)
+ * OP_PARSE_FLOAT   - field = parsed float values (float*) [batch-only]
+ * OP_COMPUTE       - field = custom computation via parse_func
+ *
+ * ============================================================================
+ * DEPENDENCY SYSTEM
+ * ============================================================================
+ *
+ * Fields can declare dependencies on other fields. The topological sort
+ * ensures dependencies are parsed before dependents.
+ *
+ * Declare dependency arrays (registry.c):
+ *
+ *     static const FieldId DEP_ENTITY[] = { FIELD_ENTITY_COUNT, -1 };
+ *
+ * Use in field definition:
+ *
+ *     { FIELD_FOO, "foo", BLOCK_X, OP_Y, ATTR_Z, DEP_ENTITY, NULL },
+ *
+ * Circular dependencies are detected and reported as errors.
  */
 
 #ifndef _CIFFY_REGISTRY_H

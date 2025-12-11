@@ -358,6 +358,10 @@ static mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
     /* Skip past section end marker */
     _next_block(buffer);
 
+    LOG_DEBUG("Block '%s': size=%d, attrs=%d, width=%d, var_width=%d, single=%d",
+              block.category, block.size, block.attributes,
+              block.width, block.variable_width, block.single);
+
     return block;
 }
 

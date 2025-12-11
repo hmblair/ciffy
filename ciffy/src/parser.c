@@ -111,6 +111,9 @@ char *_get_id(char *buffer, CifErrorContext *ctx) {
  */
 static char **_get_unique(mmBlock *block, const char *attr, int *size,
                           CifErrorContext *ctx) {
+    LOG_DEBUG("Extracting unique '%s' from block '%s' (size=%d)",
+              attr, block->category ? block->category : "unknown", block->size);
+
     int index = _get_attr_index(block, attr);
     if (index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -136,7 +139,10 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
         char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
         if (cur_ptr == NULL) {
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to get field at line %d, index %d", line, index);
+                "Failed to get field in block '%s' at line %d/%d, attr %d/%d (lines=%s)",
+                block->category ? block->category : "unknown",
+                line, block->size, index, block->attributes,
+                block->lines ? "ok" : "NULL");
             for (int i = 0; i < ix; i++) free(str[i]);
             free(str);
             return NULL;
@@ -176,6 +182,8 @@ static char **_get_unique(mmBlock *block, const char *attr, int *size,
         }
         *size = new_size;
     }
+
+    LOG_DEBUG("Found %d unique values for '%s'", ix, attr);
     return str;
 }
 
@@ -200,6 +208,10 @@ static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx)
         size_t cur_len;
         char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
         if (cur_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get '%s' in block '%s' at line %d/%d (lines=%s)",
+                attr, block->category ? block->category : "unknown",
+                line, block->size, block->lines ? "ok" : "NULL");
             return -1;
         }
 
@@ -286,6 +298,10 @@ static int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
         size_t cur_len;
         char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
         if (cur_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get '%s' in block '%s' at line %d/%d (lines=%s)",
+                attr, block->category ? block->category : "unknown",
+                line, block->size, block->lines ? "ok" : "NULL");
             free(sizes);
             return NULL;
         }
@@ -365,6 +381,9 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         size_t group_len;
         char *group_ptr = _get_field_ptr(block, line, group_index, &group_len);
         if (group_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get group_PDB at line %d/%d in atom block (lines=%s)",
+                line, block->size, block->lines ? "ok" : "NULL");
             free(sizes);
             return NULL;
         }
@@ -383,6 +402,9 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         size_t chain_len;
         char *chain_ptr = _get_field_ptr(block, line, chain_index, &chain_len);
         if (chain_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get label_asym_id at line %d/%d in atom block (lines=%s)",
+                line, block->size, block->lines ? "ok" : "NULL");
             free(sizes);
             return NULL;
         }
@@ -585,7 +607,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return CIF_ERR_BLOCK;
     }
 
-    LOG_DEBUG("All required blocks present");
+    LOG_DEBUG("Block validation complete: atom=%d rows, poly=%d rows, chain=%d rows",
+              blocks->atom.size, blocks->poly.size, blocks->chain.size);
 
     /* ── Precompute Line Pointers ────────────────────────────────────────── */
     /* Required for _get_field_ptr used in counting and metadata extraction */
@@ -605,6 +628,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         _free_lines(&blocks->poly);
         return err;
     }
+
+    LOG_DEBUG("Line pointers precomputed for all blocks");
 
     /* ── Count Structure Elements ─────────────────────────────────────────── */
 
@@ -637,6 +662,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     /* ── Parse Metadata ───────────────────────────────────────────────────── */
 
+    LOG_DEBUG("Extracting chain metadata...");
+
     cif->res_per_chain = _count_sizes_by_group(&blocks->poly, ATTR_RES_PER_CHAIN,
                                                &cif->chains, ctx);
     if (cif->res_per_chain == NULL) return ctx->code;
@@ -651,8 +678,13 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     cif->strands = _get_unique(&blocks->poly, ATTR_STRAND_ID, &cif->chains, ctx);
     if (cif->strands == NULL) return ctx->code;
 
+    LOG_DEBUG("Metadata extracted: %d chains, %d residues in sequence",
+              cif->chains, cif->residues);
+
     /* ── Batch Atom Parsing ───────────────────────────────────────────────── */
     /* Note: lines already precomputed at start of function */
+
+    LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
 
     AtomIndices idx;
     err = _init_atom_indices(&blocks->atom, &idx, ctx);
@@ -706,6 +738,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
 
     /* ── Atom Reordering ──────────────────────────────────────────────────── */
 
+    LOG_DEBUG("Classifying polymer vs non-polymer atoms...");
+
     int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
     if (is_nonpoly == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate nonpoly mask");
@@ -720,6 +754,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         free(is_nonpoly);
         return ctx->code;
     }
+
+    LOG_DEBUG("Found %d non-polymer atoms (HETATM), reordering...", cif->nonpoly);
 
     err = _reorder_atoms(cif, is_nonpoly, ctx);
     free(is_nonpoly);

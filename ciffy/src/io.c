@@ -4,6 +4,7 @@
  */
 
 #include "io.h"
+#include "log.h"
 
 
 CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
@@ -379,8 +380,14 @@ CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
 
 
 CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
+    const char *name = block->category ? block->category : "unknown";
+
+    LOG_DEBUG("Precomputing lines for block '%s' (size=%d, single=%d, var_width=%d)",
+              name, block->size, block->single, block->variable_width);
 
     if (block->single || block->size <= 0) {
+        LOG_DEBUG("Skipping line precomputation for '%s': single=%d, size=%d",
+                  name, block->single, block->size);
         block->lines = NULL;
         return CIF_OK;
     }
@@ -389,9 +396,11 @@ CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
     if (block->variable_width) {
         if (block->lines == NULL) {
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Variable-width block missing line pointers");
+                "Variable-width block '%s' missing line pointers", name);
             return CIF_ERR_PARSE;
         }
+        LOG_DEBUG("Variable-width block '%s' already has %d line pointers",
+                  name, block->size);
         return CIF_OK;
     }
 
@@ -399,7 +408,7 @@ CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
     block->lines = malloc((size_t)block->size * sizeof(char *));
     if (block->lines == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate line pointers for %d lines", block->size);
+            "Failed to allocate line pointers for %d lines in '%s'", block->size, name);
         return CIF_ERR_ALLOC;
     }
 
@@ -407,6 +416,8 @@ CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
         block->lines[i] = block->start + i * block->width;
     }
 
+    LOG_DEBUG("Precomputed %d line pointers for '%s' (width=%d)",
+              block->size, name, block->width);
     return CIF_OK;
 }
 
@@ -420,16 +431,23 @@ void _free_lines(mmBlock *block) {
 
 
 char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
+    const char *name = block->category ? block->category : "unknown";
 
     if (block->lines == NULL) {
+        LOG_DEBUG("_get_field_ptr: lines=NULL for block '%s' (size=%d, single=%d)",
+                  name, block->size, block->single);
         return NULL;
     }
 
     /* Bounds validation */
     if (line < 0 || line >= block->size) {
+        LOG_DEBUG("_get_field_ptr: line %d out of bounds [0, %d) for block '%s'",
+                  line, block->size, name);
         return NULL;
     }
     if (index < 0 || index >= block->attributes) {
+        LOG_DEBUG("_get_field_ptr: attr %d out of bounds [0, %d) for block '%s'",
+                  index, block->attributes, name);
         return NULL;
     }
 

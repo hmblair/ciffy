@@ -43,8 +43,9 @@
 #define LOG_LEVEL_DEBUG   4
 
 /* Default compile-time log level (can be overridden with -DCIFFY_LOG_LEVEL=X) */
+/* Set to DEBUG to allow runtime configuration of all log levels */
 #ifndef CIFFY_LOG_LEVEL
-#define CIFFY_LOG_LEVEL LOG_LEVEL_WARNING
+#define CIFFY_LOG_LEVEL LOG_LEVEL_DEBUG
 #endif
 
 
@@ -72,9 +73,9 @@ static inline int _ciffy_log_level(void) {
             else if (strcmp(env, "WARNING") == 0) level = LOG_LEVEL_WARNING;
             else if (strcmp(env, "ERROR") == 0)   level = LOG_LEVEL_ERROR;
             else if (strcmp(env, "NONE") == 0)    level = LOG_LEVEL_NONE;
-            else                                  level = CIFFY_LOG_LEVEL;
+            else                                  level = LOG_LEVEL_WARNING;  /* Default */
         } else {
-            level = CIFFY_LOG_LEVEL;
+            level = LOG_LEVEL_WARNING;  /* Default: only warnings and errors */
         }
     }
 

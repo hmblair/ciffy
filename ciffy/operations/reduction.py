@@ -101,7 +101,7 @@ REDUCTIONS = {
 # Type alias for reduction results
 ReductionResult = Union[
     Array,                              # MEAN, SUM
-    tuple[Array, Array | None],         # MIN, MAX (values, indices)
+    tuple[Array, Union[Array, None]],   # MIN, MAX (values, indices)
     list[Array],                        # COLLATE
 ]
 

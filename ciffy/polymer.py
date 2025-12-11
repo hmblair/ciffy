@@ -1041,7 +1041,7 @@ class Polymer:
 
         # Build output
         header = f"PDB {self.id()} with {self.size()} atoms ({self.backend})."
-        sep = "-" * len(header)
+        sep = "─" * len(header)  # U+2500 box-drawing horizontal
 
         out = f"{header}\n{sep}\n"
         out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'# Res':>{res_w}s}  {'# Atom':>{atom_w}s}\n"

@@ -433,6 +433,44 @@ void _free_lines(mmBlock *block) {
 char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
     const char *name = block->category ? block->category : "unknown";
 
+    /* Handle single-value blocks (no loop_, values inline with attributes) */
+    if (block->single) {
+        if (line != 0) {
+            LOG_DEBUG("_get_field_ptr: single block '%s' only has line 0, got %d",
+                      name, line);
+            return NULL;
+        }
+        if (index < 0 || index >= block->attributes) {
+            LOG_DEBUG("_get_field_ptr: attr %d out of bounds [0, %d) for single block '%s'",
+                      index, block->attributes, name);
+            return NULL;
+        }
+
+        /* Navigate to the attribute line */
+        char *ptr = block->head;
+        for (int ix = 0; ix < index; ix++) {
+            while (*ptr != '\n' && *ptr != '\0') ptr++;
+            if (*ptr == '\n') ptr++;
+        }
+
+        /* Skip the attribute name (first field) to get to the value */
+        while (*ptr != ' ' && *ptr != '\n' && *ptr != '\0') ptr++;
+        while (*ptr == ' ') ptr++;
+
+        if (len != NULL) {
+            char *end = ptr;
+            bool squotes = false;
+            bool dquotes = false;
+            while ((*end != ' ' && *end != '\n' && *end != '\0') || squotes) {
+                if (*end == '\'' && !dquotes) squotes = !squotes;
+                if (*end == '"') dquotes = !dquotes;
+                end++;
+            }
+            *len = (size_t)(end - ptr);
+        }
+        return ptr;
+    }
+
     if (block->lines == NULL) {
         LOG_DEBUG("_get_field_ptr: lines=NULL for block '%s' (size=%d, single=%d)",
                   name, block->size, block->single);

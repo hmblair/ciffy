@@ -1019,20 +1019,28 @@ class Polymer:
         # Gather data for all chains
         types = self.molecule_type
         rows = []
+        total_res = 0
+        total_atoms = 0
         for ix in range(self.size(Scale.CHAIN)):
             mol = molecule_type(types[ix].item())
+            res = self.lengths[ix].item()
+            atoms = self._sizes[Scale.CHAIN][ix].item()
+            total_res += res
+            total_atoms += atoms
             rows.append({
                 'chain': self.names[ix],
                 'type': mol.name,
-                'res': self.lengths[ix].item(),
-                'atoms': self._sizes[Scale.CHAIN][ix].item(),
+                'res': res,
+                'atoms': atoms,
             })
 
-        # Calculate column widths
+        # Calculate column widths (include totals in width calculation)
         chain_w = max(len(r['chain']) for r in rows) if rows else 1
         type_w = max(len(r['type']) for r in rows) if rows else 4
-        res_w = max(len(str(r['res'])) for r in rows) if rows else 1
-        atom_w = max(len(str(r['atoms'])) for r in rows) if rows else 1
+        res_w = max((len(str(r['res'])) for r in rows), default=1)
+        res_w = max(res_w, len(str(total_res)))
+        atom_w = max((len(str(r['atoms'])) for r in rows), default=1)
+        atom_w = max(atom_w, len(str(total_atoms)))
 
         # Ensure minimum widths for headers
         type_w = max(type_w, 4)  # "Type"
@@ -1040,14 +1048,18 @@ class Polymer:
         atom_w = max(atom_w, 5)  # "Atoms"
 
         # Build output
-        header = f"PDB {self.id()} with {self.size()} atoms ({self.backend})."
-        sep = "─" * len(header)  # U+2500 box-drawing horizontal
+        header = f"PDB {self.id()} ({self.backend})"
+        table_w = chain_w + 2 + type_w + 2 + res_w + 2 + atom_w
+        sep = "─" * table_w
 
         out = f"{header}\n{sep}\n"
         out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'Res':>{res_w}s}  {'Atoms':>{atom_w}s}\n"
 
         for r in rows:
             out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res']:{res_w}d}  {r['atoms']:{atom_w}d}\n"
+
+        out += f"{sep}\n"
+        out += f"{'':{chain_w}s}  {'':{type_w}s}  {total_res:{res_w}d}  {total_atoms:{atom_w}d}\n"
 
         return out
 

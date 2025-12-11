@@ -173,15 +173,17 @@ class TestLoad:
         polymer = load(cif_file, backend=backend)
         repr_str = repr(polymer)
 
-        # Check header line contains PDB ID, atom count, and backend
+        # Check header line contains PDB ID and backend
         assert polymer.id() in repr_str
-        assert str(polymer.size()) in repr_str
         assert backend in repr_str
 
         # Check column headers are present
         assert "Type" in repr_str
-        assert "# Res" in repr_str
-        assert "# Atom" in repr_str
+        assert "Res" in repr_str
+        assert "Atoms" in repr_str
+
+        # Check total atom count appears (in totals row)
+        assert str(polymer.size()) in repr_str
 
         # Check each chain is listed with correct information
         for ix in range(polymer.size(Scale.CHAIN)):
@@ -213,7 +215,7 @@ class TestLoad:
         # Data lines start after "Type" header line
         data_started = False
         for line in lines:
-            if "Type" in line and "# Res" in line:
+            if "Type" in line and "Res" in line:
                 data_started = True
                 continue
             if not data_started:

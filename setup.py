@@ -79,7 +79,7 @@ def _readme() -> str:
 
 
 VERSION = _version()
-DESCRIPTION = 'Fast CIF file parsing for molecular structures'
+DESCRIPTION = 'Load CIF files in a jiffy'
 LONG_DESCRIPTION = _readme()
 LICENSE = 'MIT'
 AUTHOR = 'Hamish M. Blair'

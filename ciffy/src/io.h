@@ -149,17 +149,6 @@ char *_get_attr(char *buffer, CifErrorContext *ctx);
 int _get_attr_index(mmBlock *block, const char *attr);
 
 /**
- * @brief Get an attribute value by line number and attribute index.
- *
- * @param block The block to read from
- * @param line Line number (0-based, for multi-entry blocks)
- * @param index Attribute index (0-based)
- * @param ctx Error context, populated on failure (may be NULL)
- * @return Allocated string containing value, or NULL on error
- */
-char *_get_attr_by_line(mmBlock *block, int line, int index, CifErrorContext *ctx);
-
-/**
  * @brief Convert a string to an integer.
  *
  * @param str String to parse
@@ -169,30 +158,6 @@ int _str_to_int(const char *str);
 
 /** Function pointer type for gperf hash table lookup functions */
 typedef struct _LOOKUP *(*HashTable)(const char *, size_t);
-
-/**
- * @brief Look up a token in a hash table.
- *
- * Strips quotes from the token and performs the lookup.
- *
- * @param func Hash table lookup function
- * @param token Token to look up
- * @return Lookup result value, or -1 if not found
- */
-int _lookup(HashTable func, char *token);
-
-/**
- * @brief Look up a token with error reporting.
- *
- * Like _lookup but populates error context on failure.
- *
- * @param func Hash table lookup function
- * @param token Token to look up
- * @param result Output pointer for lookup result
- * @param ctx Error context, populated on failure
- * @return CIF_OK on success, CIF_ERR_LOOKUP if not found
- */
-CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext *ctx);
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Inline parsing functions (no allocation, cache-friendly)

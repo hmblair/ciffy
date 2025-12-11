@@ -229,6 +229,7 @@ static int _count_unique(mmBlock *block, const char *attr, CifErrorContext *ctx)
  * Parse residue types via hash table lookup.
  *
  * Used for sequence parsing where residue names map to type indices.
+ * Uses inline lookup to avoid allocations in the loop.
  */
 static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
                               CifErrorContext *ctx) {
@@ -247,13 +248,17 @@ static int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
     }
 
     for (int line = 0; line < block->size; line++) {
-        char *token = _get_attr_by_line(block, line, index, ctx);
-        if (token == NULL) {
+        int result = _lookup_inline(block, line, index, func);
+        if (result == PARSE_FAIL) {
+            /* Field access failed - report error with context */
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to lookup '%s' in block '%s' at line %d/%d",
+                attr, block->category ? block->category : "unknown",
+                line, block->size);
             free(array);
             return NULL;
         }
-        array[line] = _lookup(func, token);
-        free(token);
+        array[line] = result;
     }
 
     return array;

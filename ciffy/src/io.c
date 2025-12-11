@@ -229,54 +229,6 @@ int _get_attr_index(mmBlock *block, const char *attr) {
 }
 
 
-char *_get_attr_by_line(mmBlock *block, int line, int index, CifErrorContext *ctx) {
-
-    if (block->single) {
-
-        char *ptr = block->head;
-        for (int ix = 0; ix < index; ix++) {
-            _advance_line(&ptr);
-        }
-
-        char *skip = _get_field_and_advance(&ptr, ctx);
-        if (skip != NULL) { free(skip); }
-        return _get_field_and_advance(&ptr, ctx);
-
-    } else {
-
-        /* Bounds check for multi-entry blocks */
-        if (line < 0 || line >= block->size) {
-            if (ctx != NULL) {
-                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
-                    "Line index %d out of bounds (size=%d)", line, block->size);
-            }
-            return NULL;
-        }
-        if (index < 0 || index >= block->attributes) {
-            if (ctx != NULL) {
-                CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
-                    "Attribute index %d out of bounds (attributes=%d)",
-                    index, block->attributes);
-            }
-            return NULL;
-        }
-
-        char *ptr;
-        if (block->variable_width) {
-            /* Variable-width: use line pointers and calculate offset per-line */
-            char *line_start = block->lines[line];
-            int offset = _get_offset(line_start, ' ', index);
-            ptr = line_start + offset;
-        } else {
-            /* Fixed-width: use precomputed offsets */
-            ptr = block->start + line * block->width + block->offsets[index];
-        }
-        return _get_field(ptr, ctx);
-
-    }
-}
-
-
 int _str_to_int(const char *str) {
 
     int base = 10;
@@ -286,52 +238,6 @@ int _str_to_int(const char *str) {
     if (*endptr != '\0') { return -1; }
 
     return (int)val;
-}
-
-
-static inline char *_strip_quotes(char *str) {
-
-    char *write_ptr = str;
-    char *read_ptr = str;
-
-    while (*read_ptr) {
-        if (*read_ptr != '"') {
-            *write_ptr = *read_ptr;
-            write_ptr++;
-        }
-        read_ptr++;
-    }
-    *write_ptr = '\0';
-
-    return str;
-}
-
-
-int _lookup(HashTable func, char *token) {
-
-    token = _strip_quotes(token);
-    struct _LOOKUP *lookup = func(token, strlen(token));
-
-    if (lookup != NULL) {
-        return lookup->value;
-    }
-
-    return -1;
-}
-
-
-CifError _lookup_safe(HashTable func, char *token, int *result, CifErrorContext *ctx) {
-
-    token = _strip_quotes(token);
-    struct _LOOKUP *lookup = func(token, strlen(token));
-
-    if (lookup != NULL) {
-        *result = lookup->value;
-        return CIF_OK;
-    }
-
-    CIF_SET_ERROR(ctx, CIF_ERR_LOOKUP, "Unknown token: '%s'", token);
-    return CIF_ERR_LOOKUP;
 }
 
 
@@ -539,23 +445,6 @@ int _parse_int_inline(mmBlock *block, int line, int index) {
 }
 
 
-int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
-
-    size_t len;
-    char *ptr = _get_field_ptr(block, line, index, &len);
-    if (ptr == NULL || len == 0) return PARSE_FAIL;
-    if (len >= MAX_INLINE_BUFFER) return PARSE_FAIL;
-
-    /* Copy to thread-local buffer for null-termination */
-    char buffer[MAX_INLINE_BUFFER];
-    memcpy(buffer, ptr, len);
-    buffer[len] = '\0';
-
-    /* Use existing lookup which handles quote stripping */
-    return _lookup(func, buffer);
-}
-
-
 /**
  * @brief Copy field to buffer, stripping only outer quotes.
  *
@@ -589,6 +478,25 @@ static void _copy_field_strip_outer_quotes(const char *ptr, size_t len,
         }
     }
 }
+
+
+int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
+
+    size_t len;
+    char *ptr = _get_field_ptr(block, line, index, &len);
+    if (ptr == NULL || len == 0) return PARSE_FAIL;
+    if (len + 1 > MAX_INLINE_BUFFER) return PARSE_FAIL;
+
+    /* Copy field to buffer, stripping only outer quotes */
+    char buffer[MAX_INLINE_BUFFER];
+    size_t out_len = 0;
+    _copy_field_strip_outer_quotes(ptr, len, buffer, &out_len);
+    buffer[out_len] = '\0';
+
+    struct _LOOKUP *lookup = func(buffer, out_len);
+    return lookup != NULL ? lookup->value : PARSE_FAIL;
+}
+
 
 int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
                           HashTable func, char *buffer) {

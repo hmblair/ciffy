@@ -48,9 +48,52 @@ centered, centroids = polymer.center(ciffy.CHAIN)
 # Each chain now centered at origin
 ```
 
-## Structural Alignment
+## Superimposing Two Structures
 
-Align to principal axes using `align()`:
+Use `ciffy.align()` to superimpose one structure onto another using the Kabsch algorithm:
+
+```python
+import ciffy
+
+# Load reference and mobile structures
+reference = ciffy.load("reference.cif")
+mobile = ciffy.load("mobile.cif")
+
+# Align mobile onto reference
+ref, aligned = ciffy.align(reference, mobile)
+
+# ref is unchanged, aligned is mobile rotated/translated to minimize RMSD
+print(f"RMSD after alignment: {ciffy.rmsd(ref, aligned).sqrt():.3f} Å")
+```
+
+The `align()` function:
+
+- Returns a tuple `(reference, aligned_mobile)`
+- Reference structure is unchanged
+- Mobile structure is optimally rotated and translated
+- Uses Kabsch algorithm (SVD-based) for optimal superposition
+
+### Visualizing Alignment
+
+```python
+# Save aligned structures for visualization
+reference.write("reference.cif")
+aligned.write("aligned_mobile.cif")
+# Open both in PyMOL/ChimeraX to verify alignment
+```
+
+### Alignment with Metrics
+
+```python
+# Compute TM-score on aligned structures
+ref, aligned = ciffy.align(pred, target)
+tm = ciffy.tm_score(aligned, ref)
+print(f"TM-score: {tm:.3f}")
+```
+
+## Aligning to Principal Axes
+
+Use `polymer.align()` to align a single structure to its principal axes:
 
 ```python
 # Align to principal components

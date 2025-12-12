@@ -22,6 +22,7 @@ pip install torch
 | Get RNA only | `rna = polymer.by_type(ciffy.RNA)` |
 | Get backbone | `backbone = polymer.backbone()` |
 | Compute RMSD | `rmsd = ciffy.rmsd(p1, p2)` |
+| Superimpose structures | `ref, aligned = ciffy.align(p1, p2)` |
 | Move to GPU | `polymer = polymer.to("cuda")` |
 | Per-residue mean | `polymer.reduce(features, ciffy.RESIDUE)` |
 

@@ -26,7 +26,8 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 torch = ["torch"]
-dev = ["pytest", "torch"]
+vis = ["matplotlib"]
+dev = ["pytest", "torch", "matplotlib"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"
@@ -36,7 +37,7 @@ Homepage = "https://github.com/hmblair/ciffy"
 Repository = "https://github.com/hmblair/ciffy"
 
 [tool.setuptools]
-packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io", "ciffy.nn"]
+packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io", "ciffy.nn", "ciffy.visualize"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

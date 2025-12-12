@@ -40,7 +40,7 @@ def tm_score(
         - Protein: d_0 = 1.24 * (L - 15)^(1/3) - 1.8
         - RNA/DNA: d_0 = 0.6 * sqrt(L - 5) - 2.5
     """
-    from .alignment import kabsch_distance
+    from .alignment import kabsch_align
 
     # Get coordinates at specified scale
     if scale == Scale.ATOM:
@@ -63,10 +63,37 @@ def tm_score(
     mol_type = _get_molecule_type(ref)
 
     # Compute d_0 based on molecule type
-    # Use max(0, ...) to avoid complex numbers from sqrt/cbrt of negative values
-    if mol_type in (Molecule.PROTEIN,):
+    d_0 = _compute_d0(L, mol_type)
+
+    # Align predicted structure onto reference using Kabsch algorithm
+    # kabsch_align places pred_aligned at ref centroid, so compare to ref_coords directly
+    pred_aligned, _, _ = kabsch_align(pred_coords, ref_coords, center=True)
+
+    # Compute per-residue distances
+    if is_torch(ref_coords):
+        import torch
+        distances = torch.sqrt(((pred_aligned - ref_coords) ** 2).sum(dim=1))
+        tm = (1.0 / (1.0 + (distances / d_0) ** 2)).sum() / L
+        return tm.item()
+    else:
+        distances = np.sqrt(((pred_aligned - ref_coords) ** 2).sum(axis=1))
+        tm = (1.0 / (1.0 + (distances / d_0) ** 2)).sum() / L
+        return float(tm)
+
+
+def _compute_d0(L: int, mol_type: Molecule) -> float:
+    """
+    Compute the d_0 normalization parameter for TM-score.
+
+    Args:
+        L: Length of the structure (number of residues).
+        mol_type: Molecule type for formula selection.
+
+    Returns:
+        d_0 value (minimum 0.5 for very small structures).
+    """
+    if mol_type == Molecule.PROTEIN:
         # Protein: d_0 = 1.24 * (L - 15)^(1/3) - 1.8
-        # Use signed cube root for negative values
         inner = L - 15
         if inner >= 0:
             d_0 = 1.24 * (inner ** (1/3)) - 1.8
@@ -74,58 +101,11 @@ def tm_score(
             d_0 = 1.24 * (-((-inner) ** (1/3))) - 1.8
     else:
         # RNA/DNA: d_0 = 0.6 * sqrt(L - 5) - 2.5
-        # Clamp inner value to 0 to avoid complex numbers
         inner = max(0, L - 5)
         d_0 = 0.6 * np.sqrt(inner) - 2.5
 
     # Ensure d_0 is positive (minimum 0.5 for very small structures)
-    d_0 = float(max(d_0, 0.5))
-
-    # Align structures using Kabsch algorithm
-    # First center both structures
-    if is_torch(pred_coords):
-        import torch
-        pred_centered = pred_coords - pred_coords.mean(dim=0)
-        ref_centered = ref_coords - ref_coords.mean(dim=0)
-
-        # Compute optimal rotation via SVD
-        H = pred_centered.T @ ref_centered
-        U, S, Vt = torch.linalg.svd(H)
-        R = Vt.T @ U.T
-
-        # Handle reflection
-        if torch.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = Vt.T @ U.T
-
-        # Apply rotation and compute distances
-        pred_aligned = pred_centered @ R.T
-        distances = torch.sqrt(((pred_aligned - ref_centered) ** 2).sum(dim=1))
-
-        # Compute TM-score
-        tm = (1.0 / (1.0 + (distances / d_0) ** 2)).sum() / L
-        return tm.item()
-    else:
-        pred_centered = pred_coords - pred_coords.mean(axis=0)
-        ref_centered = ref_coords - ref_coords.mean(axis=0)
-
-        # Compute optimal rotation via SVD
-        H = pred_centered.T @ ref_centered
-        U, S, Vt = np.linalg.svd(H)
-        R = Vt.T @ U.T
-
-        # Handle reflection
-        if np.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = Vt.T @ U.T
-
-        # Apply rotation and compute distances
-        pred_aligned = pred_centered @ R.T
-        distances = np.sqrt(((pred_aligned - ref_centered) ** 2).sum(axis=1))
-
-        # Compute TM-score
-        tm = (1.0 / (1.0 + (distances / d_0) ** 2)).sum() / L
-        return float(tm)
+    return float(max(d_0, 0.5))
 
 
 def lddt(

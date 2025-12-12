@@ -705,10 +705,10 @@ class Polymer:
         Returns:
             Pairwise distance matrix.
         """
-        if scale is not None:
-            coords = self.reduce(self.coordinates, scale)
-        else:
+        if scale is None or scale == Scale.ATOM:
             coords = self.coordinates
+        else:
+            coords = self.reduce(self.coordinates, scale)
 
         return _cdist(coords, coords)
 
@@ -951,9 +951,10 @@ class Polymer:
         names = [self.names[j] for j in ix]
         strands = [self.strands[j] for j in ix]
 
-        # Calculate new polymer_count from residue sizes
-        # (residue atoms are always polymer atoms)
-        new_polymer_count = sizes[Scale.RESIDUE].sum().item()
+        # Calculate new polymer_count from residue sizes, capped at total atoms
+        # (residue atoms are always polymer atoms, but we cap to handle edge cases)
+        residue_sum = sizes[Scale.RESIDUE].sum().item()
+        new_polymer_count = min(residue_sum, len(coordinates))
 
         # Preserve molecule types if available
         mol_types = self._molecule_types[ix] if self._molecule_types is not None else None
@@ -1031,7 +1032,37 @@ class Polymer:
         """
         if self.nonpoly == 0:
             return self
-        return self[:self.polymer_count]
+
+        # Slice to polymer atoms only
+        coordinates = self.coordinates[:self.polymer_count]
+        atoms = self.atoms[:self.polymer_count]
+        elements = self.elements[:self.polymer_count]
+
+        # Keep only chains that have residues (polymer chains)
+        chain_mask = self.lengths > 0
+        lengths = self.lengths[chain_mask]
+        names = filter_by_mask(self.names, chain_mask)
+        strands = filter_by_mask(self.strands, chain_mask)
+
+        # Calculate chain sizes from residue sizes (atoms per chain = sum of
+        # atoms per residue for that chain)
+        chn_sizes = self.rreduce(self._sizes[Scale.RESIDUE], Scale.CHAIN, Reduction.SUM)
+        chn_sizes = chn_sizes[chain_mask]
+
+        sizes = {
+            Scale.RESIDUE: self._sizes[Scale.RESIDUE],  # Unchanged
+            Scale.CHAIN: chn_sizes,
+            Scale.MOLECULE: _array_like_backend(self.coordinates, [self.polymer_count]),
+        }
+
+        # Filter molecule types if available
+        mol_types = self._molecule_types[chain_mask] if self._molecule_types is not None else None
+
+        return Polymer(
+            coordinates, atoms, elements, self.sequence, sizes,
+            self._id, names, strands, lengths, self.polymer_count,
+            mol_types,
+        )
 
     def hetero(self: Polymer) -> Polymer:
         """

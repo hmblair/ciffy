@@ -18,7 +18,7 @@ from .types import Scale, Molecule
 
 # Operations
 from .operations.reduction import Reduction
-from .operations.alignment import kabsch_distance as rmsd
+from .operations.alignment import kabsch_distance as rmsd, align
 from .operations.metrics import tm_score, lddt
 
 # I/O
@@ -33,6 +33,10 @@ from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 
 # Neural network utilities (requires PyTorch)
 from . import nn
+
+# Visualization utilities
+from . import visualize
+from .visualize import to_defattr, plot_profile, contact_map
 
 # Expose profiling function if available (when built with CIFFY_PROFILE=1)
 try:
@@ -67,6 +71,7 @@ __all__ = [
     "write_cif",
     "from_sequence",
     "rmsd",
+    "align",
     "tm_score",
     "lddt",
     # Vocabulary sizes
@@ -86,4 +91,9 @@ __all__ = [
     "WATER",
     # Submodules
     "nn",
+    "visualize",
+    # Visualization functions
+    "to_defattr",
+    "plot_profile",
+    "contact_map",
 ]

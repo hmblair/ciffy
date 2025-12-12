@@ -56,6 +56,10 @@
 
 ::: ciffy.rmsd
 
+### align
+
+::: ciffy.align
+
 ### Reduction
 
 ::: ciffy.Reduction

@@ -391,3 +391,249 @@ class TestWithCoordinates:
         assert p2.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
         assert p2.size(Scale.CHAIN) == p.size(Scale.CHAIN)
         assert p2.id() == p.id()
+
+
+class TestKabschAlignment:
+    """Test kabsch_rotation and kabsch_align functions."""
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_rotation_returns_3x3(self, backend):
+        """kabsch_rotation returns a 3x3 rotation matrix."""
+        from ciffy.operations.alignment import kabsch_rotation
+
+        if backend == "torch":
+            import torch
+            coords1 = torch.randn(10, 3)
+            coords2 = torch.randn(10, 3)
+        else:
+            coords1 = np.random.randn(10, 3).astype(np.float32)
+            coords2 = np.random.randn(10, 3).astype(np.float32)
+
+        R = kabsch_rotation(coords1, coords2)
+
+        assert R.shape == (3, 3)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_rotation_is_orthogonal(self, backend):
+        """kabsch_rotation returns orthogonal matrix (R @ R.T = I)."""
+        from ciffy.operations.alignment import kabsch_rotation
+
+        if backend == "torch":
+            import torch
+            coords1 = torch.randn(20, 3)
+            coords2 = torch.randn(20, 3)
+        else:
+            coords1 = np.random.randn(20, 3).astype(np.float32)
+            coords2 = np.random.randn(20, 3).astype(np.float32)
+
+        R = kabsch_rotation(coords1, coords2)
+        R_np = np.asarray(R)
+
+        # R @ R.T should be identity
+        RRt = R_np @ R_np.T
+        assert np.allclose(RRt, np.eye(3), atol=1e-5)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_rotation_det_positive(self, backend):
+        """kabsch_rotation returns proper rotation (det = +1)."""
+        from ciffy.operations.alignment import kabsch_rotation
+
+        if backend == "torch":
+            import torch
+            coords1 = torch.randn(15, 3)
+            coords2 = torch.randn(15, 3)
+        else:
+            coords1 = np.random.randn(15, 3).astype(np.float32)
+            coords2 = np.random.randn(15, 3).astype(np.float32)
+
+        R = kabsch_rotation(coords1, coords2)
+        det = np.linalg.det(np.asarray(R))
+
+        # Should be a proper rotation (not reflection)
+        assert abs(det - 1.0) < 1e-5
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_align_returns_tuple(self, backend):
+        """kabsch_align returns (aligned, rotation, translation)."""
+        from ciffy.operations.alignment import kabsch_align
+
+        if backend == "torch":
+            import torch
+            coords1 = torch.randn(10, 3)
+            coords2 = torch.randn(10, 3)
+        else:
+            coords1 = np.random.randn(10, 3).astype(np.float32)
+            coords2 = np.random.randn(10, 3).astype(np.float32)
+
+        result = kabsch_align(coords1, coords2)
+
+        assert len(result) == 3
+        aligned, R, translation = result
+        assert aligned.shape == coords1.shape
+        assert R.shape == (3, 3)
+        assert translation.shape == (3,)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_align_self_zero_rmsd(self, backend):
+        """kabsch_align of coords to itself gives zero RMSD."""
+        from ciffy.operations.alignment import kabsch_align
+
+        if backend == "torch":
+            import torch
+            coords = torch.randn(20, 3)
+        else:
+            coords = np.random.randn(20, 3).astype(np.float32)
+
+        aligned, R, _ = kabsch_align(coords, coords, center=True)
+        aligned_np = np.asarray(aligned)
+        coords_np = np.asarray(coords)
+
+        # RMSD should be ~0
+        rmsd = np.sqrt(((aligned_np - coords_np) ** 2).sum(axis=1).mean())
+        assert rmsd < 1e-5
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_align_rotation_only(self, backend):
+        """kabsch_align recovers known rotation."""
+        from ciffy.operations.alignment import kabsch_align
+
+        # Create a known rotation (90 degrees around z-axis)
+        theta = np.pi / 2
+        R_true = np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        if backend == "torch":
+            import torch
+            coords2 = torch.randn(30, 3)
+            coords1 = coords2 @ torch.from_numpy(R_true.T)  # Rotate coords2
+        else:
+            coords2 = np.random.randn(30, 3).astype(np.float32)
+            coords1 = coords2 @ R_true.T  # Rotate coords2
+
+        # Center both first
+        if backend == "torch":
+            coords1_c = coords1 - coords1.mean(dim=0)
+            coords2_c = coords2 - coords2.mean(dim=0)
+        else:
+            coords1_c = coords1 - coords1.mean(axis=0)
+            coords2_c = coords2 - coords2.mean(axis=0)
+
+        aligned, R, _ = kabsch_align(coords1_c, coords2_c, center=False)
+
+        # Aligned should match coords2_c closely
+        aligned_np = np.asarray(aligned)
+        coords2_c_np = np.asarray(coords2_c)
+        rmsd = np.sqrt(((aligned_np - coords2_c_np) ** 2).sum(axis=1).mean())
+        assert rmsd < 1e-4
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_kabsch_align_with_translation(self, backend):
+        """kabsch_align handles translation correctly."""
+        from ciffy.operations.alignment import kabsch_align
+
+        if backend == "torch":
+            import torch
+            coords2 = torch.randn(20, 3)
+            # Translate coords1
+            coords1 = coords2 + torch.tensor([10.0, -5.0, 3.0])
+        else:
+            coords2 = np.random.randn(20, 3).astype(np.float32)
+            coords1 = coords2 + np.array([10.0, -5.0, 3.0], dtype=np.float32)
+
+        aligned, _, _ = kabsch_align(coords1, coords2, center=True)
+
+        # After alignment, should match closely
+        aligned_np = np.asarray(aligned)
+        coords2_np = np.asarray(coords2)
+        rmsd = np.sqrt(((aligned_np - coords2_np) ** 2).sum(axis=1).mean())
+        assert rmsd < 1e-4
+
+
+class TestAlignFunction:
+    """Test ciffy.align() function."""
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_returns_tuple_of_polymers(self, backend):
+        """align returns (polymer1, aligned_polymer2)."""
+        import ciffy
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        p2 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        ref, aligned = ciffy.align(p1, p2)
+
+        assert isinstance(ref, ciffy.Polymer)
+        assert isinstance(aligned, ciffy.Polymer)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_reference_unchanged(self, backend):
+        """align does not modify the reference polymer."""
+        import ciffy
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        p2 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        original_coords = np.asarray(p1.coordinates).copy()
+
+        ref, aligned = ciffy.align(p1, p2)
+
+        # Reference should be unchanged
+        assert np.allclose(np.asarray(ref.coordinates), original_coords)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_minimizes_rmsd(self, backend):
+        """align produces minimal RMSD between structures."""
+        import ciffy
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        p2 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        # Apply rotation and translation to p2
+        theta = np.pi / 3
+        R = np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        if backend == "torch":
+            import torch
+            p2.coordinates = p2.coordinates @ torch.from_numpy(R.T) + torch.tensor([10.0, -5.0, 3.0])
+        else:
+            p2.coordinates = p2.coordinates @ R.T + np.array([10.0, -5.0, 3.0], dtype=np.float32)
+
+        # Before alignment, raw RMSD should be large
+        raw_rmsd_before = np.sqrt(((np.asarray(p1.coordinates) - np.asarray(p2.coordinates)) ** 2).sum(axis=1).mean())
+        assert raw_rmsd_before > 5.0
+
+        # After alignment, raw RMSD should be minimal
+        ref, aligned = ciffy.align(p1, p2)
+        raw_rmsd_after = np.sqrt(((np.asarray(ref.coordinates) - np.asarray(aligned.coordinates)) ** 2).sum(axis=1).mean())
+        assert raw_rmsd_after < 1e-3
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_self(self, backend):
+        """align of structure with itself gives zero RMSD."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        ref, aligned = ciffy.align(p, p)
+
+        # Should be essentially identical
+        rmsd = np.sqrt(((np.asarray(ref.coordinates) - np.asarray(aligned.coordinates)) ** 2).sum(axis=1).mean())
+        assert rmsd < 1e-5
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_size_mismatch_raises(self, backend):
+        """align raises ValueError for different-sized polymers."""
+        import ciffy
+
+        p1 = ciffy.from_sequence("acgu", backend=backend)
+        p2 = ciffy.from_sequence("acguacgu", backend=backend)
+
+        with pytest.raises(ValueError, match="same size"):
+            ciffy.align(p1, p2)

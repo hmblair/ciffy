@@ -120,6 +120,63 @@ def residue_to_molecule(residue_idx: int) -> Molecule:
     return RESIDUE_MOLECULE_TYPE.get(residue_idx, Molecule.UNKNOWN)
 
 
+# CIF residue names -> Residue index
+# Maps the names used in mmCIF files to our internal indices
+CIF_RESIDUE_NAMES: dict[str, int] = {
+    # RNA nucleotides (CIF uses single letters)
+    'A': Residue.ADE.value,
+    'C': Residue.CYT.value,
+    'G': Residue.GUA.value,
+    'U': Residue.URA.value,
+    # DNA nucleotides
+    'DA': Residue.ADE.value,  # Same base index as RNA
+    'DC': Residue.CYT.value,
+    'DG': Residue.GUA.value,
+    'DT': Residue.DT.value,
+    'T': Residue.DT.value,  # Some PDB files use single T
+}
+
+# Residue index -> CIF output name
+# Used by the writer to output CIF-compatible residue names
+# Must match the residue prefixes used in atom definitions (atoms.py)
+RESIDUE_CIF_NAMES: dict[int, str] = {
+    Residue.ADE.value: 'A',   # RNA adenosine
+    Residue.CYT.value: 'C',   # RNA cytidine
+    Residue.GUA.value: 'G',   # RNA guanosine
+    Residue.URA.value: 'U',   # RNA uridine
+    Residue.DT.value: 'DT',   # DNA thymidine (no single-letter atom prefix)
+    # Amino acids use their enum names (3-letter codes)
+    Residue.ALA.value: 'ALA',
+    Residue.CYS.value: 'CYS',
+    Residue.ASP.value: 'ASP',
+    Residue.GLU.value: 'GLU',
+    Residue.PHE.value: 'PHE',
+    Residue.GLY.value: 'GLY',
+    Residue.HIS.value: 'HIS',
+    Residue.ILE.value: 'ILE',
+    Residue.LYS.value: 'LYS',
+    Residue.LEU.value: 'LEU',
+    Residue.MET.value: 'MET',
+    Residue.ASN.value: 'ASN',
+    Residue.PRO.value: 'PRO',
+    Residue.GLN.value: 'GLN',
+    Residue.ARG.value: 'ARG',
+    Residue.SER.value: 'SER',
+    Residue.THR.value: 'THR',
+    Residue.VAL.value: 'VAL',
+    Residue.TRP.value: 'TRP',
+    Residue.TYR.value: 'TYR',
+    # Non-polymer
+    Residue.HOH.value: 'HOH',
+    Residue.MG.value: 'MG',
+    Residue.CS.value: 'CS',
+    # Modified nucleotides
+    Residue.GTP.value: 'GTP',
+    Residue.CCC.value: 'CCC',
+    Residue.GNG.value: 'GNG',
+}
+
+
 RES_ABBREV: dict[str, str] = {
     # Nucleotides (lowercase single-letter)
     'ADE': 'a',

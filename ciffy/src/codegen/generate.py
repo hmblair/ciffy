@@ -92,6 +92,8 @@ struct _LOOKUP;
         f.write(atom_gperf)
 
     # === Generate residue.gperf ===
+    from ciffy.biochemistry.residues import CIF_RESIDUE_NAMES
+
     residue_gperf = """%define lookup-function-name _lookup_residue
 %define hash-function-name _hash_residue
 %define constants-prefix RESIDUE
@@ -102,8 +104,18 @@ struct _LOOKUP;
 struct _LOOKUP;
 %%
 """
+    # Track which names are already added (avoid duplicates)
+    added_names = set()
+
+    # Add enum member names (for round-trip compatibility)
     for member in Residue:
         residue_gperf += f"{member.name}, {member.value}\n"
+        added_names.add(member.name)
+
+    # Add CIF-specific names (skip if already added from enum)
+    for cif_name, idx in CIF_RESIDUE_NAMES.items():
+        if cif_name not in added_names:
+            residue_gperf += f"{cif_name}, {idx}\n"
 
     with open(hash_dir / "residue.gperf", "w") as f:
         f.write(residue_gperf)
@@ -195,14 +207,15 @@ struct _LOOKUP;
 def generate_reverse_header(hash_dir, atom_index, Residue, Element):
     """Generate reverse.h for CIF writing."""
     from ciffy.biochemistry.molecule_types import ENTITY_POLY_TYPES
+    from ciffy.biochemistry.residues import RESIDUE_CIF_NAMES
 
     # Collect atoms info
     atoms = {}  # idx -> (residue, atom_name)
     for (residue, atom), idx in atom_index.items():
         atoms[idx] = (residue, atom)
 
-    # Collect residues
-    residues = {member.value: member.name for member in Residue}
+    # Collect residues - use CIF output names for writing
+    residues = RESIDUE_CIF_NAMES
 
     # Collect elements
     elements = {member.value: member.name for member in Element}

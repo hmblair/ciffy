@@ -42,8 +42,8 @@ class TestFromSequence:
         assert polymer.size(Scale.RESIDUE) == 5
         assert polymer.size(Scale.CHAIN) == 1
 
-        # Check sequence values (M=15, G=10, K=13, L=14, F=9)
-        assert list(polymer.sequence) == [15, 10, 13, 14, 9]
+        # Check sequence values (M=18, G=13, K=16, L=17, F=12)
+        assert list(polymer.sequence) == [18, 13, 16, 17, 12]
 
         # Check coordinates are zeros
         assert np.allclose(polymer.coordinates, 0.0)
@@ -64,7 +64,7 @@ class TestFromSequence:
         polymer = from_sequence("M")  # Methionine (not ambiguous with nucleotides)
 
         assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [15]  # MET
+        assert list(polymer.sequence) == [18]  # MET
 
     def test_warning_uppercase_nucleotides(self):
         """Test warning when uppercase looks like nucleotides."""
@@ -80,8 +80,8 @@ class TestFromSequence:
             assert "nucleotide characters" in str(w[0].message)
             assert "Did you mean lowercase" in str(w[0].message)
 
-        # Should work as protein (A=Ala, C=Cys, G=Gly)
-        assert list(polymer.sequence) == [5, 6, 10]
+        # Should work as protein (A=8 Ala, C=9 Cys, G=13 Gly)
+        assert list(polymer.sequence) == [8, 9, 13]
 
     def test_uppercase_acgt_warning(self):
         """Test warning for ACGT (valid protein letters)."""
@@ -95,8 +95,8 @@ class TestFromSequence:
             assert len(w) == 1
             assert "nucleotide characters" in str(w[0].message)
 
-        # Sequence values: A=5, C=6, G=10, T=21
-        assert list(polymer.sequence) == [5, 6, 10, 21]
+        # Sequence values: A=8, C=9, G=13, T=24
+        assert list(polymer.sequence) == [8, 9, 13, 24]
 
     def test_invalid_character_rna(self):
         """Test invalid character in RNA sequence raises ValueError."""
@@ -112,12 +112,31 @@ class TestFromSequence:
         with pytest.raises(ValueError, match="Unknown protein residue 'X'"):
             from_sequence("MGXLF")
 
-    def test_dna_not_supported(self):
-        """Test DNA (thymine) raises ValueError."""
+    def test_dna_sequence(self):
+        """Test DNA sequence generates correct polymer."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence("acgt")
+
+        # Check structure counts
+        assert polymer.size(Scale.RESIDUE) == 4
+        assert polymer.size(Scale.CHAIN) == 1
+
+        # Check sequence values (DA=4, DC=5, DG=6, DT=7)
+        assert list(polymer.sequence) == [4, 5, 6, 7]
+
+        # Check coordinates are zeros
+        assert np.allclose(polymer.coordinates, 0.0)
+
+        # Check all atoms have valid indices (> 0)
+        assert (polymer.atoms > 0).all()
+
+    def test_dna_rna_mixed_raises(self):
+        """Test mixing 'u' and 't' raises ValueError."""
         from ciffy import from_sequence
 
-        with pytest.raises(ValueError, match="DNA.*not supported"):
-            from_sequence("acgt")
+        with pytest.raises(ValueError, match="both 'u'.*and 't'"):
+            from_sequence("acgut")
 
     def test_empty_sequence(self):
         """Test empty sequence raises ValueError."""
@@ -217,6 +236,16 @@ class TestFromSequence:
         polymer = from_sequence("acgu")
 
         assert polymer.size(Scale.RESIDUE) == 4
+
+    def test_all_4_dna_nucleotides(self):
+        """Test all 4 DNA nucleotides work."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence("acgt")
+
+        assert polymer.size(Scale.RESIDUE) == 4
+        # DNA nucleotides have slightly different atom counts (no 2'-OH)
+        assert polymer.size() > 0
 
     def test_elements_are_atomic_numbers(self):
         """Test elements are atomic numbers."""
@@ -379,3 +408,135 @@ class TestFromSequenceEdgeCases:
         # Check that the result has a valid backend regardless
         p = from_sequence("acgu", backend="numpy")
         assert p.backend in ["numpy", "torch"]
+
+
+class TestFromSequenceMultiChain:
+    """Test multi-chain from_sequence functionality."""
+
+    def test_two_rna_chains(self):
+        """Test creating two RNA chains."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "acgu"])
+
+        assert polymer.size(Scale.CHAIN) == 2
+        assert polymer.size(Scale.RESIDUE) == 8
+        assert polymer.names == ["A", "B"]
+
+    def test_three_chains(self):
+        """Test creating three chains."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "acgu", "acgu"])
+
+        assert polymer.size(Scale.CHAIN) == 3
+        assert polymer.names == ["A", "B", "C"]
+
+    def test_mixed_rna_protein(self):
+        """Test mixing RNA and protein chains."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "MGKLF"])
+
+        assert polymer.size(Scale.CHAIN) == 2
+        assert polymer.size(Scale.RESIDUE) == 9  # 4 RNA + 5 protein
+
+    def test_different_length_chains(self):
+        """Test chains with different lengths."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["a", "acgu", "acguacgu"])
+
+        assert polymer.size(Scale.CHAIN) == 3
+        assert list(polymer.lengths) == [1, 4, 8]
+
+    def test_single_element_list(self):
+        """Test list with single sequence equals string input."""
+        from ciffy import from_sequence, Scale
+
+        p1 = from_sequence("acgu")
+        p2 = from_sequence(["acgu"])
+
+        assert p1.size() == p2.size()
+        assert p1.size(Scale.CHAIN) == p2.size(Scale.CHAIN)
+        assert p1.names == p2.names
+
+    def test_empty_list_raises(self):
+        """Test empty list raises ValueError."""
+        from ciffy import from_sequence
+
+        with pytest.raises(ValueError, match="Empty sequence list"):
+            from_sequence([])
+
+    def test_chain_names_beyond_z(self):
+        """Test chain naming beyond 26 chains."""
+        from ciffy import from_sequence, Scale
+
+        # Create 27 chains
+        seqs = ["a"] * 27
+        polymer = from_sequence(seqs)
+
+        assert polymer.size(Scale.CHAIN) == 27
+        assert polymer.names[0] == "A"
+        assert polymer.names[25] == "Z"
+        assert polymer.names[26] == "AA"
+
+    def test_multi_chain_torch_backend(self):
+        """Test multi-chain with torch backend."""
+        import torch
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "acgu"], backend="torch")
+
+        assert polymer.backend == "torch"
+        assert polymer.size(Scale.CHAIN) == 2
+        assert isinstance(polymer.coordinates, torch.Tensor)
+
+    def test_atoms_per_chain(self):
+        """Test atoms are correctly distributed per chain."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "MGKLF"])
+
+        # Get atoms per chain
+        atoms_per_chain = polymer.per(Scale.ATOM, Scale.CHAIN)
+        assert len(atoms_per_chain) == 2
+
+        # First chain (RNA) should have 148 atoms
+        # Second chain (protein) should have different count
+        assert atoms_per_chain[0] > 0
+        assert atoms_per_chain[1] > 0
+        assert sum(atoms_per_chain) == polymer.size()
+
+    def test_two_dna_chains(self):
+        """Test creating two DNA chains (e.g., double helix)."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgt", "acgt"])
+
+        assert polymer.size(Scale.CHAIN) == 2
+        assert polymer.size(Scale.RESIDUE) == 8
+        assert polymer.names == ["A", "B"]
+
+    def test_mixed_rna_dna(self):
+        """Test mixing RNA and DNA chains."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgu", "acgt"])
+
+        assert polymer.size(Scale.CHAIN) == 2
+        assert polymer.size(Scale.RESIDUE) == 8
+        # First chain is RNA (indices 0-3), second is DNA (indices 4-7)
+        seq = list(polymer.sequence)
+        assert seq[:4] == [0, 1, 2, 3]  # RNA
+        assert seq[4:] == [4, 5, 6, 7]  # DNA
+
+    def test_mixed_dna_protein(self):
+        """Test mixing DNA and protein chains."""
+        from ciffy import from_sequence, Scale
+
+        polymer = from_sequence(["acgt", "MGKLF"])
+
+        assert polymer.size(Scale.CHAIN) == 2
+        # 4 DNA + 5 protein residues
+        assert polymer.size(Scale.RESIDUE) == 9

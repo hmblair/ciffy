@@ -12,3 +12,6 @@ ciffy/src/hash/
 
 # Test data (downloaded on demand from RCSB PDB)
 tests/data/
+
+# Generated documentation (mkdocs output)
+site/

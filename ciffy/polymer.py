@@ -120,6 +120,57 @@ def _classify_chain_type(min_idx: int, max_idx: int,
     return Molecule.OTHER.value
 
 
+def _format_chain_table(pdb_id: str, backend: str, rows: list[dict]) -> str:
+    """
+    Format chain info as a table string.
+
+    Args:
+        pdb_id: PDB identifier.
+        backend: Backend name ('numpy' or 'torch').
+        rows: List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
+
+    Returns:
+        Formatted table string.
+    """
+    # ANSI codes
+    GREEN = "\033[32m"
+    GREY = "\033[90m"
+    RESET = "\033[0m"
+
+    # Calculate totals first (needed for column width calculation)
+    total_res = sum(r['res'] for r in rows)
+    total_atoms = sum(r['atoms'] for r in rows)
+
+    # Calculate column widths (include totals in width calculation)
+    chain_w = max(1, max((len(r['chain']) for r in rows), default=0))
+    type_w = max(4, max((len(r['type']) for r in rows), default=0))
+    res_w = max(3, len(str(total_res)), max((len(str(r['res'])) for r in rows), default=0))
+    atoms_w = max(5, len(str(total_atoms)), max((len(str(r['atoms'])) for r in rows), default=0))
+
+    # Build header and ensure separator is wide enough for title
+    header = f"{'':>{chain_w}}  {'Type':<{type_w}}  {'Res':>{res_w}}  {'Atoms':>{atoms_w}}"
+    title = f"Polymer {pdb_id} ({backend})"
+    sep_width = max(len(header), len(title))
+    sep = "─" * sep_width
+
+    # Build rows
+    lines = [f"Polymer {GREEN}{pdb_id}{RESET} {GREY}({backend}){RESET}", sep, header, sep]
+    for r in rows:
+        res_str = "-" if r['res'] == 0 else str(r['res'])
+        lines.append(
+            f"{r['chain']:>{chain_w}}  {r['type']:<{type_w}}  {res_str:>{res_w}}  {r['atoms']:>{atoms_w}}"
+        )
+
+    # Add totals row
+    lines.append(sep)
+    lines.append(
+        f"{'Σ':>{chain_w}}  {'':<{type_w}}  {total_res:>{res_w}}  {total_atoms:>{atoms_w}}"
+    )
+    lines.append(sep)
+
+    return "\n".join(lines)
+
+
 class Polymer:
     """
     A molecular structure with coordinates, atom types, and hierarchy.
@@ -957,27 +1008,24 @@ class Polymer:
         """
         return [ATOM_NAMES.get(ix.item(), '?') for ix in self.atoms]
 
-    def __repr__(self: Polymer) -> str:
-        """String representation with structure summary."""
-        # Gather data for all chains
-        # Convert to numpy once to avoid repeated .item() calls in loop
+    def chain_info(self: Polymer) -> list[dict]:
+        """
+        Get information about each chain.
+
+        Returns:
+            List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
+        """
         types_np = _ap.as_numpy(self.molecule_type)
         lengths_np = _ap.as_numpy(self.lengths)
         atoms_np = _ap.as_numpy(self._sizes[Scale.CHAIN])
         elements_np = _ap.as_numpy(self.elements)
 
         rows = []
-        total_res = 0
-        total_atoms = 0
         atom_offset = 0
         for ix in range(self.size(Scale.CHAIN)):
             mol = molecule_type(int(types_np[ix]))
             res = int(lengths_np[ix])
             atoms = int(atoms_np[ix])
-            total_res += res
-            total_atoms += atoms
-            # Non-poly chains (res=0) show "-" for residue count
-            is_nonpoly = (res == 0)
 
             # For ION chains, show element name (e.g., "MG ION")
             type_str = mol.name
@@ -991,43 +1039,16 @@ class Polymer:
                 'chain': self.names[ix],
                 'type': type_str,
                 'res': res,
-                'res_str': '-' if is_nonpoly else str(res),
                 'atoms': atoms,
             })
             atom_offset += atoms
 
-        # Calculate column widths (include totals in width calculation)
-        chain_w = max(len(r['chain']) for r in rows) if rows else 1
-        type_w = max(len(r['type']) for r in rows) if rows else 4
-        res_w = max((len(r['res_str']) for r in rows), default=1)
-        res_w = max(res_w, len(str(total_res)))
-        atom_w = max((len(str(r['atoms'])) for r in rows), default=1)
-        atom_w = max(atom_w, len(str(total_atoms)))
+        return rows
 
-        # Ensure minimum widths for headers
-        type_w = max(type_w, 4)  # "Type"
-        res_w = max(res_w, 3)    # "Res"
-        atom_w = max(atom_w, 5)  # "Atoms"
-
-        # ANSI color codes
-        GREY = "\033[90m"
-        RESET = "\033[0m"
-
-        # Build output
-        header = f"PDB {self.id()} {GREY}({self.backend}){RESET}"
-        table_w = chain_w + 2 + type_w + 2 + res_w + 2 + atom_w
-        sep = "─" * table_w
-
-        out = f"{header}\n{sep}\n"
-        out += f"{'':{chain_w}s}  {'Type':{type_w}s}  {'Res':>{res_w}s}  {'Atoms':>{atom_w}s}\n"
-
-        for r in rows:
-            out += f"{r['chain']:{chain_w}s}  {r['type']:{type_w}s}  {r['res_str']:>{res_w}s}  {r['atoms']:{atom_w}d}\n"
-
-        out += f"{sep}\n"
-        out += f"{'':{chain_w}s}  {'':{type_w}s}  {total_res:{res_w}d}  {total_atoms:{atom_w}d}\n"
-
-        return out
+    def __repr__(self: Polymer) -> str:
+        """String representation with structure summary."""
+        rows = self.chain_info()
+        return _format_chain_table(self.id(), self.backend, rows)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion

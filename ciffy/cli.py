@@ -44,9 +44,9 @@ def main():
     from ciffy import load
 
     for i, filepath in enumerate(args.files):
-        # Add separator between multiple files
+        # Add blank line between multiple files
         if i > 0:
-            print("\n" + "=" * 40 + "\n")
+            print()
 
         try:
             polymer = load(filepath, load_descriptions=args.desc)

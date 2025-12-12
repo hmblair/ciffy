@@ -951,7 +951,7 @@ class Polymer:
         Returns:
             Single-letter sequence string.
         """
-        def abbrev(x):
+        def abbrev(x: int) -> str:
             return RESIDUE_ABBREV.get(x, 'n')
         return "".join(abbrev(ix.item()) for ix in self.sequence)
 

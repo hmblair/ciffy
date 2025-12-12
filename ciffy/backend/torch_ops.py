@@ -5,12 +5,9 @@ Provides pure PyTorch implementations without torch_scatter dependency.
 """
 
 from __future__ import annotations
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Tuple, Optional
 
 import torch
-
-if TYPE_CHECKING:
-    pass
 
 
 def _ensure_same_device(index: torch.Tensor, src: torch.Tensor) -> torch.Tensor:

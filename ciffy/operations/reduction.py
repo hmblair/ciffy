@@ -56,16 +56,7 @@ def scatter_collate(
     Returns:
         List where each element contains all values for that index.
     """
-    if len(indices) == 0:
-        return [features[indices == ix] for ix in range(dim_size)]
-    if is_torch(indices):
-        max_idx = indices.max().item()
-    else:
-        max_idx = int(indices.max())
-    return [
-        features[indices == ix]
-        for ix in range(max_idx + 1)
-    ]
+    return [features[indices == ix] for ix in range(dim_size)]
 
 
 def _scatter_sum(features: Array, indices: Array, dim: int, dim_size: int) -> Array:

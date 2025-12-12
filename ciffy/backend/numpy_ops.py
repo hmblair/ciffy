@@ -182,3 +182,8 @@ def cat(arrays: list, axis: int = 0) -> np.ndarray:
 def multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Element-wise multiplication."""
     return np.multiply(a, b)
+
+
+def sign(arr: np.ndarray) -> np.ndarray:
+    """Element-wise sign (-1, 0, or 1)."""
+    return np.sign(arr)

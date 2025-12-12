@@ -63,15 +63,23 @@ def tm_score(
     mol_type = _get_molecule_type(ref)
 
     # Compute d_0 based on molecule type
+    # Use max(0, ...) to avoid complex numbers from sqrt/cbrt of negative values
     if mol_type in (Molecule.PROTEIN,):
         # Protein: d_0 = 1.24 * (L - 15)^(1/3) - 1.8
-        d_0 = 1.24 * ((L - 15) ** (1/3)) - 1.8
+        # Use signed cube root for negative values
+        inner = L - 15
+        if inner >= 0:
+            d_0 = 1.24 * (inner ** (1/3)) - 1.8
+        else:
+            d_0 = 1.24 * (-((-inner) ** (1/3))) - 1.8
     else:
         # RNA/DNA: d_0 = 0.6 * sqrt(L - 5) - 2.5
-        d_0 = 0.6 * np.sqrt(L - 5) - 2.5
+        # Clamp inner value to 0 to avoid complex numbers
+        inner = max(0, L - 5)
+        d_0 = 0.6 * np.sqrt(inner) - 2.5
 
-    # Ensure d_0 is positive
-    d_0 = max(d_0, 0.5)
+    # Ensure d_0 is positive (minimum 0.5 for very small structures)
+    d_0 = float(max(d_0, 0.5))
 
     # Align structures using Kabsch algorithm
     # First center both structures

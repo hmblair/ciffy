@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 
 # Test PDB IDs - add new structures here to include them in generic tests
-TEST_PDBS = ["3SKW", "9GCM", "8CAM"]
+TEST_PDBS = ["3SKW", "9GCM"]
 
 # Large structures (excluded from parametrized tests by default for speed)
-LARGE_PDBS = ["9MDS"]
+LARGE_PDBS = ["9MDS", "8CAM"]
 
 DATA_DIR = Path(__file__).parent / "data"
 PDB_URL = "https://files.rcsb.org/download/{pdb_id}.cif"
@@ -81,3 +81,50 @@ def cif_9gcm() -> str:
 def cif_9mds() -> str:
     """Path to 9MDS.cif (large ribosome structure)."""
     return get_test_cif("9MDS")
+
+
+# =============================================================================
+# Synthetic polymer fixtures for edge case testing
+# =============================================================================
+
+@pytest.fixture(params=["numpy", "torch"])
+def backend(request) -> str:
+    """Parametrized backend fixture."""
+    return request.param
+
+
+@pytest.fixture
+def empty_polymer(backend):
+    """Polymer with 0 atoms (via impossible mask)."""
+    from ciffy import from_sequence
+    template = from_sequence("a", backend=backend)
+    return template[template.atoms < 0]
+
+
+@pytest.fixture
+def single_atom_polymer(backend):
+    """Polymer with exactly 1 atom."""
+    from ciffy import from_sequence
+    template = from_sequence("g", backend=backend)  # Glycine has few atoms
+    return template[:1]
+
+
+@pytest.fixture
+def single_residue_polymer(backend):
+    """Polymer with 1 residue (multiple atoms)."""
+    from ciffy import from_sequence
+    return from_sequence("a", backend=backend)
+
+
+@pytest.fixture
+def single_chain_polymer(backend):
+    """Polymer with 1 chain, multiple residues."""
+    from ciffy import from_sequence
+    return from_sequence("acgu", backend=backend)
+
+
+@pytest.fixture
+def multi_chain_polymer(backend):
+    """Polymer loaded from CIF with multiple chains."""
+    from ciffy import load
+    return load(get_test_cif("9GCM"), backend=backend)

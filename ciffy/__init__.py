@@ -49,6 +49,9 @@ MOLECULE = Scale.MOLECULE
 PROTEIN = Molecule.PROTEIN
 RNA = Molecule.RNA
 DNA = Molecule.DNA
+LIGAND = Molecule.LIGAND
+ION = Molecule.ION
+WATER = Molecule.WATER
 
 __all__ = [
     # Version
@@ -78,6 +81,9 @@ __all__ = [
     "PROTEIN",
     "RNA",
     "DNA",
+    "LIGAND",
+    "ION",
+    "WATER",
     # Submodules
     "nn",
 ]

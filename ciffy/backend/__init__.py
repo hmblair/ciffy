@@ -101,3 +101,53 @@ def size(arr: Array, dim: int = 0) -> int:
     if is_torch(arr):
         return arr.size(dim)
     return arr.shape[dim]
+
+
+def get_device(arr: Array) -> str | None:
+    """
+    Get the device of an array.
+
+    Args:
+        arr: A NumPy array or PyTorch tensor.
+
+    Returns:
+        Device string (e.g., 'cpu', 'cuda:0') for PyTorch tensors,
+        None for NumPy arrays.
+    """
+    if is_torch(arr):
+        return str(arr.device)
+    return None
+
+
+def check_compatible(target: Array, source: Array, name: str = "array") -> None:
+    """
+    Check that source array is compatible with target (same backend and device).
+
+    Args:
+        target: The reference array (e.g., existing coordinates).
+        source: The array being assigned.
+        name: Name of the array for error messages.
+
+    Raises:
+        TypeError: If backends don't match.
+        ValueError: If devices don't match (for PyTorch tensors).
+    """
+    target_backend = get_backend(target)
+    source_backend = get_backend(source)
+
+    if target_backend != source_backend:
+        raise TypeError(
+            f"Cannot assign {source_backend.value} {name} to "
+            f"{target_backend.value} Polymer. "
+            f"Convert using .numpy() or .torch() first."
+        )
+
+    if target_backend == Backend.TORCH:
+        target_device = str(target.device)
+        source_device = str(source.device)
+        if target_device != source_device:
+            raise ValueError(
+                f"Cannot assign {name} on device '{source_device}' to "
+                f"Polymer on device '{target_device}'. "
+                f"Move tensor using .to('{target_device}') first."
+            )

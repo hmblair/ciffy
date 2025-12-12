@@ -151,3 +151,193 @@ class TestLDDT:
 
         with pytest.raises(ValueError, match="sizes must match"):
             lddt(p1, p2)
+
+
+# =============================================================================
+# Edge Case Tests for Metrics
+# =============================================================================
+
+class TestTMScoreEdgeCases:
+    """Edge case tests for tm_score."""
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_tm_score_very_small_structure(self, backend):
+        """TM-score handles very small structures (d_0 edge case)."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        # Create 5-residue structure
+        p = ciffy.from_sequence("acgua", backend=backend)
+
+        # Attach random non-zero coordinates
+        coords = np.random.randn(p.size(), 3).astype(np.float32) * 10
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        score = tm_score(p, p, scale=Scale.RESIDUE)
+
+        assert 0.0 <= score <= 1.0
+        # Self-comparison should be ~1.0
+        assert score > 0.99
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_tm_score_single_residue(self, backend):
+        """TM-score handles single-residue structure (may return NaN for L<5)."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.from_sequence("a", backend=backend)
+
+        # Attach non-zero coordinates
+        coords = np.random.randn(p.size(), 3).astype(np.float32) * 10
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        score = tm_score(p, p, scale=Scale.RESIDUE)
+
+        # TM-score should always return a valid float in [0, 1]
+        assert 0.0 <= score <= 1.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_tm_score_two_residues(self, backend):
+        """TM-score handles two-residue structure."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.from_sequence("ac", backend=backend)
+
+        # Attach non-zero coordinates
+        coords = np.random.randn(p.size(), 3).astype(np.float32) * 10
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        score = tm_score(p, p, scale=Scale.RESIDUE)
+
+        # TM-score should always return a valid float in [0, 1]
+        assert 0.0 <= score <= 1.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_tm_score_at_residue_scale(self, backend):
+        """TM-score at residue scale on larger structure."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        score = tm_score(p, p, scale=Scale.RESIDUE)
+
+        assert 0.0 <= score <= 1.0
+        assert score > 0.99
+
+
+class TestLDDTEdgeCases:
+    """Edge case tests for lddt."""
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_very_small_cutoff(self, backend):
+        """lDDT with very small cutoff (few/no pairs)."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+
+        # Place atoms very far apart
+        n = p.size()
+        coords = np.zeros((n, 3), dtype=np.float32)
+        coords[:, 0] = np.arange(n) * 100  # 100 angstroms apart
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        # Very small cutoff = no pairs
+        global_score, per_res = lddt(p, p, cutoff=1.0)
+
+        # With no valid pairs, lDDT should return 0.0
+        assert global_score == 0.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_single_threshold(self, backend):
+        """lDDT with single threshold."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        global_score, per_res = lddt(p, p, thresholds=(1.0,))
+
+        assert 0.0 <= global_score <= 1.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_many_thresholds(self, backend):
+        """lDDT with many thresholds."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        thresholds = tuple(i * 0.1 for i in range(1, 21))  # 0.1 to 2.0
+        global_score, per_res = lddt(p, p, thresholds=thresholds)
+
+        assert 0.0 <= global_score <= 1.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_single_residue(self, backend):
+        """lDDT on single-residue structure."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.from_sequence("a", backend=backend)
+
+        # Attach non-zero coordinates
+        coords = np.random.randn(p.size(), 3).astype(np.float32)
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        global_score, per_res = lddt(p, p)
+
+        # Single residue may have undefined lDDT (no pairs to compare)
+        assert per_res.shape == (1,)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_two_residues(self, backend):
+        """lDDT on two-residue structure."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.from_sequence("ac", backend=backend)
+
+        # Attach coordinates close together
+        coords = np.random.randn(p.size(), 3).astype(np.float32)
+        if backend == "torch":
+            import torch
+            p.coordinates = torch.from_numpy(coords)
+        else:
+            p.coordinates = coords
+
+        global_score, per_res = lddt(p, p)
+
+        assert 0.0 <= global_score <= 1.0
+        assert per_res.shape == (2,)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_lddt_large_cutoff(self, backend):
+        """lDDT with very large cutoff (all pairs included)."""
+        if backend == "torch" and not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        global_score, per_res = lddt(p, p, cutoff=1000.0)
+
+        # Self comparison should be 1.0
+        assert abs(global_score - 1.0) < 1e-6

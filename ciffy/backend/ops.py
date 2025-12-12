@@ -156,3 +156,16 @@ def multiply(a: Array, b: Array) -> Array:
         Element-wise product.
     """
     return _get_ops(a).multiply(a, b)
+
+
+def sign(arr: Array) -> Array:
+    """
+    Element-wise sign (-1, 0, or 1).
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Array with sign of each element.
+    """
+    return _get_ops(arr).sign(arr)

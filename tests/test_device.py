@@ -238,40 +238,26 @@ class TestMixedDeviceHandling:
         assert index.device.type == "cpu"
 
     @requires_cuda
-    def test_with_coordinates_gpu_on_cpu_polymer_cuda(self, any_polymer_torch):
-        """Test with_coordinates with GPU coords on CPU polymer works for center/expand."""
+    def test_with_coordinates_rejects_cross_device_cuda(self, any_polymer_torch):
+        """Test with_coordinates rejects GPU coords on CPU polymer."""
         import torch
-        from ciffy import Scale
+        import pytest
 
-        # CPU polymer with GPU coordinates (common pattern in ML workflows)
+        # CPU polymer should reject GPU coordinates
         gpu_coords = any_polymer_torch.coordinates.to("cuda")
-        mixed_polymer = any_polymer_torch.with_coordinates(gpu_coords)
-
-        # Internal sizes are on CPU, coordinates on CUDA
-        assert mixed_polymer.coordinates.device.type == "cuda"
-        assert mixed_polymer._sizes[Scale.CHAIN].device.type == "cpu"
-
-        # center() should work (uses reduce + expand internally)
-        centered, means = mixed_polymer.center(Scale.MOLECULE)
-        assert centered.coordinates.device.type == "cuda"
+        with pytest.raises(ValueError, match="device"):
+            any_polymer_torch.with_coordinates(gpu_coords)
 
     @requires_mps
-    def test_with_coordinates_gpu_on_cpu_polymer_mps(self, any_polymer_torch):
-        """Test with_coordinates with MPS coords on CPU polymer works for center/expand."""
+    def test_with_coordinates_rejects_cross_device_mps(self, any_polymer_torch):
+        """Test with_coordinates rejects MPS coords on CPU polymer."""
         import torch
-        from ciffy import Scale
+        import pytest
 
-        # CPU polymer with MPS coordinates (common pattern in ML workflows)
+        # CPU polymer should reject MPS coordinates
         mps_coords = any_polymer_torch.coordinates.to("mps")
-        mixed_polymer = any_polymer_torch.with_coordinates(mps_coords)
-
-        # Internal sizes are on CPU, coordinates on MPS
-        assert mixed_polymer.coordinates.device.type == "mps"
-        assert mixed_polymer._sizes[Scale.CHAIN].device.type == "cpu"
-
-        # center() should work (uses reduce + expand internally)
-        centered, means = mixed_polymer.center(Scale.MOLECULE)
-        assert centered.coordinates.device.type == "mps"
+        with pytest.raises(ValueError, match="device"):
+            any_polymer_torch.with_coordinates(mps_coords)
 
 
 class TestDifferentiability:

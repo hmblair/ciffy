@@ -209,3 +209,8 @@ def cat(tensors: list, dim: int = 0) -> torch.Tensor:
 def multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise multiplication."""
     return torch.multiply(a, b)
+
+
+def sign(arr: torch.Tensor) -> torch.Tensor:
+    """Element-wise sign (-1, 0, or 1)."""
+    return torch.sign(arr)

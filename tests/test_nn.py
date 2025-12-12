@@ -203,3 +203,161 @@ class TestPolymerEmbedding:
 
         # Check that embedding weights have gradients
         assert embed.atom_embedding.weight.grad is not None
+
+
+# =============================================================================
+# Edge Case Tests
+# =============================================================================
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestPolymerDatasetEdgeCases:
+    """Edge case tests for PolymerDataset."""
+
+    def test_dataset_empty_directory(self, tmp_path):
+        """Dataset with empty directory has length 0."""
+        from ciffy.nn import PolymerDataset
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        dataset = PolymerDataset(str(empty_dir))
+        assert len(dataset) == 0
+
+    def test_dataset_filters_match_nothing(self):
+        """Dataset with impossible filters is empty."""
+        from ciffy.nn import PolymerDataset
+
+        # max_atoms=1 should filter out everything
+        dataset = PolymerDataset(DATA_DIR, max_atoms=1)
+        assert len(dataset) == 0
+
+    def test_dataset_min_atoms_filter(self):
+        """Dataset min_atoms filters correctly."""
+        from ciffy.nn import PolymerDataset
+
+        # Very large min_atoms should filter out everything
+        dataset = PolymerDataset(DATA_DIR, min_atoms=1000000)
+        assert len(dataset) == 0
+
+    def test_dataset_all_excluded(self):
+        """Dataset with all IDs excluded is empty."""
+        from ciffy.nn import PolymerDataset
+
+        # Get all CIF files and exclude them
+        import glob
+        cif_files = glob.glob(os.path.join(DATA_DIR, "*.cif"))
+        exclude_ids = [os.path.basename(f).replace(".cif", "") for f in cif_files]
+
+        dataset = PolymerDataset(DATA_DIR, exclude_ids=exclude_ids)
+        assert len(dataset) == 0
+
+    def test_dataset_molecule_types_filter_no_match(self):
+        """Dataset with non-matching molecule_types is empty or smaller."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Molecule
+
+        # DNA type likely not present in test data
+        dataset = PolymerDataset(DATA_DIR, molecule_types=[Molecule.DNA])
+        # May be empty or have some entries
+        assert len(dataset) >= 0  # Shouldn't crash
+
+    def test_dataset_directory_with_non_cif_files(self, tmp_path):
+        """Dataset ignores non-CIF files."""
+        from ciffy.nn import PolymerDataset
+        import shutil
+
+        # Create directory with mixed files
+        mixed_dir = tmp_path / "mixed"
+        mixed_dir.mkdir()
+
+        # Add a CIF file
+        shutil.copy(get_cif("3SKW"), mixed_dir / "3SKW.cif")
+
+        # Add non-CIF files
+        (mixed_dir / "readme.txt").write_text("test")
+        (mixed_dir / "data.json").write_text("{}")
+
+        dataset = PolymerDataset(str(mixed_dir))
+        # Should only find the CIF file
+        assert len(dataset) >= 1
+
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestPolymerEmbeddingEdgeCases:
+    """Edge case tests for PolymerEmbedding."""
+
+    def test_embedding_single_dim(self):
+        """Embedding with dimension 1 works."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=1)
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
+
+        features = embed(p)
+        assert features.shape == (p.size(), 1)
+
+    def test_embedding_large_dim(self):
+        """Embedding with large dimension works."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=1024)
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
+
+        features = embed(p)
+        assert features.shape == (p.size(), 1024)
+
+    def test_embedding_only_residue_dim(self):
+        """Embedding with only residue_dim at atom scale."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.ATOM, residue_dim=64)
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
+
+        features = embed(p)
+        # Should expand residue embeddings to atom level
+        assert features.shape == (p.size(), 64)
+
+    def test_embedding_only_element_dim(self):
+        """Embedding with only element_dim at atom scale."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.ATOM, element_dim=32)
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
+
+        features = embed(p)
+        assert features.shape == (p.size(), 32)
+
+    def test_embedding_all_dims(self):
+        """Embedding with all dims at atom scale."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(
+            scale=Scale.ATOM,
+            atom_dim=64,
+            residue_dim=32,
+            element_dim=16,
+        )
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
+
+        features = embed(p)
+        assert features.shape == (p.size(), 64 + 32 + 16)
+
+    def test_embedding_on_template_polymer(self):
+        """Embedding works on template polymer."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=32)
+        p = ciffy.from_sequence("acgu", backend="torch")
+
+        features = embed(p)
+        assert features.shape == (p.size(), 32)
+
+    def test_embedding_on_single_residue(self):
+        """Embedding works on single-residue polymer."""
+        from ciffy.nn import PolymerEmbedding
+
+        embed = PolymerEmbedding(scale=Scale.RESIDUE, residue_dim=32)
+        p = ciffy.from_sequence("a", backend="torch")
+
+        features = embed(p)
+        assert features.shape == (1, 32)

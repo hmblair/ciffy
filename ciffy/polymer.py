@@ -12,7 +12,7 @@ from copy import copy
 
 import numpy as np
 
-from .backend import Array, is_torch, get_backend, size as arr_size
+from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible
 from .backend import ops as backend
 from .backend import array_protocol as _ap
 from .types import Scale, Molecule
@@ -161,11 +161,12 @@ def _format_chain_table(pdb_id: str, backend: str, rows: list[dict]) -> str:
             f"{r['chain']:>{chain_w}}  {r['type']:<{type_w}}  {res_str:>{res_w}}  {r['atoms']:>{atoms_w}}"
         )
 
-    # Add totals row
-    lines.append(sep)
-    lines.append(
-        f"{'Σ':>{chain_w}}  {'':<{type_w}}  {total_res:>{res_w}}  {total_atoms:>{atoms_w}}"
-    )
+    # Add totals row only if there are multiple chains
+    if len(rows) > 1:
+        lines.append(sep)
+        lines.append(
+            f"{'Σ':>{chain_w}}  {'':<{type_w}}  {total_res:>{res_w}}  {total_atoms:>{atoms_w}}"
+        )
     lines.append(sep)
 
     return "\n".join(lines)
@@ -266,14 +267,78 @@ class Polymer:
                 f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.id()}."
             )
 
-        self.coordinates = coordinates
-        self.atoms = atoms
-        self.elements = elements
-        self.sequence = sequence
+        self._coordinates = coordinates
+        self._atoms = atoms
+        self._elements = elements
+        self._sequence = sequence
         self._sizes = sizes
-        self.lengths = lengths
+        self._lengths = lengths
         self._molecule_types = molecule_types
         self.descriptions = descriptions
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Array Properties (with backend/device validation)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def coordinates(self) -> Array:
+        """(N, 3) tensor of atom positions."""
+        return self._coordinates
+
+    @coordinates.setter
+    def coordinates(self, value: Array) -> None:
+        """Set coordinates with backend/device validation."""
+        if hasattr(self, '_coordinates') and self._coordinates is not None:
+            check_compatible(self._coordinates, value, "coordinates")
+        self._coordinates = value
+
+    @property
+    def atoms(self) -> Array:
+        """(N,) tensor of atom type indices."""
+        return self._atoms
+
+    @atoms.setter
+    def atoms(self, value: Array) -> None:
+        """Set atoms with backend/device validation."""
+        if hasattr(self, '_coordinates') and self._coordinates is not None:
+            check_compatible(self._coordinates, value, "atoms")
+        self._atoms = value
+
+    @property
+    def elements(self) -> Array:
+        """(N,) tensor of element indices."""
+        return self._elements
+
+    @elements.setter
+    def elements(self, value: Array) -> None:
+        """Set elements with backend/device validation."""
+        if hasattr(self, '_coordinates') and self._coordinates is not None:
+            check_compatible(self._coordinates, value, "elements")
+        self._elements = value
+
+    @property
+    def sequence(self) -> Array:
+        """(R,) tensor of residue type indices."""
+        return self._sequence
+
+    @sequence.setter
+    def sequence(self, value: Array) -> None:
+        """Set sequence with backend/device validation."""
+        if hasattr(self, '_coordinates') and self._coordinates is not None:
+            check_compatible(self._coordinates, value, "sequence")
+        self._sequence = value
+
+    @property
+    def lengths(self) -> Array:
+        """(C,) tensor of residues per chain."""
+        return self._lengths
+
+    @lengths.setter
+    def lengths(self, value: Array) -> None:
+        """Set lengths with backend/device validation."""
+        if hasattr(self, '_coordinates') and self._coordinates is not None:
+            check_compatible(self._coordinates, value, "lengths")
+        self._lengths = value
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -712,7 +777,7 @@ class Polymer:
         ).squeeze()
 
         # Ensure stability by fixing signs based on third moments
-        signs = aligned.moment(3, scale).sign()
+        signs = backend.sign(aligned.moment(3, scale))
         signs[:, 0] = signs[:, 1] * signs[:, 2] * _det(Q)
         signs_exp = aligned.expand(signs, scale)
 
@@ -1112,6 +1177,18 @@ class Polymer:
         from .backend import get_backend
         return get_backend(self.coordinates).value
 
+    @property
+    def device(self: Polymer) -> str | None:
+        """
+        Get the device of the polymer's arrays.
+
+        Returns:
+            Device string (e.g., 'cpu', 'cuda:0', 'mps:0') for PyTorch tensors,
+            None for NumPy arrays.
+        """
+        from .backend import get_device
+        return get_device(self.coordinates)
+
     def numpy(self: Polymer) -> Polymer:
         """
         Convert all arrays to NumPy.
@@ -1255,10 +1332,15 @@ class Polymer:
         Create a copy with new coordinates.
 
         Args:
-            coordinates: New coordinate tensor.
+            coordinates: New coordinate tensor. Must match the polymer's
+                backend and device.
 
         Returns:
             New Polymer with updated coordinates.
+
+        Raises:
+            TypeError: If backend doesn't match.
+            ValueError: If device doesn't match (for PyTorch tensors).
         """
         result = copy(self)
         result.coordinates = coordinates

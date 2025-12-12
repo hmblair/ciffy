@@ -22,11 +22,6 @@ from .nucleotides import (
     DeoxyribonucleicAcid,
 )
 from .constants import (
-    FRAMES,
-    FRAME1,
-    FRAME2,
-    FRAME3,
-    COARSE,
     Backbone,
     Nucleobase,
     Phosphate,
@@ -80,11 +75,6 @@ __all__ = [
     "Thymidine",
     "DeoxyribonucleicAcid",
     # Constants
-    "FRAMES",
-    "FRAME1",
-    "FRAME2",
-    "FRAME3",
-    "COARSE",
     "Backbone",
     "Nucleobase",
     "Phosphate",

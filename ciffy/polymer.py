@@ -27,7 +27,6 @@ from .biochemistry import (
     RESIDUE_MOLECULE_TYPE,
     ATOM_NAMES,
     ELEMENT_NAMES,
-    FRAMES,
     Backbone,
 )
 from .utils import all_equal, filter_by_mask

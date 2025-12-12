@@ -59,7 +59,7 @@ class TestModuleStructure:
             Element, Residue, RESIDUE_ABBREV,
             Adenosine, Cytosine, Guanosine, Uridine,
             RibonucleicAcid,
-            FRAMES, Backbone, Nucleobase, Phosphate, COARSE,
+            Backbone, Nucleobase, Phosphate,
         )
         assert Element.C.value == 6
         assert Residue.ADE.value == 0

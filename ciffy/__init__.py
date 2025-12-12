@@ -41,6 +41,7 @@ except (ImportError, AttributeError):
     pass  # Profiling not enabled in this build
 
 # Convenience aliases
+ATOM = Scale.ATOM
 RESIDUE = Scale.RESIDUE
 CHAIN = Scale.CHAIN
 MOLECULE = Scale.MOLECULE
@@ -70,6 +71,7 @@ __all__ = [
     "NUM_RESIDUES",
     "NUM_ATOMS",
     # Convenience aliases
+    "ATOM",
     "RESIDUE",
     "CHAIN",
     "MOLECULE",

@@ -494,18 +494,11 @@ class Polymer:
         Returns:
             Expanded feature tensor.
         """
-        # Ensure sizes are on same device as features
-        device = getattr(features, 'device', None)
+        # Device mismatch is handled by backend.repeat_interleave
         if dest == Scale.ATOM:
-            sizes = self._sizes[source]
-            if device is not None and hasattr(sizes, 'to'):
-                sizes = sizes.to(device)
-            return backend.repeat_interleave(features, sizes)
+            return backend.repeat_interleave(features, self._sizes[source])
         if dest == Scale.RESIDUE:
-            lengths = self.lengths
-            if device is not None and hasattr(lengths, 'to'):
-                lengths = lengths.to(device)
-            return backend.repeat_interleave(features, lengths)
+            return backend.repeat_interleave(features, self.lengths)
         raise ValueError(f"Cannot expand to {dest.name}")
 
     def count(

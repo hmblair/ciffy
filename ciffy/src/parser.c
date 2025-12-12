@@ -52,20 +52,24 @@ static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 /**
  * Parse the PDB identifier from "data_XXXX" header line.
  */
-char *_get_id(char *buffer, CifErrorContext *ctx) {
+char *_get_id(ParseCursor *cursor, CifErrorContext *ctx) {
     const char *prefix = "data_";
 
-    if (_neq(buffer, prefix)) {
+    if (_neq(cursor->ptr, prefix)) {
         CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
             "Invalid mmCIF file: missing 'data_' prefix");
         return NULL;
     }
 
-    buffer += 5;
-    char *start = buffer;
-    while (*buffer != '\n' && *buffer != '\0') buffer++;
+    cursor->ptr += 5;
+    char *start = cursor->ptr;
+    CURSOR_SKIP_TO_EOL(cursor);
+    char *id = _strdup_n(start, (size_t)(cursor->ptr - start), ctx);
 
-    return _strdup_n(start, (size_t)(buffer - start), ctx);
+    /* Advance past the header line */
+    CURSOR_PASS_NEWLINE(cursor);
+
+    return id;
 }
 
 
@@ -221,19 +225,8 @@ int *_parse_via_lookup(mmBlock *block, HashTable func, const char *attr,
     }
 
     for (int line = 0; line < block->size; line++) {
-        int value;
-        LookupResult res = _lookup_inline_safe(block, line, index, func, &value);
-
-        if (res == LOOKUP_ERROR) {
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to access '%s' in block '%s' at line %d/%d",
-                attr, block->category ? block->category : "unknown",
-                line, block->size);
-            free(array);
-            return NULL;
-        }
-        /* LOOKUP_NOT_FOUND is OK - store -1 for unknown values */
-        array[line] = (res == LOOKUP_OK) ? value : -1;
+        /* Use _lookup_inline which emits warnings for unknown values */
+        array[line] = _lookup_inline(block, line, index, func);
     }
 
     return array;
@@ -613,59 +606,59 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
  * Public functions for reading and managing mmCIF blocks.
  * ============================================================================ */
 
-bool _skip_multiline_attr(char **buffer) {
-    _advance_line(buffer);
+bool _skip_multiline_attr(ParseCursor *cursor) {
+    CURSOR_NEXT_LINE(cursor);
     int lines = 0;
     const int MAX_MULTILINE_LINES = 10000;
-    while (**buffer != ';' && **buffer != '\0' && lines < MAX_MULTILINE_LINES) {
-        _advance_line(buffer);
+    while (*cursor->ptr != ';' && !CURSOR_AT_END(cursor) && lines < MAX_MULTILINE_LINES) {
+        CURSOR_NEXT_LINE(cursor);
         lines++;
     }
     if (lines >= MAX_MULTILINE_LINES) {
         LOG_ERROR("Unterminated multiline attribute (exceeded %d lines)", MAX_MULTILINE_LINES);
         return false;
     }
-    if (**buffer == ';') {
-        _advance_line(buffer);
+    if (*cursor->ptr == ';') {
+        CURSOR_NEXT_LINE(cursor);
     }
     return true;
 }
 
 
-void _next_block(char **buffer) {
-    while (**buffer != '\0' && !_is_section_end(*buffer)) {
-        _advance_line(buffer);
+void _next_block(ParseCursor *cursor) {
+    while (!CURSOR_AT_END(cursor) && !_is_section_end(cursor->ptr)) {
+        CURSOR_NEXT_LINE(cursor);
     }
-    if (**buffer != '\0') {
-        _advance_line(buffer);
+    if (!CURSOR_AT_END(cursor)) {
+        CURSOR_NEXT_LINE(cursor);
     }
 }
 
 
-mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
+mmBlock _read_block(ParseCursor *cursor, CifErrorContext *ctx) {
 
     mmBlock block = {0};
 
     /* Check if this is a single-entry block (no "loop_" prefix) */
-    if (_eq(*buffer, "loop_")) {
-        _advance_line(buffer);
+    if (_eq(cursor->ptr, "loop_")) {
+        CURSOR_NEXT_LINE(cursor);
     } else {
         block.single = true;
         block.size = 1;
     }
 
-    block.head = *buffer;
+    block.head = cursor->ptr;
     block.category = _get_category(block.head, ctx);
     if (block.category == NULL) {
         return block;  /* Error - ctx is already set */
     }
 
     /* Count attributes by scanning header lines */
-    while (**buffer != '\0' && _eq(*buffer, block.category)) {
+    while (!CURSOR_AT_END(cursor) && _eq(cursor->ptr, block.category)) {
         block.attributes++;
-        _advance_line(buffer);
-        if (**buffer == ';') {
-            if (!_skip_multiline_attr(buffer)) {
+        CURSOR_NEXT_LINE(cursor);
+        if (*cursor->ptr == ';') {
+            if (!_skip_multiline_attr(cursor)) {
                 LOG_ERROR("Unterminated multiline in block %s", block.category);
                 CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Unterminated multiline attribute");
                 free(block.category);
@@ -685,10 +678,10 @@ mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
     }
 
     if (!block.single) {
-        /* Multi-entry block: calculate offsets and line width */
-        block.start = *buffer;
+        /* Multi-entry block: save cursor position and calculate offsets */
+        block.data = *cursor;  /* Copy cursor (ptr + line) atomically */
         block.variable_width = false;
-        block.offsets = _get_offsets(block.start, block.attributes, ctx);
+        block.offsets = _get_offsets(block.data.ptr, block.attributes, ctx);
         if (block.offsets == NULL) {
             free(block.category);
             block.category = NULL;
@@ -708,9 +701,9 @@ mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
         }
 
         /* Count entries until section end (assuming fixed-width) */
-        while (**buffer != '\0' && !_is_section_end(*buffer)) {
+        while (!CURSOR_AT_END(cursor) && !_is_section_end(cursor->ptr)) {
             /* Check if we're at a valid position (previous char should be newline) */
-            if (*buffer > block.start && (*buffer)[-1] != '\n') {
+            if (cursor->ptr > block.data.ptr && (cursor->ptr)[-1] != '\n') {
                 /* Variable-width detected - fall back to line scanning */
                 LOG_INFO("Variable line widths in block %s, using fallback parser",
                          block.category);
@@ -725,22 +718,25 @@ mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
                     return block;
                 }
 
-                /* Advance buffer to end of data section */
-                *buffer = block.end;
+                /* Update cursor to end of block data */
+                cursor->ptr = block.end;
+                cursor->line = block.data.line + block.size;
                 break;
             }
 
-            *buffer += block.width;
+            /* Advance by fixed width and track line */
+            cursor->ptr += block.width;
+            cursor->line++;
             block.size++;
         }
     }
 
     /* Skip past section end marker */
-    _next_block(buffer);
+    _next_block(cursor);
 
-    LOG_DEBUG("Block '%s': size=%d, attrs=%d, width=%d, var_width=%d, single=%d",
+    LOG_DEBUG("Block '%s': size=%d, attrs=%d, width=%d, var_width=%d, single=%d, data.line=%d",
               block.category, block.size, block.attributes,
-              block.width, block.variable_width, block.single);
+              block.width, block.variable_width, block.single, block.data.line);
 
     return block;
 }
@@ -748,7 +744,8 @@ mmBlock _read_block(char **buffer, CifErrorContext *ctx) {
 
 void _free_block(mmBlock *block) {
     block->head = NULL;
-    block->start = NULL;
+    block->data.ptr = NULL;
+    block->data.line = 0;
     block->end = NULL;
     block->variable_width = false;
 

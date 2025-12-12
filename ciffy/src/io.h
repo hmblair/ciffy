@@ -17,12 +17,13 @@
 #include "error.h"
 #include "common.h"
 #include "codegen/lookup.h"
+#include "hash/reverse.h"
 
 /** Sentinel value indicating attribute index not found */
 #define BAD_IX -1
 
-/** Sentinel value for failed inline parsing */
-#define PARSE_FAIL -1
+/** Sentinel value for failed inline parsing (aliased from reverse.h) */
+#define PARSE_FAIL UNKNOWN_INDEX
 
 
 /* ============================================================================
@@ -64,6 +65,61 @@ typedef enum {
 } BlockId;
 
 
+/* ============================================================================
+ * PARSE CURSOR
+ * Tracks buffer position and line number during parsing.
+ * ============================================================================ */
+
+/**
+ * @brief Cursor for tracking position during CIF parsing.
+ *
+ * Bundles the buffer pointer with a line counter for accurate
+ * error reporting with file line numbers. Used both for active parsing
+ * and stored in blocks to enable line number calculation during extraction.
+ */
+typedef struct {
+    char *ptr;    /**< Current position in buffer */
+    int line;     /**< Current 1-indexed line number */
+} ParseCursor;
+
+
+/* ============================================================================
+ * CURSOR MACROS
+ * Centralized cursor operations that ensure line counting is always correct.
+ * ALL code that advances past newlines MUST use these macros.
+ * ============================================================================ */
+
+/** @brief Skip to end of current line (stops AT the newline, doesn't pass it). */
+#define CURSOR_SKIP_TO_EOL(cursor) do { \
+    while (*(cursor)->ptr != '\n' && *(cursor)->ptr != '\0') (cursor)->ptr++; \
+} while(0)
+
+/** @brief Advance past a newline character, incrementing line counter. */
+#define CURSOR_PASS_NEWLINE(cursor) do { \
+    if (*(cursor)->ptr == '\n') { (cursor)->ptr++; (cursor)->line++; } \
+} while(0)
+
+/** @brief Advance to start of next line (skip to EOL, then pass newline). */
+#define CURSOR_NEXT_LINE(cursor) do { \
+    CURSOR_SKIP_TO_EOL(cursor); \
+    CURSOR_PASS_NEWLINE(cursor); \
+} while(0)
+
+/** @brief Skip whitespace (spaces and tabs only, NOT newlines). */
+#define CURSOR_SKIP_WHITESPACE(cursor) do { \
+    while (*(cursor)->ptr == ' ' || *(cursor)->ptr == '\t') (cursor)->ptr++; \
+} while(0)
+
+/** @brief Check if cursor is at end of buffer. */
+#define CURSOR_AT_END(cursor) (*(cursor)->ptr == '\0')
+
+/** @brief Check if cursor is at a newline. */
+#define CURSOR_AT_NEWLINE(cursor) (*(cursor)->ptr == '\n')
+
+/** @brief Get absolute line number for a row within a block. */
+#define CURSOR_LINE_AT(cursor, row) ((cursor)->line + (row))
+
+
 /**
  * @brief Represents a parsed mmCIF block (loop or single-value).
  *
@@ -80,7 +136,7 @@ typedef struct {
     bool single;        /**< true if single-entry block, false if loop */
     bool variable_width;/**< true if lines have variable widths (fallback mode) */
     char *head;         /**< Pointer to start of header (attribute definitions) */
-    char *start;        /**< Pointer to start of data section */
+    ParseCursor data;   /**< Cursor marking start of data section (ptr + line number) */
     char *end;          /**< Pointer to end of data section (for variable-width) */
     int  *offsets;      /**< Column byte offsets (template from first line) */
     char **lines;       /**< Line start pointers (always populated for variable-width) */
@@ -102,13 +158,16 @@ typedef struct {
 CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx);
 
 /**
- * @brief Advance buffer pointer to the next line.
+ * @brief Advance cursor to the next line.
  *
- * Moves the buffer pointer past the current line's newline character.
+ * Convenience function wrapping CURSOR_NEXT_LINE macro.
+ * Prefer using the macro directly in performance-critical code.
  *
- * @param buffer Pointer to buffer pointer (modified in place)
+ * @param cursor Pointer to parse cursor (modified in place)
  */
-void _advance_line(char **buffer);
+static inline void _advance_line(ParseCursor *cursor) {
+    CURSOR_NEXT_LINE(cursor);
+}
 
 /**
  * @brief Calculate byte offset to the nth field.

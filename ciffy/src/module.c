@@ -421,21 +421,24 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
     char *cpy = buffer;  /* Keep original pointer for free */
 
+    /* Initialize parse cursor with line tracking */
+    ParseCursor cursor = {.ptr = buffer, .line = 1};
+
     mmCIF cif = {0};
     mmBlockList blocks = {0};
 
     /* Read and validate the PDB ID */
-    cif.id = _get_id(buffer, &ctx);
+    cif.id = _get_id(&cursor, &ctx);
     if (cif.id == NULL) {
         free(cpy);
         return _set_py_error(&ctx, file);
     }
-    _next_block(&buffer);
+    _next_block(&cursor);
 
     /* Parse all blocks in the file */
     PROFILE_START(block_parse);
-    while (*buffer != '\0') {
-        mmBlock block = _read_block(&buffer, &ctx);
+    while (*cursor.ptr != '\0') {
+        mmBlock block = _read_block(&cursor, &ctx);
         if (block.category == NULL) {
             /* Block parsing failed */
             free(cif.id);

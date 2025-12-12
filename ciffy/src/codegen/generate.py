@@ -277,6 +277,15 @@ def generate_reverse_header(hash_dir, atom_index, residue_to_cif, Element, Molec
  */
 
 #include <stddef.h>
+#include "../log.h"
+
+/* ============================================================================
+ * UNKNOWN/FALLBACK CONSTANTS - Single Source of Truth
+ * ============================================================================ */
+#define UNKNOWN_INDEX    (-1)       /* Failed lookup result */
+#define UNKNOWN_ELEMENT  "X"        /* Unknown element symbol */
+#define UNKNOWN_RESIDUE  "UNK"      /* Unknown residue name */
+#define UNKNOWN_ATOM     "X"        /* Unknown atom name */
 
 /* ============================================================================
  * ELEMENT REVERSE LOOKUP
@@ -296,7 +305,8 @@ static const char *ELEMENT_NAMES[ELEMENT_MAX] = {{
 
 static inline const char *element_name(int idx) {
     if (idx < 0 || idx >= ELEMENT_MAX || ELEMENT_NAMES[idx] == NULL) {
-        return "X";
+        LOG_WARNING("Unknown element index %d", idx);
+        return UNKNOWN_ELEMENT;
     }
     return ELEMENT_NAMES[idx];
 }
@@ -319,7 +329,8 @@ static inline const char *element_name(int idx) {
 
 static inline const char *residue_name(int idx) {
     if (idx < 0 || idx >= RESIDUE_MAX || RESIDUE_NAMES[idx] == NULL) {
-        return "UNK";
+        LOG_WARNING("Unknown residue index %d", idx);
+        return UNKNOWN_RESIDUE;
     }
     return RESIDUE_NAMES[idx];
 }
@@ -347,8 +358,9 @@ typedef struct {
     header += '''};
 
 static inline const AtomInfo *atom_info(int idx) {
-    static const AtomInfo UNKNOWN = {"UNK", "X"};
+    static const AtomInfo UNKNOWN = {UNKNOWN_RESIDUE, UNKNOWN_ATOM};
     if (idx < 0 || idx >= ATOM_MAX || ATOM_INFO[idx].atom == NULL) {
+        LOG_WARNING("Unknown atom index %d", idx);
         return &UNKNOWN;
     }
     return &ATOM_INFO[idx];

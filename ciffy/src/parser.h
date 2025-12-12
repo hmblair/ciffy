@@ -70,11 +70,11 @@ typedef struct mmBlockList {
  *
  * Parses the "data_XXXX" line at the start of an mmCIF file.
  *
- * @param buffer Start of the file buffer
+ * @param cursor Parse cursor (position advanced past header)
  * @param ctx Error context, populated on failure
  * @return Allocated PDB ID string, or NULL on error
  */
-char *_get_id(char *buffer, CifErrorContext *ctx);
+char *_get_id(ParseCursor *cursor, CifErrorContext *ctx);
 
 /**
  * @brief Populate an mmCIF structure from parsed blocks.
@@ -101,11 +101,11 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
  * Reads block header, counts attributes, and for multi-entry blocks,
  * calculates line width and entry count.
  *
- * @param buffer Pointer to buffer pointer (modified in place)
+ * @param cursor Parse cursor (position advanced past block)
  * @param ctx Error context for allocation failures
  * @return Parsed block structure (check category for NULL on error)
  */
-mmBlock _read_block(char **buffer, CifErrorContext *ctx);
+mmBlock _read_block(ParseCursor *cursor, CifErrorContext *ctx);
 
 /**
  * @brief Free resources associated with a block.
@@ -119,19 +119,19 @@ void _free_block(mmBlock *block);
  *
  * Multi-line values start and end with ';' on their own line.
  *
- * @param buffer Pointer to buffer pointer (modified in place)
+ * @param cursor Parse cursor (position advanced past value)
  * @return true on success, false if unterminated (exceeded max lines)
  */
-bool _skip_multiline_attr(char **buffer);
+bool _skip_multiline_attr(ParseCursor *cursor);
 
 /**
  * @brief Advance to the next block (skip to section end marker).
  *
  * Skips until finding a line starting with '#' or reaching end of buffer.
  *
- * @param buffer Pointer to buffer pointer (modified in place)
+ * @param cursor Parse cursor (position advanced to next block)
  */
-void _next_block(char **buffer);
+void _next_block(ParseCursor *cursor);
 
 /**
  * @brief Store a block if it's needed, otherwise free it.

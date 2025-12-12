@@ -894,7 +894,12 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
         memcpy(buf, _src, _src_len); \
         (buf)[_src_len] = '\0'; \
         struct _LOOKUP *_r = table(buf, _src_len); \
-        (dest) = _r ? _r->value : PARSE_FAIL; \
+        if (_r) { \
+            (dest) = _r->value; \
+        } else { \
+            LOG_WARNING("Unknown element '%s' at line %d", buf, block->data.line + row); \
+            (dest) = PARSE_FAIL; \
+        } \
     } else { \
         (dest) = PARSE_FAIL; \
     } \
@@ -932,7 +937,12 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
         size_t _total = _len1 + 1 + _len2; \
         (buf)[_total] = '\0'; \
         struct _LOOKUP *_r = table(buf, _total); \
-        (dest) = _r ? _r->value : PARSE_FAIL; \
+        if (_r) { \
+            (dest) = _r->value; \
+        } else { \
+            LOG_WARNING("Unknown atom '%s' at line %d", buf, block->data.line + row); \
+            (dest) = PARSE_FAIL; \
+        } \
     } else { \
         (dest) = PARSE_FAIL; \
     } \

@@ -326,15 +326,7 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
     CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.seq_id\n");
 
     int res_idx = 0;
-    int unknown_count = 0;
     int skipped_count = 0;
-
-    /* Track unique unknown residue types for detailed warning */
-    #define MAX_UNKNOWN_TRACK 16
-    int unknown_res_types[MAX_UNKNOWN_TRACK];
-    int unknown_res_type_count = 0;
-    char unknown_chains[256] = "";  /* Buffer for chain names with unknowns */
-    int unknown_chains_len = 0;
 
     for (int chain = 0; chain < cif->chains; chain++) {
         const char *chain_name = cif->names[chain];
@@ -342,7 +334,6 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
         CIF_CHECK_CHAIN_NAME(chain_name, chain, ctx);
 
         int output_seq_id = 1;  /* Track output sequence number (restarts per chain) */
-        int chain_unknown_start = unknown_count;  /* Track unknowns in this chain */
 
         for (int res = 0; res < cif->res_per_chain[chain]; res++) {
             CIF_CHECK_BOUNDS(res_idx, cif->residues, "Residue", ctx);
@@ -354,68 +345,18 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
                 continue;
             }
 
-            int seq_idx = cif->sequence[res_idx];
-            const char *res_name = residue_name(seq_idx);
-
-            if (seq_idx < 0) {
-                unknown_count++;
-                LOG_DEBUG("Unknown residue type %d at chain %s, position %d",
-                          seq_idx, chain_name, output_seq_id);
-
-                /* Track unique unknown residue type indices */
-                int is_new = 1;
-                for (int i = 0; i < unknown_res_type_count; i++) {
-                    if (unknown_res_types[i] == seq_idx) {
-                        is_new = 0;
-                        break;
-                    }
-                }
-                if (is_new && unknown_res_type_count < MAX_UNKNOWN_TRACK) {
-                    unknown_res_types[unknown_res_type_count++] = seq_idx;
-                }
-            }
+            /* residue_name() logs warning automatically for unknown indices */
+            const char *res_name = residue_name(cif->sequence[res_idx]);
 
             CIF_FPRINTF(file, ctx, "%-4.4s %-4.4s %-4.4s %-6d\n",
                 chain_name, res_name, strand, output_seq_id);
             output_seq_id++;
             res_idx++;
         }
-
-        /* Record chain if it had unknowns */
-        if (unknown_count > chain_unknown_start) {
-            int name_len = (int)strlen(chain_name);
-            if (unknown_chains_len + name_len + 2 < (int)sizeof(unknown_chains)) {
-                if (unknown_chains_len > 0) {
-                    unknown_chains[unknown_chains_len++] = ',';
-                    unknown_chains[unknown_chains_len++] = ' ';
-                }
-                memcpy(unknown_chains + unknown_chains_len, chain_name, name_len);
-                unknown_chains_len += name_len;
-                unknown_chains[unknown_chains_len] = '\0';
-            }
-        }
     }
 
     if (skipped_count > 0) {
         LOG_DEBUG("Skipped %d residues with no polymer atoms", skipped_count);
-    }
-    if (unknown_count > 0) {
-        /* Build string of unique unknown type indices */
-        char types_str[256] = "";
-        int types_len = 0;
-        for (int i = 0; i < unknown_res_type_count && types_len < 200; i++) {
-            int written = snprintf(types_str + types_len, sizeof(types_str) - types_len,
-                                   "%s%d", i > 0 ? ", " : "", unknown_res_types[i]);
-            if (written > 0) types_len += written;
-        }
-        if (unknown_res_type_count == MAX_UNKNOWN_TRACK) {
-            snprintf(types_str + types_len, sizeof(types_str) - types_len, ", ...");
-        }
-
-        LOG_WARNING("Found %d residues with unknown type (written as 'UNK') - "
-                    "type indices: [%s], chains: [%s]",
-                    unknown_count, types_str,
-                    unknown_chains_len > 0 ? unknown_chains : "none");
     }
 
     CIF_FPRINTF(file, ctx, "#\n");
@@ -449,16 +390,6 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
     int atom_idx = 0;
     int res_idx = 0;
     int serial = 1;
-    int unknown_atom_count = 0;
-    int unknown_elem_count = 0;
-
-    /* Track unique unknown atom/element types for detailed warning */
-    int unknown_atom_types[MAX_UNKNOWN_TRACK];
-    int unknown_atom_type_count = 0;
-    int unknown_elem_types[MAX_UNKNOWN_TRACK];
-    int unknown_elem_type_count = 0;
-    char atom_unknown_chains[256] = "";
-    int atom_unknown_chains_len = 0;
 
     /* Iterate through chains */
     for (int chain = 0; chain < cif->chains; chain++) {
@@ -469,8 +400,6 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                   chain_name, cif->res_per_chain[chain]);
 
         int output_seq_id = 1;  /* Track output sequence number (restarts per chain) */
-        int chain_unknown_atom_start = unknown_atom_count;
-        int chain_unknown_elem_start = unknown_elem_count;
 
         /* Iterate through residues in this chain */
         for (int res = 0; res < cif->res_per_chain[chain]; res++) {
@@ -484,6 +413,7 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 continue;
             }
 
+            /* residue_name() logs warning automatically for unknown indices */
             const char *res_name = residue_name(cif->sequence[res_idx]);
 
             /* Iterate through atoms in this residue */
@@ -493,46 +423,11 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 /* Determine if polymer or non-polymer atom */
                 const char *group = (atom_idx < cif->polymer) ? "ATOM" : "HETATM";
 
-                /* Get element symbol via reverse lookup */
-                int elem_idx = cif->elements[atom_idx];
-                const char *elem = element_name(elem_idx);
-                if (elem_idx < 0 || elem_idx >= ELEMENT_MAX || strcmp(elem, "X") == 0) {
-                    unknown_elem_count++;
-                    LOG_DEBUG("Unknown element %d at atom %d", elem_idx, atom_idx);
+                /* element_name() logs warning automatically for unknown indices */
+                const char *elem = element_name(cif->elements[atom_idx]);
 
-                    /* Track unique unknown element type indices */
-                    int is_new = 1;
-                    for (int i = 0; i < unknown_elem_type_count; i++) {
-                        if (unknown_elem_types[i] == elem_idx) {
-                            is_new = 0;
-                            break;
-                        }
-                    }
-                    if (is_new && unknown_elem_type_count < MAX_UNKNOWN_TRACK) {
-                        unknown_elem_types[unknown_elem_type_count++] = elem_idx;
-                    }
-                }
-
-                /* Get atom name via reverse lookup */
-                int type_idx = cif->types[atom_idx];
-                const AtomInfo *ainfo = atom_info(type_idx);
-                if (type_idx < 0 || strcmp(ainfo->atom, "X") == 0) {
-                    unknown_atom_count++;
-                    LOG_DEBUG("Unknown atom type %d at atom %d (chain %s, res %d)",
-                              type_idx, atom_idx, chain_name, output_seq_id);
-
-                    /* Track unique unknown atom type indices */
-                    int is_new = 1;
-                    for (int i = 0; i < unknown_atom_type_count; i++) {
-                        if (unknown_atom_types[i] == type_idx) {
-                            is_new = 0;
-                            break;
-                        }
-                    }
-                    if (is_new && unknown_atom_type_count < MAX_UNKNOWN_TRACK) {
-                        unknown_atom_types[unknown_atom_type_count++] = type_idx;
-                    }
-                }
+                /* atom_info() logs warning automatically for unknown indices */
+                const AtomInfo *ainfo = atom_info(cif->types[atom_idx]);
 
                 /* Format atom name, quoting if it contains a prime (') */
                 char atom_buf[MAX_ATOM_NAME_BUF];
@@ -573,58 +468,6 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
             output_seq_id++;
             res_idx++;
         }
-
-        /* Record chain if it had unknowns */
-        if (unknown_atom_count > chain_unknown_atom_start ||
-            unknown_elem_count > chain_unknown_elem_start) {
-            int name_len = (int)strlen(chain_name);
-            if (atom_unknown_chains_len + name_len + 2 < (int)sizeof(atom_unknown_chains)) {
-                if (atom_unknown_chains_len > 0) {
-                    atom_unknown_chains[atom_unknown_chains_len++] = ',';
-                    atom_unknown_chains[atom_unknown_chains_len++] = ' ';
-                }
-                memcpy(atom_unknown_chains + atom_unknown_chains_len, chain_name, name_len);
-                atom_unknown_chains_len += name_len;
-                atom_unknown_chains[atom_unknown_chains_len] = '\0';
-            }
-        }
-    }
-
-    if (unknown_atom_count > 0) {
-        /* Build string of unique unknown type indices */
-        char types_str[256] = "";
-        int types_len = 0;
-        for (int i = 0; i < unknown_atom_type_count && types_len < 200; i++) {
-            int written = snprintf(types_str + types_len, sizeof(types_str) - types_len,
-                                   "%s%d", i > 0 ? ", " : "", unknown_atom_types[i]);
-            if (written > 0) types_len += written;
-        }
-        if (unknown_atom_type_count == MAX_UNKNOWN_TRACK) {
-            snprintf(types_str + types_len, sizeof(types_str) - types_len, ", ...");
-        }
-
-        LOG_WARNING("Found %d atoms with unknown type (written as 'X') - "
-                    "type indices: [%s], chains: [%s]",
-                    unknown_atom_count, types_str,
-                    atom_unknown_chains_len > 0 ? atom_unknown_chains : "none");
-    }
-    if (unknown_elem_count > 0) {
-        /* Build string of unique unknown element indices */
-        char elem_str[256] = "";
-        int elem_len = 0;
-        for (int i = 0; i < unknown_elem_type_count && elem_len < 200; i++) {
-            int written = snprintf(elem_str + elem_len, sizeof(elem_str) - elem_len,
-                                   "%s%d", i > 0 ? ", " : "", unknown_elem_types[i]);
-            if (written > 0) elem_len += written;
-        }
-        if (unknown_elem_type_count == MAX_UNKNOWN_TRACK) {
-            snprintf(elem_str + elem_len, sizeof(elem_str) - elem_len, ", ...");
-        }
-
-        LOG_WARNING("Found %d atoms with unknown element (written as 'X') - "
-                    "element indices: [%s], chains: [%s]",
-                    unknown_elem_count, elem_str,
-                    atom_unknown_chains_len > 0 ? atom_unknown_chains : "none");
     }
 
     LOG_INFO("Wrote %d atoms to file", serial - 1);

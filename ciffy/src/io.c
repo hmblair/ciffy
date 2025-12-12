@@ -81,11 +81,15 @@ CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
 }
 
 
-void _advance_line(char **buffer) {
-
-    while (**buffer != '\n' && **buffer != '\0') { (*buffer)++; }
-    if (**buffer == '\n') { (*buffer)++; }
-
+/**
+ * @brief Simple line advancement without tracking (for internal use).
+ *
+ * Used when scanning already-parsed block headers where line tracking
+ * is not needed. For tracked line advancement, use CURSOR_NEXT_LINE macro.
+ */
+static inline void _advance_line_simple(char **buffer) {
+    while (**buffer != '\n' && **buffer != '\0') (*buffer)++;
+    if (**buffer == '\n') (*buffer)++;
 }
 
 
@@ -242,7 +246,7 @@ int _get_attr_index(mmBlock *block, const char *attr, CifErrorContext *ctx) {
             /* Log allocation failure but continue searching */
             LOG_DEBUG("_get_attr_index: failed to get attr %d in block '%s'", ix, name);
         }
-        _advance_line(&ptr);
+        _advance_line_simple(&ptr);
     }
 
     return BAD_IX;
@@ -273,7 +277,7 @@ int _str_to_int(const char *str) {
 CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
     /* Count lines first by scanning for newlines */
     int count = 0;
-    char *ptr = block->start;
+    char *ptr = block->data.ptr;
 
     while (*ptr != '\0' && !_is_section_end(ptr)) {
         count++;
@@ -299,7 +303,7 @@ CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
     }
 
     /* Second pass: populate pointers */
-    ptr = block->start;
+    ptr = block->data.ptr;
     for (int i = 0; i < count; i++) {
         block->lines[i] = ptr;
         while (*ptr != '\n' && *ptr != '\0') ptr++;
@@ -344,7 +348,7 @@ CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx) {
     }
 
     for (int i = 0; i < block->size; i++) {
-        block->lines[i] = block->start + i * block->width;
+        block->lines[i] = block->data.ptr + i * block->width;
     }
 
     LOG_DEBUG("Precomputed %d line pointers for '%s' (width=%d)",
@@ -530,7 +534,11 @@ int _lookup_element_fast(mmBlock *block, int line, int index, HashTable func) {
         buffer[len] = '\0';
 
         struct _LOOKUP *lookup = func(buffer, len);
-        return lookup != NULL ? lookup->value : PARSE_FAIL;
+        if (lookup == NULL) {
+            LOG_WARNING("Unknown element '%s' at line %d", buffer, block->data.line + line);
+            return PARSE_FAIL;
+        }
+        return lookup->value;
     }
     return _lookup_inline(block, line, index, func);
 }
@@ -574,7 +582,11 @@ int _lookup_atom_type_fast(mmBlock *block, int line, int idx1, int idx2,
         buffer[total_len] = '\0';
 
         struct _LOOKUP *lookup = func(buffer, total_len);
-        return lookup != NULL ? lookup->value : PARSE_FAIL;
+        if (lookup == NULL) {
+            LOG_WARNING("Unknown atom '%s' at line %d", buffer, block->data.line + line);
+            return PARSE_FAIL;
+        }
+        return lookup->value;
     }
     return _lookup_double_inline(block, line, idx1, idx2, func, buffer);
 }
@@ -670,7 +682,11 @@ int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
     buffer[out_len] = '\0';
 
     struct _LOOKUP *lookup = func(buffer, out_len);
-    return lookup != NULL ? lookup->value : PARSE_FAIL;
+    if (lookup == NULL) {
+        LOG_WARNING("Unknown residue '%s' at line %d", buffer, block->data.line + line);
+        return PARSE_FAIL;
+    }
+    return lookup->value;
 }
 
 
@@ -722,7 +738,11 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
     buffer[out_len] = '\0';
 
     struct _LOOKUP *lookup = func(buffer, out_len);
-    return lookup != NULL ? lookup->value : PARSE_FAIL;
+    if (lookup == NULL) {
+        LOG_WARNING("Unknown atom '%s' at line %d", buffer, block->data.line + line);
+        return PARSE_FAIL;
+    }
+    return lookup->value;
 }
 
 

@@ -11,22 +11,22 @@ class Residue(IndexEnum):
     Residue types with unique integer indices.
 
     Includes nucleotides (RNA and DNA), amino acids, water, and ions.
-    DNA nucleotides share indices with their RNA counterparts.
+    Uses 3-letter codes consistently to avoid ambiguity (e.g., ADE for
+    adenosine, ALA for alanine).
     """
 
-    # RNA nucleotides
-    A = 0
-    C = 1
-    G = 2
-    U = 3
+    # RNA nucleotides (3-letter codes)
+    ADE = 0   # Adenosine
+    CYT = 1   # Cytidine
+    GUA = 2   # Guanosine
+    URA = 3   # Uridine
 
-    # DNA nucleotides (share indices with RNA)
-    DA = 0
-    DC = 1
-    DG = 2
-    DU = 3
-    T = 4
-    DT = 4
+    # DNA nucleotides
+    DA = 0    # Deoxyadenosine (same index as ADE)
+    DC = 1    # Deoxycytidine (same index as CYT)
+    DG = 2    # Deoxyguanosine (same index as GUA)
+    DT = 4    # Deoxythymidine
+    THY = 4   # Thymidine (alias for DT)
 
     # Amino acids
     ALA = 5
@@ -67,11 +67,11 @@ class Residue(IndexEnum):
 # Indices correspond to Residue enum values
 RESIDUE_MOLECULE_TYPE: dict[int, Molecule] = {
     # RNA nucleotides (0-3)
-    0: Molecule.RNA,   # A, DA
-    1: Molecule.RNA,   # C, DC
-    2: Molecule.RNA,   # G, DG
-    3: Molecule.RNA,   # U, DU
-    4: Molecule.DNA,   # T, DT
+    0: Molecule.RNA,   # ADE, DA
+    1: Molecule.RNA,   # CYT, DC
+    2: Molecule.RNA,   # GUA, DG
+    3: Molecule.RNA,   # URA
+    4: Molecule.DNA,   # THY, DT
 
     # Amino acids (5-24)
     5: Molecule.PROTEIN,   # ALA
@@ -121,14 +121,18 @@ def residue_to_molecule(residue_idx: int) -> Molecule:
 
 
 RES_ABBREV: dict[str, str] = {
-    # Nucleotides (lowercase)
-    'A': 'a',
-    'C': 'c',
-    'G': 'g',
-    'U': 'u',
-    'T': 't',
+    # Nucleotides (lowercase single-letter)
+    'ADE': 'a',
+    'CYT': 'c',
+    'GUA': 'g',
+    'URA': 'u',
+    'THY': 't',
+    'DA': 'a',
+    'DC': 'c',
+    'DG': 'g',
+    'DT': 't',
     'N': 'n',
-    # Amino acids (single letter)
+    # Amino acids (uppercase single-letter)
     'ALA': 'A',
     'CYS': 'C',
     'ASP': 'D',

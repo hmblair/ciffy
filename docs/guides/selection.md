@@ -97,13 +97,16 @@ Select specific residue types using `by_residue()`:
 from ciffy.biochemistry import Residue
 
 # Get all adenosine residues
-adenosines = polymer.by_residue(Residue.A)
+adenosines = polymer.by_residue(Residue.ADE)
 
 # Get all purines (A and G)
-purines = polymer.by_residue([Residue.A, Residue.G])
+purines = polymer.by_residue([Residue.ADE, Residue.GUA])
 
 # Get all pyrimidines (C and U)
-pyrimidines = polymer.by_residue([Residue.C, Residue.U])
+pyrimidines = polymer.by_residue([Residue.CYT, Residue.URA])
+
+# Amino acids use 3-letter codes too
+alanines = polymer.by_residue(Residue.ALA)
 ```
 
 ## Atom Selection

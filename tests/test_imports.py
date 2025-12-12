@@ -62,7 +62,7 @@ class TestModuleStructure:
             FRAMES, Backbone, Nucleobase, Phosphate, COARSE,
         )
         assert Element.C.value == 6
-        assert Residue.A.value == 0
+        assert Residue.ADE.value == 0
         assert RES_ABBREV['ALA'] == 'A'
         assert Adenosine.P.value == 2
 

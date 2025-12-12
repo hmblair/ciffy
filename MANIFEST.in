@@ -5,3 +5,7 @@ include ciffy/src/codegen/*.py
 include ciffy/src/codegen/*.h
 include ciffy/src/hash/*.c
 include ciffy/src/hash/*.h
+
+# Tests and test data
+include tests/*.py
+include tests/data/*.cif

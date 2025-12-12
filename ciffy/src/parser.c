@@ -15,6 +15,7 @@
 #include "parser.h"
 #include "registry.h"
 #include "log.h"
+#include "profile.h"
 
 #include <math.h>    /* for isnan */
 #include <unistd.h>  /* for isatty */
@@ -36,10 +37,9 @@
 
 static const size_t COORDS = 3;
 
-/* Atom-level attributes (used by atom reordering/classification) */
+/* Atom-level attributes (used by residue/chain counting) */
 static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
-static const char *ATTR_GROUP_PDB     = "group_PDB";
 
 
 
@@ -323,8 +323,7 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
  *
  * Uses pointer-based comparison - minimal allocations.
  */
-static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
-                                     int *nonpoly_count, int *is_nonpoly,
+static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_count,
                                      int *res_per_chain, CifErrorContext *ctx) {
     int seq_index = _get_attr_index(block, ATTR_SEQ_ID, ctx);
     if (seq_index == BAD_IX) {
@@ -338,12 +337,6 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         return NULL;
     }
 
-    int group_index = _get_attr_index(block, ATTR_GROUP_PDB, ctx);
-    if (group_index == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_GROUP_PDB);
-        return NULL;
-    }
-
     int *sizes = calloc((size_t)residue_count, sizeof(int));
     if (sizes == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
@@ -351,32 +344,18 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
         return NULL;
     }
 
+    /* Note: cif->nonpoly and cif->polymer are already set by _prescan_group_pdb */
+
     int chain_offset = 0;
     char *prev_chain_ptr = NULL;
     size_t prev_chain_len = 0;
     int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
-        /* Check if atom is HETATM (non-polymer) using pointer comparison */
-        size_t group_len;
-        char *group_ptr = _get_field_ptr(block, line, group_index, &group_len);
-        if (group_ptr == NULL) {
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to get group_PDB at line %d/%d in atom block (lines=%s)",
-                line, block->size, block->lines ? "ok" : "NULL");
-            free(sizes);
-            return NULL;
-        }
-
-        bool is_hetatm = _field_eq(group_ptr, group_len, "HETATM");
-
-        if (is_hetatm) {
-            (*nonpoly_count)++;
-            is_nonpoly[line] = 1;
+        /* Skip non-polymer atoms (already classified during pre-scan) */
+        if (cif->is_nonpoly[line]) {
             continue;
         }
-
-        is_nonpoly[line] = 0;
 
         /* Track chain changes to compute residue offset */
         size_t chain_len;
@@ -418,70 +397,6 @@ static int *_count_atoms_per_residue(mmBlock *block, int residue_count,
 
 
 /* ============================================================================
- * ATOM REORDERING
- * Separate polymer atoms from non-polymer (ligands, water, ions).
- * Enables simple slicing: polymer = atoms[0:polymer_count]
- * ============================================================================ */
-
-/**
- * Reorder arrays so polymer atoms come first.
- *
- * After reordering:
- *   - atoms[0, polymer_count) = polymer atoms
- *   - atoms[polymer_count, total) = non-polymer atoms
- */
-static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx) {
-    int atoms = cif->atoms;
-    int polymer_count = atoms - cif->nonpoly;
-
-    LOG_DEBUG("Reordering: %d total atoms, %d polymer, %d nonpoly",
-              atoms, polymer_count, cif->nonpoly);
-
-    if (cif->nonpoly == 0) {
-        cif->polymer = polymer_count;
-        return CIF_OK;
-    }
-
-    /* Allocate reorder buffers */
-    float *new_coords = calloc(COORDS * (size_t)atoms, sizeof(float));
-    int *new_types = calloc((size_t)atoms, sizeof(int));
-    int *new_elements = calloc((size_t)atoms, sizeof(int));
-
-    if (!new_coords || !new_types || !new_elements) {
-        free(new_coords);
-        free(new_types);
-        free(new_elements);
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate reorder buffers");
-        return CIF_ERR_ALLOC;
-    }
-
-    /* Two-pointer copy: polymer to front, non-polymer to back */
-    int poly_ix = 0;
-    int nonpoly_ix = polymer_count;
-
-    for (int i = 0; i < atoms; i++) {
-        int dest = is_nonpoly[i] ? nonpoly_ix++ : poly_ix++;
-        memcpy(&new_coords[COORDS * dest], &cif->coordinates[COORDS * i],
-               COORDS * sizeof(float));
-        new_types[dest] = cif->types[i];
-        new_elements[dest] = cif->elements[i];
-    }
-
-    /* Swap arrays */
-    free(cif->coordinates);
-    free(cif->types);
-    free(cif->elements);
-
-    cif->coordinates = new_coords;
-    cif->types = new_types;
-    cif->elements = new_elements;
-    cif->polymer = polymer_count;
-
-    return CIF_OK;
-}
-
-
-/* ============================================================================
  * MOLECULE TYPE PARSING
  * Parse chain molecule types from _entity_poly and _struct_asym blocks.
  * ============================================================================ */
@@ -509,10 +424,13 @@ static CifError _reorder_atoms(mmCIF *cif, int *is_nonpoly, CifErrorContext *ctx
  *   1. Validate required blocks exist
  *   2. Count models, chains, residues, atoms
  *   3. Parse chain/residue metadata
- *   4. Batch parse atom data (parallelized)
- *   5. Reorder atoms (polymer first)
+ *   4. Batch parse atom data (parallelized) - skipped if metadata_only
+ *   5. Reorder atoms (polymer first) - skipped if metadata_only
+ *
+ * @param metadata_only If true, skip batch parsing and only compute counts.
+ *                      Used for fast dataset indexing.
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifErrorContext *ctx) {
     LOG_DEBUG("Starting CIF structure parsing");
 
     /* ── Block Validation (registry-driven) ────────────────────────────────── */
@@ -526,6 +444,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     /* ── Precompute Line Pointers ────────────────────────────────────────── */
     /* Required for _get_field_ptr used in counting and metadata extraction */
 
+    PROFILE_START(line_precomp);
     CifError err = _precompute_lines(&blocks->b[BLOCK_ATOM], ctx);
     if (err != CIF_OK) return err;
 
@@ -541,6 +460,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         _free_lines(&blocks->b[BLOCK_POLY]);
         return err;
     }
+    PROFILE_END(line_precomp);
 
     LOG_DEBUG("Line pointers precomputed for all blocks");
 
@@ -548,6 +468,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     /* Compute field execution order and parse: chains, residues, models, atoms,
      * names, res_per_chain, strands, sequence */
 
+    PROFILE_START(metadata);
     ParsePlan plan;
     err = _plan_parse(&plan, ctx);
     if (err != CIF_OK) {
@@ -564,6 +485,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         _free_lines(&blocks->b[BLOCK_CHAIN]);
         return err;
     }
+    PROFILE_END(metadata);
 
     LOG_INFO("Parsing structure: %d models, %d chains, %d residues, %d atoms",
              cif->models, cif->chains, cif->residues, cif->atoms);
@@ -571,10 +493,29 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     LOG_DEBUG("Metadata extracted: %d chains, %d residues in sequence",
               cif->chains, cif->residues);
 
-    /* ── Batch Atom Parsing (registry-driven) ─────────────────────────────── */
+    /* ── metadata_only: Skip batch parsing, just compute atoms_per_chain ───── */
+    if (metadata_only) {
+        LOG_DEBUG("metadata_only mode: skipping batch parsing");
+
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
+
+        /* Only compute atoms_per_chain for fast indexing */
+        cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
+                                                     &cif->chains, ctx);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        if (cif->atoms_per_chain == NULL) return ctx->code;
+
+        LOG_DEBUG("metadata_only: computed atoms_per_chain for %d chains", cif->chains);
+        return CIF_OK;
+    }
+
+    /* ── Batch Atom Parsing with Two-Pointer Placement ───────────────────── */
     /* Note: lines already precomputed at start of function */
 
     LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
+
+    PROFILE_START(batch_parse);
 
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
     err = _allocate_field_arrays(cif, ctx);
@@ -585,7 +526,26 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
         return err;
     }
 
-    /* Compute and execute batch groups */
+    /* Allocate is_nonpoly for two-pointer placement */
+    cif->is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
+    if (!cif->is_nonpoly) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_nonpoly");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Pre-scan group_PDB to classify atoms */
+    int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], cif->atoms,
+                                           cif->is_nonpoly, ctx);
+    if (polymer_count < 0) {
+        free(cif->is_nonpoly);
+        return ctx->code;
+    }
+    cif->polymer = polymer_count;
+    cif->nonpoly = cif->atoms - polymer_count;
+
+    LOG_DEBUG("Pre-scan: %d polymer, %d non-polymer atoms", cif->polymer, cif->nonpoly);
+
+    /* Compute and execute batch groups - data written directly to final positions */
     BatchGroup batch_groups[BLOCK_COUNT];
     int batch_group_count = 0;
     _compute_batch_groups(batch_groups, &batch_group_count, BLOCK_COUNT);
@@ -593,6 +553,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     for (int g = 0; g < batch_group_count; g++) {
         err = _execute_batch_group(cif, blocks, &batch_groups[g], ctx);
         if (err != CIF_OK) {
+            free(cif->is_nonpoly);
             _free_lines(&blocks->b[BLOCK_ATOM]);
             _free_lines(&blocks->b[BLOCK_POLY]);
             _free_lines(&blocks->b[BLOCK_CHAIN]);
@@ -616,37 +577,30 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
     if (nan_count > 0) {
         LOG_WARNING("Found %d atoms with invalid (NaN) coordinates", nan_count);
     }
+    PROFILE_END(batch_parse);
 
-    /* ── Atom Reordering ──────────────────────────────────────────────────── */
+    /* ── Residue/Chain Counting ────────────────────────────────────────────── */
 
-    LOG_DEBUG("Classifying polymer vs non-polymer atoms...");
+    PROFILE_START(residue_count);
 
-    int *is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
-    if (is_nonpoly == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate nonpoly mask");
-        return CIF_ERR_ALLOC;
-    }
-
-    cif->nonpoly = 0;
-    cif->atoms_per_res = _count_atoms_per_residue(&blocks->b[BLOCK_ATOM], cif->residues,
-                                                  &cif->nonpoly, is_nonpoly,
+    /* Count atoms per residue (is_nonpoly already filled, nonpoly count already set) */
+    cif->atoms_per_res = _count_atoms_per_residue(cif, &blocks->b[BLOCK_ATOM], cif->residues,
                                                   cif->res_per_chain, ctx);
     if (cif->atoms_per_res == NULL) {
-        free(is_nonpoly);
+        free(cif->is_nonpoly);
         return ctx->code;
     }
 
-    LOG_DEBUG("Found %d non-polymer atoms (HETATM), reordering...", cif->nonpoly);
-
-    err = _reorder_atoms(cif, is_nonpoly, ctx);
-    free(is_nonpoly);
-    if (err != CIF_OK) return err;
+    /* Free is_nonpoly - no longer needed */
+    free(cif->is_nonpoly);
+    cif->is_nonpoly = NULL;
 
     cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
                                                  &cif->chains, ctx);
     if (cif->atoms_per_chain == NULL) return ctx->code;
 
-    cif->polymer = cif->atoms - cif->nonpoly;
+    PROFILE_END(residue_count);
+
     LOG_INFO("Parsed %d polymer atoms, %d non-polymer atoms", cif->polymer, cif->nonpoly);
     LOG_DEBUG("CIF structure parsing complete");
 

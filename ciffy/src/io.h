@@ -294,6 +294,57 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len);
  */
 float _parse_float_inline(mmBlock *block, int line, int index);
 
+/* ============================================================================
+ * FAST BATCH PARSING
+ * Optimized functions for high-throughput atom data extraction.
+ * ============================================================================ */
+
+/**
+ * @brief Parse 3 coordinates (x,y,z) with single line_start computation.
+ */
+void _parse_coords_inline(mmBlock *block, int line, const int *idx, float *out);
+
+/**
+ * @brief Pre-scan group_PDB to build is_nonpoly mask.
+ *
+ * This enables two-pointer placement during batch parsing:
+ * - Polymer atoms write to indices [0, polymer_count)
+ * - Non-polymer atoms write to indices [polymer_count, total)
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_nonpoly Output: non-polymer mask [atoms]
+ * @param ctx Error context
+ * @return Polymer count, or -1 on error
+ */
+int _prescan_group_pdb(mmBlock *block, int atoms, int *is_nonpoly,
+                       CifErrorContext *ctx);
+
+/**
+ * @brief Fast element lookup optimized for batch processing.
+ *
+ * @param block Block containing atom data
+ * @param line Row index
+ * @param index Attribute index for element symbol
+ * @param func Hash lookup function (_lookup_element)
+ * @return Element index or PARSE_FAIL
+ */
+int _lookup_element_fast(mmBlock *block, int line, int index, HashTable func);
+
+/**
+ * @brief Fast atom type lookup (residue_atom) optimized for batch processing.
+ *
+ * @param block Block containing atom data
+ * @param line Row index
+ * @param idx1 Attribute index for comp_id (residue name)
+ * @param idx2 Attribute index for atom_id (atom name)
+ * @param func Hash lookup function (_lookup_atom)
+ * @param buffer Scratch buffer (must be MAX_INLINE_BUFFER size)
+ * @return Atom type index or PARSE_FAIL
+ */
+int _lookup_atom_type_fast(mmBlock *block, int line, int idx1, int idx2,
+                           HashTable func, char *buffer);
+
 /**
  * @brief Parse int from block without allocation.
  *
@@ -410,6 +461,86 @@ static inline void _strip_outer_quotes(const char **ptr, size_t *len) {
         (*ptr)++;
         *len -= 2;
     }
+}
+
+/**
+ * @brief Get field pointer and length from line_start using precomputed offset.
+ *
+ * Inline helper for batch parsing - avoids full _get_field_ptr overhead.
+ * Does not handle quoted fields (only for simple fields like group_PDB).
+ *
+ * @param line_start Pointer to start of line
+ * @param offsets Pre-computed column byte offsets
+ * @param index Column index
+ * @param len Output: field length
+ * @return Pointer to field start
+ */
+static inline char *_fast_get_field(char *line_start, const int *offsets,
+                                     int index, size_t *len) {
+    char *ptr = line_start + offsets[index];
+    while (*ptr == ' ') ptr++;
+
+    /* Calculate length inline (no quote handling needed for simple fields) */
+    char *end = ptr;
+    while (*end != ' ' && *end != '\n' && *end != '\0') end++;
+    *len = (size_t)(end - ptr);
+
+    return ptr;
+}
+
+/**
+ * @brief Fast float parsing optimized for mmCIF coordinates.
+ *
+ * Optimized for: [-]digits[.digits]
+ * Does NOT handle: exponents, NaN, Inf, locale decimals.
+ * Uses integer accumulation to minimize floating-point operations.
+ *
+ * @param ptr Pointer to start of float string (whitespace must be skipped)
+ * @return Parsed float value
+ */
+static inline float _fast_parse_float(const char *ptr) {
+    int64_t integer_part = 0;
+    int64_t decimal_part = 0;
+    int decimal_places = 0;
+    int sign = 1;
+
+    if (*ptr == '-') {
+        sign = -1;
+        ptr++;
+    } else if (*ptr == '+') {
+        ptr++;
+    }
+
+    while (*ptr >= '0' && *ptr <= '9') {
+        integer_part = integer_part * 10 + (*ptr - '0');
+        ptr++;
+    }
+
+    if (*ptr == '.') {
+        ptr++;
+        while (*ptr >= '0' && *ptr <= '9') {
+            decimal_part = decimal_part * 10 + (*ptr - '0');
+            decimal_places++;
+            ptr++;
+        }
+    }
+
+    static const double pow10[] = {
+        1.0, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001, 0.0000001
+    };
+
+    double result;
+    if (decimal_places > 0 && decimal_places < 8) {
+        result = (double)integer_part + (double)decimal_part * pow10[decimal_places];
+    } else if (decimal_places >= 8) {
+        double divisor = 1.0;
+        for (int i = 0; i < decimal_places; i++) divisor *= 10.0;
+        result = (double)integer_part + (double)decimal_part / divisor;
+    } else {
+        result = (double)integer_part;
+    }
+
+    return (float)(sign * result);
 }
 
 

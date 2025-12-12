@@ -84,26 +84,28 @@ class PolymerDataset(Dataset):
 
     def _build_index(self, directory: Path) -> None:
         """Scan directory and build index of valid items."""
-        from .. import load
+        from .. import load_metadata
 
         cif_files = sorted(directory.glob("*.cif"))
 
         for path in cif_files:
             try:
-                polymer = load(str(path), backend=self.backend)
+                # Use fast metadata-only loading (~10x faster than full load)
+                meta = load_metadata(str(path))
             except Exception:
                 # Skip files that fail to load
                 continue
 
             if self.scale == Scale.MOLECULE:
                 # Check total atom count
-                if self.max_atoms is None or polymer.size() <= self.max_atoms:
+                if self.max_atoms is None or meta["atoms"] <= self.max_atoms:
                     self._index.append((path, None))
             else:  # Scale.CHAIN
-                # Check each chain's atom count
-                for chain_idx in range(polymer.size(Scale.CHAIN)):
-                    chain = polymer.by_index(chain_idx)
-                    if self.max_atoms is None or chain.size() <= self.max_atoms:
+                # Check each chain's atom count using atoms_per_chain array
+                atoms_per_chain = meta["atoms_per_chain"]
+                for chain_idx in range(meta["chains"]):
+                    chain_atoms = int(atoms_per_chain[chain_idx])
+                    if self.max_atoms is None or chain_atoms <= self.max_atoms:
                         self._index.append((path, chain_idx))
 
     def __len__(self) -> int:

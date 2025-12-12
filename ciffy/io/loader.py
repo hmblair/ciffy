@@ -109,3 +109,49 @@ def load(
         return polymer.torch()
 
     return polymer
+
+
+def load_metadata(file: str) -> dict:
+    """
+    Load only metadata from a CIF file (fast path for indexing).
+
+    Skips parsing of coordinates, atom types, and elements, returning
+    only the information needed for dataset indexing: atom counts and
+    chain structure.
+
+    This is ~10-15x faster than full load() for large structures.
+
+    Args:
+        file: Path to the CIF file.
+
+    Returns:
+        Dict with keys:
+            - atoms: Total atom count (int)
+            - chains: Number of chains (int)
+            - atoms_per_chain: Array of atom counts per chain (np.ndarray)
+
+    Raises:
+        OSError: If the file does not exist.
+        RuntimeError: If parsing fails.
+
+    Example:
+        >>> meta = load_metadata("8cam.cif")
+        >>> print(f"{meta['chains']} chains, {meta['atoms']} total atoms")
+        377 chains, 86648 total atoms
+        >>> print(f"Chain 0 has {meta['atoms_per_chain'][0]} atoms")
+        Chain 0 has 190 atoms
+    """
+    from .._c import _load
+
+    if not os.path.isfile(file):
+        raise OSError(f'The file "{file}" does not exist.')
+
+    data = _load(file, metadata_only=True)
+
+    atoms_per_chain = data["atoms_per_chain"]
+
+    return {
+        "atoms": int(atoms_per_chain.sum()),
+        "chains": len(atoms_per_chain),
+        "atoms_per_chain": atoms_per_chain,
+    }

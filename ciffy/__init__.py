@@ -22,7 +22,7 @@ from .operations.alignment import kabsch_distance as rmsd
 from .operations.metrics import tm_score, lddt
 
 # I/O
-from .io.loader import load
+from .io.loader import load, load_metadata
 from .io.writer import write_cif
 
 # Template generation
@@ -33,6 +33,12 @@ from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 
 # Neural network utilities (requires PyTorch)
 from . import nn
+
+# Expose profiling function if available (when built with CIFFY_PROFILE=1)
+try:
+    from ._c import _get_profile
+except (ImportError, AttributeError):
+    pass  # Profiling not enabled in this build
 
 # Convenience aliases
 RESIDUE = Scale.RESIDUE
@@ -53,6 +59,7 @@ __all__ = [
     "Reduction",
     # Functions
     "load",
+    "load_metadata",
     "write_cif",
     "from_sequence",
     "rmsd",

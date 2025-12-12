@@ -68,6 +68,14 @@ class GenerateAndBuildExt(build_ext):
             print(result.stdout)
 
 
+# Build compile args
+extra_compile_args = ['-O3']
+
+# Enable profiling if CIFFY_PROFILE environment variable is set
+if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):
+    extra_compile_args.append('-DCIFFY_PROFILE')
+    print("Profiling enabled: building with -DCIFFY_PROFILE")
+
 # C extension module
 ext_module = Extension(
     name="ciffy._c",
@@ -80,7 +88,7 @@ ext_module = Extension(
         'ciffy/src/registry.c',
     ],
     include_dirs=[numpy.get_include()],
-    extra_compile_args=['-O3'],
+    extra_compile_args=extra_compile_args,
 )
 
 setup(

@@ -36,7 +36,7 @@ Homepage = "https://github.com/hmblair/ciffy"
 Repository = "https://github.com/hmblair/ciffy"
 
 [tool.setuptools]
-packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io"]
+packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io", "ciffy.nn"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

@@ -42,6 +42,8 @@ typedef struct mmCIF {
     float *coordinates;     /**< Atom coordinates [atoms * 3] as x,y,z triplets */
     int   *types;           /**< Atom type indices [atoms] */
     int   *elements;        /**< Element type indices [atoms] */
+    int   *is_nonpoly;      /**< Non-polymer mask [atoms], temp during parse */
+    int   write_dest;       /**< Current write destination for batch callbacks */
 
     int *sequence;          /**< Residue type indices [residues] */
     int *res_per_chain;     /**< Residues per chain [chains] */
@@ -85,7 +87,7 @@ char *_get_id(char *buffer, CifErrorContext *ctx);
  * @param ctx Error context, populated on failure
  * @return CIF_OK on success, error code on failure
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx);
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifErrorContext *ctx);
 
 
 /* ─────────────────────────────────────────────────────────────────────────────

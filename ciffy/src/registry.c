@@ -9,6 +9,7 @@
 #include "registry.h"
 #include "parser.h"
 #include "log.h"
+#include "profile.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -90,35 +91,34 @@ extern int _parse_int_inline(mmBlock *block, int line, int index);
  * ============================================================================ */
 
 /**
- * @brief Parse coordinates for a single row.
+ * @brief Parse coordinates for a single row with two-pointer placement.
  * attr_indices: [0]=x, [1]=y, [2]=z
+ * Uses cif->write_dest (set by batch loop) as destination.
  */
 static void _batch_coords(mmCIF *cif, mmBlock *block, int row,
                           const int *idx, char *scratch) {
     (void)scratch;
-    cif->coordinates[3 * row + 0] = _parse_float_inline(block, row, idx[0]);
-    cif->coordinates[3 * row + 1] = _parse_float_inline(block, row, idx[1]);
-    cif->coordinates[3 * row + 2] = _parse_float_inline(block, row, idx[2]);
+    _parse_coords_inline(block, row, idx, &cif->coordinates[3 * cif->write_dest]);
 }
 
 /**
- * @brief Parse element type for a single row.
+ * @brief Parse element type for a single row with two-pointer placement.
  * attr_indices: [0]=type_symbol
  */
 static void _batch_elements(mmCIF *cif, mmBlock *block, int row,
                             const int *idx, char *scratch) {
     (void)scratch;
-    cif->elements[row] = _lookup_inline(block, row, idx[0], _lookup_element);
+    cif->elements[cif->write_dest] = _lookup_element_fast(block, row, idx[0], _lookup_element);
 }
 
 /**
- * @brief Parse atom type for a single row.
+ * @brief Parse atom type for a single row with two-pointer placement.
  * attr_indices: [0]=label_comp_id, [1]=label_atom_id
  */
 static void _batch_types(mmCIF *cif, mmBlock *block, int row,
                          const int *idx, char *scratch) {
-    cif->types[row] = _lookup_double_inline(block, row, idx[0], idx[1],
-                                            _lookup_atom, scratch);
+    cif->types[cif->write_dest] = _lookup_atom_type_fast(block, row, idx[0], idx[1],
+                                                          _lookup_atom, scratch);
 }
 
 
@@ -839,6 +839,156 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
     LOG_DEBUG("Computed %d batch groups", *group_count);
 }
 
+/* ============================================================================
+ * FUSED BATCH PARSING MACROS
+ *
+ * These macros enable easy extension of the fused batch loop.
+ * All macros assume these variables are in scope:
+ *   - line_start: char* to current row
+ *   - offsets: const int* column offsets
+ *
+ * To add a new field (e.g., B-factor):
+ *   1. Add attribute index lookup in _execute_batch_group
+ *   2. Add one line in the fused loop: BATCH_FLOAT(bfactor[dest], bfactor_idx);
+ * ============================================================================ */
+
+/**
+ * @brief Parse a float field.
+ * @param dest  Destination lvalue (e.g., coords[3*dest + 0])
+ * @param idx   Column index in offsets array
+ */
+#define BATCH_FLOAT(dest, idx) do { \
+    char *_p = line_start + offsets[idx]; \
+    while (*_p == ' ') _p++; \
+    (dest) = _fast_parse_float(_p); \
+} while(0)
+
+/**
+ * @brief Parse an integer field.
+ * @param dest  Destination lvalue
+ * @param idx   Column index in offsets array
+ */
+#define BATCH_INT(dest, idx) do { \
+    char *_p = line_start + offsets[idx]; \
+    while (*_p == ' ') _p++; \
+    (dest) = atoi(_p); \
+} while(0)
+
+/**
+ * @brief Parse a field and perform hash table lookup.
+ * @param dest   Destination lvalue (receives lookup value or PARSE_FAIL)
+ * @param idx    Column index in offsets array
+ * @param table  Hash lookup function (e.g., _lookup_element)
+ * @param buf    Scratch buffer (must be MAX_INLINE_BUFFER size)
+ */
+#define BATCH_LOOKUP(dest, idx, table, buf) do { \
+    char *_p = line_start + offsets[idx]; \
+    while (*_p == ' ') _p++; \
+    char *_end = _p; \
+    while (*_end != ' ' && *_end != '\n' && *_end != '\0') _end++; \
+    size_t _len = (size_t)(_end - _p); \
+    if (_len > 0 && _len < MAX_INLINE_BUFFER) { \
+        const char *_src = _p; \
+        size_t _src_len = _len; \
+        _strip_outer_quotes(&_src, &_src_len); \
+        memcpy(buf, _src, _src_len); \
+        (buf)[_src_len] = '\0'; \
+        struct _LOOKUP *_r = table(buf, _src_len); \
+        (dest) = _r ? _r->value : PARSE_FAIL; \
+    } else { \
+        (dest) = PARSE_FAIL; \
+    } \
+} while(0)
+
+/**
+ * @brief Parse two fields, combine with separator, and perform hash lookup.
+ * @param dest   Destination lvalue (receives lookup value or PARSE_FAIL)
+ * @param idx1   Column index for first field (e.g., comp_id)
+ * @param idx2   Column index for second field (e.g., atom_id)
+ * @param sep    Separator character (e.g., '_')
+ * @param table  Hash lookup function (e.g., _lookup_atom)
+ * @param buf    Scratch buffer (must be MAX_INLINE_BUFFER size)
+ */
+#define BATCH_LOOKUP2(dest, idx1, idx2, sep, table, buf) do { \
+    /* First field */ \
+    char *_p1 = line_start + offsets[idx1]; \
+    while (*_p1 == ' ') _p1++; \
+    char *_end1 = _p1; \
+    while (*_end1 != ' ' && *_end1 != '\n' && *_end1 != '\0') _end1++; \
+    size_t _len1 = (size_t)(_end1 - _p1); \
+    /* Second field */ \
+    char *_p2 = line_start + offsets[idx2]; \
+    while (*_p2 == ' ') _p2++; \
+    char *_end2 = _p2; \
+    while (*_end2 != ' ' && *_end2 != '\n' && *_end2 != '\0') _end2++; \
+    size_t _len2 = (size_t)(_end2 - _p2); \
+    /* Combine and lookup */ \
+    if (_len1 > 0 && _len2 > 0 && _len1 + 1 + _len2 + 1 < MAX_INLINE_BUFFER) { \
+        _strip_outer_quotes((const char **)&_p1, &_len1); \
+        _strip_outer_quotes((const char **)&_p2, &_len2); \
+        memcpy(buf, _p1, _len1); \
+        (buf)[_len1] = (sep); \
+        memcpy((buf) + _len1 + 1, _p2, _len2); \
+        size_t _total = _len1 + 1 + _len2; \
+        (buf)[_total] = '\0'; \
+        struct _LOOKUP *_r = table(buf, _total); \
+        (dest) = _r ? _r->value : PARSE_FAIL; \
+    } else { \
+        (dest) = PARSE_FAIL; \
+    } \
+} while(0)
+
+
+/**
+ * @brief Fused batch processing for ATOM block fields.
+ *
+ * Processes coords, elements, and types in a single tight loop,
+ * eliminating per-field function call overhead. Uses two-pointer
+ * placement for polymer/non-polymer separation.
+ *
+ * To add new fields (e.g., B-factor, occupancy):
+ *   1. Add attribute name to ATTR_xxx array at top of file
+ *   2. Add field index lookup in _execute_batch_group
+ *   3. Add one BATCH_xxx macro call in the loop below
+ */
+static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
+                                          const int *coord_idx,
+                                          int elem_idx, int comp_idx, int atom_idx,
+                                          CifErrorContext *ctx) {
+    (void)ctx;
+
+    char scratch[MAX_INLINE_BUFFER];
+    char elem_buf[MAX_INLINE_BUFFER];
+    float *coords = cif->coordinates;
+    int *elements = cif->elements;
+    int *types = cif->types;
+    int *is_nonpoly = cif->is_nonpoly;
+    const int *offsets = block->offsets;
+    char **lines = block->lines;
+
+    int poly_idx = 0;
+    int nonpoly_idx = cif->polymer;
+
+    for (int row = 0; row < block->size; row++) {
+        int dest = is_nonpoly[row] ? nonpoly_idx++ : poly_idx++;
+        char *line_start = lines[row];
+
+        /* Coordinates (x, y, z) */
+        BATCH_FLOAT(coords[3 * dest + 0], coord_idx[0]);
+        BATCH_FLOAT(coords[3 * dest + 1], coord_idx[1]);
+        BATCH_FLOAT(coords[3 * dest + 2], coord_idx[2]);
+
+        /* Element symbol -> element index */
+        BATCH_LOOKUP(elements[dest], elem_idx, _lookup_element, elem_buf);
+
+        /* Residue_Atom -> atom type index */
+        BATCH_LOOKUP2(types[dest], comp_idx, atom_idx, '_', _lookup_atom, scratch);
+    }
+
+    return CIF_OK;
+}
+
+
 CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
                                const BatchGroup *group, CifErrorContext *ctx) {
     mmBlock *block = _get_block_by_id(blocks, group->block_id);
@@ -861,24 +1011,70 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
         }
     }
 
+    /* Use fused loop for ATOM block when is_nonpoly is available */
+    if (group->block_id == BLOCK_ATOM && cif->is_nonpoly != NULL) {
+        /* Find attribute indices for coords, elements, types */
+        int coord_idx[3] = {-1, -1, -1};
+        int elem_idx = -1, comp_idx = -1, atom_idx = -1;
+
+        for (int f = 0; f < group->field_count; f++) {
+            FieldId fid = group->fields[f];
+            if (fid == FIELD_COORDS) {
+                coord_idx[0] = attr_indices[group->attr_map[f][0]];
+                coord_idx[1] = attr_indices[group->attr_map[f][1]];
+                coord_idx[2] = attr_indices[group->attr_map[f][2]];
+            } else if (fid == FIELD_ELEMENTS) {
+                elem_idx = attr_indices[group->attr_map[f][0]];
+            } else if (fid == FIELD_TYPES) {
+                comp_idx = attr_indices[group->attr_map[f][0]];
+                atom_idx = attr_indices[group->attr_map[f][1]];
+            }
+        }
+
+        LOG_DEBUG("Using fused batch loop for ATOM block");
+        return _batch_atom_fields_fused(cif, block, coord_idx,
+                                        elem_idx, comp_idx, atom_idx, ctx);
+    }
+
     /* Scratch buffer for combined lookups */
     char scratch[MAX_INLINE_BUFFER];
 
-    /* Single pass over all rows */
+    /* Pre-compute field indices outside the row loop */
+    int all_field_indices[MAX_BATCH_FIELDS][MAX_BATCH_ATTRS];
+    for (int f = 0; f < group->field_count; f++) {
+        const FieldDef *def = &FIELDS[group->fields[f]];
+        int field_attr_count = _count_attrs(def->attrs);
+        for (int a = 0; a < field_attr_count; a++) {
+            all_field_indices[f][a] = attr_indices[group->attr_map[f][a]];
+        }
+    }
+
+    /* Generic path: Single pass over all rows */
     for (int row = 0; row < block->size; row++) {
+        cif->write_dest = row;
+
         /* Call each field's batch callback */
         for (int f = 0; f < group->field_count; f++) {
             FieldId fid = group->fields[f];
             const FieldDef *def = &FIELDS[fid];
 
-            /* Build attr indices for this field from the attr_map */
-            int field_indices[MAX_BATCH_ATTRS];
-            int field_attr_count = _count_attrs(def->attrs);
-            for (int a = 0; a < field_attr_count; a++) {
-                field_indices[a] = attr_indices[group->attr_map[f][a]];
-            }
+#ifdef CIFFY_PROFILE
+            struct timespec _t_start, _t_end;
+            clock_gettime(CLOCK_MONOTONIC, &_t_start);
+#endif
+            def->batch_row_func(cif, block, row, all_field_indices[f], scratch);
 
-            def->batch_row_func(cif, block, row, field_indices, scratch);
+#ifdef CIFFY_PROFILE
+            clock_gettime(CLOCK_MONOTONIC, &_t_end);
+            double elapsed = (_t_end.tv_sec - _t_start.tv_sec) +
+                           (_t_end.tv_nsec - _t_start.tv_nsec) / 1e9;
+            switch (fid) {
+                case FIELD_COORDS:   g_profile.batch_coords += elapsed; break;
+                case FIELD_ELEMENTS: g_profile.batch_elements += elapsed; break;
+                case FIELD_TYPES:    g_profile.batch_types += elapsed; break;
+                default: break;
+            }
+#endif
         }
     }
 

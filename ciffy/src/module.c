@@ -10,6 +10,12 @@
 #define CIFFY_MAIN_MODULE
 #include "module.h"
 #include "log.h"
+#include "profile.h"
+
+#ifdef CIFFY_PROFILE
+/* Global profile instance for timing data */
+CifProfile g_profile = {0};
+#endif
 
 
 /**
@@ -174,12 +180,14 @@ static PyObject *_export_field(const mmCIF *cif, const FieldDef *def) {
 
         case PY_1D_INT: {
             int *data = *(int **)(base + def->storage_offset);
+            if (data == NULL) Py_RETURN_NONE;  /* metadata_only mode */
             return _init_1d_arr_int(size, data);
         }
 
         case PY_1D_FLOAT: {
             /* Not currently used, but included for completeness */
             float *data = *(float **)(base + def->storage_offset);
+            if (data == NULL) Py_RETURN_NONE;  /* metadata_only mode */
             npy_intp dims[1] = {size};
             PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_FLOAT, data);
             if (arr) PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
@@ -188,11 +196,13 @@ static PyObject *_export_field(const mmCIF *cif, const FieldDef *def) {
 
         case PY_2D_FLOAT: {
             float *data = *(float **)(base + def->storage_offset);
+            if (data == NULL) Py_RETURN_NONE;  /* metadata_only mode */
             return _init_2d_arr_float(size, def->elements_per_item, data);
         }
 
         case PY_STR_LIST: {
             char **data = *(char ***)(base + def->storage_offset);
+            if (data == NULL) Py_RETURN_NONE;  /* metadata_only mode */
             return _c_arr_to_py_list(data, size);
         }
 
@@ -386,22 +396,26 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     (void)self;
 
     __py_init();
+    PROFILE_RESET();
 
     CifErrorContext ctx = CIF_ERROR_INIT;
 
-    /* Parse arguments: filename (required) + load_descriptions (optional keyword) */
-    static char *kwlist[] = {"filename", "load_descriptions", NULL};
+    /* Parse arguments: filename (required) + optional keywords */
+    static char *kwlist[] = {"filename", "load_descriptions", "metadata_only", NULL};
     const char *file = NULL;
     int load_descriptions = 0;  /* Default: false */
+    int metadata_only = 0;      /* Default: false - load full data */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|p", kwlist,
-                                      &file, &load_descriptions)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|pp", kwlist,
+                                      &file, &load_descriptions, &metadata_only)) {
         return NULL;
     }
 
     /* Load the entire file into memory */
+    PROFILE_START(file_load);
     char *buffer = NULL;
     CifError err = _load_file(file, &buffer, &ctx);
+    PROFILE_END(file_load);
     if (err != CIF_OK) {
         return _set_py_error(&ctx, file);
     }
@@ -419,6 +433,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     _next_block(&buffer);
 
     /* Parse all blocks in the file */
+    PROFILE_START(block_parse);
     while (*buffer != '\0') {
         mmBlock block = _read_block(&buffer, &ctx);
         if (block.category == NULL) {
@@ -430,9 +445,10 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
         _store_or_free_block(&block, &blocks);
     }
+    PROFILE_END(block_parse);
 
-    /* Extract molecular data from parsed blocks */
-    err = _fill_cif(&cif, &blocks, &ctx);
+    /* Extract molecular data from parsed blocks (includes line_precomp, metadata, batch_parse, residue_count) */
+    err = _fill_cif(&cif, &blocks, metadata_only, &ctx);
     if (err != CIF_OK) {
         free(cif.id);
         _free_block_list(&blocks);
@@ -441,7 +457,8 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
 
     /* Optionally parse descriptions (after _fill_cif so chains is populated) */
-    if (load_descriptions) {
+    /* Skip in metadata_only mode since we don't need descriptions for indexing */
+    if (load_descriptions && !metadata_only) {
         err = _parse_descriptions(&cif, &blocks, &ctx);
         if (err != CIF_OK) {
             free(cif.id);
@@ -456,6 +473,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     _free_block_list(&blocks);
 
     /* Convert to Python objects */
+    PROFILE_START(py_convert);
     PyObject *dict = _c_to_py(cif);
     if (dict == NULL) return NULL;
 
@@ -480,8 +498,63 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(cif.descriptions);
     }
 
+    PROFILE_END(py_convert);
     return dict;
 }
+
+
+#ifdef CIFFY_PROFILE
+/**
+ * @brief Get profiling data from the last _load() call.
+ *
+ * Returns a dict with timing breakdown for each parsing phase.
+ * Only available when compiled with CIFFY_PROFILE defined.
+ *
+ * @return Dict with timing in seconds, or None if profiling disabled
+ */
+static PyObject *_get_profile(PyObject *self, PyObject *args) {
+    (void)self;
+    (void)args;
+
+    PyObject *dict = PyDict_New();
+    if (dict == NULL) return NULL;
+
+    /* Helper macro to add a timing value to the dict */
+    #define ADD_TIMING(name) do { \
+        PyObject *val = PyFloat_FromDouble(g_profile.name); \
+        if (val == NULL) { Py_DECREF(dict); return NULL; } \
+        if (PyDict_SetItemString(dict, #name, val) < 0) { \
+            Py_DECREF(val); Py_DECREF(dict); return NULL; \
+        } \
+        Py_DECREF(val); \
+    } while(0)
+
+    ADD_TIMING(file_load);
+    ADD_TIMING(block_parse);
+    ADD_TIMING(line_precomp);
+    ADD_TIMING(metadata);
+    ADD_TIMING(batch_parse);
+    ADD_TIMING(residue_count);
+    ADD_TIMING(py_convert);
+    /* Sub-phases of batch_parse */
+    ADD_TIMING(batch_coords);
+    ADD_TIMING(batch_elements);
+    ADD_TIMING(batch_types);
+
+    #undef ADD_TIMING
+
+    return dict;
+}
+#else
+/**
+ * @brief Stub when profiling is disabled - returns None.
+ */
+static PyObject *_get_profile(PyObject *self, PyObject *args) {
+    (void)self;
+    (void)args;
+    Py_RETURN_NONE;
+}
+#endif
 
 
 /**
@@ -651,6 +724,12 @@ static PyMethodDef methods[] = {
      "    IOError: If file cannot be written\n"
      "    TypeError: If arguments have wrong type\n"
      "    MemoryError: If allocation fails\n"},
+    {"_get_profile", _get_profile, METH_NOARGS,
+     "Get profiling data from the last _load() call.\n\n"
+     "Returns:\n"
+     "    dict or None: Timing breakdown if profiling enabled, else None.\n"
+     "    Keys: file_load, block_parse, line_precomp, metadata,\n"
+     "          batch_parse, residue_count, py_convert (all in seconds)\n"},
     {NULL, NULL, 0, NULL}
 };
 

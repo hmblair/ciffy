@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 
 /** Maximum file size (1GB) - prevents memory exhaustion attacks */
 #define MAX_CIF_FILE_SIZE (1024L * 1024L * 1024L)
@@ -460,6 +461,125 @@ float _parse_float_inline(mmBlock *block, int line, int index) {
 }
 
 
+/* ============================================================================
+ * FAST BATCH PARSING
+ *
+ * Optimized parsing functions for batch atom data extraction.
+ * These functions are designed for the hot path where we parse the same
+ * fields from thousands of rows. Key optimizations:
+ *
+ * 1. Compute line_start once per row (not per field)
+ * 2. Direct pointer arithmetic with precomputed offsets
+ * 3. Custom float parser avoiding locale/error handling overhead
+ * 4. Inline field length calculation (no separate function call)
+ * 5. memcpy for string copies instead of byte-by-byte loops
+ * ============================================================================ */
+
+/* _fast_parse_float and _fast_get_field are now defined as static inline in io.h */
+
+
+/**
+ * @brief Parse 3 coordinates (x,y,z) with single line_start computation.
+ */
+void _parse_coords_inline(mmBlock *block, int line, const int *idx, float *out) {
+    if (block->lines != NULL && !block->variable_width) {
+        char *line_start = block->lines[line];
+        const int *offsets = block->offsets;
+
+        char *ptr = line_start + offsets[idx[0]];
+        while (*ptr == ' ') ptr++;
+        out[0] = _fast_parse_float(ptr);
+
+        ptr = line_start + offsets[idx[1]];
+        while (*ptr == ' ') ptr++;
+        out[1] = _fast_parse_float(ptr);
+
+        ptr = line_start + offsets[idx[2]];
+        while (*ptr == ' ') ptr++;
+        out[2] = _fast_parse_float(ptr);
+    } else {
+        out[0] = _parse_float_inline(block, line, idx[0]);
+        out[1] = _parse_float_inline(block, line, idx[1]);
+        out[2] = _parse_float_inline(block, line, idx[2]);
+    }
+}
+
+
+/**
+ * @brief Fast element lookup with single line_start computation.
+ *
+ * @param block Block containing atom data
+ * @param line Row index
+ * @param index Attribute index for element symbol
+ * @param func Hash lookup function (_lookup_element)
+ * @return Element index or PARSE_FAIL
+ */
+int _lookup_element_fast(mmBlock *block, int line, int index, HashTable func) {
+    if (block->lines != NULL && !block->variable_width) {
+        char *line_start = block->lines[line];
+        size_t len;
+        char *ptr = _fast_get_field(line_start, block->offsets, index, &len);
+
+        if (len == 0 || len >= MAX_INLINE_BUFFER) return PARSE_FAIL;
+
+        /* Strip quotes and copy to buffer */
+        _strip_outer_quotes((const char **)&ptr, &len);
+
+        char buffer[MAX_INLINE_BUFFER];
+        memcpy(buffer, ptr, len);
+        buffer[len] = '\0';
+
+        struct _LOOKUP *lookup = func(buffer, len);
+        return lookup != NULL ? lookup->value : PARSE_FAIL;
+    }
+    return _lookup_inline(block, line, index, func);
+}
+
+
+/**
+ * @brief Fast atom type lookup (residue_atom) with single line_start computation.
+ *
+ * Combines two fields (comp_id, atom_id) into "COMP_ATOM" format for lookup.
+ *
+ * @param block Block containing atom data
+ * @param line Row index
+ * @param idx1 Attribute index for comp_id (residue name)
+ * @param idx2 Attribute index for atom_id (atom name)
+ * @param func Hash lookup function (_lookup_atom)
+ * @param buffer Scratch buffer (must be MAX_INLINE_BUFFER size)
+ * @return Atom type index or PARSE_FAIL
+ */
+int _lookup_atom_type_fast(mmBlock *block, int line, int idx1, int idx2,
+                           HashTable func, char *buffer) {
+    if (block->lines != NULL && !block->variable_width) {
+        char *line_start = block->lines[line];
+        const int *offsets = block->offsets;
+
+        size_t len1, len2;
+        char *ptr1 = _fast_get_field(line_start, offsets, idx1, &len1);
+        char *ptr2 = _fast_get_field(line_start, offsets, idx2, &len2);
+
+        if (len1 == 0 || len2 == 0) return PARSE_FAIL;
+        if (len1 + 1 + len2 + 1 > MAX_INLINE_BUFFER) return PARSE_FAIL;
+
+        /* Strip quotes */
+        _strip_outer_quotes((const char **)&ptr1, &len1);
+        _strip_outer_quotes((const char **)&ptr2, &len2);
+
+        /* Build "COMP_ATOM" key with memcpy */
+        memcpy(buffer, ptr1, len1);
+        buffer[len1] = '_';
+        memcpy(buffer + len1 + 1, ptr2, len2);
+        size_t total_len = len1 + 1 + len2;
+        buffer[total_len] = '\0';
+
+        struct _LOOKUP *lookup = func(buffer, total_len);
+        return lookup != NULL ? lookup->value : PARSE_FAIL;
+    }
+    return _lookup_double_inline(block, line, idx1, idx2, func, buffer);
+}
+
+
 int _parse_int_inline(mmBlock *block, int line, int index) {
 
     char *ptr = _get_field_ptr(block, line, index, NULL);
@@ -603,4 +723,50 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
 
     struct _LOOKUP *lookup = func(buffer, out_len);
     return lookup != NULL ? lookup->value : PARSE_FAIL;
+}
+
+
+/* ============================================================================
+ * TWO-POINTER REORDER PREPARATION
+ * Pre-scan to classify atoms for direct placement during batch parsing.
+ * ============================================================================ */
+
+/**
+ * @brief Pre-scan group_PDB to build is_nonpoly mask.
+ *
+ * This enables two-pointer placement during batch parsing:
+ * - Polymer atoms write to indices [0, polymer_count)
+ * - Non-polymer atoms write to indices [polymer_count, total)
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_nonpoly Output: non-polymer mask [atoms]
+ * @param ctx Error context
+ * @return Polymer count, or -1 on error
+ */
+int _prescan_group_pdb(mmBlock *block, int atoms, int *is_nonpoly,
+                       CifErrorContext *ctx) {
+    /* Get group_PDB attribute index */
+    int group_idx = _get_attr_index(block, "group_PDB", ctx);
+    if (group_idx == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'group_PDB'");
+        return -1;
+    }
+
+    /* Single pass: classify each atom as polymer or non-polymer */
+    int nonpoly_count = 0;
+    for (int row = 0; row < atoms; row++) {
+        size_t len;
+        char *ptr = _get_field_ptr(block, row, group_idx, &len);
+        if (ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                "Failed to get group_PDB at row %d", row);
+            return -1;
+        }
+        /* HETATM check: length 6 and starts with 'H' */
+        is_nonpoly[row] = (len == 6 && ptr[0] == 'H') ? 1 : 0;
+        nonpoly_count += is_nonpoly[row];
+    }
+
+    return atoms - nonpoly_count;
 }

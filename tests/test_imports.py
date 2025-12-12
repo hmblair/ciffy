@@ -36,35 +36,7 @@ class TestPublicAPI:
         assert isinstance(ciffy.__version__, str)
 
 
-class TestBackwardCompatibility:
-    """Test backward-compatible imports from old module locations."""
-
-    def test_enum_imports(self):
-        from ciffy.enum import (
-            IndexEnum, PairEnum,
-            Residue, Element,
-            Adenosine, Cytosine, Guanosine, Uridine,
-            RibonucleicAcid, RibonucleicAcidNoPrefix,
-            RES_ABBREV,
-            FRAMES, FRAME1, FRAME2, FRAME3, COARSE,
-            Backbone, Nucleobase, Phosphate,
-        )
-        assert IndexEnum is not None
-        assert Residue.A.value == 0
-        assert Element.C.value == 6
-
-    def test_reduction_imports(self):
-        from ciffy.reduction import Reduction, REDUCTIONS, _Reduction
-        assert Reduction.MEAN is not None
-        assert REDUCTIONS is not None
-
-    def test_rmsd_imports(self):
-        from ciffy.operations.alignment import kabsch_distance, coordinate_covariance
-        assert kabsch_distance is not None
-        assert coordinate_covariance is not None
-
-
-class TestNewModuleStructure:
+class TestModuleStructure:
     """Test imports from new module organization."""
 
     def test_utils_imports(self):

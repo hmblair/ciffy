@@ -443,7 +443,7 @@ class TestDifferentiability:
         import ciffy
 
         # Select single chain
-        p1 = any_polymer_torch.select(0)
+        p1 = any_polymer_torch.by_index(0)
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
 

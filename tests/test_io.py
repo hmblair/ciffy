@@ -246,7 +246,7 @@ class TestLoad:
             assert val in valid_values, f"Chain {i} has invalid molecule type value: {val}"
 
         # Verify RNA chains are classified correctly
-        rna_subset = polymer.subset(Molecule.RNA)
+        rna_subset = polymer.by_type(Molecule.RNA)
         if not rna_subset.empty():
             rna_types = rna_subset.molecule_type
             for i, mol_val in enumerate(rna_types):
@@ -424,7 +424,7 @@ class TestCifSave:
 
         polymer = load(cif_file, backend="numpy")
 
-        rna = polymer.subset(RNA)
+        rna = polymer.by_type(RNA)
         if rna.empty() or rna.polymer_count == 0:
             return  # No RNA to test - pass vacuously
 

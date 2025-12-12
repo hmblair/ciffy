@@ -189,7 +189,7 @@ import ciffy
 polymer = ciffy.load("ribosome.cif", backend="torch")
 
 # Get RNA chains only
-rna = polymer.subset(ciffy.RNA)
+rna = polymer.by_type(ciffy.RNA)
 
 # Compute per-chain analysis
 for i, chain in enumerate(rna.chains()):

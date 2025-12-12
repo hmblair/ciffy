@@ -19,7 +19,7 @@ pip install torch
 | Task | Code |
 |------|------|
 | Load structure | `polymer = ciffy.load("file.cif")` |
-| Get RNA only | `rna = polymer.subset(ciffy.RNA)` |
+| Get RNA only | `rna = polymer.by_type(ciffy.RNA)` |
 | Get backbone | `backbone = polymer.backbone()` |
 | Compute RMSD | `rmsd = ciffy.rmsd(p1, p2)` |
 | Move to GPU | `polymer = polymer.to("cuda")` |
@@ -64,16 +64,16 @@ print(polymer.names)               # Chain names: ['A', 'B', ...]
 
 ```python
 # By molecule type
-rna = polymer.subset(ciffy.RNA)
-protein = polymer.subset(ciffy.PROTEIN)
+rna = polymer.by_type(ciffy.RNA)
+protein = polymer.by_type(ciffy.PROTEIN)
 
 # Polymer vs non-polymer
 polymer_only = polymer.poly()      # Excludes water, ions, ligands
 hetero = polymer.hetero()          # Only water, ions, ligands
 
 # By chain
-chain_a = polymer.select(0)        # First chain
-chains = polymer.select([0, 2])    # Multiple chains
+chain_a = polymer.by_index(0)      # First chain
+chains = polymer.by_index([0, 2])  # Multiple chains
 
 # Backbone atoms
 backbone = polymer.backbone()

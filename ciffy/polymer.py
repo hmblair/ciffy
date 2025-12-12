@@ -721,7 +721,7 @@ class Polymer:
             self._id, names, strands, lengths, new_polymer_count,
         )
 
-    def select(self: Polymer, ix: Array | int) -> Polymer:
+    def by_index(self: Polymer, ix: Array | int) -> Polymer:
         """
         Select chains by index.
 
@@ -773,9 +773,9 @@ class Polymer:
             self._id, names, strands, lengths, new_polymer_count,
         )
 
-    def get_by_name(self: Polymer, name: Array | int) -> Polymer:
+    def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """
-        Select atoms by atom type name.
+        Select atoms by atom type index.
 
         Args:
             name: Atom type index or indices.
@@ -787,7 +787,7 @@ class Polymer:
         mask = (self.atoms[:, None] == name).any(1)
         return self[mask]
 
-    def subset(self: Polymer, mol: Molecule) -> Polymer:
+    def by_type(self: Polymer, mol: Molecule) -> Polymer:
         """
         Select chains by molecule type.
 
@@ -798,7 +798,7 @@ class Polymer:
             New Polymer with chains of that type.
         """
         ix = _nonzero_1d(self.molecule_type == mol.value)
-        return self.select(ix)
+        return self.by_index(ix)
 
     def poly(self: Polymer) -> Polymer:
         """
@@ -857,7 +857,7 @@ class Polymer:
             Individual chain Polymers.
         """
         for ix in range(self.size(Scale.CHAIN)):
-            chain = self.select(ix)
+            chain = self.by_index(ix)
             if mol is None or chain.istype(mol):
                 yield chain
 
@@ -900,7 +900,7 @@ class Polymer:
 
     def backbone(self: Polymer) -> Polymer:
         """Select backbone atoms."""
-        return self.get_by_name(Backbone.index())
+        return self.by_atom(Backbone.index())
 
     # ─────────────────────────────────────────────────────────────────────────
     # String Representations

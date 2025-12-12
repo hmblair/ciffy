@@ -4,7 +4,7 @@ This guide covers how to select and filter molecular structures in ciffy.
 
 ## Molecule Type Selection
 
-ciffy supports various molecule types. Use `subset()` to filter by type:
+ciffy supports various molecule types. Use `by_type()` to filter by type:
 
 ```python
 import ciffy
@@ -12,9 +12,9 @@ import ciffy
 polymer = ciffy.load("structure.cif")
 
 # Select by molecule type
-rna_chains = polymer.subset(ciffy.RNA)
-protein_chains = polymer.subset(ciffy.PROTEIN)
-dna_chains = polymer.subset(ciffy.DNA)
+rna_chains = polymer.by_type(ciffy.RNA)
+protein_chains = polymer.by_type(ciffy.PROTEIN)
+dna_chains = polymer.by_type(ciffy.DNA)
 ```
 
 ### Available Molecule Types
@@ -33,8 +33,8 @@ dna_chains = polymer.subset(ciffy.DNA)
 from ciffy.types import Molecule
 
 # Access all molecule types
-ligands = polymer.subset(Molecule.LIGAND)
-ions = polymer.subset(Molecule.ION)
+ligands = polymer.by_type(Molecule.LIGAND)
+ions = polymer.by_type(Molecule.ION)
 ```
 
 ### Iterating Over Chains
@@ -61,10 +61,10 @@ Select specific chains by index:
 
 ```python
 # Select first chain
-chain_a = polymer.select(0)
+chain_a = polymer.by_index(0)
 
 # Select multiple chains
-chains_ac = polymer.select([0, 2])
+chains_ac = polymer.by_index([0, 2])
 
 # Chain names are preserved
 print(polymer.names)  # ['A', 'B', 'C', ...]
@@ -93,16 +93,16 @@ print(f"Non-polymer atoms: {polymer.nonpoly}")
 
 ### By Atom Type Index
 
-Use `get_by_name()` to select atoms by their type index:
+Use `by_atom()` to select atoms by their type index:
 
 ```python
 from ciffy.biochemistry import Adenosine, Guanosine
 
 # Get all N1 atoms from adenosines
-n1_atoms = polymer.get_by_name(Adenosine.N1)
+n1_atoms = polymer.by_atom(Adenosine.N1)
 
 # Get multiple atom types
-c1_prime = polymer.get_by_name([
+c1_prime = polymer.by_atom([
     Adenosine.C1_PRIME,
     Guanosine.C1_PRIME,
 ])
@@ -144,13 +144,13 @@ For structural analysis, ciffy provides predefined atom groups:
 from ciffy.biochemistry import COARSE, FRAMES, Backbone
 
 # N1/N3 atoms for base pairing analysis
-n1_n3_atoms = polymer.get_by_name(COARSE.index())
+n1_n3_atoms = polymer.by_atom(COARSE.index())
 
 # Reference frame atoms (C2, C4, C6 of each nucleotide)
-frame_atoms = polymer.get_by_name(FRAMES.index())
+frame_atoms = polymer.by_atom(FRAMES.index())
 
 # Backbone atoms
-backbone_atoms = polymer.get_by_name(Backbone.index())
+backbone_atoms = polymer.by_atom(Backbone.index())
 ```
 
 | Group | Atoms | Use Case |
@@ -220,12 +220,12 @@ Chain multiple selections together:
 
 ```python
 # Get backbone atoms of RNA chains only
-rna_backbone = polymer.subset(ciffy.RNA).backbone()
+rna_backbone = polymer.by_type(ciffy.RNA).backbone()
 
 # Get N1/N3 of first chain
 from ciffy.biochemistry import COARSE
-chain_a_n1n3 = polymer.select(0).get_by_name(COARSE.index())
+chain_a_n1n3 = polymer.by_index(0).by_atom(COARSE.index())
 
 # Polymer-only, then by chain
-clean = polymer.poly().select([0, 1])
+clean = polymer.poly().by_index([0, 1])
 ```

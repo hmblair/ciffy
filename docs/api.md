@@ -28,9 +28,9 @@
         - moment
         - mask
         - __getitem__
-        - select
-        - get_by_name
-        - subset
+        - by_index
+        - by_atom
+        - by_type
         - poly
         - hetero
         - chains

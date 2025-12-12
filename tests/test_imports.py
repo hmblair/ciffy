@@ -496,7 +496,7 @@ class TestKabschDistance:
 
         polymer = load(any_cif)
         # Select first chain only
-        chain = polymer.select(0)
+        chain = polymer.by_index(0)
 
         # Add small perturbation
         perturbed = copy.deepcopy(chain)

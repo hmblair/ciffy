@@ -14,7 +14,8 @@ from typing import Sequence
 import numpy as np
 
 from .polymer import Polymer
-from .types import Scale
+from .types import Scale, Molecule
+from .biochemistry.residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
 from .biochemistry._generated_atoms import (
     # RNA nucleotides
     Adenosine,
@@ -66,56 +67,77 @@ _ELEMENT_MAP: dict[str, int] = {
 
 
 # =============================================================================
-# RESIDUE DEFINITIONS (single source of truth)
+# RESIDUE -> ATOM ENUM MAPPING
 # =============================================================================
 
-# Each residue: (residue_index, atom_enum_class)
-# Indices match Residue enum in _generated_residues.py
-_RESIDUE_ATOMS: tuple[tuple[int, type], ...] = (
+# Maps Residue enum members to their atom enum classes
+# Only includes residues that can be generated from sequences
+RESIDUE_ATOMS: dict[Residue, type] = {
     # RNA (indices 0-3)
-    (0, Adenosine),
-    (1, Cytosine),
-    (2, Guanosine),
-    (3, Uridine),
+    Residue.ADE: Adenosine,
+    Residue.CYT: Cytosine,
+    Residue.GUA: Guanosine,
+    Residue.URA: Uridine,
     # DNA (indices 4-7)
-    (4, Deoxyadenosine),
-    (5, Deoxycytidine),
-    (6, Deoxyguanosine),
-    (7, Thymidine),
-    # Protein (indices 8-27, alphabetical by 3-letter code)
-    (8, Alanine),      # ALA
-    (9, Cysteine),     # CYS
-    (10, AsparticAcid),  # ASP
-    (11, GlutamicAcid),  # GLU
-    (12, Phenylalanine), # PHE
-    (13, Glycine),       # GLY
-    (14, Histidine),     # HIS
-    (15, Isoleucine),    # ILE
-    (16, Lysine),        # LYS
-    (17, Leucine),       # LEU
-    (18, Methionine),    # MET
-    (19, Asparagine),    # ASN
-    (20, Proline),       # PRO
-    (21, Glutamine),     # GLN
-    (22, Arginine),      # ARG
-    (23, Serine),        # SER
-    (24, Threonine),     # THR
-    (25, Valine),        # VAL
-    (26, Tryptophan),    # TRP
-    (27, Tyrosine),      # TYR
-)
-
-# Build lookup dict from tuple
-RESIDUE_ATOMS: dict[int, type] = dict(_RESIDUE_ATOMS)
-
-# Sequence character mappings (derived from residue definitions)
-RNA_MAP: dict[str, int] = {'a': 0, 'c': 1, 'g': 2, 'u': 3}
-DNA_MAP: dict[str, int] = {'a': 4, 'c': 5, 'g': 6, 't': 7}
-AMINO_ACID_MAP: dict[str, int] = {
-    'A': 8, 'C': 9, 'D': 10, 'E': 11, 'F': 12, 'G': 13, 'H': 14,
-    'I': 15, 'K': 16, 'L': 17, 'M': 18, 'N': 19, 'P': 20, 'Q': 21,
-    'R': 22, 'S': 23, 'T': 24, 'V': 25, 'W': 26, 'Y': 27,
+    Residue.DA: Deoxyadenosine,
+    Residue.DC: Deoxycytidine,
+    Residue.DG: Deoxyguanosine,
+    Residue.DT: Thymidine,
+    # Protein (indices 8-27)
+    Residue.ALA: Alanine,
+    Residue.CYS: Cysteine,
+    Residue.ASP: AsparticAcid,
+    Residue.GLU: GlutamicAcid,
+    Residue.PHE: Phenylalanine,
+    Residue.GLY: Glycine,
+    Residue.HIS: Histidine,
+    Residue.ILE: Isoleucine,
+    Residue.LYS: Lysine,
+    Residue.LEU: Leucine,
+    Residue.MET: Methionine,
+    Residue.ASN: Asparagine,
+    Residue.PRO: Proline,
+    Residue.GLN: Glutamine,
+    Residue.ARG: Arginine,
+    Residue.SER: Serine,
+    Residue.THR: Threonine,
+    Residue.VAL: Valine,
+    Residue.TRP: Tryptophan,
+    Residue.TYR: Tyrosine,
 }
+
+
+# =============================================================================
+# SEQUENCE CHARACTER MAPPINGS (built from generated data)
+# =============================================================================
+
+def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """
+    Build sequence character -> residue index mappings from generated data.
+
+    Returns:
+        Tuple of (RNA_MAP, DNA_MAP, AMINO_ACID_MAP).
+    """
+    rna_map: dict[str, int] = {}
+    dna_map: dict[str, int] = {}
+    amino_acid_map: dict[str, int] = {}
+
+    for residue in RESIDUE_ATOMS:
+        idx = residue.value
+        abbrev = RESIDUE_ABBREV[idx]
+        mol_type = RESIDUE_MOLECULE_TYPE[idx]
+
+        if mol_type == Molecule.RNA:
+            rna_map[abbrev] = idx
+        elif mol_type == Molecule.DNA:
+            dna_map[abbrev] = idx
+        elif mol_type == Molecule.PROTEIN:
+            amino_acid_map[abbrev] = idx
+
+    return rna_map, dna_map, amino_acid_map
+
+
+RNA_MAP, DNA_MAP, AMINO_ACID_MAP = _build_sequence_maps()
 
 # Characters that look like nucleotides (for ambiguity warning)
 _NUCLEOTIDE_CHARS = frozenset('ACGUT')
@@ -155,7 +177,7 @@ def _expand_residue(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...]]
     Results are cached since the same residue type always expands identically.
 
     Args:
-        residue_idx: Residue index from Residue enum.
+        residue_idx: Residue index (from Residue enum value).
 
     Returns:
         Tuple of (atom_indices, element_indices) as tuples for hashability.
@@ -163,10 +185,15 @@ def _expand_residue(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...]]
     Raises:
         ValueError: If residue_idx has no atom definitions.
     """
-    if residue_idx not in RESIDUE_ATOMS:
-        raise ValueError(f"No atom definitions for residue index {residue_idx}")
+    try:
+        residue = Residue(residue_idx)
+    except ValueError:
+        raise ValueError(f"Invalid residue index: {residue_idx}")
 
-    atom_enum = RESIDUE_ATOMS[residue_idx]
+    if residue not in RESIDUE_ATOMS:
+        raise ValueError(f"No atom definitions for residue {residue.name}")
+
+    atom_enum = RESIDUE_ATOMS[residue]
     atom_indices = []
     element_indices = []
 

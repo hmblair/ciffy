@@ -10,7 +10,6 @@ To modify residues, edit ciffy/biochemistry/definitions.py and run:
 from ._generated_residues import (
     Residue,
     RESIDUE_MOLECULE_TYPE,
-    residue_to_molecule,
     CIF_RESIDUE_NAMES,
     RESIDUE_CIF_NAMES,
     RESIDUE_ABBREV,
@@ -19,7 +18,6 @@ from ._generated_residues import (
 __all__ = [
     "Residue",
     "RESIDUE_MOLECULE_TYPE",
-    "residue_to_molecule",
     "CIF_RESIDUE_NAMES",
     "RESIDUE_CIF_NAMES",
     "RESIDUE_ABBREV",

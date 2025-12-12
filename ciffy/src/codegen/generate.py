@@ -556,22 +556,6 @@ from ..types import Molecule
         code += f"    {idx}: Molecule.{res.molecule_type.name},  # {res.name}\n"
     code += "}\n\n"
 
-    # Generate residue_to_molecule function
-    code += """
-def residue_to_molecule(residue_idx: int) -> Molecule:
-    \"\"\"
-    Get the molecule type for a residue index.
-
-    Args:
-        residue_idx: Integer residue index from Residue enum.
-
-    Returns:
-        Molecule type for this residue.
-    \"\"\"
-    return RESIDUE_MOLECULE_TYPE.get(residue_idx, Molecule.UNKNOWN)
-
-"""
-
     # Generate CIF_RESIDUE_NAMES (CIF input names -> index)
     code += "# CIF residue names -> Residue index (for parsing)\n"
     code += "CIF_RESIDUE_NAMES: dict[str, int] = {\n"

@@ -4,18 +4,16 @@ Pytest configuration and fixtures for ciffy tests.
 Downloads test CIF files from RCSB PDB on demand.
 """
 
-import os
 import urllib.request
 from pathlib import Path
 
 import pytest
 
-# Test PDB IDs and their expected properties
-TEST_PDBS = {
-    "3SKW": {"atoms": 2874, "chains": 13},  # RNA + ligands + ions
-    "9GCM": {"atoms": 4466, "chains": 4},   # RNA-protein complex
-    "9MDS": {"atoms": 102216, "chains": 2}, # Large ribosome structure
-}
+# Test PDB IDs - add new structures here to include them in generic tests
+TEST_PDBS = ["3SKW", "9GCM"]
+
+# Large structures (excluded from parametrized tests by default for speed)
+LARGE_PDBS = ["9MDS"]
 
 DATA_DIR = Path(__file__).parent / "data"
 PDB_URL = "https://files.rcsb.org/download/{pdb_id}.cif"
@@ -36,10 +34,36 @@ def _download_cif(pdb_id: str) -> Path:
 
 def get_test_cif(pdb_id: str) -> str:
     """Get path to a test CIF file, downloading if necessary."""
-    if pdb_id not in TEST_PDBS:
-        raise ValueError(f"Unknown test PDB: {pdb_id}. Available: {list(TEST_PDBS.keys())}")
     return str(_download_cif(pdb_id))
 
+
+# =============================================================================
+# Parametrized fixtures for generic tests
+# =============================================================================
+
+@pytest.fixture(scope="session", params=TEST_PDBS)
+def any_cif(request) -> str:
+    """Parametrized fixture that runs tests on all standard test PDBs."""
+    return get_test_cif(request.param)
+
+
+@pytest.fixture(scope="session", params=TEST_PDBS)
+def any_polymer_numpy(request):
+    """Parametrized fixture providing polymers with numpy backend."""
+    from ciffy import load
+    return load(get_test_cif(request.param), backend="numpy")
+
+
+@pytest.fixture(scope="session", params=TEST_PDBS)
+def any_polymer_torch(request):
+    """Parametrized fixture providing polymers with torch backend."""
+    from ciffy import load
+    return load(get_test_cif(request.param), backend="torch")
+
+
+# =============================================================================
+# Named fixtures for specific structures
+# =============================================================================
 
 @pytest.fixture(scope="session")
 def cif_3skw() -> str:
@@ -57,9 +81,3 @@ def cif_9gcm() -> str:
 def cif_9mds() -> str:
     """Path to 9MDS.cif (large ribosome structure)."""
     return get_test_cif("9MDS")
-
-
-@pytest.fixture(scope="session")
-def all_test_cifs() -> dict[str, str]:
-    """Dict of all test CIF paths, keyed by PDB ID."""
-    return {pdb_id: get_test_cif(pdb_id) for pdb_id in TEST_PDBS}

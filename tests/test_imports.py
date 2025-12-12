@@ -392,15 +392,18 @@ class TestBackendOperations:
 
 
 class TestKabschDistance:
-    """Test Kabsch distance (aligned RMSD) computation."""
+    """Test Kabsch distance (aligned RMSD) computation.
 
-    def test_rotation_zero_rmsd(self, cif_3skw):
+    Uses parametrized any_cif fixture to run on all test PDBs.
+    """
+
+    def test_rotation_zero_rmsd(self, any_cif):
         """Rotating a polymer should give zero RMSD after alignment."""
         import copy
         from ciffy import load, Scale
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
 
         # Create a rotation matrix (90 degrees around z-axis)
         theta = np.pi / 2
@@ -418,13 +421,13 @@ class TestKabschDistance:
         dist = kabsch_distance(polymer, rotated, Scale.MOLECULE)
         assert np.allclose(dist, 0, atol=1e-5)
 
-    def test_translation_zero_rmsd(self, cif_3skw):
+    def test_translation_zero_rmsd(self, any_cif):
         """Translating a polymer should give zero RMSD after alignment."""
         import copy
         from ciffy import load, Scale
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
 
         # Create translated copy
         translated = copy.deepcopy(polymer)
@@ -434,13 +437,13 @@ class TestKabschDistance:
         dist = kabsch_distance(polymer, translated, Scale.MOLECULE)
         assert np.allclose(dist, 0, atol=1e-5)
 
-    def test_flip_nonzero_rmsd(self, cif_3skw):
+    def test_flip_nonzero_rmsd(self, any_cif):
         """Flipping/reflecting coordinates should give nonzero RMSD."""
         import copy
         from ciffy import load, Scale
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
 
         # Create reflected copy (mirror across xy-plane)
         flipped = copy.deepcopy(polymer)
@@ -450,24 +453,24 @@ class TestKabschDistance:
         dist = kabsch_distance(polymer, flipped, Scale.MOLECULE)
         assert dist > 0.1  # Should be significantly nonzero
 
-    def test_numpy_backend(self, cif_3skw):
+    def test_numpy_backend(self, any_cif):
         """Test RMSD with NumPy backend explicitly."""
         from ciffy import load
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw, backend="numpy")
+        polymer = load(any_cif, backend="numpy")
         assert polymer.backend == "numpy"
 
         # RMSD of structure with itself should be ~0
         dist = kabsch_distance(polymer, polymer)
         assert np.allclose(dist, 0, atol=1e-10)
 
-    def test_default_scale(self, cif_3skw):
+    def test_default_scale(self, any_cif):
         """Test that rmsd defaults to MOLECULE scale."""
         from ciffy import load, Scale
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
 
         # These should be equivalent
         dist_default = kabsch_distance(polymer, polymer)
@@ -475,23 +478,23 @@ class TestKabschDistance:
 
         assert np.allclose(dist_default, dist_explicit)
 
-    def test_identical_structures(self, cif_3skw):
+    def test_identical_structures(self, any_cif):
         """Test RMSD of identical structures is zero."""
         from ciffy import load
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
         dist = kabsch_distance(polymer, polymer)
 
         assert np.allclose(dist, 0, atol=1e-10)
 
-    def test_single_chain(self, cif_3skw):
+    def test_single_chain(self, any_cif):
         """Test RMSD works on single-chain polymers."""
         import copy
         from ciffy import load
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
         # Select first chain only
         chain = polymer.select(0)
 
@@ -503,13 +506,13 @@ class TestKabschDistance:
         assert dist.shape == (1,)  # Single molecule
         assert dist[0] > 0  # Should be nonzero due to perturbation
 
-    def test_chain_scale(self, cif_3skw):
+    def test_chain_scale(self, any_cif):
         """Test RMSD at CHAIN scale."""
         import copy
         from ciffy import load, Scale
         from ciffy.operations.alignment import kabsch_distance
 
-        polymer = load(cif_3skw)
+        polymer = load(any_cif)
 
         # Perturb one chain more than others
         perturbed = copy.deepcopy(polymer)

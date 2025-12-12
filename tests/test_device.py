@@ -40,18 +40,15 @@ requires_mps = pytest.mark.skipif(
 
 
 class TestDeviceOperations:
-    """Test operations on different devices."""
+    """Test operations on different devices.
 
-    @pytest.fixture
-    def polymer_torch(self, cif_9gcm):
-        """Create a test polymer with torch backend."""
-        from ciffy import load
-        return load(cif_9gcm, backend="torch")
+    Uses parametrized any_any_polymer_torch fixture to run on all test PDBs.
+    """
 
     @requires_cuda
-    def test_to_cuda(self, polymer_torch):
+    def test_to_cuda(self, any_any_polymer_torch):
         """Test moving polymer to CUDA device."""
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
 
         assert p_cuda.coordinates.device.type == "cuda"
         assert p_cuda.atoms.device.type == "cuda"
@@ -59,9 +56,9 @@ class TestDeviceOperations:
         assert p_cuda.sequence.device.type == "cuda"
 
     @requires_mps
-    def test_to_mps(self, polymer_torch):
+    def test_to_mps(self, any_polymer_torch):
         """Test moving polymer to MPS device."""
-        p_mps = polymer_torch.to("mps")
+        p_mps = any_polymer_torch.to("mps")
 
         assert p_mps.coordinates.device.type == "mps"
         assert p_mps.atoms.device.type == "mps"
@@ -69,11 +66,11 @@ class TestDeviceOperations:
         assert p_mps.sequence.device.type == "mps"
 
     @requires_cuda
-    def test_reduce_on_cuda(self, polymer_torch):
+    def test_reduce_on_cuda(self, any_polymer_torch):
         """Test reduction operations on CUDA."""
         from ciffy import Scale
 
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
 
         # Test reduce (per-atom to per-chain)
         means = p_cuda.reduce(p_cuda.coordinates, Scale.CHAIN)
@@ -81,11 +78,11 @@ class TestDeviceOperations:
         assert means.shape[0] == p_cuda.size(Scale.CHAIN)
 
     @requires_mps
-    def test_reduce_on_mps(self, polymer_torch):
+    def test_reduce_on_mps(self, any_polymer_torch):
         """Test reduction operations on MPS."""
         from ciffy import Scale
 
-        p_mps = polymer_torch.to("mps")
+        p_mps = any_polymer_torch.to("mps")
 
         # Test reduce (per-atom to per-chain)
         means = p_mps.reduce(p_mps.coordinates, Scale.CHAIN)
@@ -93,32 +90,32 @@ class TestDeviceOperations:
         assert means.shape[0] == p_mps.size(Scale.CHAIN)
 
     @requires_cuda
-    def test_center_on_cuda(self, polymer_torch):
+    def test_center_on_cuda(self, any_polymer_torch):
         """Test centering on CUDA (uses reduce internally)."""
         from ciffy import Scale
 
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
         centered, _ = p_cuda.center(Scale.MOLECULE)
 
         assert centered.coordinates.device.type == "cuda"
 
     @requires_mps
-    def test_center_on_mps(self, polymer_torch):
+    def test_center_on_mps(self, any_polymer_torch):
         """Test centering on MPS (uses reduce internally)."""
         from ciffy import Scale
 
-        p_mps = polymer_torch.to("mps")
+        p_mps = any_polymer_torch.to("mps")
         centered, _ = p_mps.center(Scale.MOLECULE)
 
         assert centered.coordinates.device.type == "mps"
 
     @requires_cuda
-    def test_expand_on_cuda(self, polymer_torch):
+    def test_expand_on_cuda(self, any_polymer_torch):
         """Test expand on CUDA."""
         from ciffy import Scale
         import torch
 
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
 
         # Create per-chain features and expand to per-atom
         chain_features = torch.randn(p_cuda.size(Scale.CHAIN), 16, device="cuda")
@@ -128,12 +125,12 @@ class TestDeviceOperations:
         assert expanded.shape[0] == p_cuda.size()
 
     @requires_mps
-    def test_expand_on_mps(self, polymer_torch):
+    def test_expand_on_mps(self, any_polymer_torch):
         """Test expand on MPS."""
         from ciffy import Scale
         import torch
 
-        p_mps = polymer_torch.to("mps")
+        p_mps = any_polymer_torch.to("mps")
 
         # Create per-chain features and expand to per-atom
         chain_features = torch.randn(p_mps.size(Scale.CHAIN), 16, device="mps")
@@ -143,11 +140,11 @@ class TestDeviceOperations:
         assert expanded.shape[0] == p_mps.size()
 
     @requires_cuda
-    def test_rmsd_on_cuda(self, polymer_torch):
+    def test_rmsd_on_cuda(self, any_polymer_torch):
         """Test RMSD calculation on CUDA."""
         import ciffy
 
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
 
         # Calculate RMSD against self (should be 0)
         rmsd = ciffy.rmsd(p_cuda, p_cuda, ciffy.MOLECULE)
@@ -157,7 +154,7 @@ class TestDeviceOperations:
         assert rmsd.item() < 1e-5
 
     @requires_mps
-    def test_rmsd_on_mps(self, polymer_torch):
+    def test_rmsd_on_mps(self, any_polymer_torch):
         """Test RMSD calculation on MPS.
 
         Note: MPS doesn't support SVD operations, so RMSD (which uses Kabsch
@@ -167,7 +164,7 @@ class TestDeviceOperations:
         import ciffy
         import torch
 
-        p_mps = polymer_torch.to("mps")
+        p_mps = any_polymer_torch.to("mps")
 
         # MPS doesn't support SVD, so RMSD will fail
         # Use PYTORCH_ENABLE_MPS_FALLBACK=1 env var to enable CPU fallback
@@ -177,12 +174,6 @@ class TestDeviceOperations:
 
 class TestMixedDeviceHandling:
     """Test that operations handle mixed-device scenarios gracefully."""
-
-    @pytest.fixture
-    def polymer_torch(self, cif_9gcm):
-        """Create a test polymer with torch backend."""
-        from ciffy import load
-        return load(cif_9gcm, backend="torch")
 
     @requires_cuda
     def test_scatter_with_cpu_index_cuda_features(self):
@@ -219,13 +210,13 @@ class TestMixedDeviceHandling:
         assert result.device.type == "mps"
 
     @requires_cuda
-    def test_reduce_with_mismatched_sizes_device(self, polymer_torch):
+    def test_reduce_with_mismatched_sizes_device(self, any_polymer_torch):
         """Test reduce works even if internal sizes tensor is on different device."""
         import torch
         from ciffy import Scale
 
         # Get polymer on CUDA
-        p_cuda = polymer_torch.to("cuda")
+        p_cuda = any_polymer_torch.to("cuda")
 
         # Manually move coordinates to CPU but keep sizes on CUDA
         # (This simulates a potential edge case)
@@ -247,14 +238,14 @@ class TestMixedDeviceHandling:
         assert index.device.type == "cpu"
 
     @requires_cuda
-    def test_with_coordinates_gpu_on_cpu_polymer_cuda(self, polymer_torch):
+    def test_with_coordinates_gpu_on_cpu_polymer_cuda(self, any_polymer_torch):
         """Test with_coordinates with GPU coords on CPU polymer works for center/expand."""
         import torch
         from ciffy import Scale
 
         # CPU polymer with GPU coordinates (common pattern in ML workflows)
-        gpu_coords = polymer_torch.coordinates.to("cuda")
-        mixed_polymer = polymer_torch.with_coordinates(gpu_coords)
+        gpu_coords = any_polymer_torch.coordinates.to("cuda")
+        mixed_polymer = any_polymer_torch.with_coordinates(gpu_coords)
 
         # Internal sizes are on CPU, coordinates on CUDA
         assert mixed_polymer.coordinates.device.type == "cuda"
@@ -265,14 +256,14 @@ class TestMixedDeviceHandling:
         assert centered.coordinates.device.type == "cuda"
 
     @requires_mps
-    def test_with_coordinates_gpu_on_cpu_polymer_mps(self, polymer_torch):
+    def test_with_coordinates_gpu_on_cpu_polymer_mps(self, any_polymer_torch):
         """Test with_coordinates with MPS coords on CPU polymer works for center/expand."""
         import torch
         from ciffy import Scale
 
         # CPU polymer with MPS coordinates (common pattern in ML workflows)
-        mps_coords = polymer_torch.coordinates.to("mps")
-        mixed_polymer = polymer_torch.with_coordinates(mps_coords)
+        mps_coords = any_polymer_torch.coordinates.to("mps")
+        mixed_polymer = any_polymer_torch.with_coordinates(mps_coords)
 
         # Internal sizes are on CPU, coordinates on MPS
         assert mixed_polymer.coordinates.device.type == "mps"
@@ -284,21 +275,18 @@ class TestMixedDeviceHandling:
 
 
 class TestDifferentiability:
-    """Test that operations are differentiable for use with autograd."""
+    """Test that operations are differentiable for use with autograd.
 
-    @pytest.fixture
-    def polymer_torch(self, cif_9gcm):
-        """Create a test polymer with torch backend."""
-        from ciffy import load
-        return load(cif_9gcm, backend="torch")
+    Uses parametrized any_polymer_torch fixture to run on all test PDBs.
+    """
 
-    def test_rmsd_is_differentiable(self, polymer_torch):
+    def test_rmsd_is_differentiable(self, any_polymer_torch):
         """Test that ciffy.rmsd supports backpropagation."""
         import torch
         import ciffy
 
         # Create two polymers with coordinates that require gradients
-        p1 = polymer_torch
+        p1 = any_polymer_torch
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
 
         # Add small perturbation to make them different
@@ -315,12 +303,12 @@ class TestDifferentiability:
         assert coords2.grad is not None, "Gradients were not computed"
         assert not torch.all(coords2.grad == 0), "Gradients are all zero"
 
-    def test_rmsd_gradient_correctness(self, polymer_torch):
+    def test_rmsd_gradient_correctness(self, any_polymer_torch):
         """Test that RMSD gradients point toward alignment."""
         import torch
         import ciffy
 
-        p1 = polymer_torch
+        p1 = any_polymer_torch
 
         # Create p2 with a known translation
         translation = torch.tensor([10.0, 0.0, 0.0])
@@ -336,13 +324,13 @@ class TestDifferentiability:
         mean_grad = coords2.grad.mean(dim=0)
         assert mean_grad[0] < 0, "Gradient should point toward reducing distance"
 
-    def test_center_is_differentiable(self, polymer_torch):
+    def test_center_is_differentiable(self, any_polymer_torch):
         """Test that center() supports backpropagation."""
         import torch
         from ciffy import Scale
 
-        coords = polymer_torch.coordinates.clone().detach().requires_grad_(True)
-        p = polymer_torch.with_coordinates(coords)
+        coords = any_polymer_torch.coordinates.clone().detach().requires_grad_(True)
+        p = any_polymer_torch.with_coordinates(coords)
 
         centered, means = p.center(Scale.MOLECULE)
 
@@ -352,13 +340,13 @@ class TestDifferentiability:
 
         assert coords.grad is not None, "Gradients were not computed"
 
-    def test_reduce_is_differentiable(self, polymer_torch):
+    def test_reduce_is_differentiable(self, any_polymer_torch):
         """Test that reduce() supports backpropagation."""
         import torch
         from ciffy import Scale
 
-        coords = polymer_torch.coordinates.clone().detach().requires_grad_(True)
-        p = polymer_torch.with_coordinates(coords)
+        coords = any_polymer_torch.coordinates.clone().detach().requires_grad_(True)
+        p = any_polymer_torch.with_coordinates(coords)
 
         # Reduce to chain level
         chain_means = p.reduce(coords, Scale.CHAIN)
@@ -369,12 +357,12 @@ class TestDifferentiability:
         assert coords.grad is not None, "Gradients were not computed"
 
     @requires_cuda
-    def test_rmsd_differentiable_on_cuda(self, polymer_torch):
+    def test_rmsd_differentiable_on_cuda(self, any_polymer_torch):
         """Test RMSD differentiability on CUDA."""
         import torch
         import ciffy
 
-        p1 = polymer_torch.to("cuda")
+        p1 = any_polymer_torch.to("cuda")
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
 
@@ -384,7 +372,7 @@ class TestDifferentiability:
         assert coords2.grad is not None
         assert coords2.grad.device.type == "cuda"
 
-    def test_rmsd_gradient_stability_small_perturbation(self, polymer_torch):
+    def test_rmsd_gradient_stability_small_perturbation(self, any_polymer_torch):
         """Test gradient stability with near-identical structures.
 
         When structures are nearly identical, the covariance matrix approaches
@@ -394,7 +382,7 @@ class TestDifferentiability:
         import torch
         import ciffy
 
-        p1 = polymer_torch
+        p1 = any_polymer_torch
         # Very small perturbation - this is the challenging case for SVD gradients
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         perturbation = torch.randn_like(coords2) * 1e-6
@@ -407,7 +395,7 @@ class TestDifferentiability:
         assert coords2.grad is not None, "Gradients were not computed"
         assert torch.isfinite(coords2.grad).all(), "Gradients contain NaN or Inf"
 
-    def test_rmsd_gradient_stability_identical_structures(self, polymer_torch):
+    def test_rmsd_gradient_stability_identical_structures(self, any_polymer_torch):
         """Test gradient stability with exactly identical structures.
 
         The degenerate case where structures are identical. The RMSD is 0,
@@ -416,7 +404,7 @@ class TestDifferentiability:
         import torch
         import ciffy
 
-        p1 = polymer_torch
+        p1 = any_polymer_torch
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         p2 = p1.with_coordinates(coords2)
 
@@ -431,12 +419,12 @@ class TestDifferentiability:
         assert coords2.grad is not None, "Gradients were not computed"
         assert torch.isfinite(coords2.grad).all(), "Gradients contain NaN or Inf"
 
-    def test_rmsd_gradient_magnitude_bounded(self, polymer_torch):
+    def test_rmsd_gradient_magnitude_bounded(self, any_polymer_torch):
         """Test that gradient magnitudes are reasonable (not exploding)."""
         import torch
         import ciffy
 
-        p1 = polymer_torch
+        p1 = any_polymer_torch
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         # Moderate perturbation
         p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.5)
@@ -449,13 +437,13 @@ class TestDifferentiability:
         assert grad_norm < 1e6, f"Gradient norm too large: {grad_norm}"
         assert torch.isfinite(grad_norm), "Gradient norm is not finite"
 
-    def test_rmsd_gradient_stability_single_chain(self, polymer_torch):
+    def test_rmsd_gradient_stability_single_chain(self, any_polymer_torch):
         """Test gradient stability on single-chain polymer."""
         import torch
         import ciffy
 
         # Select single chain
-        p1 = polymer_torch.select(0)
+        p1 = any_polymer_torch.select(0)
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
 

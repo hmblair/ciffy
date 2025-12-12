@@ -19,6 +19,7 @@ from .types import Scale, Molecule
 # Operations
 from .operations.reduction import Reduction
 from .operations.alignment import kabsch_distance as rmsd
+from .operations.metrics import tm_score, lddt
 
 # I/O
 from .io.loader import load
@@ -29,6 +30,9 @@ from .template import from_sequence
 
 # Vocabulary sizes (for embedding layers)
 from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
+
+# Neural network utilities (requires PyTorch)
+from . import nn
 
 # Convenience aliases
 RESIDUE = Scale.RESIDUE
@@ -52,6 +56,8 @@ __all__ = [
     "write_cif",
     "from_sequence",
     "rmsd",
+    "tm_score",
+    "lddt",
     # Vocabulary sizes
     "NUM_ELEMENTS",
     "NUM_RESIDUES",
@@ -63,4 +69,6 @@ __all__ = [
     "PROTEIN",
     "RNA",
     "DNA",
+    # Submodules
+    "nn",
 ]

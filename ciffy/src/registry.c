@@ -169,14 +169,20 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
     mmBlock *entity_nonpoly = &blocks->b[BLOCK_ENTITY_NONPOLY];
     mmBlock *chain_block = &blocks->b[BLOCK_CHAIN];
 
-    /* Build entity_id -> molecule_type map */
-    int entity_map[100];
-    for (int i = 0; i < 100; i++) entity_map[i] = 12;  /* UNKNOWN */
+    /* Build entity_id -> molecule_type map (sized for number of chains + 1) */
+    int entity_map_size = cif->chains + 1;  /* +1 for 1-indexed entity_ids */
+    int *entity_map = calloc((size_t)entity_map_size, sizeof(int));
+    if (!entity_map) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate entity_map");
+        return CIF_ERR_ALLOC;
+    }
+    for (int i = 0; i < entity_map_size; i++) entity_map[i] = 12;  /* UNKNOWN */
 
     /* Get attribute index for struct_asym.entity_id */
     int sa_entity_idx = _get_attr_index(chain_block, "entity_id", ctx);
     if (sa_entity_idx < 0) {
         LOG_WARNING("_struct_asym missing entity_id attribute");
+        free(entity_map);
         return CIF_OK;
     }
 
@@ -185,7 +191,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
      * ======================================================================== */
     if (entity->category != NULL) {
         CifError err = _precompute_lines(entity, ctx);
-        if (err != CIF_OK) return err;
+        if (err != CIF_OK) { free(entity_map); return err; }
 
         int e_id_idx = _get_attr_index(entity, "id", ctx);
         int e_type_idx = _get_attr_index(entity, "type", ctx);
@@ -193,7 +199,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         if (e_id_idx >= 0 && e_type_idx >= 0) {
             for (int row = 0; row < entity->size; row++) {
                 int entity_id = _parse_int_inline(entity, row, e_id_idx);
-                if (entity_id < 0 || entity_id >= 100) continue;
+                if (entity_id < 0 || entity_id >= entity_map_size) continue;
 
                 size_t type_len;
                 const char *type_ptr = _get_field_ptr(entity, row, e_type_idx, &type_len);
@@ -225,7 +231,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
      * ======================================================================== */
     if (entity_nonpoly->category != NULL) {
         CifError err = _precompute_lines(entity_nonpoly, ctx);
-        if (err != CIF_OK) return err;
+        if (err != CIF_OK) { free(entity_map); return err; }
 
         int enp_entity_idx = _get_attr_index(entity_nonpoly, "entity_id", ctx);
         int enp_comp_idx = _get_attr_index(entity_nonpoly, "comp_id", ctx);
@@ -233,7 +239,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         if (enp_entity_idx >= 0 && enp_comp_idx >= 0) {
             for (int row = 0; row < entity_nonpoly->size; row++) {
                 int entity_id = _parse_int_inline(entity_nonpoly, row, enp_entity_idx);
-                if (entity_id < 0 || entity_id >= 100) continue;
+                if (entity_id < 0 || entity_id >= entity_map_size) continue;
 
                 size_t comp_len;
                 const char *comp_ptr = _get_field_ptr(entity_nonpoly, row, enp_comp_idx, &comp_len);
@@ -264,7 +270,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
      * ======================================================================== */
     if (entity_poly->category != NULL) {
         CifError err = _precompute_lines(entity_poly, ctx);
-        if (err != CIF_OK) return err;
+        if (err != CIF_OK) { free(entity_map); return err; }
 
         int ep_entity_idx = _get_attr_index(entity_poly, "entity_id", ctx);
         int ep_type_idx = _get_attr_index(entity_poly, "type", ctx);
@@ -272,7 +278,7 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
         if (ep_entity_idx >= 0 && ep_type_idx >= 0) {
             for (int row = 0; row < entity_poly->size; row++) {
                 int entity_id = _parse_int_inline(entity_poly, row, ep_entity_idx);
-                if (entity_id < 0 || entity_id >= 100) continue;
+                if (entity_id < 0 || entity_id >= entity_map_size) continue;
 
                 size_t type_len;
                 const char *type_ptr = _get_field_ptr(entity_poly, row, ep_type_idx, &type_len);
@@ -304,11 +310,12 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
      * ======================================================================== */
     for (int chain = 0; chain < cif->chains; chain++) {
         int entity_id = _parse_int_inline(chain_block, chain, sa_entity_idx);
-        if (entity_id >= 0 && entity_id < 100) {
+        if (entity_id >= 0 && entity_id < entity_map_size) {
             cif->molecule_types[chain] = entity_map[entity_id];
         }
     }
 
+    free(entity_map);
     LOG_DEBUG("Molecule types parsed for %d chains", cif->chains);
     return CIF_OK;
 }

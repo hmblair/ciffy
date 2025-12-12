@@ -618,6 +618,53 @@ class Polymer:
 
         return _cdist(coords, coords)
 
+    def knn(self: Polymer, k: int, scale: Scale = Scale.ATOM) -> Array:
+        """
+        Find k-nearest neighbors at the specified scale.
+
+        Args:
+            k: Number of neighbors per point (excluding self).
+            scale: Scale at which to compute (ATOM, RESIDUE, CHAIN).
+
+        Returns:
+            Tensor of shape (k, N) where N = size at scale.
+            Entry [i, j] is the index of j's i-th nearest neighbor.
+
+        Example:
+            >>> p = ciffy.load("structure.cif", backend="torch")
+            >>> neighbors = p.knn(k=16, scale=Scale.ATOM)  # (16, num_atoms)
+            >>> # Convert to edge_index for PyG:
+            >>> src = torch.arange(p.size()).repeat_interleave(16)
+            >>> dst = neighbors.flatten()
+            >>> edge_index = torch.stack([src, dst])
+        """
+        # Compute pairwise distances at the given scale
+        if scale == Scale.ATOM:
+            dists = self.pairwise_distances()
+        else:
+            dists = self.pairwise_distances(scale)
+
+        n = dists.shape[0]
+        if k >= n:
+            raise ValueError(f"k={k} must be less than number of points ({n})")
+
+        if is_torch(dists):
+            # Use topk to find k+1 smallest (includes self at distance 0)
+            # largest=False gives smallest distances
+            _, indices = dists.topk(k + 1, dim=1, largest=False)
+            # Exclude self (first column) and transpose to (k, N)
+            return indices[:, 1:].T
+        else:
+            # NumPy: use argpartition for efficiency
+            # argpartition gives k+1 smallest but not sorted
+            indices = np.argpartition(dists, k + 1, axis=1)[:, :k + 1]
+            # Sort within the k+1 to get proper order
+            row_indices = np.arange(n)[:, None]
+            sorted_order = np.argsort(dists[row_indices, indices], axis=1)
+            indices = indices[row_indices, sorted_order]
+            # Exclude self (first column) and transpose to (k, N)
+            return indices[:, 1:].T
+
     def _pc(
         self: Polymer,
         scale: Scale,

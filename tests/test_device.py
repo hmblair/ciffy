@@ -310,19 +310,22 @@ class TestDifferentiability:
 
         p1 = any_polymer_torch
 
-        # Create p2 with a known translation
-        translation = torch.tensor([10.0, 0.0, 0.0])
-        coords2 = (p1.coordinates + translation).requires_grad_(True)
+        # Use noise perturbation that can't be perfectly aligned by Kabsch
+        # (pure translation would be perfectly removed, giving RMSD=0 and grad=0)
+        torch.manual_seed(42)
+        noise = torch.randn_like(p1.coordinates) * 1.0
+        coords2 = (p1.coordinates + noise).requires_grad_(True)
         p2 = p1.with_coordinates(coords2)
 
         # Compute RMSD
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
         rmsd_sq.sum().backward()
 
-        # The gradient should point back toward p1 (negative x direction)
-        # since that would reduce the RMSD
-        mean_grad = coords2.grad.mean(dim=0)
-        assert mean_grad[0] < 0, "Gradient should point toward reducing distance"
+        # Gradients should be non-zero and point in a consistent direction
+        # (we can't predict exact direction with random noise, but they should exist)
+        assert coords2.grad is not None, "Gradients were not computed"
+        grad_norm = coords2.grad.norm()
+        assert grad_norm > 1e-6, f"Gradient norm too small: {grad_norm}"
 
     def test_center_is_differentiable(self, any_polymer_torch):
         """Test that center() supports backpropagation."""
@@ -410,8 +413,12 @@ class TestDifferentiability:
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
 
-        # RMSD should be essentially zero
-        assert rmsd_sq.item() < 1e-10
+        # RMSD should be essentially zero, but float32 accumulation errors
+        # grow with structure size. Tolerance scales as sqrt(N) * eps * scale.
+        n_atoms = p1.size()
+        # For 86k atoms, this gives ~0.003 tolerance (float32 eps ~1e-7, coords ~100A)
+        tolerance = max(1e-6, (n_atoms ** 0.5) * 1e-7 * 100)
+        assert rmsd_sq.item() < tolerance, f"RMSD {rmsd_sq.item()} >= {tolerance} for {n_atoms} atoms"
 
         rmsd_sq.sum().backward()
 

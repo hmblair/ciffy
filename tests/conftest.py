@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 # Test PDB IDs - add new structures here to include them in generic tests
-TEST_PDBS = ["3SKW", "9GCM"]
+TEST_PDBS = ["3SKW", "9GCM", "8CAM"]
 
 # Large structures (excluded from parametrized tests by default for speed)
 LARGE_PDBS = ["9MDS"]

@@ -89,6 +89,23 @@ print(f"Non-polymer atoms: {polymer.nonpoly}")
 !!! note
     The `poly()` result has valid residue information and supports residue-scale operations. The `hetero()` result does not have residue structure.
 
+## Residue Selection
+
+Select specific residue types using `by_residue()`:
+
+```python
+from ciffy.biochemistry import Residue
+
+# Get all adenosine residues
+adenosines = polymer.by_residue(Residue.A)
+
+# Get all purines (A and G)
+purines = polymer.by_residue([Residue.A, Residue.G])
+
+# Get all pyrimidines (C and U)
+pyrimidines = polymer.by_residue([Residue.C, Residue.U])
+```
+
 ## Atom Selection
 
 ### By Atom Type Index

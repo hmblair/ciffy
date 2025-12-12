@@ -787,6 +787,26 @@ class Polymer:
         mask = (self.atoms[:, None] == name).any(1)
         return self[mask]
 
+    def by_residue(self: Polymer, res: Array | int) -> Polymer:
+        """
+        Select residues by residue type index.
+
+        Args:
+            res: Residue type index or indices (from Residue enum).
+
+        Returns:
+            New Polymer with matching residues.
+
+        Example:
+            >>> from ciffy.biochemistry import Residue
+            >>> adenosines = polymer.by_residue(Residue.A)
+            >>> purines = polymer.by_residue([Residue.A, Residue.G])
+        """
+        res = _as_backend(self.sequence, res)
+        res_mask = (self.sequence[:, None] == res).any(1)
+        atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+        return self[atom_mask]
+
     def by_type(self: Polymer, mol: Molecule) -> Polymer:
         """
         Select chains by molecule type.

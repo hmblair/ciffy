@@ -30,6 +30,7 @@
         - __getitem__
         - by_index
         - by_atom
+        - by_residue
         - by_type
         - poly
         - hetero

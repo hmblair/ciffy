@@ -26,7 +26,7 @@ from .biochemistry import (
     RESIDUE_ABBREV,
     RESIDUE_MOLECULE_TYPE,
     ATOM_NAMES,
-    Element,
+    ELEMENT_NAMES,
     FRAMES,
     Backbone,
 )
@@ -976,7 +976,7 @@ class Polymer:
             type_str = mol.name
             if mol == Molecule.ION and atoms > 0:
                 elem_idx = int(elements_np[atom_offset])
-                elem_name = Element.revdict().get(elem_idx, "")
+                elem_name = ELEMENT_NAMES.get(elem_idx, "")
                 if elem_name:
                     type_str = f"{elem_name} {mol.name}"
 

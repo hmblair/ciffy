@@ -44,3 +44,7 @@ class Element(IndexEnum):
     BA = 56   # Barium
     HG = 80   # Mercury
     PB = 82   # Lead
+
+
+# Pre-computed reverse lookup: atomic number -> element name
+ELEMENT_NAMES: dict[int, str] = {e.value: e.name for e in Element}

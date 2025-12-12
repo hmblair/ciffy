@@ -4,7 +4,7 @@ Biochemistry constants and enumerations.
 Defines atoms, residues, elements, and nucleotide structures.
 """
 
-from .elements import Element
+from .elements import Element, ELEMENT_NAMES
 from .residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE, residue_to_molecule
 from .nucleotides import (
     # RNA
@@ -57,8 +57,9 @@ __all__ = [
     "NUM_ELEMENTS",
     "NUM_RESIDUES",
     "NUM_ATOMS",
-    # Reverse lookup
+    # Reverse lookups
     "ATOM_NAMES",
+    "ELEMENT_NAMES",
     # Elements
     "Element",
     # Residues

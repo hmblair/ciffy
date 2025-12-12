@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Auto-generate hash lookup tables for CIF parsing and writing.
+Auto-generate hash lookup tables and Python enums.
 
-Generates:
-  - hash/atom.gperf, hash/residue.gperf, hash/element.gperf (forward lookups)
-  - hash/atom.c, hash/residue.c, hash/element.c (gperf output)
-  - hash/reverse.h (reverse lookups for writing)
-  - biochemistry/_generated_atoms.py (Python enums with auto-assigned indices)
+Reads from ciffy/biochemistry/definitions.py (single source of truth) and generates:
+  - hash/*.gperf (forward lookups)
+  - hash/*.c (gperf output)
+  - hash/reverse.h (reverse lookups for CIF writing)
+  - biochemistry/_generated_atoms.py (Python atom enums)
+  - biochemistry/_generated_residues.py (Python Residue enum + mappings)
 
 Usage:
-  python generate.py [--gperf-path /path/to/gperf]
+  python generate.py [--gperf-path /path/to/gperf] [--skip-gperf]
 
 This script is called automatically during build via setup.py.
 """
@@ -22,7 +23,6 @@ from pathlib import Path
 
 def find_gperf():
     """Find gperf executable (requires version 3.1+ for constants-prefix)."""
-    # Check Homebrew paths first (they have newer versions)
     candidates = [
         "/opt/homebrew/bin/gperf",  # macOS Homebrew ARM
         "/usr/local/bin/gperf",      # macOS Homebrew Intel
@@ -32,7 +32,10 @@ def find_gperf():
     for path in candidates:
         if path and Path(path).exists():
             return path
-    raise RuntimeError("gperf not found. Install with: brew install gperf (macOS) or apt install gperf (Linux)")
+    raise RuntimeError(
+        "gperf not found. Install with: brew install gperf (macOS) "
+        "or apt install gperf (Linux)"
+    )
 
 
 def to_python_name(cif_name: str) -> str:
@@ -47,27 +50,55 @@ def to_python_name(cif_name: str) -> str:
 
 
 def generate_all():
-    """Generate all lookup tables and Python enums."""
-    from ciffy.biochemistry.atoms import ALL_ATOMS
-    from ciffy.biochemistry.residues import Residue
+    """Generate all lookup tables and Python enums from definitions."""
+    from ciffy.biochemistry.definitions import ALL_RESIDUES, validate_definitions
     from ciffy.biochemistry.elements import Element
     from ciffy.biochemistry.molecule_types import (
         ENTITY_POLY_TYPES, ENTITY_TYPES, ION_COMP_IDS
     )
+    from ciffy.types import Molecule
+
+    # Validate definitions before generating
+    validate_definitions()
 
     # Output directories
     hash_dir = Path(__file__).parent.parent / "hash"
     biochem_dir = Path(__file__).parent.parent.parent / "biochemistry"
     hash_dir.mkdir(exist_ok=True)
 
+    # === Build derived data from definitions ===
+
+    # Build residue index mapping
+    residue_index = {}  # residue_name -> index
+    cif_to_residue = {}  # cif_name -> residue_index
+    residue_to_cif = {}  # residue_index -> first cif_name (for writing)
+    residue_to_molecule = {}  # residue_index -> molecule_type
+    residue_abbreviations = {}  # residue_name -> abbreviation
+
+    for idx, res in enumerate(ALL_RESIDUES):
+        residue_index[res.name] = idx
+        residue_to_molecule[idx] = res.molecule_type
+        residue_abbreviations[res.name] = res.abbreviation
+
+        # First CIF name is the canonical one for writing
+        residue_to_cif[idx] = res.cif_names[0]
+
+        # All CIF names map to this residue
+        for cif_name in res.cif_names:
+            cif_to_residue[cif_name] = idx
+
+    print(f"Loaded {len(ALL_RESIDUES)} residue definitions")
+
     # === Assign indices to all atoms ===
     # Index 0 is reserved for "unknown"
-    atom_index = {}  # (residue, atom_name) -> index
+    atom_index = {}  # (cif_residue_name, atom_name) -> index
     current_idx = 1
 
-    for residue, atoms in ALL_ATOMS.items():
-        for atom in atoms:
-            key = (residue, atom)
+    for res in ALL_RESIDUES:
+        # Use the first CIF name as the residue prefix in atom hash
+        cif_name = res.cif_names[0]
+        for atom in res.atoms:
+            key = (cif_name, atom)
             if key not in atom_index:
                 atom_index[key] = current_idx
                 current_idx += 1
@@ -92,8 +123,6 @@ struct _LOOKUP;
         f.write(atom_gperf)
 
     # === Generate residue.gperf ===
-    from ciffy.biochemistry.residues import CIF_RESIDUE_NAMES
-
     residue_gperf = """%define lookup-function-name _lookup_residue
 %define hash-function-name _hash_residue
 %define constants-prefix RESIDUE
@@ -104,18 +133,18 @@ struct _LOOKUP;
 struct _LOOKUP;
 %%
 """
-    # Track which names are already added (avoid duplicates)
+    # Add all CIF names that map to residue indices
     added_names = set()
-
-    # Add enum member names (for round-trip compatibility)
-    for member in Residue:
-        residue_gperf += f"{member.name}, {member.value}\n"
-        added_names.add(member.name)
-
-    # Add CIF-specific names (skip if already added from enum)
-    for cif_name, idx in CIF_RESIDUE_NAMES.items():
+    for cif_name, idx in sorted(cif_to_residue.items(), key=lambda x: x[1]):
         if cif_name not in added_names:
             residue_gperf += f"{cif_name}, {idx}\n"
+            added_names.add(cif_name)
+
+    # Also add enum names for round-trip compatibility
+    for res in ALL_RESIDUES:
+        if res.name not in added_names:
+            residue_gperf += f"{res.name}, {residue_index[res.name]}\n"
+            added_names.add(res.name)
 
     with open(hash_dir / "residue.gperf", "w") as f:
         f.write(residue_gperf)
@@ -149,7 +178,6 @@ struct _LOOKUP;
 %%
 """
     for type_str, mol_value in ENTITY_POLY_TYPES.items():
-        # Quote strings with special characters
         if "(" in type_str or "/" in type_str or " " in type_str:
             molecule_gperf += f'"{type_str}", {mol_value}\n'
         else:
@@ -158,7 +186,7 @@ struct _LOOKUP;
     with open(hash_dir / "molecule.gperf", "w") as f:
         f.write(molecule_gperf)
 
-    # === Generate entity.gperf (for _entity.type lookup) ===
+    # === Generate entity.gperf ===
     entity_gperf = """%define lookup-function-name _lookup_entity
 %define hash-function-name _hash_entity
 %define constants-prefix ENTITY
@@ -175,7 +203,7 @@ struct _LOOKUP;
     with open(hash_dir / "entity.gperf", "w") as f:
         f.write(entity_gperf)
 
-    # === Generate ion.gperf (for ion comp_id lookup) ===
+    # === Generate ion.gperf ===
     ion_gperf = """%define lookup-function-name _lookup_ion
 %define hash-function-name _hash_ion
 %define constants-prefix ION
@@ -186,7 +214,6 @@ struct _LOOKUP;
 struct _LOOKUP;
 %%
 """
-    from ciffy.types import Molecule
     for comp_id in sorted(ION_COMP_IDS):
         ion_gperf += f"{comp_id}, {Molecule.ION.value}\n"
 
@@ -196,33 +223,30 @@ struct _LOOKUP;
     print("Generated: hash/*.gperf (atom, residue, element, molecule, entity, ion)")
 
     # === Generate reverse.h ===
-    generate_reverse_header(hash_dir, atom_index, Residue, Element)
+    generate_reverse_header(
+        hash_dir, atom_index, residue_to_cif, Element, Molecule
+    )
 
     # === Generate Python enums ===
-    generate_python_enums(biochem_dir, atom_index)
+    generate_python_enums(biochem_dir, atom_index, ALL_RESIDUES)
+    generate_residue_module(biochem_dir, ALL_RESIDUES, residue_to_molecule)
 
     return atom_index
 
 
-def generate_reverse_header(hash_dir, atom_index, Residue, Element):
+def generate_reverse_header(hash_dir, atom_index, residue_to_cif, Element, Molecule):
     """Generate reverse.h for CIF writing."""
     from ciffy.biochemistry.molecule_types import ENTITY_POLY_TYPES
-    from ciffy.biochemistry.residues import RESIDUE_CIF_NAMES
 
     # Collect atoms info
     atoms = {}  # idx -> (residue, atom_name)
     for (residue, atom), idx in atom_index.items():
         atoms[idx] = (residue, atom)
 
-    # Collect residues - use CIF output names for writing
-    residues = RESIDUE_CIF_NAMES
-
     # Collect elements
     elements = {member.value: member.name for member in Element}
 
-    # Collect molecule types (reverse: value -> CIF string)
-    # Use preferred canonical CIF strings for each molecule type
-    from ciffy.types import Molecule
+    # Molecule type CIF strings
     molecule_types = {
         Molecule.RNA.value: "polyribonucleotide",
         Molecule.DNA.value: "polydeoxyribonucleotide",
@@ -237,7 +261,7 @@ def generate_reverse_header(hash_dir, atom_index, Residue, Element):
 
     # Find max indices
     atom_max = max(atoms.keys()) + 1
-    residue_max = max(residues.keys()) + 1
+    residue_max = max(residue_to_cif.keys()) + 1
     element_max = max(elements.keys()) + 1
     molecule_max = max(molecule_types.keys()) + 1
 
@@ -286,8 +310,8 @@ static inline const char *element_name(int idx) {
     header += 'static const char *RESIDUE_NAMES[RESIDUE_MAX] = {\n'
 
     for i in range(residue_max):
-        if i in residues:
-            header += f'    [{i}] = "{residues[i]}",\n'
+        if i in residue_to_cif:
+            header += f'    [{i}] = "{residue_to_cif[i]}",\n'
         else:
             header += f'    [{i}] = NULL,\n'
 
@@ -362,59 +386,29 @@ static inline const char *molecule_type_name(int idx) {
     print("Generated: hash/reverse.h")
 
 
-def generate_python_enums(biochem_dir, atom_index):
-    """Generate Python enum file with auto-assigned indices."""
-    from ciffy.biochemistry.atoms import (
-        NUCLEOTIDE_ATOMS, AMINO_ACID_ATOMS,
-    )
+def generate_python_enums(biochem_dir, atom_index, all_residues):
+    """Generate Python atom enum file with auto-assigned indices."""
+    from ciffy.types import Molecule
 
-    # Build per-residue atom dicts
-    residue_atoms = {}  # residue -> {python_name: index}
-    for (residue, atom), idx in atom_index.items():
-        if residue not in residue_atoms:
-            residue_atoms[residue] = {}
+    # Build per-residue atom dicts using CIF name as key
+    residue_atoms = {}  # cif_name -> {python_name: index}
+    for (cif_name, atom), idx in atom_index.items():
+        if cif_name not in residue_atoms:
+            residue_atoms[cif_name] = {}
         python_name = to_python_name(atom)
-        residue_atoms[residue][python_name] = idx
+        residue_atoms[cif_name][python_name] = idx
 
-    # Class name mapping
-    class_names = {
-        # Nucleotides
-        "A": "Adenosine",
-        "C": "Cytosine",
-        "G": "Guanosine",
-        "U": "Uridine",
-        "GTP": "GuanosineTriphosphate",
-        "CCC": "CytidineTriphosphate",
-        "GNG": "Deoxyguanosine",
-        # Amino acids
-        "GLY": "Glycine",
-        "ALA": "Alanine",
-        "VAL": "Valine",
-        "LEU": "Leucine",
-        "ILE": "Isoleucine",
-        "PRO": "Proline",
-        "PHE": "Phenylalanine",
-        "TRP": "Tryptophan",
-        "MET": "Methionine",
-        "CYS": "Cysteine",
-        "SER": "Serine",
-        "THR": "Threonine",
-        "ASN": "Asparagine",
-        "GLN": "Glutamine",
-        "ASP": "AsparticAcid",
-        "GLU": "GlutamicAcid",
-        "LYS": "Lysine",
-        "ARG": "Arginine",
-        "HIS": "Histidine",
-        "TYR": "Tyrosine",
-    }
+    # Group residues by type
+    rna_residues = [r for r in all_residues if r.molecule_type == Molecule.RNA]
+    dna_residues = [r for r in all_residues if r.molecule_type == Molecule.DNA]
+    protein_residues = [r for r in all_residues if r.molecule_type == Molecule.PROTEIN]
 
     code = '''"""
 Auto-generated atom enum definitions.
 
 DO NOT EDIT MANUALLY - Generated by ciffy/src/codegen/generate.py
 
-To modify atoms, edit ciffy/biochemistry/atoms.py and run:
+To modify atoms, edit ciffy/biochemistry/definitions.py and run:
     python ciffy/src/codegen/generate.py
 """
 
@@ -423,86 +417,98 @@ from ..utils import IndexEnum
 
 '''
 
-    # Generate nucleotide classes
-    code += "# " + "=" * 77 + "\n"
-    code += "# NUCLEOTIDES\n"
-    code += "# " + "=" * 77 + "\n\n"
+    # Generate individual atom classes
+    for section_name, residues in [
+        ("RNA NUCLEOTIDES", rna_residues),
+        ("DNA NUCLEOTIDES", dna_residues),
+        ("AMINO ACIDS", protein_residues),
+    ]:
+        if not residues:
+            continue
 
-    for residue in NUCLEOTIDE_ATOMS.keys():
-        class_name = class_names[residue]
-        atoms = residue_atoms[residue]
-        code += f"class {class_name}(IndexEnum):\n"
-        code += f'    """{class_name} ({residue}) atom indices."""\n'
-        for python_name, idx in atoms.items():
-            code += f"    {python_name} = {idx}\n"
-        code += "\n\n"
+        code += "# " + "=" * 77 + "\n"
+        code += f"# {section_name}\n"
+        code += "# " + "=" * 77 + "\n\n"
 
-    # Generate amino acid classes
-    code += "# " + "=" * 77 + "\n"
-    code += "# AMINO ACIDS\n"
-    code += "# " + "=" * 77 + "\n\n"
+        for res in residues:
+            cif_name = res.cif_names[0]
+            if cif_name not in residue_atoms:
+                continue  # Skip residues with no atoms (water, ions)
 
-    for residue in AMINO_ACID_ATOMS.keys():
-        class_name = class_names[residue]
-        atoms = residue_atoms[residue]
-        code += f"class {class_name}(IndexEnum):\n"
-        code += f'    """{class_name} ({residue}) atom indices."""\n'
-        for python_name, idx in atoms.items():
-            code += f"    {python_name} = {idx}\n"
-        code += "\n\n"
+            atoms = residue_atoms[cif_name]
+            code += f"class {res.class_name}(IndexEnum):\n"
+            code += f'    """{res.class_name} ({cif_name}) atom indices."""\n'
+            for python_name, idx in atoms.items():
+                code += f"    {python_name} = {idx}\n"
+            code += "\n\n"
 
     # Generate combined enums
     code += "# " + "=" * 77 + "\n"
     code += "# COMBINED ENUMS\n"
     code += "# " + "=" * 77 + "\n\n"
 
-    # RibonucleicAcid
-    code += "RibonucleicAcid = IndexEnum(\n"
-    code += '    "RibonucleicAcid",\n'
-    code += '    Adenosine.dict("A_") | Cytosine.dict("C_") |\n'
-    code += '    Guanosine.dict("G_") | Uridine.dict("U_")\n'
-    code += ")\n\n"
+    # RibonucleicAcid (RNA only - 4 bases)
+    rna_bases = [r for r in rna_residues if r.cif_names[0] in ("A", "C", "G", "U")]
+    if rna_bases:
+        code += "RibonucleicAcid = IndexEnum(\n"
+        code += '    "RibonucleicAcid",\n'
+        parts = [f'{r.class_name}.dict("{r.cif_names[0]}_")' for r in rna_bases]
+        code += "    " + " |\n    ".join(parts) + "\n"
+        code += ")\n\n"
 
-    # RibonucleicAcidNoPrefix
-    code += "RibonucleicAcidNoPrefix = IndexEnum(\n"
-    code += '    "RibonucleicAcid",\n'
-    code += '    Adenosine.dict() | Cytosine.dict() |\n'
-    code += '    Guanosine.dict() | Uridine.dict()\n'
-    code += ")\n\n"
+        code += "RibonucleicAcidNoPrefix = IndexEnum(\n"
+        code += '    "RibonucleicAcid",\n'
+        parts = [f'{r.class_name}.dict()' for r in rna_bases]
+        code += "    " + " |\n    ".join(parts) + "\n"
+        code += ")\n\n"
+
+    # DeoxyribonucleicAcid (DNA only - 4 bases)
+    dna_bases = [r for r in dna_residues if r.cif_names[0] in ("DA", "DC", "DG", "DT")]
+    if dna_bases:
+        code += "DeoxyribonucleicAcid = IndexEnum(\n"
+        code += '    "DeoxyribonucleicAcid",\n'
+        parts = [f'{r.class_name}.dict("{r.cif_names[0]}_")' for r in dna_bases]
+        code += "    " + " |\n    ".join(parts) + "\n"
+        code += ")\n\n"
 
     # ModifiedNucleotides
-    code += "ModifiedNucleotides = IndexEnum(\n"
-    code += '    "ModifiedNucleotides",\n'
-    code += '    GuanosineTriphosphate.dict("GTP_") |\n'
-    code += '    CytidineTriphosphate.dict("CCC_") |\n'
-    code += '    Deoxyguanosine.dict("GNG_")\n'
-    code += ")\n\n"
+    modified = [r for r in all_residues
+                if r.molecule_type in (Molecule.RNA, Molecule.DNA)
+                and r.cif_names[0] not in ("A", "C", "G", "U", "DA", "DC", "DG", "DT")]
+    if modified:
+        code += "ModifiedNucleotides = IndexEnum(\n"
+        code += '    "ModifiedNucleotides",\n'
+        parts = [f'{r.class_name}.dict("{r.cif_names[0]}_")' for r in modified]
+        code += "    " + " |\n    ".join(parts) + "\n"
+        code += ")\n\n"
 
     # AminoAcids
-    code += "AminoAcids = IndexEnum(\n"
-    code += '    "AminoAcids",\n'
-    code += '    Glycine.dict("GLY_") | Alanine.dict("ALA_") |\n'
-    code += '    Valine.dict("VAL_") | Leucine.dict("LEU_") |\n'
-    code += '    Isoleucine.dict("ILE_") | Proline.dict("PRO_") |\n'
-    code += '    Phenylalanine.dict("PHE_") | Tryptophan.dict("TRP_") |\n'
-    code += '    Methionine.dict("MET_") | Cysteine.dict("CYS_") |\n'
-    code += '    Serine.dict("SER_") | Threonine.dict("THR_") |\n'
-    code += '    Asparagine.dict("ASN_") | Glutamine.dict("GLN_") |\n'
-    code += '    AsparticAcid.dict("ASP_") | GlutamicAcid.dict("GLU_") |\n'
-    code += '    Lysine.dict("LYS_") | Arginine.dict("ARG_") |\n'
-    code += '    Histidine.dict("HIS_") | Tyrosine.dict("TYR_")\n'
-    code += ")\n\n"
+    if protein_residues:
+        code += "AminoAcids = IndexEnum(\n"
+        code += '    "AminoAcids",\n'
+        parts = [f'{r.class_name}.dict("{r.cif_names[0]}_")' for r in protein_residues]
+        # Format nicely with line breaks
+        formatted_parts = []
+        line = "    "
+        for part in parts:
+            if len(line) + len(part) > 76:
+                formatted_parts.append(line.rstrip(" |"))
+                line = "    " + part + " |"
+            else:
+                line += part + " | "
+        formatted_parts.append(line.rstrip(" |"))
+        code += " |\n".join(formatted_parts) + "\n"
+        code += ")\n\n"
 
-    # Generate reverse lookup dict (index -> atom_name)
+    # Generate reverse lookup dict
     code += "# " + "=" * 77 + "\n"
     code += "# REVERSE LOOKUP\n"
     code += "# " + "=" * 77 + "\n\n"
     code += "# Maps atom index -> atom name (for all residue types)\n"
     code += "ATOM_NAMES: dict[int, str] = {\n"
 
-    # Sort by index for readable output
     for (residue, atom), idx in sorted(atom_index.items(), key=lambda x: x[1]):
-        code += f"    {idx}: \"{atom}\",\n"
+        code += f'    {idx}: "{atom}",\n'
 
     code += "}\n"
 
@@ -510,6 +516,89 @@ from ..utils import IndexEnum
         f.write(code)
 
     print("Generated: biochemistry/_generated_atoms.py")
+
+
+def generate_residue_module(biochem_dir, all_residues, residue_to_molecule):
+    """Generate Python Residue enum and mapping dicts."""
+
+    code = '''"""
+Auto-generated residue definitions.
+
+DO NOT EDIT MANUALLY - Generated by ciffy/src/codegen/generate.py
+
+To modify residues, edit ciffy/biochemistry/definitions.py and run:
+    python ciffy/src/codegen/generate.py
+"""
+
+from ..utils import IndexEnum
+from ..types import Molecule
+
+
+'''
+
+    # Generate Residue enum
+    code += "class Residue(IndexEnum):\n"
+    code += '    """\n'
+    code += '    Residue types with unique integer indices.\n'
+    code += '    \n'
+    code += '    Includes nucleotides (RNA and DNA), amino acids, water, and ions.\n'
+    code += '    """\n\n'
+
+    for idx, res in enumerate(all_residues):
+        code += f"    {res.name} = {idx}  # {res.class_name}\n"
+
+    code += "\n\n"
+
+    # Generate RESIDUE_MOLECULE_TYPE mapping
+    code += "# Mapping from residue index to molecule type\n"
+    code += "RESIDUE_MOLECULE_TYPE: dict[int, Molecule] = {\n"
+    for idx, res in enumerate(all_residues):
+        code += f"    {idx}: Molecule.{res.molecule_type.name},  # {res.name}\n"
+    code += "}\n\n"
+
+    # Generate residue_to_molecule function
+    code += """
+def residue_to_molecule(residue_idx: int) -> Molecule:
+    \"\"\"
+    Get the molecule type for a residue index.
+
+    Args:
+        residue_idx: Integer residue index from Residue enum.
+
+    Returns:
+        Molecule type for this residue.
+    \"\"\"
+    return RESIDUE_MOLECULE_TYPE.get(residue_idx, Molecule.UNKNOWN)
+
+"""
+
+    # Generate CIF_RESIDUE_NAMES (CIF input names -> index)
+    code += "# CIF residue names -> Residue index (for parsing)\n"
+    code += "CIF_RESIDUE_NAMES: dict[str, int] = {\n"
+    for idx, res in enumerate(all_residues):
+        for cif_name in res.cif_names:
+            code += f'    "{cif_name}": {idx},  # {res.name}\n'
+    code += "}\n\n"
+
+    # Generate RESIDUE_CIF_NAMES (index -> CIF output name)
+    code += "# Residue index -> CIF output name (for writing)\n"
+    code += "RESIDUE_CIF_NAMES: dict[int, str] = {\n"
+    for idx, res in enumerate(all_residues):
+        # Use first CIF name as canonical output
+        code += f'    {idx}: "{res.cif_names[0]}",  # {res.name}\n'
+    code += "}\n\n"
+
+    # Generate RES_ABBREV (residue name -> single-letter abbreviation)
+    code += "# Residue name -> single-letter abbreviation\n"
+    code += "RES_ABBREV: dict[str, str] = {\n"
+    for res in all_residues:
+        code += f'    "{res.name}": "{res.abbreviation}",\n'
+    code += "}\n"
+
+    with open(biochem_dir / "_generated_residues.py", "w") as f:
+        f.write(code)
+
+    print("Generated: biochemistry/_generated_residues.py")
 
 
 def run_gperf(gperf_path):
@@ -538,10 +627,13 @@ def run_gperf(gperf_path):
 def main():
     parser = argparse.ArgumentParser(description="Generate hash lookup tables")
     parser.add_argument("--gperf-path", help="Path to gperf executable")
-    parser.add_argument("--skip-gperf", action="store_true", help="Skip running gperf (only generate .gperf files)")
+    parser.add_argument(
+        "--skip-gperf", action="store_true",
+        help="Skip running gperf (only generate .gperf files)"
+    )
     args = parser.parse_args()
 
-    # Generate .gperf files, reverse.h, and Python enums
+    # Generate everything from definitions
     generate_all()
 
     # Run gperf

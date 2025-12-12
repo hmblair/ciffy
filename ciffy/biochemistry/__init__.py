@@ -7,12 +7,19 @@ Defines atoms, residues, elements, and nucleotide structures.
 from .elements import Element
 from .residues import Residue, RES_ABBREV, RESIDUE_MOLECULE_TYPE, residue_to_molecule
 from .nucleotides import (
+    # RNA
     Adenosine,
     Cytosine,
     Guanosine,
     Uridine,
     RibonucleicAcid,
     RibonucleicAcidNoPrefix,
+    # DNA
+    Deoxyadenosine,
+    Deoxycytidine,
+    Deoxyguanosine,
+    Thymidine,
+    DeoxyribonucleicAcid,
 )
 from .constants import (
     FRAMES,
@@ -31,17 +38,15 @@ from .constants import (
 # These are computed from the enums and include +1 for index 0 (unknown/padding)
 
 # Number of element types (max index + 1)
-# Elements use atomic numbers, so max is 16 (S) + 1 = 17
 NUM_ELEMENTS: int = max(e.value for e in Element) + 1
 
 # Number of residue types (max index + 1)
-# Residues are 0-indexed, max is ~30
 NUM_RESIDUES: int = max(r.value for r in Residue) + 1
 
-# Number of atom types - imported from generated file
-# This is the total across all residue types
-from .atoms import ALL_ATOMS
-NUM_ATOMS: int = sum(len(atoms) for atoms in ALL_ATOMS.values()) + 1  # +1 for unknown
+# Number of atom types - computed from definitions
+# Index 0 is reserved for unknown, so max index + 1
+from .definitions import ALL_RESIDUES
+NUM_ATOMS: int = sum(len(r.atoms) for r in ALL_RESIDUES) + 1
 
 # Reverse lookup: atom index -> atom name
 from ._generated_atoms import ATOM_NAMES
@@ -61,13 +66,19 @@ __all__ = [
     "RES_ABBREV",
     "RESIDUE_MOLECULE_TYPE",
     "residue_to_molecule",
-    # Nucleotides
+    # RNA nucleotides
     "Adenosine",
     "Cytosine",
     "Guanosine",
     "Uridine",
     "RibonucleicAcid",
     "RibonucleicAcidNoPrefix",
+    # DNA nucleotides
+    "Deoxyadenosine",
+    "Deoxycytidine",
+    "Deoxyguanosine",
+    "Thymidine",
+    "DeoxyribonucleicAcid",
     # Constants
     "FRAMES",
     "FRAME1",

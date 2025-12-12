@@ -2,23 +2,26 @@
 Nucleotide and amino acid atom definitions.
 
 This module re-exports atom enums from the auto-generated file.
-To modify atoms, edit ciffy/biochemistry/atoms.py and run:
+To modify atoms, edit ciffy/biochemistry/definitions.py and run:
     python ciffy/src/codegen/generate.py
-
-The atom definitions (as simple lists) are in atoms.py.
-The generated IndexEnum classes are in _generated_atoms.py.
 """
 
 # Re-export everything from the generated file
 from ._generated_atoms import (
-    # Nucleotides
+    # RNA nucleotides
     Adenosine,
     Cytosine,
     Guanosine,
     Uridine,
+    # DNA nucleotides
+    Deoxyadenosine,
+    Deoxycytidine,
+    Deoxyguanosine,
+    Thymidine,
+    # Modified nucleotides
     GuanosineTriphosphate,
     CytidineTriphosphate,
-    Deoxyguanosine,
+    Deoxyguanosine2Prime,
     # Amino acids
     Glycine,
     Alanine,
@@ -43,19 +46,26 @@ from ._generated_atoms import (
     # Combined enums
     RibonucleicAcid,
     RibonucleicAcidNoPrefix,
+    DeoxyribonucleicAcid,
     ModifiedNucleotides,
     AminoAcids,
 )
 
 __all__ = [
-    # Nucleotides
+    # RNA nucleotides
     "Adenosine",
     "Cytosine",
     "Guanosine",
     "Uridine",
+    # DNA nucleotides
+    "Deoxyadenosine",
+    "Deoxycytidine",
+    "Deoxyguanosine",
+    "Thymidine",
+    # Modified nucleotides
     "GuanosineTriphosphate",
     "CytidineTriphosphate",
-    "Deoxyguanosine",
+    "Deoxyguanosine2Prime",
     # Amino acids
     "Glycine",
     "Alanine",
@@ -80,6 +90,7 @@ __all__ = [
     # Combined enums
     "RibonucleicAcid",
     "RibonucleicAcidNoPrefix",
+    "DeoxyribonucleicAcid",
     "ModifiedNucleotides",
     "AminoAcids",
 ]

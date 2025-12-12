@@ -130,7 +130,7 @@ c1_prime = polymer.by_atom([
 
 ### Backbone Atoms
 
-Select RNA backbone atoms (sugar-phosphate):
+Select backbone atoms (works for RNA, DNA, and proteins):
 
 ```python
 backbone = polymer.backbone()
@@ -161,20 +161,22 @@ Adenosine.P    # Phosphate
 ciffy provides convenience methods for common structural selections:
 
 ```python
-# RNA selections
-backbone = polymer.backbone()     # Sugar-phosphate backbone
-bases = polymer.nucleobase()      # Nucleobases only
-phosphates = polymer.phosphate()  # Phosphate groups
+# Works on all molecule types
+backbone = polymer.backbone()     # Sugar-phosphate (RNA/DNA) or N-CA-C-O (protein)
 
-# Protein selections
+# Nucleic acid specific
+bases = polymer.nucleobase()      # RNA nucleobases only
+phosphates = polymer.phosphate()  # RNA/DNA phosphate groups
+
+# Protein specific
 sidechains = polymer.sidechain()  # Amino acid sidechains
 ```
 
 | Method | Molecule | Atoms | Use Case |
 |--------|----------|-------|----------|
-| `backbone()` | RNA | Sugar-phosphate atoms | Backbone analysis |
+| `backbone()` | RNA, DNA, Protein | Sugar-phosphate or N-CA-C-O | Backbone analysis |
 | `nucleobase()` | RNA | Ring atoms (N1-N9, C2-C8) | Base pairing, stacking |
-| `phosphate()` | RNA | P, OP1, OP2, OP3 | Phosphate contacts |
+| `phosphate()` | RNA, DNA | P, OP1, OP2, OP3 | Phosphate contacts |
 | `sidechain()` | Protein | CB onwards | Sidechain packing |
 
 ### Computing Nucleobase Centers

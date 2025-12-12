@@ -925,7 +925,7 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     def backbone(self: Polymer) -> Polymer:
-        """Select RNA backbone atoms (sugar-phosphate)."""
+        """Select backbone atoms (sugar-phosphate for RNA/DNA, N-CA-C-O for protein)."""
         return self.by_atom(Backbone.index())
 
     def nucleobase(self: Polymer) -> Polymer:
@@ -933,7 +933,7 @@ class Polymer:
         return self.by_atom(Nucleobase.index())
 
     def phosphate(self: Polymer) -> Polymer:
-        """Select RNA phosphate atoms."""
+        """Select RNA/DNA phosphate atoms."""
         return self.by_atom(Phosphate.index())
 
     def sidechain(self: Polymer) -> Polymer:

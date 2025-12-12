@@ -28,6 +28,9 @@ from .biochemistry import (
     ATOM_NAMES,
     ELEMENT_NAMES,
     Backbone,
+    Nucleobase,
+    Phosphate,
+    Sidechain,
 )
 from .utils import all_equal, filter_by_mask
 
@@ -922,8 +925,20 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     def backbone(self: Polymer) -> Polymer:
-        """Select backbone atoms."""
+        """Select RNA backbone atoms (sugar-phosphate)."""
         return self.by_atom(Backbone.index())
+
+    def nucleobase(self: Polymer) -> Polymer:
+        """Select RNA nucleobase atoms."""
+        return self.by_atom(Nucleobase.index())
+
+    def phosphate(self: Polymer) -> Polymer:
+        """Select RNA phosphate atoms."""
+        return self.by_atom(Phosphate.index())
+
+    def sidechain(self: Polymer) -> Polymer:
+        """Select protein sidechain atoms."""
+        return self.by_atom(Sidechain.index())
 
     # ─────────────────────────────────────────────────────────────────────────
     # String Representations

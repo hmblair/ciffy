@@ -25,6 +25,7 @@ from .constants import (
     Backbone,
     Nucleobase,
     Phosphate,
+    Sidechain,
 )
 
 # =============================================================================
@@ -78,4 +79,5 @@ __all__ = [
     "Backbone",
     "Nucleobase",
     "Phosphate",
+    "Sidechain",
 ]

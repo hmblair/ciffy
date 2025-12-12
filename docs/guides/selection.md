@@ -44,11 +44,11 @@ Use `chains()` to iterate, optionally filtering by type:
 ```python
 # Iterate over all chains
 for chain in polymer.chains():
-    print(f"{chain.id()}: {chain.size()} atoms")
+    print(f"{chain.names[0]}: {chain.size()} atoms")
 
 # Iterate over only RNA chains
 for chain in polymer.chains(ciffy.RNA):
-    print(f"RNA chain {chain.id()}: {chain.size(ciffy.RESIDUE)} residues")
+    print(f"RNA chain {chain.names[0]}: {chain.size(ciffy.RESIDUE)} residues")
 
 # Check molecule type
 if polymer.istype(ciffy.RNA):
@@ -123,14 +123,14 @@ n1_atoms = polymer.by_atom(Adenosine.N1)
 
 # Get multiple atom types
 c1_prime = polymer.by_atom([
-    Adenosine.C1_PRIME,
-    Guanosine.C1_PRIME,
+    Adenosine.C1p,
+    Guanosine.C1p,
 ])
 ```
 
 ### Backbone Atoms
 
-Select backbone atoms (sugar-phosphate for RNA, N-CA-C-O for proteins):
+Select RNA backbone atoms (sugar-phosphate):
 
 ```python
 backbone = polymer.backbone()
@@ -150,34 +150,46 @@ from ciffy.biochemistry import (
 )
 
 # Examples of available atoms
-Adenosine.N1      # N1 atom
-Adenosine.N3      # N3 atom
-Adenosine.C1_PRIME  # C1' sugar atom
-Adenosine.P       # Phosphate
+Adenosine.N1   # N1 atom
+Adenosine.N3   # N3 atom
+Adenosine.C1p  # C1' sugar atom
+Adenosine.P    # Phosphate
 ```
 
-### Reference Frame Atoms
+### Specialized Selection Methods
 
-For structural analysis, ciffy provides predefined atom groups:
+ciffy provides convenience methods for common structural selections:
 
 ```python
-from ciffy.biochemistry import COARSE, FRAMES, Backbone
+# RNA selections
+backbone = polymer.backbone()     # Sugar-phosphate backbone
+bases = polymer.nucleobase()      # Nucleobases only
+phosphates = polymer.phosphate()  # Phosphate groups
 
-# N1/N3 atoms for base pairing analysis
-n1_n3_atoms = polymer.by_atom(COARSE.index())
-
-# Reference frame atoms (C2, C4, C6 of each nucleotide)
-frame_atoms = polymer.by_atom(FRAMES.index())
-
-# Backbone atoms
-backbone_atoms = polymer.by_atom(Backbone.index())
+# Protein selections
+sidechains = polymer.sidechain()  # Amino acid sidechains
 ```
 
-| Group | Atoms | Use Case |
-|-------|-------|----------|
-| `COARSE` | N1, N3 | Base pairing, coarse-grained models |
-| `FRAMES` | C2, C4, C6 | Reference frame construction |
-| `Backbone` | P, O5', C5', C4', C3', O3' | Backbone analysis |
+| Method | Molecule | Atoms | Use Case |
+|--------|----------|-------|----------|
+| `backbone()` | RNA | Sugar-phosphate atoms | Backbone analysis |
+| `nucleobase()` | RNA | Ring atoms (N1-N9, C2-C8) | Base pairing, stacking |
+| `phosphate()` | RNA | P, OP1, OP2, OP3 | Phosphate contacts |
+| `sidechain()` | Protein | CB onwards | Sidechain packing |
+
+### Computing Nucleobase Centers
+
+Get the center of mass for each nucleobase in an RNA:
+
+```python
+import ciffy
+
+rna = ciffy.load("structure.cif").by_type(ciffy.RNA)
+
+# Get nucleobase atoms and compute per-residue centers
+_, nucleobase_centers = rna.nucleobase().center(ciffy.RESIDUE)
+print(nucleobase_centers.shape)  # (num_residues, 3)
+```
 
 ## Boolean Masking
 
@@ -242,9 +254,8 @@ Chain multiple selections together:
 # Get backbone atoms of RNA chains only
 rna_backbone = polymer.by_type(ciffy.RNA).backbone()
 
-# Get N1/N3 of first chain
-from ciffy.biochemistry import COARSE
-chain_a_n1n3 = polymer.by_index(0).by_atom(COARSE.index())
+# Get nucleobases of first chain
+chain_a_bases = polymer.by_index(0).nucleobase()
 
 # Polymer-only, then by chain
 clean = polymer.poly().by_index([0, 1])

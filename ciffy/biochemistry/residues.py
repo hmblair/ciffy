@@ -13,7 +13,7 @@ from ._generated_residues import (
     residue_to_molecule,
     CIF_RESIDUE_NAMES,
     RESIDUE_CIF_NAMES,
-    RES_ABBREV,
+    RESIDUE_ABBREV,
 )
 
 __all__ = [
@@ -22,5 +22,5 @@ __all__ = [
     "residue_to_molecule",
     "CIF_RESIDUE_NAMES",
     "RESIDUE_CIF_NAMES",
-    "RES_ABBREV",
+    "RESIDUE_ABBREV",
 ]

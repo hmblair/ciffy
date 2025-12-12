@@ -182,40 +182,40 @@ RESIDUE_CIF_NAMES: dict[int, str] = {
     33: "GNG",  # GNG
 }
 
-# Residue name -> single-letter abbreviation
-RES_ABBREV: dict[str, str] = {
-    "ADE": "a",
-    "CYT": "c",
-    "GUA": "g",
-    "URA": "u",
-    "DA": "a",
-    "DC": "c",
-    "DG": "g",
-    "DT": "t",
-    "ALA": "A",
-    "CYS": "C",
-    "ASP": "D",
-    "GLU": "E",
-    "PHE": "F",
-    "GLY": "G",
-    "HIS": "H",
-    "ILE": "I",
-    "LYS": "K",
-    "LEU": "L",
-    "MET": "M",
-    "ASN": "N",
-    "PRO": "P",
-    "GLN": "Q",
-    "ARG": "R",
-    "SER": "S",
-    "THR": "T",
-    "VAL": "V",
-    "TRP": "W",
-    "TYR": "Y",
-    "HOH": "~",
-    "MG": "~",
-    "CS": "~",
-    "GTP": "g",
-    "CCC": "c",
-    "GNG": "g",
+# Residue index -> single-letter abbreviation
+RESIDUE_ABBREV: dict[int, str] = {
+    0: "a",  # ADE
+    1: "c",  # CYT
+    2: "g",  # GUA
+    3: "u",  # URA
+    4: "a",  # DA
+    5: "c",  # DC
+    6: "g",  # DG
+    7: "t",  # DT
+    8: "A",  # ALA
+    9: "C",  # CYS
+    10: "D",  # ASP
+    11: "E",  # GLU
+    12: "F",  # PHE
+    13: "G",  # GLY
+    14: "H",  # HIS
+    15: "I",  # ILE
+    16: "K",  # LYS
+    17: "L",  # LEU
+    18: "M",  # MET
+    19: "N",  # ASN
+    20: "P",  # PRO
+    21: "Q",  # GLN
+    22: "R",  # ARG
+    23: "S",  # SER
+    24: "T",  # THR
+    25: "V",  # VAL
+    26: "W",  # TRP
+    27: "Y",  # TYR
+    28: "~",  # HOH
+    29: "~",  # MG
+    30: "~",  # CS
+    31: "g",  # GTP
+    32: "c",  # CCC
+    33: "g",  # GNG
 }

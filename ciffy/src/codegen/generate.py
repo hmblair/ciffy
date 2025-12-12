@@ -588,11 +588,11 @@ def residue_to_molecule(residue_idx: int) -> Molecule:
         code += f'    {idx}: "{res.cif_names[0]}",  # {res.name}\n'
     code += "}\n\n"
 
-    # Generate RES_ABBREV (residue name -> single-letter abbreviation)
-    code += "# Residue name -> single-letter abbreviation\n"
-    code += "RES_ABBREV: dict[str, str] = {\n"
-    for res in all_residues:
-        code += f'    "{res.name}": "{res.abbreviation}",\n'
+    # Generate RESIDUE_ABBREV (residue index -> single-letter abbreviation)
+    code += "# Residue index -> single-letter abbreviation\n"
+    code += "RESIDUE_ABBREV: dict[int, str] = {\n"
+    for idx, res in enumerate(all_residues):
+        code += f'    {idx}: "{res.abbreviation}",  # {res.name}\n'
     code += "}\n"
 
     with open(biochem_dir / "_generated_residues.py", "w") as f:

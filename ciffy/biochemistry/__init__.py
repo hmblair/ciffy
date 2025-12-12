@@ -5,7 +5,7 @@ Defines atoms, residues, elements, and nucleotide structures.
 """
 
 from .elements import Element
-from .residues import Residue, RES_ABBREV, RESIDUE_MOLECULE_TYPE, residue_to_molecule
+from .residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE, residue_to_molecule
 from .nucleotides import (
     # RNA
     Adenosine,
@@ -63,7 +63,7 @@ __all__ = [
     "Element",
     # Residues
     "Residue",
-    "RES_ABBREV",
+    "RESIDUE_ABBREV",
     "RESIDUE_MOLECULE_TYPE",
     "residue_to_molecule",
     # RNA nucleotides

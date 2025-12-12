@@ -23,7 +23,7 @@ from .types.molecule import molecule_type
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .biochemistry import (
     Residue,
-    RES_ABBREV,
+    RESIDUE_ABBREV,
     RESIDUE_MOLECULE_TYPE,
     ATOM_NAMES,
     Element,
@@ -938,7 +938,7 @@ class Polymer:
             Single-letter sequence string.
         """
         def abbrev(x):
-            return RES_ABBREV.get(Residue.revdict().get(x, 'N'), 'n')
+            return RESIDUE_ABBREV.get(x, 'n')
         return "".join(abbrev(ix.item()) for ix in self.sequence)
 
     def atom_names(self: Polymer) -> list[str]:

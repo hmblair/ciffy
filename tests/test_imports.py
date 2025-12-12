@@ -56,14 +56,14 @@ class TestModuleStructure:
 
     def test_biochemistry_imports(self):
         from ciffy.biochemistry import (
-            Element, Residue, RES_ABBREV,
+            Element, Residue, RESIDUE_ABBREV,
             Adenosine, Cytosine, Guanosine, Uridine,
             RibonucleicAcid,
             FRAMES, Backbone, Nucleobase, Phosphate, COARSE,
         )
         assert Element.C.value == 6
         assert Residue.ADE.value == 0
-        assert RES_ABBREV['ALA'] == 'A'
+        assert RESIDUE_ABBREV[Residue.ALA.value] == 'A'
         assert Adenosine.P.value == 2
 
     def test_operations_imports(self):

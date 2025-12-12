@@ -59,9 +59,9 @@ class TestBackwardCompatibility:
         assert REDUCTIONS is not None
 
     def test_rmsd_imports(self):
-        from ciffy.rmsd import _kabsch_distance, _coordinate_covariance
-        assert _kabsch_distance is not None
-        assert _coordinate_covariance is not None
+        from ciffy.operations.alignment import kabsch_distance, coordinate_covariance
+        assert kabsch_distance is not None
+        assert coordinate_covariance is not None
 
 
 class TestNewModuleStructure:

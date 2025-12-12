@@ -1,8 +1,17 @@
 """Tests for template polymer generation from sequences."""
 
+import os
 import pytest
 import numpy as np
 import warnings
+
+TESTS_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(TESTS_DIR, "data")
+
+
+def get_test_cif(pdb_id: str) -> str:
+    """Get path to a test CIF file."""
+    return os.path.join(DATA_DIR, f"{pdb_id}.cif")
 
 
 class TestFromSequence:
@@ -540,3 +549,93 @@ class TestFromSequenceMultiChain:
         assert polymer.size(Scale.CHAIN) == 2
         # 4 DNA + 5 protein residues
         assert polymer.size(Scale.RESIDUE) == 9
+
+
+class TestTemplateMatchesCIF:
+    """Test that from_sequence produces structures consistent with CIF files."""
+
+    def _extract_chain_sequences(self, polymer) -> list[str]:
+        """Extract per-chain sequences from a polymer."""
+        sequences = []
+        seq_str = polymer.str()
+        offset = 0
+        for length in polymer.lengths:
+            length = int(length)
+            if length > 0:
+                sequences.append(seq_str[offset:offset + length])
+                offset += length
+        return sequences
+
+    def _verify_template_matches_loaded(self, loaded, template):
+        """
+        Verify template matches loaded CIF (except coordinates).
+
+        Checks:
+        1. Residue sequences match exactly
+        2. Loaded atoms are subset of template atoms (per residue)
+        3. Elements match for corresponding atoms
+        4. Chain and residue counts match
+        """
+        from ciffy import Scale
+
+        # 1. Sequences match
+        assert np.array_equal(loaded.sequence, template.sequence), \
+            "Residue sequences differ"
+
+        # 2. Loaded atoms are subset of template atoms per residue
+        loaded_sizes = loaded.per(Scale.ATOM, Scale.RESIDUE)
+        template_sizes = template.per(Scale.ATOM, Scale.RESIDUE)
+
+        loaded_offset = 0
+        template_offset = 0
+
+        for i in range(len(loaded_sizes)):
+            loaded_atoms = set(loaded.atoms[loaded_offset:loaded_offset + loaded_sizes[i]].tolist())
+            template_atoms = set(template.atoms[template_offset:template_offset + template_sizes[i]].tolist())
+
+            assert loaded_atoms.issubset(template_atoms), \
+                f"Residue {i}: loaded atoms {loaded_atoms - template_atoms} not in template"
+
+            loaded_offset += loaded_sizes[i]
+            template_offset += template_sizes[i]
+
+        # 3. Elements match for corresponding atom types
+        template_atom_to_element = dict(zip(
+            template.atoms.tolist(),
+            template.elements.tolist()
+        ))
+
+        for atom_idx, elem in zip(loaded.atoms.tolist(), loaded.elements.tolist()):
+            template_elem = template_atom_to_element.get(atom_idx)
+            if template_elem is not None:
+                assert elem == template_elem, \
+                    f"Element mismatch for atom {atom_idx}: loaded={elem}, template={template_elem}"
+
+        # 4. Counts match
+        assert loaded.size(Scale.CHAIN) == template.size(Scale.CHAIN), "Chain counts differ"
+        assert loaded.size(Scale.RESIDUE) == template.size(Scale.RESIDUE), "Residue counts differ"
+
+    def test_1zew_dna_consistency(self):
+        """Test template matches 1ZEW (DNA duplex)."""
+        from ciffy import load, from_sequence
+
+        loaded = load(get_test_cif("1ZEW")).poly()
+        sequences = self._extract_chain_sequences(loaded)
+        template = from_sequence(sequences)
+
+        self._verify_template_matches_loaded(loaded, template)
+
+    def test_9gcm_rna_protein_consistency(self):
+        """Test template matches 9GCM (RNA + protein complex)."""
+        from ciffy import load, from_sequence
+
+        loaded = load(get_test_cif("9GCM")).poly()
+        sequences = self._extract_chain_sequences(loaded)
+
+        # Skip if no valid sequences (structure might have unusual residues)
+        if not sequences or not all(sequences):
+            pytest.skip("No valid polymer sequences in structure")
+
+        template = from_sequence(sequences)
+
+        self._verify_template_matches_loaded(loaded, template)

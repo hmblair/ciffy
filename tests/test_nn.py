@@ -1,5 +1,6 @@
 """Tests for ciffy.nn module."""
 
+import os
 import pytest
 import numpy as np
 
@@ -11,6 +12,14 @@ except ImportError:
 
 import ciffy
 from ciffy import Scale
+
+TESTS_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(TESTS_DIR, "data")
+
+
+def get_cif(pdb_id: str) -> str:
+    """Get path to a test CIF file."""
+    return os.path.join(DATA_DIR, f"{pdb_id}.cif")
 
 
 # =============================================================================
@@ -26,7 +35,7 @@ class TestKNN:
         if backend == "torch" and not TORCH_AVAILABLE:
             pytest.skip("PyTorch not available")
 
-        p = ciffy.load("tests/data/1ZEW.cif", backend=backend)
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
         k = 5
         neighbors = p.knn(k=k, scale=Scale.ATOM)
 
@@ -38,7 +47,7 @@ class TestKNN:
         if backend == "torch" and not TORCH_AVAILABLE:
             pytest.skip("PyTorch not available")
 
-        p = ciffy.load("tests/data/1ZEW.cif", backend=backend)
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
         k = 3
         neighbors = p.knn(k=k, scale=Scale.RESIDUE)
 
@@ -50,7 +59,7 @@ class TestKNN:
         if backend == "torch" and not TORCH_AVAILABLE:
             pytest.skip("PyTorch not available")
 
-        p = ciffy.load("tests/data/1ZEW.cif", backend=backend)
+        p = ciffy.load(get_cif("3SKW"), backend=backend)
         neighbors = p.knn(k=3, scale=Scale.ATOM)
 
         # Check that no atom is its own neighbor
@@ -63,7 +72,7 @@ class TestKNN:
 
     def test_knn_k_too_large(self):
         """Test that knn raises error when k >= n."""
-        p = ciffy.load("tests/data/1ZEW.cif", backend="numpy")
+        p = ciffy.load(get_cif("3SKW"), backend="numpy")
         with pytest.raises(ValueError, match="k=.* must be less than"):
             p.knn(k=p.size(), scale=Scale.ATOM)
 
@@ -80,7 +89,7 @@ class TestPolymerDataset:
         """Test dataset at molecule scale."""
         from ciffy.nn import PolymerDataset
 
-        dataset = PolymerDataset("tests/data/", scale=Scale.MOLECULE)
+        dataset = PolymerDataset(DATA_DIR, scale=Scale.MOLECULE)
         assert len(dataset) > 0
 
         # Check that items are Polymers
@@ -91,9 +100,9 @@ class TestPolymerDataset:
         """Test dataset at chain scale."""
         from ciffy.nn import PolymerDataset
 
-        dataset = PolymerDataset("tests/data/", scale=Scale.CHAIN)
+        dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
         # Chain scale should have more items than molecule scale
-        mol_dataset = PolymerDataset("tests/data/", scale=Scale.MOLECULE)
+        mol_dataset = PolymerDataset(DATA_DIR, scale=Scale.MOLECULE)
         assert len(dataset) >= len(mol_dataset)
 
     def test_dataset_max_atoms_filter(self):
@@ -101,8 +110,8 @@ class TestPolymerDataset:
         from ciffy.nn import PolymerDataset
 
         # Very small max_atoms should filter out most/all
-        dataset_small = PolymerDataset("tests/data/", max_atoms=10)
-        dataset_large = PolymerDataset("tests/data/", max_atoms=100000)
+        dataset_small = PolymerDataset(DATA_DIR, max_atoms=10)
+        dataset_large = PolymerDataset(DATA_DIR, max_atoms=100000)
 
         assert len(dataset_small) <= len(dataset_large)
 
@@ -111,7 +120,7 @@ class TestPolymerDataset:
         from ciffy.nn import PolymerDataset
 
         with pytest.raises(ValueError, match="scale must be MOLECULE or CHAIN"):
-            PolymerDataset("tests/data/", scale=Scale.ATOM)
+            PolymerDataset(DATA_DIR, scale=Scale.ATOM)
 
     def test_dataset_invalid_directory(self):
         """Test that invalid directory raises error."""
@@ -140,7 +149,7 @@ class TestPolymerEmbedding:
             element_dim=16,
         )
 
-        p = ciffy.load("tests/data/1ZEW.cif", backend="torch")
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
         features = embed(p)
 
         assert features.shape == (p.size(), embed.output_dim)
@@ -155,7 +164,7 @@ class TestPolymerEmbedding:
             residue_dim=64,
         )
 
-        p = ciffy.load("tests/data/1ZEW.cif", backend="torch")
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
         features = embed(p)
 
         assert features.shape == (p.size(Scale.RESIDUE), 64)
@@ -186,7 +195,7 @@ class TestPolymerEmbedding:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=32)
-        p = ciffy.load("tests/data/1ZEW.cif", backend="torch")
+        p = ciffy.load(get_cif("3SKW"), backend="torch")
 
         features = embed(p)
         loss = features.sum()

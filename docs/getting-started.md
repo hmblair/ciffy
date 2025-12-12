@@ -8,15 +8,24 @@ Install ciffy using pip:
 pip install ciffy
 ```
 
-For PyTorch support, ensure you have PyTorch installed:
+For PyTorch support:
 
 ```bash
 pip install torch
 ```
 
-## Loading Structures
+## Quick Reference
 
-Load a CIF file with the `load` function:
+| Task | Code |
+|------|------|
+| Load structure | `polymer = ciffy.load("file.cif")` |
+| Get RNA only | `rna = polymer.subset(ciffy.RNA)` |
+| Get backbone | `backbone = polymer.backbone()` |
+| Compute RMSD | `rmsd = ciffy.rmsd(p1, p2)` |
+| Move to GPU | `polymer = polymer.to("cuda")` |
+| Per-residue mean | `polymer.reduce(features, ciffy.RESIDUE)` |
+
+## Loading Structures
 
 ```python
 import ciffy
@@ -32,9 +41,9 @@ polymer = ciffy.load("structure.cif", load_descriptions=True)
 print(polymer.descriptions)  # ['RNA (66-MER)', 'CESIUM ION', ...]
 ```
 
-## Understanding the Polymer Object
+## The Polymer Object
 
-The `Polymer` class represents a molecular structure with multiple scales:
+The `Polymer` class represents a molecular structure:
 
 ```python
 polymer = ciffy.load("structure.cif")
@@ -44,28 +53,14 @@ coords = polymer.coordinates  # (N, 3) array of positions
 atoms = polymer.atoms         # (N,) atom type indices
 elements = polymer.elements   # (N,) element indices
 
-# Get structure info
-print(polymer.size())                    # Total atoms
-print(polymer.size(ciffy.CHAIN))         # Number of chains
-print(polymer.size(ciffy.RESIDUE))       # Number of residues
-```
-
-## Hierarchical Operations
-
-ciffy supports operations at different scales:
-
-```python
-# Reduce: aggregate atoms to coarser scales
-centroids = polymer.reduce(polymer.coordinates, ciffy.CHAIN)  # Per-chain centroids
-residue_means = polymer.reduce(features, ciffy.RESIDUE)       # Per-residue means
-
-# Expand: broadcast from coarse to fine scales
-chain_features = polymer.expand(per_chain_data, ciffy.CHAIN)  # Repeat per atom
+# Structure info
+print(polymer.size())              # Total atoms
+print(polymer.size(ciffy.CHAIN))   # Number of chains
+print(polymer.size(ciffy.RESIDUE)) # Number of residues
+print(polymer.names)               # Chain names: ['A', 'B', ...]
 ```
 
 ## Filtering Structures
-
-Select subsets of the structure:
 
 ```python
 # By molecule type
@@ -79,23 +74,39 @@ hetero = polymer.hetero()          # Only water, ions, ligands
 # By chain
 chain_a = polymer.select(0)        # First chain
 chains = polymer.select([0, 2])    # Multiple chains
+
+# Backbone atoms
+backbone = polymer.backbone()
 ```
+
+See the [Selection Guide](guides/selection.md) for advanced filtering.
+
+## Hierarchical Operations
+
+ciffy supports operations at different scales:
+
+```python
+# Reduce: aggregate atoms to coarser scales
+chain_centroids = polymer.reduce(polymer.coordinates, ciffy.CHAIN)
+residue_means = polymer.reduce(features, ciffy.RESIDUE)
+
+# Expand: broadcast from coarse to fine scales
+atom_features = polymer.expand(chain_data, ciffy.CHAIN)
+```
+
+See the [Analysis Guide](guides/analysis.md) for more operations.
 
 ## Computing RMSD
 
-Compute root-mean-square deviation between aligned structures:
-
 ```python
-# RMSD with Kabsch alignment (default: molecule scale)
+# RMSD with Kabsch alignment
 rmsd = ciffy.rmsd(polymer1, polymer2)
 
 # Per-chain RMSD
-rmsd_per_chain = ciffy.rmsd(polymer1, polymer2, scale=ciffy.CHAIN)
+per_chain = ciffy.rmsd(polymer1, polymer2, scale=ciffy.CHAIN)
 ```
 
-## GPU Support
-
-Move structures to GPU (PyTorch backend only):
+## GPU Support (PyTorch)
 
 ```python
 polymer = ciffy.load("structure.cif", backend="torch")
@@ -103,24 +114,19 @@ polymer = ciffy.load("structure.cif", backend="torch")
 # Move to GPU
 polymer_gpu = polymer.to("cuda")
 
-# Change precision
+# Mixed precision
 polymer_fp16 = polymer.to(dtype=torch.float16)
 ```
 
-## Writing CIF Files
+See the [Deep Learning Guide](guides/deep-learning.md) for training workflows.
 
-Save structures back to CIF format:
+## Writing CIF Files
 
 ```python
 polymer.write("output.cif")
-
-# Or use the function directly
-ciffy.write_cif(polymer, "output.cif")
 ```
 
 ## CLI Usage
-
-ciffy includes a command-line interface:
 
 ```bash
 # View structure summary
@@ -129,3 +135,10 @@ ciffy structure.cif
 # Show entity descriptions
 ciffy structure.cif --desc
 ```
+
+## Next Steps
+
+- [Selection Guide](guides/selection.md) - Molecule types, atom filtering, chain selection
+- [Analysis Guide](guides/analysis.md) - RMSD, alignment, distances, reductions
+- [Deep Learning Guide](guides/deep-learning.md) - PyTorch, GPU, embeddings
+- [API Reference](api.md) - Complete API documentation

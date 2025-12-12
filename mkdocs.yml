@@ -63,4 +63,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Guides:
+    - Selection & Filtering: guides/selection.md
+    - Structural Analysis: guides/analysis.md
+    - Deep Learning: guides/deep-learning.md
   - API Reference: api.md

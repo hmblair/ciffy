@@ -91,7 +91,7 @@ sequence = polymer.str()          # Sequence string
 # Geometric operations
 centered, means = polymer.center(ciffy.MOLECULE)
 aligned, Q = polymer.align(ciffy.CHAIN)
-distances = polymer.pd(ciffy.RESIDUE)
+distances = polymer.pairwise_distances(ciffy.RESIDUE)
 
 # Selection
 rna_chains = polymer.subset(ciffy.RNA)
@@ -100,12 +100,16 @@ backbone = polymer.backbone()
 # Molecule type per chain (parsed from CIF _entity_poly block)
 mol_types = polymer.molecule_type  # Array of Molecule enum values
 
+# Load with entity descriptions (off by default for performance)
+polymer = ciffy.load("structure.cif", load_descriptions=True)
+descriptions = polymer.descriptions  # List of description strings per chain
+
 # Iterate over chains
 for chain in polymer.chains(ciffy.RNA):
     print(chain.id(), chain.str())
 
-# Compute RMSD between structures
-rmsd = ciffy.rmsd(polymer1, polymer2, ciffy.MOLECULE)
+# Compute RMSD between structures (defaults to MOLECULE scale)
+rmsd = ciffy.rmsd(polymer1, polymer2)
 ```
 
 ## Saving Structures
@@ -127,6 +131,9 @@ ciffy structure.cif
 # Show sequences per chain
 ciffy structure.cif --sequence
 
+# Show entity descriptions per chain
+ciffy structure.cif --desc
+
 # Multiple files
 ciffy file1.cif file2.cif
 ```
@@ -142,6 +149,12 @@ C  PROTEIN  246   1261
 D  PROTEIN  485    760
 ──────────────────────
             998   4466
+
+Descriptions:
+  A: U11 snRNA
+  B: U11/U12 small nuclear ribonucleoprotein 25 kDa protein
+  C: U11/U12 small nuclear ribonucleoprotein 35 kDa protein
+  D: Programmed cell death protein 7
 ```
 
 ## Module Structure

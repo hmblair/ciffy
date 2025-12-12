@@ -71,7 +71,7 @@ def coordinate_covariance(
 def kabsch_distance(
     polymer1: "Polymer",
     polymer2: "Polymer",
-    scale: "Scale",
+    scale: "Scale" = None,
 ) -> Array:
     """
     Compute Kabsch distance (aligned RMSD) between polymer structures.
@@ -83,7 +83,7 @@ def kabsch_distance(
     Args:
         polymer1: First polymer structure.
         polymer2: Second polymer structure.
-        scale: Scale at which to compute distance (e.g., MOLECULE).
+        scale: Scale at which to compute distance. Default is MOLECULE.
 
     Returns:
         Array of squared distances, one per scale unit.

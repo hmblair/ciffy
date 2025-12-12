@@ -20,6 +20,7 @@ class TestFromSequence:
     def test_rna_sequence(self):
         """Test RNA sequence generates correct polymer."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("acgu")
 
@@ -27,8 +28,9 @@ class TestFromSequence:
         assert polymer.size(Scale.RESIDUE) == 4
         assert polymer.size(Scale.CHAIN) == 1
 
-        # Check sequence values (A=0, C=1, G=2, U=3)
-        assert list(polymer.sequence) == [0, 1, 2, 3]
+        # Check sequence values match Residue enum
+        expected = [Residue.A.value, Residue.C.value, Residue.G.value, Residue.U.value]
+        assert list(polymer.sequence) == expected
 
         # Check coordinates are zeros
         assert np.allclose(polymer.coordinates, 0.0)
@@ -44,6 +46,7 @@ class TestFromSequence:
     def test_protein_sequence(self):
         """Test protein sequence generates correct polymer."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("MGKLF")
 
@@ -51,8 +54,10 @@ class TestFromSequence:
         assert polymer.size(Scale.RESIDUE) == 5
         assert polymer.size(Scale.CHAIN) == 1
 
-        # Check sequence values (M=18, G=13, K=16, L=17, F=12)
-        assert list(polymer.sequence) == [18, 13, 16, 17, 12]
+        # Check sequence values match Residue enum
+        expected = [Residue.MET.value, Residue.GLY.value, Residue.LYS.value,
+                    Residue.LEU.value, Residue.PHE.value]
+        assert list(polymer.sequence) == expected
 
         # Check coordinates are zeros
         assert np.allclose(polymer.coordinates, 0.0)
@@ -60,24 +65,27 @@ class TestFromSequence:
     def test_single_residue_rna(self):
         """Test single nucleotide."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("a")
 
         assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [0]  # Adenosine
+        assert list(polymer.sequence) == [Residue.A.value]
 
     def test_single_residue_protein(self):
         """Test single amino acid."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("M")  # Methionine (not ambiguous with nucleotides)
 
         assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [18]  # MET
+        assert list(polymer.sequence) == [Residue.MET.value]
 
     def test_warning_uppercase_nucleotides(self):
         """Test warning when uppercase looks like nucleotides."""
         from ciffy import from_sequence
+        from ciffy.biochemistry import Residue
 
         # Note: "ACGU" would fail because U is not a valid protein letter
         # Use "ACG" which is A=Ala, C=Cys, G=Gly (all valid protein)
@@ -89,12 +97,14 @@ class TestFromSequence:
             assert "nucleotide characters" in str(w[0].message)
             assert "Did you mean lowercase" in str(w[0].message)
 
-        # Should work as protein (A=8 Ala, C=9 Cys, G=13 Gly)
-        assert list(polymer.sequence) == [8, 9, 13]
+        # Should work as protein
+        expected = [Residue.ALA.value, Residue.CYS.value, Residue.GLY.value]
+        assert list(polymer.sequence) == expected
 
     def test_uppercase_acgt_warning(self):
         """Test warning for ACGT (valid protein letters)."""
         from ciffy import from_sequence
+        from ciffy.biochemistry import Residue
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -104,8 +114,9 @@ class TestFromSequence:
             assert len(w) == 1
             assert "nucleotide characters" in str(w[0].message)
 
-        # Sequence values: A=8, C=9, G=13, T=24
-        assert list(polymer.sequence) == [8, 9, 13, 24]
+        # Check sequence matches Residue enum
+        expected = [Residue.ALA.value, Residue.CYS.value, Residue.GLY.value, Residue.THR.value]
+        assert list(polymer.sequence) == expected
 
     def test_invalid_character_rna(self):
         """Test invalid character in RNA sequence raises ValueError."""
@@ -124,6 +135,7 @@ class TestFromSequence:
     def test_dna_sequence(self):
         """Test DNA sequence generates correct polymer."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("acgt")
 
@@ -131,8 +143,9 @@ class TestFromSequence:
         assert polymer.size(Scale.RESIDUE) == 4
         assert polymer.size(Scale.CHAIN) == 1
 
-        # Check sequence values (DA=4, DC=5, DG=6, DT=7)
-        assert list(polymer.sequence) == [4, 5, 6, 7]
+        # Check sequence values match Residue enum
+        expected = [Residue.DA.value, Residue.DC.value, Residue.DG.value, Residue.DT.value]
+        assert list(polymer.sequence) == expected
 
         # Check coordinates are zeros
         assert np.allclose(polymer.coordinates, 0.0)
@@ -530,15 +543,18 @@ class TestFromSequenceMultiChain:
     def test_mixed_rna_dna(self):
         """Test mixing RNA and DNA chains."""
         from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = from_sequence(["acgu", "acgt"])
 
         assert polymer.size(Scale.CHAIN) == 2
         assert polymer.size(Scale.RESIDUE) == 8
-        # First chain is RNA (indices 0-3), second is DNA (indices 4-7)
+        # First chain is RNA, second is DNA
         seq = list(polymer.sequence)
-        assert seq[:4] == [0, 1, 2, 3]  # RNA
-        assert seq[4:] == [4, 5, 6, 7]  # DNA
+        rna_expected = [Residue.A.value, Residue.C.value, Residue.G.value, Residue.U.value]
+        dna_expected = [Residue.DA.value, Residue.DC.value, Residue.DG.value, Residue.DT.value]
+        assert seq[:4] == rna_expected
+        assert seq[4:] == dna_expected
 
     def test_mixed_dna_protein(self):
         """Test mixing DNA and protein chains."""
@@ -557,22 +573,22 @@ class TestTerminalAtoms:
     def test_single_residue_has_all_terminal_atoms(self):
         """Single residue should have both 5' and 3' terminal atoms."""
         from ciffy import from_sequence
-        from ciffy.biochemistry._generated_atoms import Adenosine
+        from ciffy.biochemistry import A  # CCD name for adenosine
 
         # Single residue has all atoms (both termini)
         single = from_sequence("a")
-        full_count = len(list(Adenosine))
+        full_count = len(list(A))
         assert single.size() == full_count
 
     def test_internal_residues_lack_terminal_atoms(self):
         """Internal residues should not have terminal atoms."""
         from ciffy import from_sequence, Scale
-        from ciffy.biochemistry._generated_atoms import Adenosine, Cytosine
+        from ciffy.biochemistry import A  # CCD name for adenosine
 
         # Use same residue type to control for inherent size differences
         polymer = from_sequence("aaaa")
         apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
-        full_count = len(list(Adenosine))
+        full_count = len(list(A))
 
         # First residue: all atoms except HO3' (3'-terminal) -> full - 1
         # Middle residues: no OP3, HOP3, HO3' (all terminal) -> full - 3

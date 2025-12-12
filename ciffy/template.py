@@ -15,39 +15,17 @@ import numpy as np
 
 from .polymer import Polymer
 from .types import Scale, Molecule
-from .biochemistry.residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
+from .biochemistry._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
 from .biochemistry._generated_atoms import (
     # RNA nucleotides
-    Adenosine,
-    Cytosine,
-    Guanosine,
-    Uridine,
+    A, C, G, U,
     # DNA nucleotides
-    Deoxyadenosine,
-    Deoxycytidine,
-    Deoxyguanosine,
-    Thymidine,
+    Da, Dc, Dg, Dt,
     # Amino acids
-    Alanine,
-    Arginine,
-    Asparagine,
-    AsparticAcid,
-    Cysteine,
-    Glutamine,
-    GlutamicAcid,
-    Glycine,
-    Histidine,
-    Isoleucine,
-    Leucine,
-    Lysine,
-    Methionine,
-    Phenylalanine,
-    Proline,
-    Serine,
-    Threonine,
-    Tryptophan,
-    Tyrosine,
-    Valine,
+    Ala, Arg, Asn, Asp, Cys,
+    Gln, Glu, Gly, His, Ile,
+    Leu, Lys, Met, Phe, Pro,
+    Ser, Thr, Trp, Tyr, Val,
 )
 
 
@@ -90,37 +68,37 @@ _PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT'})
 # Maps Residue enum members to their atom enum classes
 # Only includes residues that can be generated from sequences
 RESIDUE_ATOMS: dict[Residue, type] = {
-    # RNA (indices 0-3)
-    Residue.ADE: Adenosine,
-    Residue.CYT: Cytosine,
-    Residue.GUA: Guanosine,
-    Residue.URA: Uridine,
-    # DNA (indices 4-7)
-    Residue.DA: Deoxyadenosine,
-    Residue.DC: Deoxycytidine,
-    Residue.DG: Deoxyguanosine,
-    Residue.DT: Thymidine,
-    # Protein (indices 8-27)
-    Residue.ALA: Alanine,
-    Residue.CYS: Cysteine,
-    Residue.ASP: AsparticAcid,
-    Residue.GLU: GlutamicAcid,
-    Residue.PHE: Phenylalanine,
-    Residue.GLY: Glycine,
-    Residue.HIS: Histidine,
-    Residue.ILE: Isoleucine,
-    Residue.LYS: Lysine,
-    Residue.LEU: Leucine,
-    Residue.MET: Methionine,
-    Residue.ASN: Asparagine,
-    Residue.PRO: Proline,
-    Residue.GLN: Glutamine,
-    Residue.ARG: Arginine,
-    Residue.SER: Serine,
-    Residue.THR: Threonine,
-    Residue.VAL: Valine,
-    Residue.TRP: Tryptophan,
-    Residue.TYR: Tyrosine,
+    # RNA
+    Residue.A: A,
+    Residue.C: C,
+    Residue.G: G,
+    Residue.U: U,
+    # DNA
+    Residue.DA: Da,
+    Residue.DC: Dc,
+    Residue.DG: Dg,
+    Residue.DT: Dt,
+    # Protein
+    Residue.ALA: Ala,
+    Residue.ARG: Arg,
+    Residue.ASN: Asn,
+    Residue.ASP: Asp,
+    Residue.CYS: Cys,
+    Residue.GLN: Gln,
+    Residue.GLU: Glu,
+    Residue.GLY: Gly,
+    Residue.HIS: His,
+    Residue.ILE: Ile,
+    Residue.LEU: Leu,
+    Residue.LYS: Lys,
+    Residue.MET: Met,
+    Residue.PHE: Phe,
+    Residue.PRO: Pro,
+    Residue.SER: Ser,
+    Residue.THR: Thr,
+    Residue.TRP: Trp,
+    Residue.TYR: Tyr,
+    Residue.VAL: Val,
 }
 
 

@@ -404,16 +404,16 @@ class TestCifSave:
                 f"reloaded has {len(np.unique(reload_atoms))} unique types"
 
             # Specifically check that backbone atoms exist (primed atoms)
-            # Adenosine C2' is index 11, C2 is index 21
-            from ciffy.biochemistry.nucleotides import Adenosine
-            has_backbone = Adenosine.C2p.value in orig_atoms
-            has_nucleobase = Adenosine.C2.value in orig_atoms
+            # A.C2' (sugar) vs A.C2 (nucleobase)
+            from ciffy.biochemistry import A  # CCD name for adenosine
+            has_backbone = A.C2p.value in orig_atoms
+            has_nucleobase = A.C2.value in orig_atoms
 
             if has_backbone:
-                assert Adenosine.C2p.value in reload_atoms, \
+                assert A.C2p.value in reload_atoms, \
                     "Backbone C2' atoms lost in round-trip"
             if has_nucleobase:
-                assert Adenosine.C2.value in reload_atoms, \
+                assert A.C2.value in reload_atoms, \
                     "Nucleobase C2 atoms lost in round-trip"
 
         finally:

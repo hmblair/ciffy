@@ -1269,6 +1269,7 @@ class Polymer:
             strands=self.strands.copy(),
             lengths=to_numpy(self.lengths),
             polymer_count=self.polymer_count,
+            molecule_types=to_numpy(self._molecule_types) if self._molecule_types is not None else None,
         )
 
     def torch(self: Polymer) -> Polymer:
@@ -1295,6 +1296,7 @@ class Polymer:
             strands=self.strands.copy(),
             lengths=to_torch(self.lengths).long(),
             polymer_count=self.polymer_count,
+            molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
         )
 
     def to(self: Polymer, device=None, dtype=None) -> Polymer:

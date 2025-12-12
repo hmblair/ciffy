@@ -5,43 +5,25 @@ Defines atoms, residues, elements, and nucleotide structures.
 """
 
 from .elements import Element, ELEMENT_NAMES
-from .residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
-from .nucleotides import (
-    # RNA
-    Adenosine,
-    Cytosine,
-    Guanosine,
-    Uridine,
+from ._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
+from ._generated_atoms import (
+    # RNA (CCD names)
+    A, C, G, U,
+    # DNA (CCD names)
+    Da, Dc, Dg, Dt,
+    # Amino acids (CCD names)
+    Ala, Arg, Asn, Asp, Cys,
+    Gln, Glu, Gly, His, Ile,
+    Leu, Lys, Met, Phe, Pro,
+    Ser, Thr, Trp, Tyr, Val,
+    # Combined enums
     RibonucleicAcid,
     RibonucleicAcidNoPrefix,
-    # DNA
-    Deoxyadenosine,
-    Deoxycytidine,
-    Deoxyguanosine,
-    Thymidine,
     DeoxyribonucleicAcid,
-    # Amino acids
-    Glycine,
-    Alanine,
-    Valine,
-    Leucine,
-    Isoleucine,
-    Proline,
-    Phenylalanine,
-    Tryptophan,
-    Methionine,
-    Cysteine,
-    Serine,
-    Threonine,
-    Asparagine,
-    Glutamine,
-    AsparticAcid,
-    GlutamicAcid,
-    Lysine,
-    Arginine,
-    Histidine,
-    Tyrosine,
+    ModifiedNucleotides,
     AminoAcids,
+    # Reverse lookup
+    ATOM_NAMES,
 )
 from .constants import (
     Backbone,
@@ -53,7 +35,6 @@ from .constants import (
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)
 # =============================================================================
-# These are computed from the enums and include +1 for index 0 (unknown/padding)
 
 # Number of element types (max index + 1)
 NUM_ELEMENTS: int = max(e.value for e in Element) + 1
@@ -61,13 +42,8 @@ NUM_ELEMENTS: int = max(e.value for e in Element) + 1
 # Number of residue types (max index + 1)
 NUM_RESIDUES: int = max(r.value for r in Residue) + 1
 
-# Number of atom types - computed from definitions
-# Index 0 is reserved for unknown, so max index + 1
-from .definitions import ALL_RESIDUES
-NUM_ATOMS: int = sum(len(r.atoms) for r in ALL_RESIDUES) + 1
-
-# Reverse lookup: atom index -> atom name
-from ._generated_atoms import ATOM_NAMES
+# Number of atom types (max index + 1)
+NUM_ATOMS: int = max(ATOM_NAMES.keys()) + 1
 
 
 __all__ = [
@@ -85,39 +61,19 @@ __all__ = [
     "RESIDUE_ABBREV",
     "RESIDUE_MOLECULE_TYPE",
     # RNA nucleotides
-    "Adenosine",
-    "Cytosine",
-    "Guanosine",
-    "Uridine",
+    "A", "C", "G", "U",
     "RibonucleicAcid",
     "RibonucleicAcidNoPrefix",
     # DNA nucleotides
-    "Deoxyadenosine",
-    "Deoxycytidine",
-    "Deoxyguanosine",
-    "Thymidine",
+    "Da", "Dc", "Dg", "Dt",
     "DeoxyribonucleicAcid",
+    # Modified nucleotides
+    "ModifiedNucleotides",
     # Amino acids
-    "Glycine",
-    "Alanine",
-    "Valine",
-    "Leucine",
-    "Isoleucine",
-    "Proline",
-    "Phenylalanine",
-    "Tryptophan",
-    "Methionine",
-    "Cysteine",
-    "Serine",
-    "Threonine",
-    "Asparagine",
-    "Glutamine",
-    "AsparticAcid",
-    "GlutamicAcid",
-    "Lysine",
-    "Arginine",
-    "Histidine",
-    "Tyrosine",
+    "Ala", "Arg", "Asn", "Asp", "Cys",
+    "Gln", "Glu", "Gly", "His", "Ile",
+    "Leu", "Lys", "Met", "Phe", "Pro",
+    "Ser", "Thr", "Trp", "Tyr", "Val",
     "AminoAcids",
     # Constants
     "Backbone",

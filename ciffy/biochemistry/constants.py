@@ -6,40 +6,40 @@ Defines atom groupings for backbone, nucleobase, phosphate, and sidechain atoms.
 
 from typing import Callable
 from ..utils import IndexEnum
-from .nucleotides import (
+from ._generated_atoms import (
     # RNA
-    Adenosine, Cytosine, Guanosine, Uridine,
+    A, C, G, U,
     # DNA
-    Deoxyadenosine, Deoxycytidine, Deoxyguanosine, Thymidine,
+    Da, Dc, Dg, Dt,
     # Amino acids
-    Glycine, Alanine, Valine, Leucine, Isoleucine, Proline,
-    Phenylalanine, Tryptophan, Methionine, Cysteine, Serine, Threonine,
-    Asparagine, Glutamine, AsparticAcid, GlutamicAcid, Lysine, Arginine,
-    Histidine, Tyrosine,
+    Ala, Arg, Asn, Asp, Cys,
+    Gln, Glu, Gly, His, Ile,
+    Leu, Lys, Met, Phe, Pro,
+    Ser, Thr, Trp, Tyr, Val,
 )
 
 # Residue groupings
 _RNA_NUCLEOTIDES = [
-    ("A_", Adenosine),
-    ("C_", Cytosine),
-    ("G_", Guanosine),
-    ("U_", Uridine),
+    ("A_", A),
+    ("C_", C),
+    ("G_", G),
+    ("U_", U),
 ]
 
 _DNA_NUCLEOTIDES = [
-    ("DA_", Deoxyadenosine),
-    ("DC_", Deoxycytidine),
-    ("DG_", Deoxyguanosine),
-    ("DT_", Thymidine),
+    ("DA_", Da),
+    ("DC_", Dc),
+    ("DG_", Dg),
+    ("DT_", Dt),
 ]
 
 _AMINO_ACIDS = [
-    ("G_", Glycine), ("A_", Alanine), ("V_", Valine), ("L_", Leucine),
-    ("I_", Isoleucine), ("P_", Proline), ("F_", Phenylalanine),
-    ("W_", Tryptophan), ("M_", Methionine), ("C_", Cysteine),
-    ("S_", Serine), ("T_", Threonine), ("N_", Asparagine),
-    ("Q_", Glutamine), ("D_", AsparticAcid), ("E_", GlutamicAcid),
-    ("K_", Lysine), ("R_", Arginine), ("H_", Histidine), ("Y_", Tyrosine),
+    ("GLY_", Gly), ("ALA_", Ala), ("VAL_", Val), ("LEU_", Leu),
+    ("ILE_", Ile), ("PRO_", Pro), ("PHE_", Phe),
+    ("TRP_", Trp), ("MET_", Met), ("CYS_", Cys),
+    ("SER_", Ser), ("THR_", Thr), ("ASN_", Asn),
+    ("GLN_", Gln), ("ASP_", Asp), ("GLU_", Glu),
+    ("LYS_", Lys), ("ARG_", Arg), ("HIS_", His), ("TYR_", Tyr),
 ]
 
 # Protein backbone atom names

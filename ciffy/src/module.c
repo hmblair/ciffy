@@ -306,11 +306,16 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
         return CIF_OK;
     }
 
-    /* Build entity_id -> description map (max 100 entities) */
-    char *entity_desc[100] = {NULL};
+    /* Build entity_id -> description map (sized for number of chains + 1) */
+    int entity_desc_size = cif->chains + 1;
+    char **entity_desc = calloc((size_t)entity_desc_size, sizeof(char *));
+    if (!entity_desc) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate entity_desc");
+        return CIF_ERR_ALLOC;
+    }
 
     CifError err = _precompute_lines(entity, ctx);
-    if (err != CIF_OK) return err;
+    if (err != CIF_OK) { free(entity_desc); return err; }
 
     int e_id_idx = _get_attr_index(entity, "id", ctx);
     int e_desc_idx = _get_attr_index(entity, "pdbx_description", ctx);
@@ -318,7 +323,7 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
     if (e_id_idx >= 0 && e_desc_idx >= 0) {
         for (int row = 0; row < entity->size; row++) {
             int entity_id = _parse_int_inline(entity, row, e_id_idx);
-            if (entity_id < 0 || entity_id >= 100) continue;
+            if (entity_id < 0 || entity_id >= entity_desc_size) continue;
 
             size_t desc_len;
             const char *desc_ptr = _get_field_ptr(entity, row, e_desc_idx, &desc_len);
@@ -339,7 +344,8 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
     err = _precompute_lines(chain_block, ctx);
     if (err != CIF_OK) {
         /* Free allocated descriptions */
-        for (int i = 0; i < 100; i++) free(entity_desc[i]);
+        for (int i = 0; i < entity_desc_size; i++) free(entity_desc[i]);
+        free(entity_desc);
         return err;
     }
 
@@ -347,7 +353,7 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
     if (sa_entity_idx >= 0) {
         for (int row = 0; row < chain_block->size && row < cif->chains; row++) {
             int entity_id = _parse_int_inline(chain_block, row, sa_entity_idx);
-            if (entity_id >= 0 && entity_id < 100 && entity_desc[entity_id]) {
+            if (entity_id >= 0 && entity_id < entity_desc_size && entity_desc[entity_id]) {
                 /* Duplicate for each chain (entity may be shared) */
                 cif->descriptions[row] = strdup(entity_desc[entity_id]);
             }
@@ -356,7 +362,8 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
     _free_lines(chain_block);
 
     /* Free temporary entity description map */
-    for (int i = 0; i < 100; i++) free(entity_desc[i]);
+    for (int i = 0; i < entity_desc_size; i++) free(entity_desc[i]);
+    free(entity_desc);
 
     return CIF_OK;
 }

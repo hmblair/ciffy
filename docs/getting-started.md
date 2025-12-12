@@ -120,6 +120,32 @@ polymer_fp16 = polymer.to(dtype=torch.float16)
 
 See the [Deep Learning Guide](guides/deep-learning.md) for training workflows.
 
+## Creating Structures from Sequences
+
+Generate template polymers from sequence strings using `from_sequence()`:
+
+```python
+import ciffy
+
+# RNA (lowercase with u)
+rna = ciffy.from_sequence("acgu")
+print(rna.size())  # Total atoms
+
+# DNA (lowercase with t)
+dna = ciffy.from_sequence("acgt")
+
+# Protein (uppercase)
+protein = ciffy.from_sequence("MGKLF")
+
+# Multi-chain structures
+multi = ciffy.from_sequence(["acgu", "MGKLF"])  # RNA + protein
+print(multi.size(ciffy.CHAIN))  # 2 chains
+```
+
+Template polymers have correct atom types, elements, and residue sequences but zero coordinates. This is useful for generative modeling where coordinates are predicted separately.
+
+See the [Deep Learning Guide](guides/deep-learning.md#generative-modeling) for using templates with structure prediction models.
+
 ## Writing CIF Files
 
 ```python

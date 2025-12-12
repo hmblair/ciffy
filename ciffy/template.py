@@ -67,6 +67,23 @@ _ELEMENT_MAP: dict[str, int] = {
 
 
 # =============================================================================
+# TERMINAL ATOM DEFINITIONS
+# =============================================================================
+
+# Nucleic acid terminal atoms (atom names as they appear in enum, with p for ')
+# 5'-terminal only: OP3 and its hydrogen
+_NA_5_TERMINAL_ATOMS = frozenset({'OP3', 'HOP3'})
+# 3'-terminal only: hydroxyl hydrogen on O3'
+_NA_3_TERMINAL_ATOMS = frozenset({'HO3p'})
+
+# Protein terminal atoms
+# N-terminal only: extra ammonium hydrogens (NH3+ vs NH in peptide bond)
+_PROTEIN_N_TERMINAL_ATOMS = frozenset({'H2', 'H3'})
+# C-terminal only: second carboxyl oxygen (COO- vs C=O in peptide bond)
+_PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT'})
+
+
+# =============================================================================
 # RESIDUE -> ATOM ENUM MAPPING
 # =============================================================================
 
@@ -170,9 +187,9 @@ def _generate_chain_name(index: int) -> str:
 
 
 @lru_cache(maxsize=32)
-def _expand_residue(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
+def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...]]:
     """
-    Get atom indices and element indices for a residue type.
+    Get atom indices, element indices, and atom names for a residue type.
 
     Results are cached since the same residue type always expands identically.
 
@@ -180,7 +197,7 @@ def _expand_residue(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...]]
         residue_idx: Residue index (from Residue enum value).
 
     Returns:
-        Tuple of (atom_indices, element_indices) as tuples for hashability.
+        Tuple of (atom_indices, element_indices, atom_names) as tuples for hashability.
 
     Raises:
         ValueError: If residue_idx has no atom definitions.
@@ -196,13 +213,74 @@ def _expand_residue(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...]]
     atom_enum = RESIDUE_ATOMS[residue]
     atom_indices = []
     element_indices = []
+    atom_names = []
 
     for member in atom_enum:
         atom_indices.append(member.value)
-        atom_name = member.name.replace('p', "'")  # C5p -> C5'
-        element_indices.append(_atom_name_to_element(atom_name))
+        atom_names.append(member.name)
+        atom_name_display = member.name.replace('p', "'")  # C5p -> C5'
+        element_indices.append(_atom_name_to_element(atom_name_display))
 
-    return tuple(atom_indices), tuple(element_indices)
+    return tuple(atom_indices), tuple(element_indices), tuple(atom_names)
+
+
+def _filter_atoms_by_position(
+    atom_indices: tuple[int, ...],
+    element_indices: tuple[int, ...],
+    atom_names: tuple[str, ...],
+    is_nucleic_acid: bool,
+    is_first: bool,
+    is_last: bool,
+) -> tuple[list[int], list[int]]:
+    """
+    Filter atoms based on residue position in chain.
+
+    Terminal atoms are only included for terminal residues:
+    - 5'/N-terminal atoms: only for first residue
+    - 3'/C-terminal atoms: only for last residue
+    - Internal residues: exclude all terminal atoms
+
+    Args:
+        atom_indices: Full atom index tuple from _expand_residue_full.
+        element_indices: Full element index tuple from _expand_residue_full.
+        atom_names: Atom names (enum member names) from _expand_residue_full.
+        is_nucleic_acid: True for RNA/DNA, False for protein.
+        is_first: True if this is the first residue in the chain.
+        is_last: True if this is the last residue in the chain.
+
+    Returns:
+        Tuple of (filtered_atom_indices, filtered_element_indices) as lists.
+    """
+    if is_nucleic_acid:
+        start_terminal = _NA_5_TERMINAL_ATOMS
+        end_terminal = _NA_3_TERMINAL_ATOMS
+    else:
+        start_terminal = _PROTEIN_N_TERMINAL_ATOMS
+        end_terminal = _PROTEIN_C_TERMINAL_ATOMS
+
+    filtered_atoms = []
+    filtered_elements = []
+
+    for atom_idx, elem_idx, name in zip(atom_indices, element_indices, atom_names):
+        # Check if this is a terminal-only atom
+        is_start_terminal = name in start_terminal
+        is_end_terminal = name in end_terminal
+
+        # Include atom if:
+        # - It's not a terminal atom, OR
+        # - It's a start-terminal atom AND we're at the start, OR
+        # - It's an end-terminal atom AND we're at the end
+        include = True
+        if is_start_terminal and not is_first:
+            include = False
+        if is_end_terminal and not is_last:
+            include = False
+
+        if include:
+            filtered_atoms.append(atom_idx)
+            filtered_elements.append(elem_idx)
+
+    return filtered_atoms, filtered_elements
 
 
 def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], str]:
@@ -292,6 +370,10 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
     """
     Process a single chain sequence into atom/element/residue data.
 
+    Handles terminal atoms correctly:
+    - 5'/N-terminal atoms only on first residue
+    - 3'/C-terminal atoms only on last residue
+
     Args:
         sequence: Single-letter sequence for one chain.
 
@@ -299,16 +381,32 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         Tuple of (atom_indices, element_indices, atoms_per_residue, residue_indices).
     """
     residue_indices = _parse_sequence(sequence)
+    n_residues = len(residue_indices)
+
+    # Determine if nucleic acid or protein based on first residue
+    first_mol_type = RESIDUE_MOLECULE_TYPE.get(residue_indices[0])
+    is_nucleic_acid = first_mol_type in (Molecule.RNA, Molecule.DNA)
 
     all_atoms: list[int] = []
     all_elements: list[int] = []
     atoms_per_res: list[int] = []
 
-    for res_idx in residue_indices:
-        atom_indices, element_indices = _expand_residue(res_idx)
-        all_atoms.extend(atom_indices)
-        all_elements.extend(element_indices)
-        atoms_per_res.append(len(atom_indices))
+    for i, res_idx in enumerate(residue_indices):
+        is_first = (i == 0)
+        is_last = (i == n_residues - 1)
+
+        # Get full atom expansion (cached)
+        atom_indices, element_indices, atom_names = _expand_residue_full(res_idx)
+
+        # Filter based on position
+        filtered_atoms, filtered_elements = _filter_atoms_by_position(
+            atom_indices, element_indices, atom_names,
+            is_nucleic_acid, is_first, is_last
+        )
+
+        all_atoms.extend(filtered_atoms)
+        all_elements.extend(filtered_elements)
+        atoms_per_res.append(len(filtered_atoms))
 
     return all_atoms, all_elements, atoms_per_res, residue_indices
 

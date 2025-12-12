@@ -634,6 +634,35 @@ class Polymer:
         """
         return self.reduce(_to_int64(mask), scale, Reduction.SUM)
 
+    def index(self: Polymer, scale: Scale) -> Array:
+        """
+        Get the index of each atom within units at the specified scale.
+
+        Creates an integer array where each atom is labeled with its
+        containing unit's index at the given scale. Useful for positional
+        encodings, attention masking, and grouping operations.
+
+        Args:
+            scale: Scale at which to compute indices.
+                - RESIDUE: atom -> residue index (0 to num_residues-1)
+                - CHAIN: atom -> chain index (0 to num_chains-1)
+                - MOLECULE: all atoms get index 0
+
+        Returns:
+            Integer array of shape (num_atoms,) with indices.
+
+        Examples:
+            >>> polymer = ciffy.load("structure.cif")
+            >>> res_idx = polymer.index(Scale.RESIDUE)  # atom -> residue
+            >>> chain_idx = polymer.index(Scale.CHAIN)  # atom -> chain
+
+            # Use for attention masking (same-residue attention)
+            >>> mask = res_idx[:, None] == res_idx[None, :]
+        """
+        n = self.size(scale)
+        idx = backend.arange(n, like=self.coordinates)
+        return self.expand(idx, scale, Scale.ATOM)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Geometry Operations
     # ─────────────────────────────────────────────────────────────────────────

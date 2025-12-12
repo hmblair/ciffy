@@ -146,6 +146,33 @@ rmsd_sq.backward()
 print(coords.grad.shape)
 ```
 
+## Index Mapping
+
+Use `index()` to get the containing unit index for each atom:
+
+```python
+import ciffy
+
+polymer = ciffy.load("structure.cif", backend="torch")
+
+# Get residue index for each atom (0 to num_residues-1)
+residue_idx = polymer.index(ciffy.RESIDUE)  # (N,)
+
+# Get chain index for each atom (0 to num_chains-1)
+chain_idx = polymer.index(ciffy.CHAIN)  # (N,)
+
+# Use for attention masking (same-residue attention)
+same_residue_mask = residue_idx[:, None] == residue_idx[None, :]
+
+# Use for chain-aware masking
+same_chain_mask = chain_idx[:, None] == chain_idx[None, :]
+```
+
+This is useful for:
+- Positional encodings in transformers
+- Chain-aware or residue-aware attention masking
+- Grouping atoms for aggregation operations
+
 ## Hierarchical Aggregation
 
 Aggregate atom features to coarser scales:
@@ -279,6 +306,92 @@ for epoch in range(100):
 
     if epoch % 10 == 0:
         print(f"Epoch {epoch}: RMSD = {loss.sqrt().item():.3f}")
+```
+
+## Generative Modeling
+
+Use `from_sequence()` to create template structures for generative models that predict coordinates:
+
+```python
+import ciffy
+
+# Create template from sequence (zero coordinates)
+template = ciffy.from_sequence("acgu", backend="torch")
+template = template.to("cuda")
+
+# Template has correct structure but zero coordinates
+print(template.coordinates.sum())  # 0.0
+print(template.size())  # Total atoms
+print(template.atoms)  # Atom type indices
+
+# Predict coordinates with your model
+predicted_coords = model(template)  # Shape: (N, 3)
+
+# Attach predicted coordinates
+result = template.with_coordinates(predicted_coords)
+
+# Save the predicted structure
+result.write("predicted.cif")
+```
+
+### Multi-chain Generation
+
+Generate complex structures with multiple chains:
+
+```python
+# RNA-protein complex
+sequences = ["acguacgu", "MGKLF"]
+template = ciffy.from_sequence(sequences, backend="torch")
+
+print(template.size(ciffy.CHAIN))  # 2
+print(template.names)  # ['A', 'B']
+
+# Each chain has correct molecule type
+for chain in template.chains():
+    print(f"{chain.names[0]}: {chain.molecule_type[0]}")
+# A: Molecule.RNA
+# B: Molecule.PROTEIN
+```
+
+### Structure Prediction Training
+
+```python
+class StructurePredictor(nn.Module):
+    def __init__(self, hidden_dim=256):
+        super().__init__()
+        self.atom_embed = nn.Embedding(ciffy.NUM_ATOMS, hidden_dim)
+        self.encoder = nn.TransformerEncoder(...)
+        self.coord_head = nn.Linear(hidden_dim, 3)
+
+    def forward(self, template):
+        # Embed atom types
+        h = self.atom_embed(template.atoms)
+
+        # Encode structure
+        h = self.encoder(h)
+
+        # Predict coordinates
+        return self.coord_head(h)
+
+# Training loop
+model = StructurePredictor().cuda()
+optimizer = optim.Adam(model.parameters())
+
+for sequence, target_cif in dataset:
+    # Create template from sequence
+    template = ciffy.from_sequence(sequence, backend="torch").to("cuda")
+
+    # Load ground truth
+    target = ciffy.load(target_cif, backend="torch").to("cuda")
+
+    # Predict coordinates
+    pred_coords = model(template)
+    pred = template.with_coordinates(pred_coords)
+
+    # RMSD loss
+    loss = ciffy.rmsd(pred, target)
+    loss.backward()
+    optimizer.step()
 ```
 
 ## Performance Tips

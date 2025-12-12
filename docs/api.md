@@ -22,6 +22,7 @@
         - rreduce
         - expand
         - count
+        - index
         - center
         - pairwise_distances
         - align

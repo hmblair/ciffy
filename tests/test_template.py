@@ -551,6 +551,85 @@ class TestFromSequenceMultiChain:
         assert polymer.size(Scale.RESIDUE) == 9
 
 
+class TestTerminalAtoms:
+    """Test correct handling of terminal atoms."""
+
+    def test_single_residue_has_all_terminal_atoms(self):
+        """Single residue should have both 5' and 3' terminal atoms."""
+        from ciffy import from_sequence
+        from ciffy.biochemistry._generated_atoms import Adenosine
+
+        # Single residue has all atoms (both termini)
+        single = from_sequence("a")
+        full_count = len(list(Adenosine))
+        assert single.size() == full_count
+
+    def test_internal_residues_lack_terminal_atoms(self):
+        """Internal residues should not have terminal atoms."""
+        from ciffy import from_sequence, Scale
+        from ciffy.biochemistry._generated_atoms import Adenosine, Cytosine
+
+        # Use same residue type to control for inherent size differences
+        polymer = from_sequence("aaaa")
+        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        full_count = len(list(Adenosine))
+
+        # First residue: all atoms except HO3' (3'-terminal) -> full - 1
+        # Middle residues: no OP3, HOP3, HO3' (all terminal) -> full - 3
+        # Last residue: all atoms except OP3, HOP3 (5'-terminal) -> full - 2
+
+        assert apr[0] == full_count - 1, f"First residue: expected {full_count - 1}, got {apr[0]}"
+        assert apr[1] == full_count - 3, f"Middle residue: expected {full_count - 3}, got {apr[1]}"
+        assert apr[2] == full_count - 3, f"Middle residue: expected {full_count - 3}, got {apr[2]}"
+        assert apr[3] == full_count - 2, f"Last residue: expected {full_count - 2}, got {apr[3]}"
+
+    def test_protein_terminal_atoms(self):
+        """Protein should only have OXT on C-terminus, H2/H3 on N-terminus."""
+        from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import ATOM_NAMES
+
+        polymer = from_sequence("AAA")  # 3 alanines
+        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+
+        # First residue has H2, H3 (N-terminal), no OXT
+        # Middle residue has neither terminal atoms
+        # Last residue has OXT (C-terminal), no H2, H3
+
+        # Middle should have fewer atoms
+        assert apr[1] < apr[0], "Middle residue should have fewer atoms than N-terminus"
+        assert apr[1] < apr[2], "Middle residue should have fewer atoms than C-terminus"
+
+    def test_multi_chain_each_has_termini(self):
+        """Each chain should have its own terminal atoms."""
+        from ciffy import from_sequence, Scale
+
+        # Two separate chains
+        multi = from_sequence(["ac", "gu"])
+
+        # Compare to single 4-residue chain
+        single = from_sequence("acgu")
+
+        # Multi-chain should have MORE atoms because each chain has termini
+        assert multi.size() > single.size(), \
+            "Two 2-residue chains should have more atoms than one 4-residue chain"
+
+    def test_terminal_atoms_per_chain_independent(self):
+        """Terminal atom filtering should be per-chain, not global."""
+        from ciffy import from_sequence, Scale
+
+        # Two identical single-residue chains
+        two_singles = from_sequence(["a", "a"])
+
+        # One two-residue chain
+        one_double = from_sequence("aa")
+
+        # Two single-residue chains: each has full atoms (both termini)
+        # One two-residue chain: first has 5', second has 3'
+
+        # So two singles should have more atoms
+        assert two_singles.size() > one_double.size()
+
+
 class TestTemplateMatchesCIF:
     """Test that from_sequence produces structures consistent with CIF files."""
 

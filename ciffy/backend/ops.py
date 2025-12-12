@@ -169,3 +169,20 @@ def sign(arr: Array) -> Array:
         Array with sign of each element.
     """
     return _get_ops(arr).sign(arr)
+
+
+def arange(n: int, like: Array) -> Array:
+    """
+    Create an integer range [0, n) with same backend/device as reference array.
+
+    Args:
+        n: Length of the range.
+        like: Reference array to match backend and device.
+
+    Returns:
+        Integer array [0, 1, ..., n-1] on same backend/device as `like`.
+    """
+    ops = _get_ops(like)
+    if get_backend(like) == Backend.TORCH:
+        return ops.arange(n, device=like.device)
+    return ops.arange(n)

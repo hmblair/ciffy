@@ -119,6 +119,23 @@ def get_device(arr: Array) -> str | None:
     return None
 
 
+def arange(n: int, like: Array) -> Array:
+    """
+    Create an integer range [0, n) with same backend/device as reference array.
+
+    Args:
+        n: Length of the range.
+        like: Reference array to match backend and device.
+
+    Returns:
+        Integer array [0, 1, ..., n-1] on same backend/device as `like`.
+    """
+    if is_torch(like):
+        import torch
+        return torch.arange(n, dtype=torch.long, device=like.device)
+    return np.arange(n, dtype=np.int64)
+
+
 def check_compatible(target: Array, source: Array, name: str = "array") -> None:
     """
     Check that source array is compatible with target (same backend and device).

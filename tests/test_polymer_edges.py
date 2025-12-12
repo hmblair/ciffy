@@ -506,3 +506,115 @@ class TestDeviceProperty:
 
         p_torch = p.torch()
         assert p_torch.device == "cpu"
+
+
+class TestIndexMethod:
+    """Test the index(scale) method."""
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_residue_shape(self, backend):
+        """index(RESIDUE) returns array with shape (num_atoms,)."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.RESIDUE)
+
+        assert idx.shape == (p.size(),)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_residue_values(self, backend):
+        """index(RESIDUE) returns values in [0, num_residues)."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.RESIDUE)
+
+        # Convert to numpy for checking
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        assert idx_np.min() == 0
+        assert idx_np.max() == p.size(Scale.RESIDUE) - 1
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_residue_unique_count(self, backend):
+        """index(RESIDUE) has num_residues unique values."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.RESIDUE)
+
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        assert len(set(idx_np)) == p.size(Scale.RESIDUE)
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_chain_single_chain(self, backend):
+        """index(CHAIN) returns all zeros for single chain."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.CHAIN)
+
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        assert (idx_np == 0).all()
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_chain_multi_chain(self, backend):
+        """index(CHAIN) returns correct indices for multi-chain."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence(["acgu", "MGKLF"], backend=backend)
+        idx = p.index(Scale.CHAIN)
+
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        assert len(set(idx_np)) == 2
+        assert idx_np.min() == 0
+        assert idx_np.max() == 1
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_molecule_all_zeros(self, backend):
+        """index(MOLECULE) returns all zeros."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.MOLECULE)
+
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        assert (idx_np == 0).all()
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_dtype(self, backend):
+        """index() returns integer dtype."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.RESIDUE)
+
+        if backend == "torch":
+            import torch
+            assert idx.dtype == torch.int64
+        else:
+            assert idx.dtype == np.int64
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_index_consistency_with_sizes(self, backend):
+        """index() is consistent with sizes()."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        idx = p.index(Scale.RESIDUE)
+        sizes = p.sizes(Scale.RESIDUE)
+
+        # Count atoms per residue from index
+        idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
+        sizes_np = sizes.numpy() if hasattr(sizes, 'numpy') else sizes
+
+        for i, expected_size in enumerate(sizes_np):
+            actual_count = (idx_np == i).sum()
+            assert actual_count == expected_size

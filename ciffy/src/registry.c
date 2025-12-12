@@ -430,6 +430,13 @@ static const FieldDef FIELDS[] = {
       offsetof(mmCIF, molecule_types), STORAGE_INT_PTR,
       SIZE_NONE, 0, 0,
       PY_1D_INT, NULL },
+
+    /* FIELD_DESCRIPTIONS = 13 - optional, parsed separately in module.c */
+    { FIELD_DESCRIPTIONS, "descriptions", BLOCK_ENTITY, OP_COMPUTE,
+      NULL, DEP_CHAINS, NULL, false, NULL,
+      offsetof(mmCIF, descriptions), STORAGE_STR_ARRAY,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL },  /* PY_NONE: not auto-exported, handled in module.c */
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,

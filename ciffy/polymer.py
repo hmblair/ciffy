@@ -155,6 +155,7 @@ class Polymer:
         lengths: Array,
         polymer_count: int | None = None,
         molecule_types: Array | None = None,
+        descriptions: list[str] | None = None,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -173,6 +174,7 @@ class Polymer:
                 are assumed to be polymer atoms.
             molecule_types: (C,) array of molecule types per chain from CIF.
                 If None, molecule types will be inferred from residue indices.
+            descriptions: List of entity descriptions per chain, or None.
 
         Raises:
             ValueError: If tensor sizes are inconsistent.
@@ -218,6 +220,7 @@ class Polymer:
         self._sizes = sizes
         self.lengths = lengths
         self._molecule_types = molecule_types
+        self.descriptions = descriptions
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification

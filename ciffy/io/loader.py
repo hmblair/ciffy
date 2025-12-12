@@ -11,7 +11,11 @@ import numpy as np
 if TYPE_CHECKING:
     from ..polymer import Polymer
 
-def load(file: str, backend: str | None = None) -> "Polymer":
+def load(
+    file: str,
+    backend: str | None = None,
+    load_descriptions: bool = False,
+) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
 
@@ -21,6 +25,8 @@ def load(file: str, backend: str | None = None) -> "Polymer":
     Args:
         file: Path to the CIF file.
         backend: Array backend, either "numpy" or "torch". Default is "numpy".
+        load_descriptions: If True, parse entity descriptions from CIF file.
+            Default is False for performance (descriptions not needed for DL).
 
     Returns:
         Polymer object containing the parsed structure.
@@ -34,6 +40,10 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         >>> polymer = load("1abc.cif", backend="numpy")
         >>> print(polymer)
         PDB 1ABC with 1234 atoms (numpy).
+
+        >>> polymer = load("1abc.cif", load_descriptions=True)
+        >>> print(polymer.descriptions)
+        ['RNA (66-MER)', 'CESIUM ION', ...]
     """
     # Import here to avoid circular imports
     from ..polymer import Polymer
@@ -51,7 +61,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         raise OSError(f'The file "{file}" does not exist.')
 
     # Load returns a dict with all parsed data
-    data = _load(file)
+    data = _load(file, load_descriptions=load_descriptions)
 
     # Extract fields from dict
     id = data["id"]
@@ -75,6 +85,9 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         Scale.MOLECULE: mol_sizes,
     }
 
+    # Get descriptions if loaded
+    descriptions = data.get("descriptions", None)
+
     # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(
         coordinates,
@@ -88,6 +101,7 @@ def load(file: str, backend: str | None = None) -> "Polymer":
         res_per_chain,
         polymer_count,
         molecule_types,
+        descriptions,
     )
 
     # Convert to torch if requested

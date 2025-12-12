@@ -5,6 +5,7 @@ Usage:
     ciffy <file.cif>              # Load and print polymer summary
     ciffy <file1> <file2> ...     # Load and print multiple files
     ciffy <file.cif> --atoms      # Also show atom counts per residue
+    ciffy <file.cif> --desc       # Show entity descriptions per chain
 """
 
 import argparse
@@ -32,6 +33,11 @@ def main():
         action="store_true",
         help="Show sequence string",
     )
+    parser.add_argument(
+        "--desc", "-d",
+        action="store_true",
+        help="Show entity descriptions for each chain",
+    )
 
     args = parser.parse_args()
 
@@ -43,7 +49,7 @@ def main():
             print("\n" + "=" * 40 + "\n")
 
         try:
-            polymer = load(filepath)
+            polymer = load(filepath, load_descriptions=args.desc)
         except FileNotFoundError:
             print(f"Error: File not found: {filepath}", file=sys.stderr)
             continue
@@ -67,6 +73,15 @@ def main():
             from ciffy import Scale
             atoms_per_res = polymer.per(Scale.ATOM, Scale.RESIDUE).tolist()
             print(f"\nAtoms per residue: {atoms_per_res}")
+
+        # Optional: show entity descriptions
+        if args.desc and polymer.descriptions:
+            print("\nDescriptions:")
+            for name, desc in zip(polymer.names, polymer.descriptions):
+                # Strip CIF quoting (single/double quotes)
+                if len(desc) >= 2 and desc[0] == desc[-1] and desc[0] in "'\"":
+                    desc = desc[1:-1]
+                print(f"  {name}: {desc}")
 
 
 if __name__ == "__main__":

@@ -271,29 +271,126 @@ cleanup:
 
 /* Block parsing functions are now in parser.c - see parser.h for declarations */
 
+/* Forward declarations for parsing functions */
+extern CifError _precompute_lines(mmBlock *block, CifErrorContext *ctx);
+extern void _free_lines(mmBlock *block);
+extern int _get_attr_index(mmBlock *block, const char *attr, CifErrorContext *ctx);
+extern int _parse_int_inline(mmBlock *block, int line, int index);
+extern char *_get_field_ptr(mmBlock *block, int row, int attr_idx, size_t *len);
+
+
+/**
+ * @brief Parse entity descriptions from _entity.pdbx_description.
+ *
+ * Maps descriptions from entity_id to per-chain via _struct_asym.entity_id.
+ *
+ * @param cif Output structure (must have chains already populated)
+ * @param blocks Parsed blocks containing BLOCK_ENTITY and BLOCK_CHAIN
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorContext *ctx) {
+    /* Allocate descriptions array */
+    cif->descriptions = calloc((size_t)cif->chains, sizeof(char *));
+    if (!cif->descriptions) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate descriptions");
+        return CIF_ERR_ALLOC;
+    }
+
+    mmBlock *entity = &blocks->b[BLOCK_ENTITY];
+    mmBlock *chain_block = &blocks->b[BLOCK_CHAIN];
+
+    /* Check if entity block exists */
+    if (entity->category == NULL) {
+        LOG_DEBUG("No _entity block, descriptions will be empty");
+        return CIF_OK;
+    }
+
+    /* Build entity_id -> description map (max 100 entities) */
+    char *entity_desc[100] = {NULL};
+
+    CifError err = _precompute_lines(entity, ctx);
+    if (err != CIF_OK) return err;
+
+    int e_id_idx = _get_attr_index(entity, "id", ctx);
+    int e_desc_idx = _get_attr_index(entity, "pdbx_description", ctx);
+
+    if (e_id_idx >= 0 && e_desc_idx >= 0) {
+        for (int row = 0; row < entity->size; row++) {
+            int entity_id = _parse_int_inline(entity, row, e_id_idx);
+            if (entity_id < 0 || entity_id >= 100) continue;
+
+            size_t desc_len;
+            const char *desc_ptr = _get_field_ptr(entity, row, e_desc_idx, &desc_len);
+            if (desc_ptr && desc_len > 0) {
+                /* Copy and null-terminate the description */
+                char *desc = malloc(desc_len + 1);
+                if (desc) {
+                    memcpy(desc, desc_ptr, desc_len);
+                    desc[desc_len] = '\0';
+                    entity_desc[entity_id] = desc;
+                }
+            }
+        }
+    }
+    _free_lines(entity);
+
+    /* Map chains to descriptions via _struct_asym.entity_id */
+    err = _precompute_lines(chain_block, ctx);
+    if (err != CIF_OK) {
+        /* Free allocated descriptions */
+        for (int i = 0; i < 100; i++) free(entity_desc[i]);
+        return err;
+    }
+
+    int sa_entity_idx = _get_attr_index(chain_block, "entity_id", ctx);
+    if (sa_entity_idx >= 0) {
+        for (int row = 0; row < chain_block->size && row < cif->chains; row++) {
+            int entity_id = _parse_int_inline(chain_block, row, sa_entity_idx);
+            if (entity_id >= 0 && entity_id < 100 && entity_desc[entity_id]) {
+                /* Duplicate for each chain (entity may be shared) */
+                cif->descriptions[row] = strdup(entity_desc[entity_id]);
+            }
+        }
+    }
+    _free_lines(chain_block);
+
+    /* Free temporary entity description map */
+    for (int i = 0; i < 100; i++) free(entity_desc[i]);
+
+    return CIF_OK;
+}
+
 
 /**
  * @brief Load an mmCIF file and return parsed data as Python objects.
  *
  * Main entry point for the Python extension. Loads the file, parses
- * all blocks, extracts molecular data, and returns as a tuple of
+ * all blocks, extracts molecular data, and returns as a dict of
  * NumPy arrays and Python lists.
  *
  * @param self Module reference (unused)
- * @param args Python arguments (filename string)
- * @return Tuple of (id, coordinates, atoms, elements, residues,
- *         atoms_per_res, atoms_per_chain, res_per_chain,
- *         chain_names, strand_names, nonpoly) or NULL on error
+ * @param args Python positional arguments (filename string)
+ * @param kwargs Python keyword arguments:
+ *        - load_descriptions (bool): If true, parse entity descriptions (default: false)
+ * @return Dict of parsed data or NULL on error
  */
-static PyObject *_load(PyObject *self, PyObject *args) {
+static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
 
     __py_init();
 
     CifErrorContext ctx = CIF_ERROR_INIT;
 
-    /* Get the filename from arguments */
-    const char *file = _get_filename(args);
-    if (file == NULL) { return NULL; }
+    /* Parse arguments: filename (required) + load_descriptions (optional keyword) */
+    static char *kwlist[] = {"filename", "load_descriptions", NULL};
+    const char *file = NULL;
+    int load_descriptions = 0;  /* Default: false */
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|p", kwlist,
+                                      &file, &load_descriptions)) {
+        return NULL;
+    }
 
     /* Load the entire file into memory */
     char *buffer = NULL;
@@ -336,12 +433,47 @@ static PyObject *_load(PyObject *self, PyObject *args) {
         return _set_py_error(&ctx, file);
     }
 
+    /* Optionally parse descriptions (after _fill_cif so chains is populated) */
+    if (load_descriptions) {
+        err = _parse_descriptions(&cif, &blocks, &ctx);
+        if (err != CIF_OK) {
+            free(cif.id);
+            _free_block_list(&blocks);
+            free(cpy);
+            return _set_py_error(&ctx, file);
+        }
+    }
+
     /* Free the file buffer and block metadata */
     free(cpy);
     _free_block_list(&blocks);
 
     /* Convert to Python objects */
-    return _c_to_py(cif);
+    PyObject *dict = _c_to_py(cif);
+    if (dict == NULL) return NULL;
+
+    /* Add descriptions to dict if loaded */
+    if (load_descriptions && cif.descriptions) {
+        PyObject *py_desc = _c_arr_to_py_list(cif.descriptions, cif.chains);
+        if (py_desc == NULL) {
+            Py_DECREF(dict);
+            return NULL;
+        }
+        if (PyDict_SetItemString(dict, "descriptions", py_desc) < 0) {
+            Py_DECREF(py_desc);
+            Py_DECREF(dict);
+            return NULL;
+        }
+        Py_DECREF(py_desc);
+
+        /* Free descriptions array (strings were copied by _c_arr_to_py_list) */
+        for (int i = 0; i < cif.chains; i++) {
+            free(cif.descriptions[i]);
+        }
+        free(cif.descriptions);
+    }
+
+    return dict;
 }
 
 
@@ -466,10 +598,11 @@ cleanup:
 
 /* Python module method table */
 static PyMethodDef methods[] = {
-    {"_load", _load, METH_VARARGS,
+    {"_load", (PyCFunction)_load, METH_VARARGS | METH_KEYWORDS,
      "Load an mmCIF file and return molecular structure data.\n\n"
      "Args:\n"
-     "    filename (str): Path to the mmCIF file\n\n"
+     "    filename (str): Path to the mmCIF file\n"
+     "    load_descriptions (bool): If True, parse entity descriptions (default: False)\n\n"
      "Returns:\n"
      "    dict: {\n"
      "        'id': str,                    # PDB identifier\n"
@@ -484,6 +617,7 @@ static PyMethodDef methods[] = {
      "        'strand_names': list[str],    # strand names\n"
      "        'polymer_count': int,         # polymer atoms\n"
      "        'molecule_types': ndarray,    # (C,) int32\n"
+     "        'descriptions': list[str],    # entity descriptions (if load_descriptions=True)\n"
      "    }\n\n"
      "Raises:\n"
      "    IOError: If file cannot be read\n"

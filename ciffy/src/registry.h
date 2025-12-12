@@ -172,6 +172,7 @@ typedef enum {
     FIELD_RES_PER_CHAIN, /**< cif->res_per_chain - residue counts per chain */
     FIELD_ATOMS_PER_RES, /**< cif->atoms_per_res - atom counts per residue */
     FIELD_MOL_TYPES,     /**< cif->molecule_types - molecule type per chain */
+    FIELD_DESCRIPTIONS,  /**< cif->descriptions - entity description per chain (optional) */
     FIELD_COUNT          /**< Total number of field types */
 } FieldId;
 

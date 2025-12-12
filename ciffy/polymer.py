@@ -768,9 +768,13 @@ class Polymer:
         # (residue atoms are always polymer atoms)
         new_polymer_count = sizes[Scale.RESIDUE].sum().item()
 
+        # Preserve molecule types if available
+        mol_types = self._molecule_types[ix] if self._molecule_types is not None else None
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
             self._id, names, strands, lengths, new_polymer_count,
+            mol_types,
         )
 
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
@@ -953,10 +957,12 @@ class Polymer:
         types_np = _ap.as_numpy(self.molecule_type)
         lengths_np = _ap.as_numpy(self.lengths)
         atoms_np = _ap.as_numpy(self._sizes[Scale.CHAIN])
+        elements_np = _ap.as_numpy(self.elements)
 
         rows = []
         total_res = 0
         total_atoms = 0
+        atom_offset = 0
         for ix in range(self.size(Scale.CHAIN)):
             mol = molecule_type(int(types_np[ix]))
             res = int(lengths_np[ix])
@@ -965,13 +971,23 @@ class Polymer:
             total_atoms += atoms
             # Non-poly chains (res=0) show "-" for residue count
             is_nonpoly = (res == 0)
+
+            # For ION chains, show element name (e.g., "MG ION")
+            type_str = mol.name
+            if mol == Molecule.ION and atoms > 0:
+                elem_idx = int(elements_np[atom_offset])
+                elem_name = Element.revdict().get(elem_idx, "")
+                if elem_name:
+                    type_str = f"{elem_name} {mol.name}"
+
             rows.append({
                 'chain': self.names[ix],
-                'type': mol.name,
+                'type': type_str,
                 'res': res,
                 'res_str': '-' if is_nonpoly else str(res),
                 'atoms': atoms,
             })
+            atom_offset += atoms
 
         # Calculate column widths (include totals in width calculation)
         chain_w = max(len(r['chain']) for r in rows) if rows else 1

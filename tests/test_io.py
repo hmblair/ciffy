@@ -221,10 +221,13 @@ class TestLoad:
             if not data_started:
                 continue
             if line.strip():
-                # Extract molecule type (second column after chain name)
+                # Extract molecule type (columns between chain name and residue count)
+                # Format: "A  RNA  66  1413" or "D  CS ION  -  1"
                 parts = line.split()
-                if len(parts) >= 4:  # chain, type, residues, atoms
-                    mol_type = parts[1]
+                if len(parts) >= 4:  # chain, type..., residues, atoms
+                    # Type can be multi-word (e.g., "CS ION"), last word is the base type
+                    type_parts = parts[1:-2]  # Everything between chain and res/atoms
+                    mol_type = type_parts[-1]  # Last word is the Molecule enum name
                     assert mol_type in valid_types, f"Invalid molecule type: {mol_type}"
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)

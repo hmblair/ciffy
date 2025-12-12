@@ -951,10 +951,9 @@ class Polymer:
         names = [self.names[j] for j in ix]
         strands = [self.strands[j] for j in ix]
 
-        # Calculate new polymer_count from residue sizes, capped at total atoms
-        # (residue atoms are always polymer atoms, but we cap to handle edge cases)
-        residue_sum = sizes[Scale.RESIDUE].sum().item()
-        new_polymer_count = min(residue_sum, len(coordinates))
+        # Calculate new polymer_count from residue sizes
+        # (residue atoms are always polymer atoms)
+        new_polymer_count = sizes[Scale.RESIDUE].sum().item()
 
         # Preserve molecule types if available
         mol_types = self._molecule_types[ix] if self._molecule_types is not None else None

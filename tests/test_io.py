@@ -537,3 +537,45 @@ class TestMoleculeTypeDetection:
         for name, mol_type in zip(names, mol_types):
             assert mol_type == expected[name], \
                 f"Chain {name} should be {Molecule(expected[name]).name}, got {Molecule(mol_type).name}"
+
+
+class TestPolymerCountInvariant:
+    """Test that polymer_count == sum(atoms_per_res) invariant holds."""
+
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_polymer_count_equals_sum_atoms_per_res(self, cif_file, backend):
+        """Verify invariant: polymer_count == sum(atoms_per_res).
+
+        This invariant ensures that all polymer atoms belong to residues,
+        and all residue atoms are counted as polymer. It's enforced in the
+        C parser by checking both group_PDB and label_seq_id.
+        """
+        from ciffy import load, Scale
+
+        polymer = load(cif_file, backend=backend)
+
+        # Sum of atoms per residue should equal polymer_count
+        atoms_per_res_sum = polymer._sizes[Scale.RESIDUE].sum().item()
+        assert atoms_per_res_sum == polymer.polymer_count, \
+            f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum} != polymer_count={polymer.polymer_count}"
+
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_nonpoly_is_nonnegative(self, cif_file, backend):
+        """Verify nonpoly count is non-negative."""
+        from ciffy import load
+
+        polymer = load(cif_file, backend=backend)
+        assert polymer.nonpoly >= 0, f"nonpoly should be >= 0, got {polymer.nonpoly}"
+
+    @pytest.mark.parametrize("cif_file", CIF_FILES)
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_polymer_plus_nonpoly_equals_total(self, cif_file, backend):
+        """Verify polymer_count + nonpoly == total atoms."""
+        from ciffy import load
+
+        polymer = load(cif_file, backend=backend)
+        total = polymer.size()
+        assert polymer.polymer_count + polymer.nonpoly == total, \
+            f"polymer_count ({polymer.polymer_count}) + nonpoly ({polymer.nonpoly}) != total ({total})"

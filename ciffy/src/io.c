@@ -732,9 +732,18 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
  * ============================================================================ */
 
 /**
- * @brief Pre-scan group_PDB to build is_nonpoly mask.
+ * @brief Pre-scan label_seq_id to build is_nonpoly mask.
  *
- * This enables two-pointer placement during batch parsing:
+ * Classifies atoms as polymer or non-polymer based on residue membership:
+ * - Polymer: has valid label_seq_id (>= 1)
+ * - Non-polymer: missing or invalid label_seq_id
+ *
+ * This ensures polymer_count == sum(atoms_per_res) by definition,
+ * since only atoms with valid residue sequence IDs are counted as polymer.
+ * The group_PDB field (ATOM/HETATM) is ignored - residue membership is
+ * the sole criterion.
+ *
+ * Enables two-pointer placement during batch parsing:
  * - Polymer atoms write to indices [0, polymer_count)
  * - Non-polymer atoms write to indices [polymer_count, total)
  *
@@ -746,25 +755,23 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
  */
 int _prescan_group_pdb(mmBlock *block, int atoms, int *is_nonpoly,
                        CifErrorContext *ctx) {
-    /* Get group_PDB attribute index */
-    int group_idx = _get_attr_index(block, "group_PDB", ctx);
-    if (group_idx == BAD_IX) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'group_PDB'");
+    /* Get label_seq_id attribute index for residue membership check */
+    int seq_idx = _get_attr_index(block, "label_seq_id", ctx);
+    if (seq_idx == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'label_seq_id'");
         return -1;
     }
 
-    /* Single pass: classify each atom as polymer or non-polymer */
+    /* Single pass: classify each atom as polymer or non-polymer
+     * Polymer = has valid seq_id (>= 1), regardless of group_PDB */
     int nonpoly_count = 0;
     for (int row = 0; row < atoms; row++) {
-        size_t len;
-        char *ptr = _get_field_ptr(block, row, group_idx, &len);
-        if (ptr == NULL) {
-            CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to get group_PDB at row %d", row);
-            return -1;
-        }
-        /* HETATM check: length 6 and starts with 'H' */
-        is_nonpoly[row] = (len == 6 && ptr[0] == 'H') ? 1 : 0;
+        int seq_id;
+        IntParseResult seq_result = _parse_int_safe(block, row, seq_idx, &seq_id);
+        int has_valid_seq = (seq_result == PARSE_INT_OK && seq_id >= 1);
+
+        /* Polymer requires only valid seq_id (residue membership) */
+        is_nonpoly[row] = has_valid_seq ? 0 : 1;
         nonpoly_count += is_nonpoly[row];
     }
 

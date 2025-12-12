@@ -149,6 +149,56 @@ class TestBiochemistryConstants:
         backbone_values = set(b.value for b in Backbone)
         assert phosphate_values.issubset(backbone_values)
 
+    def test_backbone_contains_rna_dna_protein(self):
+        """Test that Backbone includes atoms from all molecule types."""
+        from ciffy.biochemistry import Backbone, Adenosine, Deoxyadenosine, Alanine
+        backbone_values = set(b.value for b in Backbone)
+
+        # RNA backbone (sugar-phosphate)
+        assert Adenosine.P.value in backbone_values
+        assert Adenosine.C4p.value in backbone_values
+
+        # DNA backbone (sugar-phosphate)
+        assert Deoxyadenosine.P.value in backbone_values
+        assert Deoxyadenosine.C4p.value in backbone_values
+
+        # Protein backbone (N-CA-C-O)
+        assert Alanine.N.value in backbone_values
+        assert Alanine.CA.value in backbone_values
+        assert Alanine.C.value in backbone_values
+        assert Alanine.O.value in backbone_values
+
+        # Sidechains should NOT be in backbone
+        assert Alanine.CB.value not in backbone_values
+
+    def test_nucleobase_excludes_backbone(self):
+        """Test that Nucleobase only contains base atoms, not backbone."""
+        from ciffy.biochemistry import Nucleobase, Adenosine
+        nucleobase_values = set(n.value for n in Nucleobase)
+
+        # Base atoms should be included
+        assert Adenosine.N1.value in nucleobase_values
+        assert Adenosine.C2.value in nucleobase_values
+
+        # Backbone atoms should NOT be included
+        assert Adenosine.P.value not in nucleobase_values
+        assert Adenosine.C4p.value not in nucleobase_values
+
+    def test_sidechain_excludes_backbone(self):
+        """Test that Sidechain excludes backbone atoms."""
+        from ciffy.biochemistry import Sidechain, Alanine, Lysine
+        sidechain_values = set(s.value for s in Sidechain)
+
+        # Sidechain atoms should be included
+        assert Alanine.CB.value in sidechain_values
+        assert Lysine.CE.value in sidechain_values
+
+        # Backbone atoms should NOT be included
+        assert Alanine.N.value not in sidechain_values
+        assert Alanine.CA.value not in sidechain_values
+        assert Alanine.C.value not in sidechain_values
+        assert Alanine.O.value not in sidechain_values
+
 
 class TestScaleEnum:
     """Test Scale enum functionality."""

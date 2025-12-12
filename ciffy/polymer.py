@@ -388,24 +388,6 @@ class Polymer:
 
         return _ap.to_backend(result, self.coordinates)
 
-    def type(self: Polymer) -> Array:
-        """
-        Get the molecule type of each chain.
-
-        Deprecated: Use molecule_type property instead.
-
-        Returns:
-            Tensor of Molecule enum values.
-        """
-        import warnings
-        warnings.warn(
-            "Polymer.type() is deprecated and will be removed in v0.8.0. "
-            "Use the molecule_type property instead: polymer.molecule_type",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        return self.molecule_type
-
     def istype(self: Polymer, mol: Molecule) -> bool:
         """
         Check if this is a single chain of the specified type.
@@ -590,20 +572,6 @@ class Polymer:
 
         return _cdist(coords, coords)
 
-    def pd(self: Polymer, scale: Scale | None = None) -> Array:
-        """
-        Compute pairwise distances.
-
-        Deprecated: Use pairwise_distances() instead.
-        """
-        import warnings
-        warnings.warn(
-            "Polymer.pd() is deprecated. Use pairwise_distances() instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        return self.pairwise_distances(scale)
-
     def _pc(
         self: Polymer,
         scale: Scale,
@@ -703,17 +671,23 @@ class Polymer:
         objects[indices] = True
         return self.expand(objects, source, dest)
 
-    def __getitem__(self: Polymer, mask: Array) -> Polymer:
+    def __getitem__(self: Polymer, key: Array | slice) -> Polymer:
         """
-        Select atoms by boolean mask.
+        Select atoms by boolean mask or slice.
 
         Args:
-            mask: Boolean mask of atoms to keep.
+            key: Boolean mask of atoms to keep, or slice for contiguous range.
 
         Returns:
             New Polymer with selected atoms.
         """
-        # NOTE: Potential optimization target - mask generation and slicing overhead
+        # Handle slice by converting to boolean mask
+        if isinstance(key, slice):
+            mask = _bool_zeros_like_backend(self.coordinates, self.size())
+            mask[key] = True
+            return self[mask]
+
+        mask = key
         coordinates = self.coordinates[mask]
         atoms = self.atoms[mask]
         elements = self.elements[mask]
@@ -826,37 +800,6 @@ class Polymer:
         ix = _nonzero_1d(self.molecule_type == mol.value)
         return self.select(ix)
 
-    def polymer_only(self: Polymer) -> Polymer:
-        """
-        Return a new Polymer with non-polymer atoms removed.
-
-        Deprecated: Use poly() instead, which is simpler and doesn't filter
-        unknown atom types (useful for modified residues).
-
-        Returns:
-            New Polymer containing only recognized polymer atoms.
-        """
-        import warnings
-        warnings.warn(
-            "Polymer.polymer_only() is deprecated. Use poly() instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        # With reordered atoms, polymer atoms are [0, polymer_count)
-        # Also filter out unknown atom types (-1)
-        if self.nonpoly == 0:
-            # No non-polymer atoms, but may still have unknown types
-            if (self.atoms < 0).any():
-                mask = self.atoms >= 0
-                return self[mask]
-            return self
-
-        # Create mask for polymer atoms with known types
-        mask = _bool_zeros_like_backend(self.coordinates, self.size())
-        mask[:self.polymer_count] = True
-        mask = mask & (self.atoms >= 0)
-        return self[mask]
-
     def poly(self: Polymer) -> Polymer:
         """
         Return polymer portion only (excludes HETATM/non-polymer atoms).
@@ -877,11 +820,7 @@ class Polymer:
         """
         if self.nonpoly == 0:
             return self
-
-        # Create mask for polymer atoms (first polymer_count atoms)
-        mask = _bool_zeros_like_backend(self.coordinates, self.size())
-        mask[:self.polymer_count] = True
-        return self[mask]
+        return self[:self.polymer_count]
 
     def hetero(self: Polymer) -> Polymer:
         """
@@ -902,10 +841,7 @@ class Polymer:
             >>> if not ligands.empty():
             ...     ligands.center(Scale.ATOM)  # Works on atom scale
         """
-        # Create mask for non-polymer atoms (last nonpoly atoms)
-        mask = _bool_zeros_like_backend(self.coordinates, self.size())
-        mask[self.polymer_count:] = True
-        return self[mask]
+        return self[self.polymer_count:]
 
     def chains(
         self: Polymer,
@@ -961,20 +897,6 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
     # Specialized Selections
     # ─────────────────────────────────────────────────────────────────────────
-
-    def frame(self: Polymer) -> Polymer:
-        """
-        Select frame atoms for structural alignment.
-
-        Deprecated: Use get_by_name(FRAMES) instead.
-        """
-        import warnings
-        warnings.warn(
-            "Polymer.frame() is deprecated. Use get_by_name(FRAMES) instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        return self.get_by_name(FRAMES)
 
     def backbone(self: Polymer) -> Polymer:
         """Select backbone atoms."""

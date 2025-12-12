@@ -167,8 +167,12 @@ class IndexEnum(Enum):
             PairEnum containing all unique pairs.
         """
         pairs = []
+        seen = set()
         for x, y in itertools.product(cls, cls):
-            if (x, y) not in pairs and (y, x) not in pairs:
+            # Use sorted values as canonical key for unordered pair
+            key = (min(x.value, y.value), max(x.value, y.value))
+            if key not in seen:
+                seen.add(key)
                 pairs.append((x, y))
 
         return PairEnum(pairs)

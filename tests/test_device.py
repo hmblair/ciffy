@@ -384,6 +384,87 @@ class TestDifferentiability:
         assert coords2.grad is not None
         assert coords2.grad.device.type == "cuda"
 
+    def test_rmsd_gradient_stability_small_perturbation(self, polymer_torch):
+        """Test gradient stability with near-identical structures.
+
+        When structures are nearly identical, the covariance matrix approaches
+        a scaled identity, making singular values nearly equal. This can cause
+        SVD gradient instability. We verify gradients remain finite.
+        """
+        import torch
+        import ciffy
+
+        p1 = polymer_torch
+        # Very small perturbation - this is the challenging case for SVD gradients
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+        perturbation = torch.randn_like(coords2) * 1e-6
+        p2 = p1.with_coordinates(coords2 + perturbation)
+
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+        rmsd_sq.sum().backward()
+
+        # Gradients should exist and be finite (no NaN or Inf)
+        assert coords2.grad is not None, "Gradients were not computed"
+        assert torch.isfinite(coords2.grad).all(), "Gradients contain NaN or Inf"
+
+    def test_rmsd_gradient_stability_identical_structures(self, polymer_torch):
+        """Test gradient stability with exactly identical structures.
+
+        The degenerate case where structures are identical. The RMSD is 0,
+        but gradients should still be computable and finite.
+        """
+        import torch
+        import ciffy
+
+        p1 = polymer_torch
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+        p2 = p1.with_coordinates(coords2)
+
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+
+        # RMSD should be essentially zero
+        assert rmsd_sq.item() < 1e-10
+
+        rmsd_sq.sum().backward()
+
+        # Gradients should be finite (may be zero, but not NaN/Inf)
+        assert coords2.grad is not None, "Gradients were not computed"
+        assert torch.isfinite(coords2.grad).all(), "Gradients contain NaN or Inf"
+
+    def test_rmsd_gradient_magnitude_bounded(self, polymer_torch):
+        """Test that gradient magnitudes are reasonable (not exploding)."""
+        import torch
+        import ciffy
+
+        p1 = polymer_torch
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+        # Moderate perturbation
+        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.5)
+
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+        rmsd_sq.sum().backward()
+
+        # Gradient magnitude should be bounded (not exploding)
+        grad_norm = coords2.grad.norm()
+        assert grad_norm < 1e6, f"Gradient norm too large: {grad_norm}"
+        assert torch.isfinite(grad_norm), "Gradient norm is not finite"
+
+    def test_rmsd_gradient_stability_single_chain(self, polymer_torch):
+        """Test gradient stability on single-chain polymer."""
+        import torch
+        import ciffy
+
+        # Select single chain
+        p1 = polymer_torch.select(0)
+        coords2 = p1.coordinates.clone().detach().requires_grad_(True)
+        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
+
+        rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
+        rmsd_sq.sum().backward()
+
+        assert coords2.grad is not None
+        assert torch.isfinite(coords2.grad).all(), "Gradients contain NaN or Inf"
+
 
 class TestScatterOperations:
     """Test scatter operations directly."""

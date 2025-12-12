@@ -477,3 +477,77 @@ class TestKabschDistance:
         # Kabsch distance should be nonzero (reflection cannot be aligned)
         dist = kabsch_distance(polymer, flipped, Scale.MOLECULE)
         assert dist > 0.1  # Should be significantly nonzero
+
+    def test_numpy_backend(self):
+        """Test RMSD with NumPy backend explicitly."""
+        from ciffy import load
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif", backend="numpy")
+        assert polymer.backend == "numpy"
+
+        # RMSD of structure with itself should be ~0
+        dist = kabsch_distance(polymer, polymer)
+        assert np.allclose(dist, 0, atol=1e-10)
+
+    def test_default_scale(self):
+        """Test that rmsd defaults to MOLECULE scale."""
+        from ciffy import load, Scale
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+
+        # These should be equivalent
+        dist_default = kabsch_distance(polymer, polymer)
+        dist_explicit = kabsch_distance(polymer, polymer, Scale.MOLECULE)
+
+        assert np.allclose(dist_default, dist_explicit)
+
+    def test_identical_structures(self):
+        """Test RMSD of identical structures is zero."""
+        from ciffy import load
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+        dist = kabsch_distance(polymer, polymer)
+
+        assert np.allclose(dist, 0, atol=1e-10)
+
+    def test_single_chain(self):
+        """Test RMSD works on single-chain polymers."""
+        import copy
+        from ciffy import load
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+        # Select first chain only
+        chain = polymer.select(0)
+
+        # Add small perturbation
+        perturbed = copy.deepcopy(chain)
+        perturbed.coordinates = chain.coordinates + np.random.randn(*chain.coordinates.shape) * 0.1
+
+        dist = kabsch_distance(chain, perturbed)
+        assert dist.shape == (1,)  # Single molecule
+        assert dist[0] > 0  # Should be nonzero due to perturbation
+
+    def test_chain_scale(self):
+        """Test RMSD at CHAIN scale."""
+        import copy
+        from ciffy import load, Scale
+        from ciffy.operations.alignment import kabsch_distance
+
+        polymer = load("tests/data/3SKW.cif")
+
+        # Perturb one chain more than others
+        perturbed = copy.deepcopy(polymer)
+        coords = perturbed.coordinates.copy()
+        # Add larger noise to first chain's atoms
+        n_first_chain = polymer._sizes[Scale.CHAIN][0]
+        coords[:n_first_chain] += np.random.randn(n_first_chain, 3) * 1.0
+        perturbed.coordinates = coords
+
+        dist = kabsch_distance(polymer, perturbed, Scale.CHAIN)
+        assert dist.shape[0] == polymer.size(Scale.CHAIN)
+        # First chain should have larger RMSD
+        assert dist[0] > dist[1:].mean()

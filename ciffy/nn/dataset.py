@@ -20,12 +20,75 @@ except ImportError:
 from ..types import Scale, Molecule
 
 
+def _process_file(args: tuple) -> list[tuple[str, int | None]]:
+    """
+    Process a single CIF file for indexing (runs in worker process).
+
+    Returns list of (filepath_str, chain_idx or None) tuples that pass filters.
+    """
+    from ciffy import load_metadata
+
+    (filepath, scale_value, min_atoms, max_atoms, type_filter_values, exclude_ids) = args
+
+    results = []
+    try:
+        meta = load_metadata(filepath)
+    except Exception:
+        return results
+
+    # Check exclude_ids
+    pdb_id = meta.get("id", "").upper()
+    if exclude_ids and pdb_id in exclude_ids:
+        return results
+
+    atoms_per_chain = meta["atoms_per_chain"]
+    mol_types = meta["molecule_types"]
+    total_atoms = meta["atoms"]
+
+    # Convert type_filter_values back to set if provided
+    type_filter = set(type_filter_values) if type_filter_values else None
+
+    if scale_value == Scale.MOLECULE.value:
+        # For molecule scale, check if structure has any matching chains
+        if type_filter is not None:
+            has_matching = any(int(t) in type_filter for t in mol_types)
+            if not has_matching:
+                return results
+
+        # Check atom count bounds
+        if min_atoms is not None and total_atoms < min_atoms:
+            return results
+        if max_atoms is not None and total_atoms > max_atoms:
+            return results
+
+        results.append((filepath, None))
+
+    else:  # Scale.CHAIN
+        for chain_idx in range(meta["chains"]):
+            chain_mol_type = int(mol_types[chain_idx])
+
+            # Skip chains not matching molecule_types filter
+            if type_filter is not None and chain_mol_type not in type_filter:
+                continue
+
+            # Check atom count bounds
+            chain_atoms = int(atoms_per_chain[chain_idx])
+            if min_atoms is not None and chain_atoms < min_atoms:
+                continue
+            if max_atoms is not None and chain_atoms > max_atoms:
+                continue
+
+            results.append((filepath, chain_idx))
+
+    return results
+
+
 class PolymerDataset(Dataset):
     """
     PyTorch Dataset for loading CIF files from a directory.
 
     Supports iteration at molecule or chain scale, with optional
-    filtering by maximum atom count and molecule type.
+    filtering by atom count, molecule type, and PDB ID exclusion.
 
     Example:
         >>> from ciffy.nn import PolymerDataset
@@ -35,20 +98,26 @@ class PolymerDataset(Dataset):
         >>> print(f"Found {len(dataset)} chains")
         >>> chain = dataset[0]  # Load first chain
         >>>
-        >>> # Only RNA chains
-        >>> dataset = PolymerDataset("./structures/", molecule_types=Molecule.RNA)
+        >>> # Only RNA chains with at least 10 atoms
+        >>> dataset = PolymerDataset("./structures/", molecule_types=Molecule.RNA, min_atoms=10)
         >>>
-        >>> # Only protein and RNA chains
-        >>> dataset = PolymerDataset("./structures/", molecule_types=(Molecule.PROTEIN, Molecule.RNA))
+        >>> # Exclude specific PDB IDs (e.g., test set)
+        >>> dataset = PolymerDataset("./structures/", exclude_ids=["1ABC", "2XYZ"])
+        >>>
+        >>> # Parallel scanning for large directories
+        >>> dataset = PolymerDataset("./pdb/", num_workers=8)
     """
 
     def __init__(
         self,
         directory: str | Path,
         scale: Scale = Scale.MOLECULE,
+        min_atoms: int | None = None,
         max_atoms: int | None = None,
         backend: str = "torch",
         molecule_types: Molecule | tuple[Molecule, ...] | None = None,
+        exclude_ids: list[str] | set[str] | None = None,
+        num_workers: int = 0,
     ):
         """
         Initialize dataset by scanning directory for CIF files.
@@ -58,6 +127,8 @@ class PolymerDataset(Dataset):
             scale: Iteration scale (MOLECULE or CHAIN only).
                 - MOLECULE: iterate over full structures
                 - CHAIN: iterate over individual chains
+            min_atoms: Minimum atoms per item. Items with fewer atoms
+                are filtered out. None = no minimum.
             max_atoms: Maximum atoms per item. Items exceeding this
                 are filtered out. None = no limit.
             backend: Backend for loaded polymers ("torch" or "numpy").
@@ -65,6 +136,11 @@ class PolymerDataset(Dataset):
                 a single Molecule or tuple of Molecules. Chains not matching
                 any specified type are excluded. None = no filtering.
                 Common types: Molecule.PROTEIN, Molecule.RNA, Molecule.DNA
+            exclude_ids: PDB IDs to exclude (case-insensitive). Useful for
+                held-out test sets or known problematic structures.
+            num_workers: Number of worker processes for parallel file scanning.
+                0 = single-threaded (default). Higher values speed up scanning
+                of large directories.
 
         Raises:
             ImportError: If PyTorch is not installed.
@@ -87,8 +163,10 @@ class PolymerDataset(Dataset):
             raise FileNotFoundError(f"Directory not found: {directory}")
 
         self.scale = scale
+        self.min_atoms = min_atoms
         self.max_atoms = max_atoms
         self.backend = backend
+        self.num_workers = num_workers
 
         # Normalize molecule_types to tuple or None
         if molecule_types is None:
@@ -98,27 +176,53 @@ class PolymerDataset(Dataset):
         else:
             self.molecule_types = tuple(molecule_types)
 
+        # Normalize exclude_ids to uppercase set
+        if exclude_ids is None:
+            self.exclude_ids = None
+        else:
+            self.exclude_ids = {pid.upper() for pid in exclude_ids}
+
         # Build index: list of (file_path, chain_idx or None)
         self._index: list[tuple[Path, int | None]] = []
         self._build_index(directory)
 
     def _build_index(self, directory: Path) -> None:
         """Scan directory and build index of valid items."""
-        from .. import load_metadata
-
         cif_files = sorted(directory.glob("*.cif"))
 
-        # Pre-compute type filter values if needed
-        type_filter = None
+        if not cif_files:
+            return
+
+        # Pre-compute type filter values for serialization
+        type_filter_values = None
         if self.molecule_types is not None:
-            type_filter = {m.value for m in self.molecule_types}
+            type_filter_values = tuple(m.value for m in self.molecule_types)
+
+        # Convert exclude_ids to frozenset for serialization
+        exclude_ids = frozenset(self.exclude_ids) if self.exclude_ids else None
+
+        if self.num_workers > 0:
+            self._build_index_parallel(cif_files, type_filter_values, exclude_ids)
+        else:
+            self._build_index_sequential(cif_files, type_filter_values, exclude_ids)
+
+    def _build_index_sequential(self, cif_files: list[Path],
+                                 type_filter_values: tuple | None,
+                                 exclude_ids: frozenset | None) -> None:
+        """Build index using single-threaded scanning."""
+        from .. import load_metadata
+
+        type_filter = set(type_filter_values) if type_filter_values else None
 
         for path in cif_files:
             try:
-                # Use fast metadata-only loading (~3x faster than full load)
                 meta = load_metadata(str(path))
             except Exception:
-                # Skip files that fail to load
+                continue
+
+            # Check exclude_ids
+            pdb_id = meta.get("id", "").upper()
+            if exclude_ids and pdb_id in exclude_ids:
                 continue
 
             atoms_per_chain = meta["atoms_per_chain"]
@@ -131,12 +235,16 @@ class PolymerDataset(Dataset):
                     if not has_matching:
                         continue
 
-                # Check total atom count
-                if self.max_atoms is None or meta["atoms"] <= self.max_atoms:
-                    self._index.append((path, None))
+                # Check atom count bounds
+                total_atoms = meta["atoms"]
+                if self.min_atoms is not None and total_atoms < self.min_atoms:
+                    continue
+                if self.max_atoms is not None and total_atoms > self.max_atoms:
+                    continue
+
+                self._index.append((path, None))
 
             else:  # Scale.CHAIN
-                # Check each chain against filters
                 for chain_idx in range(meta["chains"]):
                     chain_mol_type = int(mol_types[chain_idx])
 
@@ -144,12 +252,42 @@ class PolymerDataset(Dataset):
                     if type_filter is not None and chain_mol_type not in type_filter:
                         continue
 
-                    # Check atom count
+                    # Check atom count bounds
                     chain_atoms = int(atoms_per_chain[chain_idx])
+                    if self.min_atoms is not None and chain_atoms < self.min_atoms:
+                        continue
                     if self.max_atoms is not None and chain_atoms > self.max_atoms:
                         continue
 
                     self._index.append((path, chain_idx))
+
+    def _build_index_parallel(self, cif_files: list[Path],
+                               type_filter_values: tuple | None,
+                               exclude_ids: frozenset | None) -> None:
+        """Build index using parallel worker processes."""
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        # Prepare arguments for each file
+        args_list = [
+            (str(path), self.scale.value, self.min_atoms, self.max_atoms,
+             type_filter_values, exclude_ids)
+            for path in cif_files
+        ]
+
+        # Process files in parallel
+        with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+            futures = [executor.submit(_process_file, args) for args in args_list]
+
+            for future in as_completed(futures):
+                try:
+                    results = future.result()
+                    for filepath_str, chain_idx in results:
+                        self._index.append((Path(filepath_str), chain_idx))
+                except Exception:
+                    continue
+
+        # Sort index by filepath for deterministic ordering
+        self._index.sort(key=lambda x: (x[0], x[1] if x[1] is not None else -1))
 
     def __len__(self) -> int:
         """Return number of valid items (structures or chains)."""

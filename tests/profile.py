@@ -282,6 +282,70 @@ class TestBenchmark:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PolymerDataset Benchmarking
+# ─────────────────────────────────────────────────────────────────────────────
+
+def benchmark_dataset_scan(directory: str, num_workers_list: list[int],
+                           runs: int = 3) -> dict:
+    """
+    Benchmark PolymerDataset index building with different worker counts.
+
+    Args:
+        directory: Path to directory with CIF files.
+        num_workers_list: List of worker counts to test (0 = sequential).
+        runs: Number of runs per configuration.
+
+    Returns:
+        Dict mapping num_workers -> (mean_time, std_time, num_items).
+    """
+    from ciffy.nn import PolymerDataset
+    from ciffy import Scale
+
+    results = {}
+
+    for num_workers in num_workers_list:
+        times = []
+        num_items = 0
+
+        for _ in range(runs):
+            start = time.perf_counter()
+            dataset = PolymerDataset(directory, scale=Scale.CHAIN, num_workers=num_workers)
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+            num_items = len(dataset)
+
+        results[num_workers] = {
+            "mean": np.mean(times),
+            "std": np.std(times),
+            "items": num_items,
+        }
+
+    return results
+
+
+def print_dataset_benchmark(results: dict, directory: str) -> None:
+    """Print dataset benchmark results."""
+    print(f"\n{'='*60}")
+    print(f"PolymerDataset Index Scan: {directory}")
+    print(f"{'='*60}")
+
+    # Get baseline (sequential) time
+    baseline = results.get(0, {}).get("mean", 1.0)
+    items = results.get(0, {}).get("items", 0)
+
+    print(f"Items indexed: {items}")
+    print()
+    print(f"{'Workers':<10} {'Time':<15} {'Speedup':<10}")
+    print("-" * 35)
+
+    for num_workers in sorted(results.keys()):
+        r = results[num_workers]
+        speedup = baseline / r["mean"] if r["mean"] > 0 else 0
+        worker_str = "sequential" if num_workers == 0 else str(num_workers)
+        print(f"{worker_str:<10} {r['mean']*1000:>8.1f} ms    {speedup:>5.2f}x")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Direct Execution
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -293,11 +357,28 @@ if __name__ == "__main__":
     parser.add_argument("--markdown", action="store_true", help="Output markdown table")
     parser.add_argument("--ciffy-only", action="store_true",
                         help="Only benchmark ciffy (skip biopython/biotite)")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="Benchmark PolymerDataset scanning on this directory")
+    parser.add_argument("--max-workers", type=int, default=8,
+                        help="Maximum workers to test for dataset benchmark")
     args = parser.parse_args()
 
     # Check if profiling is enabled
     has_profiling = hasattr(ciffy, '_get_profile')
 
+    # Dataset benchmark mode
+    if args.dataset:
+        print("PolymerDataset Scan Benchmark")
+        print("=" * 60)
+        print(f"ciffy version: {ciffy.__version__}")
+
+        # Test sequential + various worker counts
+        worker_counts = [0] + list(range(1, args.max_workers + 1))
+        results = benchmark_dataset_scan(args.dataset, worker_counts)
+        print_dataset_benchmark(results, args.dataset)
+        exit(0)
+
+    # Standard file parsing benchmark
     all_results = []
     all_profiles = []
     for pdb_id, filepath in TEST_FILES:

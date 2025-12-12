@@ -156,6 +156,7 @@ def load_metadata(file: str) -> dict:
     molecule_types = data["molecule_types"]
 
     return {
+        "id": data["id"],
         "atoms": int(atoms_per_chain.sum()),
         "chains": len(atoms_per_chain),
         "atoms_per_chain": atoms_per_chain,

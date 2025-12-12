@@ -16,6 +16,10 @@
 
 #include <unistd.h>  /* for isatty */
 
+/* Extern declaration for ion lookup (defined in parser.c via hash/ion.c) */
+struct _LOOKUP;
+extern struct _LOOKUP * _lookup_ion(const char *str, size_t len);
+
 
 /* ============================================================================
  * HELPER MACROS
@@ -226,6 +230,80 @@ static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext
             CIF_FPRINTF(file, ctx, "%d '%s' %s\n", i + 1, type_str, strand);
         } else {
             CIF_FPRINTF(file, ctx, "%d %s %s\n", i + 1, type_str, strand);
+        }
+    }
+
+    CIF_FPRINTF(file, ctx, "#\n");
+    return CIF_OK;
+}
+
+
+/**
+ * @brief Write the _pdbx_entity_nonpoly block (non-polymer entity comp_ids).
+ *
+ * For ION entities, infers comp_id from the element symbol of the first atom.
+ * This enables proper round-trip of ION molecule types.
+ */
+static CifError _write_entity_nonpoly(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    /* Skip if no molecule_types array provided */
+    if (cif->molecule_types == NULL) {
+        LOG_DEBUG("No molecule_types array, skipping _pdbx_entity_nonpoly block");
+        return CIF_OK;
+    }
+
+    enum { LIGAND = 8, ION = 9, WATER = 10 };
+
+    /* Count non-polymer entities that need comp_id */
+    int nonpoly_count = 0;
+    for (int i = 0; i < cif->chains; i++) {
+        int mol_type = cif->molecule_types[i];
+        if (mol_type == LIGAND || mol_type == ION) {
+            nonpoly_count++;
+        }
+    }
+
+    /* Skip block if no non-polymer entities */
+    if (nonpoly_count == 0) {
+        LOG_DEBUG("No non-polymer entities, skipping _pdbx_entity_nonpoly block");
+        return CIF_OK;
+    }
+
+    CIF_FPRINTF(file, ctx, "loop_\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly.entity_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly.comp_id\n");
+
+    /* Use atoms_per_chain to compute first atom of each chain */
+    int atom_idx = 0;
+
+    for (int chain = 0; chain < cif->chains; chain++) {
+        int chain_first_atom = atom_idx;
+        int n_atoms = cif->atoms_per_chain[chain];
+        atom_idx += n_atoms;
+
+        int mol_type = cif->molecule_types[chain];
+        if (mol_type != LIGAND && mol_type != ION) {
+            continue;
+        }
+
+        /* Get element of first atom in chain */
+        if (n_atoms == 0 || chain_first_atom >= cif->atoms) {
+            LOG_WARNING("Chain %d has no atoms, cannot infer comp_id", chain);
+            continue;
+        }
+
+        int elem_idx = cif->elements[chain_first_atom];
+        const char *elem = element_name(elem_idx);
+
+        /* For ION type, use element as comp_id (enables round-trip) */
+        /* For LIGAND type, also write element (won't become ION on reload) */
+        CIF_FPRINTF(file, ctx, "%d %s\n", chain + 1, elem);
+
+        if (mol_type == ION) {
+            size_t elem_len = strlen(elem);
+            struct _LOOKUP *ion_lookup = _lookup_ion(elem, elem_len);
+            if (ion_lookup == NULL) {
+                LOG_DEBUG("Unknown ion element %s for chain %d, will become LIGAND on reload", elem, chain);
+            }
         }
     }
 
@@ -516,6 +594,9 @@ CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx) {
     if (err != CIF_OK) return err;
 
     err = _write_entity_poly(file, cif, ctx);
+    if (err != CIF_OK) return err;
+
+    err = _write_entity_nonpoly(file, cif, ctx);
     if (err != CIF_OK) return err;
 
     err = _write_poly_seq(file, cif, ctx);

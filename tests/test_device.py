@@ -43,10 +43,10 @@ class TestDeviceOperations:
     """Test operations on different devices."""
 
     @pytest.fixture
-    def polymer_torch(self):
+    def polymer_torch(self, cif_9gcm):
         """Create a test polymer with torch backend."""
         from ciffy import load
-        return load("tests/data/9GCM.cif", backend="torch")
+        return load(cif_9gcm, backend="torch")
 
     @requires_cuda
     def test_to_cuda(self, polymer_torch):
@@ -179,10 +179,10 @@ class TestMixedDeviceHandling:
     """Test that operations handle mixed-device scenarios gracefully."""
 
     @pytest.fixture
-    def polymer_torch(self):
+    def polymer_torch(self, cif_9gcm):
         """Create a test polymer with torch backend."""
         from ciffy import load
-        return load("tests/data/9GCM.cif", backend="torch")
+        return load(cif_9gcm, backend="torch")
 
     @requires_cuda
     def test_scatter_with_cpu_index_cuda_features(self):
@@ -287,10 +287,10 @@ class TestDifferentiability:
     """Test that operations are differentiable for use with autograd."""
 
     @pytest.fixture
-    def polymer_torch(self):
+    def polymer_torch(self, cif_9gcm):
         """Create a test polymer with torch backend."""
         from ciffy import load
-        return load("tests/data/9GCM.cif", backend="torch")
+        return load(cif_9gcm, backend="torch")
 
     def test_rmsd_is_differentiable(self, polymer_torch):
         """Test that ciffy.rmsd supports backpropagation."""

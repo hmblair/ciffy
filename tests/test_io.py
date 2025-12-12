@@ -494,12 +494,12 @@ class TestCifSave:
 class TestMoleculeTypeDetection:
     """Test molecule type detection for various structures."""
 
-    def test_9mds_is_rna(self):
+    def test_9mds_is_rna(self, cif_9mds):
         """Test that 9MDS (8 RNA chains) is correctly identified as RNA."""
         from ciffy import load, RNA, Scale
         from ciffy.types import Molecule
 
-        polymer = load("tests/data/9MDS.cif", backend="numpy")
+        polymer = load(cif_9mds, backend="numpy")
 
         # 9MDS has 8 chains, all RNA
         assert polymer.size(Scale.CHAIN) == 8
@@ -510,12 +510,12 @@ class TestMoleculeTypeDetection:
             assert mol_types[i] == Molecule.RNA.value, \
                 f"Chain {i} should be RNA, got {Molecule(mol_types[i])}"
 
-    def test_9gcm_mixed_rna_protein(self):
+    def test_9gcm_mixed_rna_protein(self, cif_9gcm):
         """Test that 9GCM (1 RNA + 3 protein chains) has correct molecule types."""
         from ciffy import load, Scale
         from ciffy.types import Molecule
 
-        polymer = load("tests/data/9GCM.cif", backend="numpy")
+        polymer = load(cif_9gcm, backend="numpy")
 
         # 9GCM has 4 chains
         assert polymer.size(Scale.CHAIN) == 4

@@ -1227,7 +1227,6 @@ class Polymer:
         Returns:
             New Polymer with updated coordinates.
         """
-        #TODO: rename to something more informative
         result = copy(self)
         result.coordinates = coordinates
         return result

@@ -634,7 +634,15 @@ static CifError _op_lookup(mmCIF *cif, mmBlock *block, const FieldDef *def,
         return CIF_ERR_PARSE;
     }
 
-    /* TODO: Add lookup_func to FieldDef to support different hash tables */
+    /*
+     * TODO: Add lookup_func pointer to FieldDef struct to support different
+     * hash tables. Currently hardcoded to _lookup_residue, but could support:
+     *   - _lookup_residue: residue name -> index (current)
+     *   - _lookup_element: element symbol -> atomic number
+     *   - _lookup_atom: atom name -> atom type index
+     * Would require: adding `LookupFunc lookup_func` to FieldDef, updating
+     * FIELDS[] definitions, and using def->lookup_func here instead.
+     */
     int *result = _parse_via_lookup(block, _lookup_residue, def->attrs[0], ctx);
     if (result == NULL) return ctx->code;
 

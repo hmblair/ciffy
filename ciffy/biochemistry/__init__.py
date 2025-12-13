@@ -31,6 +31,12 @@ from .constants import (
     Phosphate,
     Sidechain,
 )
+from .linking import (
+    LinkingDefinition,
+    NUCLEIC_ACID_LINK,
+    PEPTIDE_LINK,
+    LINKING_BY_TYPE,
+)
 
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)
@@ -80,4 +86,9 @@ __all__ = [
     "Nucleobase",
     "Phosphate",
     "Sidechain",
+    # Linking
+    "LinkingDefinition",
+    "NUCLEIC_ACID_LINK",
+    "PEPTIDE_LINK",
+    "LINKING_BY_TYPE",
 ]

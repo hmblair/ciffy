@@ -16,6 +16,7 @@ import numpy as np
 from .polymer import Polymer
 from .types import Scale, Molecule
 from .biochemistry._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
+from .biochemistry.linking import LINKING_BY_TYPE
 from .biochemistry._generated_atoms import (
     # RNA nucleotides
     A, C, G, U,
@@ -352,6 +353,14 @@ def _parse_sequence(sequence: str) -> list[int]:
     return residue_indices
 
 
+def _find_atom_index(atom_names: tuple[str, ...], target: str) -> int | None:
+    """Find index of atom by name in atom_names tuple."""
+    try:
+        return atom_names.index(target)
+    except ValueError:
+        return None
+
+
 def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list[int], list[np.ndarray]]:
     """
     Process a single chain sequence into atom/element/residue/coordinate data.
@@ -359,6 +368,8 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
     Handles terminal atoms correctly:
     - 5'/N-terminal atoms only on first residue
     - 3'/C-terminal atoms only on last residue
+
+    Positions residues with correct bond lengths between them.
 
     Args:
         sequence: Single-letter sequence for one chain.
@@ -373,10 +384,19 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
     first_mol_type = RESIDUE_MOLECULE_TYPE.get(residue_indices[0])
     is_nucleic_acid = first_mol_type in (Molecule.RNA, Molecule.DNA)
 
+    # Get linking definition for this molecule type
+    link_def = LINKING_BY_TYPE.get(first_mol_type)
+
+    # Direction for chain extension (along positive X axis for linear)
+    extension_dir = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
     all_atoms: list[int] = []
     all_elements: list[int] = []
     all_coords: list[np.ndarray] = []
     atoms_per_res: list[int] = []
+
+    # Track position of previous residue's "end" linking atom
+    prev_link_pos: np.ndarray | None = None
 
     for i, res_idx in enumerate(residue_indices):
         is_first = (i == 0)
@@ -385,9 +405,29 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         # Get full atom expansion (cached)
         atom_indices, element_indices, atom_names, ideal_coords = _expand_residue_full(res_idx)
 
+        # Make a mutable copy of coordinates for positioning
+        positioned_coords = ideal_coords.copy()
+
+        # Position this residue relative to previous one
+        if link_def is not None and prev_link_pos is not None:
+            # Find current residue's "start" linking atom (P for NA, N for protein)
+            curr_link_idx = _find_atom_index(atom_names, link_def.next_atom)
+            if curr_link_idx is not None:
+                # Target position: prev_link_pos + bond_length in extension direction
+                target_pos = prev_link_pos + extension_dir * link_def.bond_length
+                # Compute offset to move curr_link_atom to target
+                offset = target_pos - positioned_coords[curr_link_idx]
+                positioned_coords = positioned_coords + offset
+
+        # Update prev_link_pos for next residue
+        if link_def is not None:
+            prev_link_idx = _find_atom_index(atom_names, link_def.prev_atom)
+            if prev_link_idx is not None:
+                prev_link_pos = positioned_coords[prev_link_idx].copy()
+
         # Filter based on position
         filtered_atoms, filtered_elements, filtered_coords = _filter_atoms_by_position(
-            atom_indices, element_indices, atom_names, ideal_coords,
+            atom_indices, element_indices, atom_names, positioned_coords,
             is_nucleic_acid, is_first, is_last
         )
 

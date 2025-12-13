@@ -167,6 +167,7 @@ class ResidueDefinition:
     abbreviation: str  # Single-letter code
     atoms: list[str]  # Ordered list of atom names
     ideal_coords: dict[str, tuple[float, float, float]]  # Atom name -> (x, y, z)
+    bonds: list[tuple[str, str]]  # List of (atom1, atom2) bonded pairs
     class_name: str = ""  # Python class name
 
     def __post_init__(self):
@@ -266,13 +267,19 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
     one_letter = ""
     atoms: list[str] = []
     ideal_coords: dict[str, tuple[float, float, float]] = {}
+    bonds: list[tuple[str, str]] = []
     in_atom_loop = False
+    in_bond_loop = False
     # Column indices for atom loop parsing
     atom_columns: list[str] = []
     atom_id_col = -1
     x_ideal_col = -1
     y_ideal_col = -1
     z_ideal_col = -1
+    # Column indices for bond loop parsing
+    bond_columns: list[str] = []
+    bond_atom1_col = -1
+    bond_atom2_col = -1
 
     def make_residue() -> ResidueDefinition | None:
         """Create ResidueDefinition from current state if valid."""
@@ -287,6 +294,7 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
             abbreviation=_get_abbreviation(one_letter, comp_type),
             atoms=atoms.copy(),
             ideal_coords=ideal_coords.copy(),
+            bonds=bonds.copy(),
         )
 
     def _parse_float(s: str) -> float | None:
@@ -314,12 +322,17 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                 one_letter = ""
                 atoms = []
                 ideal_coords = {}
+                bonds = []
                 in_atom_loop = False
+                in_bond_loop = False
                 atom_columns = []
                 atom_id_col = -1
                 x_ideal_col = -1
                 y_ideal_col = -1
                 z_ideal_col = -1
+                bond_columns = []
+                bond_atom1_col = -1
+                bond_atom2_col = -1
                 continue
 
             if not comp_id:
@@ -343,10 +356,12 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                 if val != '?':
                     one_letter = val
 
-            # Detect atom definitions
+            # Detect loop start - reset loop states
             elif line.startswith('loop_'):
                 in_atom_loop = False
+                in_bond_loop = False
                 atom_columns = []
+                bond_columns = []
             elif line.startswith('_chem_comp_atom.'):
                 col_name = line.strip().split()[0]  # e.g., "_chem_comp_atom.atom_id"
                 field = col_name.split('.')[-1]  # e.g., "atom_id"
@@ -412,8 +427,37 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                             z = _parse_float(parts[z_ideal_col])
                             if x is not None and y is not None and z is not None:
                                 ideal_coords[atom_id] = (x, y, z)
+
+            # Detect bond definitions
+            elif line.startswith('_chem_comp_bond.'):
+                col_name = line.strip().split()[0]
+                field = col_name.split('.')[-1]
+                parts = line.split()
+
+                if len(parts) == 1:
+                    # Loop header format - track column position
+                    bond_columns.append(field)
+                    col_idx = len(bond_columns) - 1
+                    if field == 'atom_id_1':
+                        bond_atom1_col = col_idx
+                    elif field == 'atom_id_2':
+                        bond_atom2_col = col_idx
+                    in_bond_loop = True
+            elif in_bond_loop and line.startswith('_'):
+                pass
+            elif in_bond_loop and line.strip() and not line.startswith('#'):
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == comp_id:
+                    # Parse bond atom pair
+                    if (bond_atom1_col >= 0 and bond_atom2_col >= 0 and
+                        bond_atom1_col < len(parts) and bond_atom2_col < len(parts)):
+                        atom1 = _clean_atom_name(parts[bond_atom1_col])
+                        atom2 = _clean_atom_name(parts[bond_atom2_col])
+                        bonds.append((atom1, atom2))
+
             elif line.startswith('#'):
                 in_atom_loop = False
+                in_bond_loop = False
 
     # Yield last component
     if res := make_residue():
@@ -864,7 +908,7 @@ def generate_python_atoms(
         '',
         'import numpy as np',
         '',
-        'from ..utils import IndexEnum',
+        'from ..utils import IndexEnum, PairEnum',
         '',
         '',
     ]
@@ -918,6 +962,16 @@ def generate_python_atoms(
                         lines.append(f"    {coord}{comma}  # {res.atoms[i]}")
                     lines.append("], dtype=np.float32)")
                     lines.append('')
+
+            # Add bonds as PairEnum
+            if res.bonds:
+                lines.append(f"{res.class_name}.bonds = PairEnum([")
+                for atom1, atom2 in res.bonds:
+                    py_atom1 = _to_python_name(atom1)
+                    py_atom2 = _to_python_name(atom2)
+                    lines.append(f"    ({res.class_name}.{py_atom1}, {res.class_name}.{py_atom2}),")
+                lines.append("])")
+                lines.append('')
 
             lines.append('')
 

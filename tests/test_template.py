@@ -719,3 +719,109 @@ class TestTemplateMatchesCIF:
         template = from_sequence(sequences)
 
         self._verify_template_matches_loaded(loaded, template)
+
+
+class TestBondsAndLinking:
+    """Test bond information and residue linking."""
+
+    def test_bonds_parsed(self):
+        """Test that bonds are correctly parsed from CCD."""
+        from ciffy.biochemistry import A
+
+        assert hasattr(A, 'bonds')
+        assert len(A.bonds) > 30  # Adenosine has ~39 bonds
+
+        # Check bonds returns PairEnum with indices() method
+        indices = A.bonds.indices()
+        assert indices.shape[1] == 2  # Each bond has 2 atoms
+
+    def test_chain_extends_linearly(self):
+        """Test that chain extends in one direction without overlapping."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("aaaa")
+
+        # Chain should span a significant distance in X
+        x_range = polymer.coordinates[:, 0].max() - polymer.coordinates[:, 0].min()
+        assert x_range > 10.0  # 4 residues should span >10 Angstroms
+
+    def test_rna_bond_length(self):
+        """Test that RNA O3'-P bond length is correct (~1.6 A)."""
+        from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import ATOM_NAMES
+
+        polymer = from_sequence("aa")
+        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+
+        # Find O3' of first residue
+        o3p_coord = None
+        for i in range(apr[0]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "O3'":
+                o3p_coord = polymer.coordinates[i]
+                break
+
+        # Find P of second residue
+        p_coord = None
+        for i in range(apr[0], apr[0] + apr[1]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "P":
+                p_coord = polymer.coordinates[i]
+                break
+
+        assert o3p_coord is not None and p_coord is not None
+        dist = np.linalg.norm(p_coord - o3p_coord)
+        assert abs(dist - 1.6) < 0.01  # Within 0.01 A of target
+
+    @pytest.mark.filterwarnings("ignore:Sequence 'AA' contains only nucleotide")
+    def test_protein_bond_length(self):
+        """Test that protein C-N peptide bond length is correct (~1.33 A)."""
+        from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import ATOM_NAMES
+
+        polymer = from_sequence("AA")
+        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+
+        # Find C of first residue
+        c_coord = None
+        for i in range(apr[0]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "C":
+                c_coord = polymer.coordinates[i]
+                break
+
+        # Find N of second residue
+        n_coord = None
+        for i in range(apr[0], apr[0] + apr[1]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "N":
+                n_coord = polymer.coordinates[i]
+                break
+
+        assert c_coord is not None and n_coord is not None
+        dist = np.linalg.norm(n_coord - c_coord)
+        assert abs(dist - 1.33) < 0.01  # Within 0.01 A of target
+
+    def test_dna_bond_length(self):
+        """Test that DNA O3'-P bond length is correct (~1.6 A)."""
+        from ciffy import from_sequence, Scale
+        from ciffy.biochemistry import ATOM_NAMES
+
+        polymer = from_sequence("aa")  # Use lowercase for DNA/RNA
+        # Since 'aa' with no 't' is RNA, use 'at' to test DNA
+        polymer = from_sequence("at")  # This becomes DNA (has 't')
+        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+
+        # Find O3' of first residue
+        o3p_coord = None
+        for i in range(apr[0]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "O3'":
+                o3p_coord = polymer.coordinates[i]
+                break
+
+        # Find P of second residue
+        p_coord = None
+        for i in range(apr[0], apr[0] + apr[1]):
+            if ATOM_NAMES.get(int(polymer.atoms[i])) == "P":
+                p_coord = polymer.coordinates[i]
+                break
+
+        assert o3p_coord is not None and p_coord is not None
+        dist = np.linalg.norm(p_coord - o3p_coord)
+        assert abs(dist - 1.6) < 0.01  # Within 0.01 A of target

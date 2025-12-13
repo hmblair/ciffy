@@ -25,9 +25,6 @@ class TestFromSequence:
         expected = [Residue.A.value, Residue.C.value, Residue.G.value, Residue.U.value]
         assert list(polymer.sequence) == expected
 
-        # Check coordinates are zeros
-        assert np.allclose(polymer.coordinates, 0.0)
-
         # Check all atoms have valid indices (> 0)
         assert (polymer.atoms > 0).all()
 
@@ -51,9 +48,6 @@ class TestFromSequence:
         expected = [Residue.MET.value, Residue.GLY.value, Residue.LYS.value,
                     Residue.LEU.value, Residue.PHE.value]
         assert list(polymer.sequence) == expected
-
-        # Check coordinates are zeros
-        assert np.allclose(polymer.coordinates, 0.0)
 
     def test_single_residue_rna(self):
         """Test single nucleotide."""
@@ -139,9 +133,6 @@ class TestFromSequence:
         # Check sequence values match Residue enum
         expected = [Residue.DA.value, Residue.DC.value, Residue.DG.value, Residue.DT.value]
         assert list(polymer.sequence) == expected
-
-        # Check coordinates are zeros
-        assert np.allclose(polymer.coordinates, 0.0)
 
         # Check all atoms have valid indices (> 0)
         assert (polymer.atoms > 0).all()

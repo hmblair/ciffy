@@ -166,6 +166,7 @@ class ResidueDefinition:
     molecule_type: int  # Index into MOLECULE_TYPES
     abbreviation: str  # Single-letter code
     atoms: list[str]  # Ordered list of atom names
+    ideal_coords: dict[str, tuple[float, float, float]]  # Atom name -> (x, y, z)
     class_name: str = ""  # Python class name
 
     def __post_init__(self):
@@ -264,7 +265,14 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
     status = ""
     one_letter = ""
     atoms: list[str] = []
+    ideal_coords: dict[str, tuple[float, float, float]] = {}
     in_atom_loop = False
+    # Column indices for atom loop parsing
+    atom_columns: list[str] = []
+    atom_id_col = -1
+    x_ideal_col = -1
+    y_ideal_col = -1
+    z_ideal_col = -1
 
     def make_residue() -> ResidueDefinition | None:
         """Create ResidueDefinition from current state if valid."""
@@ -278,7 +286,17 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
             molecule_type=_determine_molecule_type(comp_type, name, comp_id),
             abbreviation=_get_abbreviation(one_letter, comp_type),
             atoms=atoms.copy(),
+            ideal_coords=ideal_coords.copy(),
         )
+
+    def _parse_float(s: str) -> float | None:
+        """Parse a float, returning None for missing values."""
+        if s == '?' or s == '.':
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
 
     with open(filepath, 'r') as f:
         for line in f:
@@ -295,7 +313,13 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                 status = ""
                 one_letter = ""
                 atoms = []
+                ideal_coords = {}
                 in_atom_loop = False
+                atom_columns = []
+                atom_id_col = -1
+                x_ideal_col = -1
+                y_ideal_col = -1
+                z_ideal_col = -1
                 continue
 
             if not comp_id:
@@ -322,23 +346,72 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
             # Detect atom definitions
             elif line.startswith('loop_'):
                 in_atom_loop = False
-            elif line.startswith('_chem_comp_atom.atom_id '):
-                # Single-value format: _chem_comp_atom.atom_id   MG
-                parts = line.split()
-                if len(parts) >= 2:
-                    atom_id = _clean_atom_name(parts[1])
-                    if atom_id not in atoms:
-                        atoms.append(atom_id)
+                atom_columns = []
             elif line.startswith('_chem_comp_atom.'):
-                in_atom_loop = True
+                col_name = line.strip().split()[0]  # e.g., "_chem_comp_atom.atom_id"
+                field = col_name.split('.')[-1]  # e.g., "atom_id"
+                parts = line.split()
+
+                # Check for single-value format (e.g., "_chem_comp_atom.atom_id MG")
+                if len(parts) >= 2:
+                    value = parts[-1]
+                    if field == 'atom_id':
+                        atom_id = _clean_atom_name(value)
+                        if atom_id not in atoms:
+                            atoms.append(atom_id)
+                            # Single-value format: store coords later when we see them
+                    elif field == 'pdbx_model_Cartn_x_ideal' and atoms:
+                        try:
+                            _single_x = float(value)
+                            ideal_coords.setdefault(atoms[-1], [None, None, None])[0] = _single_x
+                        except ValueError:
+                            pass
+                    elif field == 'pdbx_model_Cartn_y_ideal' and atoms:
+                        try:
+                            _single_y = float(value)
+                            ideal_coords.setdefault(atoms[-1], [None, None, None])[1] = _single_y
+                        except ValueError:
+                            pass
+                    elif field == 'pdbx_model_Cartn_z_ideal' and atoms:
+                        try:
+                            _single_z = float(value)
+                            coord = ideal_coords.get(atoms[-1], [None, None, None])
+                            coord[2] = float(value)
+                            if all(c is not None for c in coord):
+                                ideal_coords[atoms[-1]] = tuple(coord)
+                        except ValueError:
+                            pass
+                else:
+                    # Loop header format - track column position
+                    atom_columns.append(field)
+                    col_idx = len(atom_columns) - 1
+                    if field == 'atom_id':
+                        atom_id_col = col_idx
+                    elif field == 'pdbx_model_Cartn_x_ideal':
+                        x_ideal_col = col_idx
+                    elif field == 'pdbx_model_Cartn_y_ideal':
+                        y_ideal_col = col_idx
+                    elif field == 'pdbx_model_Cartn_z_ideal':
+                        z_ideal_col = col_idx
+                    in_atom_loop = True
             elif in_atom_loop and line.startswith('_'):
                 pass
             elif in_atom_loop and line.strip() and not line.startswith('#'):
                 parts = line.split()
                 if len(parts) >= 2 and parts[0] == comp_id:
-                    atom_id = _clean_atom_name(parts[1])
-                    if atom_id not in atoms:
-                        atoms.append(atom_id)
+                    # Parse atom_id
+                    if atom_id_col >= 0 and atom_id_col < len(parts):
+                        atom_id = _clean_atom_name(parts[atom_id_col])
+                        if atom_id not in atoms:
+                            atoms.append(atom_id)
+                        # Parse ideal coordinates if available
+                        if (x_ideal_col >= 0 and y_ideal_col >= 0 and z_ideal_col >= 0 and
+                            x_ideal_col < len(parts) and y_ideal_col < len(parts) and z_ideal_col < len(parts)):
+                            x = _parse_float(parts[x_ideal_col])
+                            y = _parse_float(parts[y_ideal_col])
+                            z = _parse_float(parts[z_ideal_col])
+                            if x is not None and y is not None and z is not None:
+                                ideal_coords[atom_id] = (x, y, z)
             elif line.startswith('#'):
                 in_atom_loop = False
 
@@ -789,6 +862,8 @@ def generate_python_atoms(
         'DO NOT EDIT - Generated by ciffy/src/codegen/generate.py from CCD.',
         '"""',
         '',
+        'import numpy as np',
+        '',
         'from ..utils import IndexEnum',
         '',
         '',
@@ -799,6 +874,9 @@ def generate_python_atoms(
         ("RNA", Molecule.RNA),
         ("DNA", Molecule.DNA),
         ("PROTEIN", Molecule.PROTEIN),
+        ("WATER", Molecule.WATER),
+        ("ION", Molecule.ION),
+        ("LIGAND", Molecule.LIGAND),
     ]
 
     for section_name, mol_type in sections:
@@ -822,6 +900,25 @@ def generate_python_atoms(
             for py_name, idx in atoms.items():
                 lines.append(f"    {py_name} = {idx}")
             lines.append('')
+
+            # Add ideal coordinates as class attribute
+            # Note: Use array index, not enum value (e.g., A.ideal[0] for first atom)
+            if res.ideal_coords and res.atoms:
+                coords = []
+                for atom in res.atoms:
+                    if atom in res.ideal_coords:
+                        x, y, z = res.ideal_coords[atom]
+                        coords.append(f"[{x:.3f}, {y:.3f}, {z:.3f}]")
+                    else:
+                        coords.append("[0.0, 0.0, 0.0]")
+                if coords:
+                    lines.append(f"{res.class_name}.ideal = np.array([")
+                    for i, coord in enumerate(coords):
+                        comma = "," if i < len(coords) - 1 else ""
+                        lines.append(f"    {coord}{comma}  # {res.atoms[i]}")
+                    lines.append("], dtype=np.float32)")
+                    lines.append('')
+
             lines.append('')
 
     # Combined enums
@@ -983,7 +1080,7 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
     cif_to_residue = {cif: idx for idx, res in enumerate(all_residues) for cif in res.cif_names}
     residue_to_cif = {idx: res.cif_names[0] for idx, res in enumerate(all_residues)}
 
-    # Assign atom indices (0 reserved for unknown)
+    # Assign atom indices (1-indexed, 0 reserved for unknown)
     atom_index: dict[tuple[str, str], int] = {}
     current_idx = 1
     for res in all_residues:

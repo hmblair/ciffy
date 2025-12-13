@@ -165,9 +165,9 @@ def _generate_chain_name(index: int) -> str:
 
 
 @lru_cache(maxsize=32)
-def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...]]:
+def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...], np.ndarray]:
     """
-    Get atom indices, element indices, and atom names for a residue type.
+    Get atom indices, element indices, atom names, and ideal coordinates for a residue type.
 
     Results are cached since the same residue type always expands identically.
 
@@ -175,7 +175,8 @@ def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, 
         residue_idx: Residue index (from Residue enum value).
 
     Returns:
-        Tuple of (atom_indices, element_indices, atom_names) as tuples for hashability.
+        Tuple of (atom_indices, element_indices, atom_names, ideal_coords).
+        First three are tuples for hashability, ideal_coords is (N, 3) array.
 
     Raises:
         ValueError: If residue_idx has no atom definitions.
@@ -199,17 +200,21 @@ def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, 
         atom_name_display = member.name.replace('p', "'")  # C5p -> C5'
         element_indices.append(_atom_name_to_element(atom_name_display))
 
-    return tuple(atom_indices), tuple(element_indices), tuple(atom_names)
+    # Get ideal coordinates from the atom enum class
+    ideal_coords = atom_enum.ideal.copy()
+
+    return tuple(atom_indices), tuple(element_indices), tuple(atom_names), ideal_coords
 
 
 def _filter_atoms_by_position(
     atom_indices: tuple[int, ...],
     element_indices: tuple[int, ...],
     atom_names: tuple[str, ...],
+    ideal_coords: np.ndarray,
     is_nucleic_acid: bool,
     is_first: bool,
     is_last: bool,
-) -> tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int], list[np.ndarray]]:
     """
     Filter atoms based on residue position in chain.
 
@@ -222,12 +227,13 @@ def _filter_atoms_by_position(
         atom_indices: Full atom index tuple from _expand_residue_full.
         element_indices: Full element index tuple from _expand_residue_full.
         atom_names: Atom names (enum member names) from _expand_residue_full.
+        ideal_coords: Ideal coordinates array (N, 3) from _expand_residue_full.
         is_nucleic_acid: True for RNA/DNA, False for protein.
         is_first: True if this is the first residue in the chain.
         is_last: True if this is the last residue in the chain.
 
     Returns:
-        Tuple of (filtered_atom_indices, filtered_element_indices) as lists.
+        Tuple of (filtered_atom_indices, filtered_element_indices, filtered_coords) as lists.
     """
     if is_nucleic_acid:
         start_terminal = _NA_5_TERMINAL_ATOMS
@@ -238,8 +244,9 @@ def _filter_atoms_by_position(
 
     filtered_atoms = []
     filtered_elements = []
+    filtered_coords = []
 
-    for atom_idx, elem_idx, name in zip(atom_indices, element_indices, atom_names):
+    for i, (atom_idx, elem_idx, name) in enumerate(zip(atom_indices, element_indices, atom_names)):
         # Check if this is a terminal-only atom
         is_start_terminal = name in start_terminal
         is_end_terminal = name in end_terminal
@@ -257,8 +264,9 @@ def _filter_atoms_by_position(
         if include:
             filtered_atoms.append(atom_idx)
             filtered_elements.append(elem_idx)
+            filtered_coords.append(ideal_coords[i])
 
-    return filtered_atoms, filtered_elements
+    return filtered_atoms, filtered_elements, filtered_coords
 
 
 def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], str]:
@@ -344,9 +352,9 @@ def _parse_sequence(sequence: str) -> list[int]:
     return residue_indices
 
 
-def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list[int]]:
+def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list[int], list[np.ndarray]]:
     """
-    Process a single chain sequence into atom/element/residue data.
+    Process a single chain sequence into atom/element/residue/coordinate data.
 
     Handles terminal atoms correctly:
     - 5'/N-terminal atoms only on first residue
@@ -356,7 +364,7 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         sequence: Single-letter sequence for one chain.
 
     Returns:
-        Tuple of (atom_indices, element_indices, atoms_per_residue, residue_indices).
+        Tuple of (atom_indices, element_indices, atoms_per_residue, residue_indices, coords).
     """
     residue_indices = _parse_sequence(sequence)
     n_residues = len(residue_indices)
@@ -367,6 +375,7 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
 
     all_atoms: list[int] = []
     all_elements: list[int] = []
+    all_coords: list[np.ndarray] = []
     atoms_per_res: list[int] = []
 
     for i, res_idx in enumerate(residue_indices):
@@ -374,19 +383,20 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         is_last = (i == n_residues - 1)
 
         # Get full atom expansion (cached)
-        atom_indices, element_indices, atom_names = _expand_residue_full(res_idx)
+        atom_indices, element_indices, atom_names, ideal_coords = _expand_residue_full(res_idx)
 
         # Filter based on position
-        filtered_atoms, filtered_elements = _filter_atoms_by_position(
-            atom_indices, element_indices, atom_names,
+        filtered_atoms, filtered_elements, filtered_coords = _filter_atoms_by_position(
+            atom_indices, element_indices, atom_names, ideal_coords,
             is_nucleic_acid, is_first, is_last
         )
 
         all_atoms.extend(filtered_atoms)
         all_elements.extend(filtered_elements)
+        all_coords.extend(filtered_coords)
         atoms_per_res.append(len(filtered_atoms))
 
-    return all_atoms, all_elements, atoms_per_res, residue_indices
+    return all_atoms, all_elements, atoms_per_res, residue_indices, all_coords
 
 
 # =============================================================================
@@ -453,6 +463,7 @@ def from_sequence(
     # Accumulate data across all chains
     all_atoms: list[int] = []
     all_elements: list[int] = []
+    all_coords: list[np.ndarray] = []
     all_atoms_per_res: list[int] = []
     all_residue_indices: list[int] = []
     atoms_per_chain: list[int] = []
@@ -460,10 +471,11 @@ def from_sequence(
     chain_names: list[str] = []
 
     for chain_idx, seq in enumerate(sequences):
-        atoms, elements, atoms_per_res, residues = _process_chain(seq)
+        atoms, elements, atoms_per_res, residues, coords = _process_chain(seq)
 
         all_atoms.extend(atoms)
         all_elements.extend(elements)
+        all_coords.extend(coords)
         all_atoms_per_res.extend(atoms_per_res)
         all_residue_indices.extend(residues)
         atoms_per_chain.append(len(atoms))
@@ -474,7 +486,7 @@ def from_sequence(
     n_atoms = len(all_atoms)
 
     polymer = Polymer(
-        coordinates=np.zeros((n_atoms, 3), dtype=np.float32),
+        coordinates=np.array(all_coords, dtype=np.float32),
         atoms=np.array(all_atoms, dtype=np.int64),
         elements=np.array(all_elements, dtype=np.int64),
         sequence=np.array(all_residue_indices, dtype=np.int64),

@@ -1354,6 +1354,36 @@ class Polymer:
             molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
         )
 
+    def to_internal(self: Polymer) -> "InternalPolymer":
+        """
+        Convert to internal coordinate representation.
+
+        Computes bond lengths, bond angles, and dihedral angles from the
+        Cartesian coordinates. The conversion is differentiable when using
+        PyTorch backend.
+
+        Returns:
+            InternalPolymer with internal coordinates and Z-matrix.
+
+        Example:
+            >>> polymer = ciffy.load("structure.cif", backend="torch")
+            >>> internal = polymer.to_internal()
+            >>>
+            >>> # Access backbone dihedrals
+            >>> phi = internal.phi  # Protein phi angles
+            >>> psi = internal.psi  # Protein psi angles
+            >>>
+            >>> # Modify dihedrals (differentiable)
+            >>> internal.dihedrals.requires_grad_(True)
+            >>> modified = internal.to_cartesian()
+            >>>
+            >>> # Compute loss and backprop
+            >>> loss = (modified.coordinates - target).pow(2).mean()
+            >>> loss.backward()
+        """
+        from .internal import cartesian_to_internal
+        return cartesian_to_internal(self)
+
     def to(self: Polymer, device=None, dtype=None) -> Polymer:
         """
         Move tensors to device and/or convert dtype (torch backend only).

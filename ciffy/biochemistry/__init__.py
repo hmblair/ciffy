@@ -2,21 +2,16 @@
 Biochemistry constants and enumerations.
 
 Defines atoms, residues, elements, and nucleotide structures.
+
+Atom enums are accessed via Residue members:
+    Residue.A.C3p.value    # atom index for C3' in adenosine
+    Residue.ALA.CA.value   # atom index for CA in alanine
 """
 
 from ._generated_elements import Element, ELEMENT_NAMES
 from ._generated_residues import Residue, CIF_RESIDUE_NAMES
 from ._generated_atoms import (
-    # RNA (CCD names)
-    A, C, G, U,
-    # DNA (CCD names)
-    DA, DC, DG, DT,
-    # Amino acids (CCD names)
-    ALA, ARG, ASN, ASP, CYS,
-    GLN, GLU, GLY, HIS, ILE,
-    LEU, LYS, MET, PHE, PRO,
-    SER, THR, TRP, TYR, VAL,
-    # Combined enums
+    # Combined enums (for bulk operations)
     RibonucleicAcid,
     RibonucleicAcidNoPrefix,
     DeoxyribonucleicAcid,
@@ -63,24 +58,15 @@ __all__ = [
     "CIF_RESIDUE_NAMES",
     # Elements
     "Element",
-    # Residues
+    # Residues (access atoms via Residue.X.atom_name)
     "Residue",
-    # RNA nucleotides
-    "A", "C", "G", "U",
+    # Combined atom enums (for bulk operations)
     "RibonucleicAcid",
     "RibonucleicAcidNoPrefix",
-    # DNA nucleotides
-    "DA", "DC", "DG", "DT",
     "DeoxyribonucleicAcid",
-    # Modified nucleotides
     "ModifiedNucleotides",
-    # Amino acids
-    "ALA", "ARG", "ASN", "ASP", "CYS",
-    "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO",
-    "SER", "THR", "TRP", "TYR", "VAL",
     "AminoAcids",
-    # Constants
+    # Atom group constants
     "Backbone",
     "Nucleobase",
     "Phosphate",

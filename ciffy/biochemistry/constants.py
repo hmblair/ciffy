@@ -6,40 +6,30 @@ Defines atom groupings for backbone, nucleobase, phosphate, and sidechain atoms.
 
 from typing import Callable
 from ..utils import IndexEnum
-from ._generated_atoms import (
-    # RNA
-    A, C, G, U,
-    # DNA
-    DA, DC, DG, DT,
-    # Amino acids
-    ALA, ARG, ASN, ASP, CYS,
-    GLN, GLU, GLY, HIS, ILE,
-    LEU, LYS, MET, PHE, PRO,
-    SER, THR, TRP, TYR, VAL,
-)
+from ._generated_residues import Residue
 
-# Residue groupings
+# Residue groupings (prefix, residue) - atoms accessed via residue.atoms
 _RNA_NUCLEOTIDES = [
-    ("A_", A),
-    ("C_", C),
-    ("G_", G),
-    ("U_", U),
+    ("A_", Residue.A),
+    ("C_", Residue.C),
+    ("G_", Residue.G),
+    ("U_", Residue.U),
 ]
 
 _DNA_NUCLEOTIDES = [
-    ("DA_", DA),
-    ("DC_", DC),
-    ("DG_", DG),
-    ("DT_", DT),
+    ("DA_", Residue.DA),
+    ("DC_", Residue.DC),
+    ("DG_", Residue.DG),
+    ("DT_", Residue.DT),
 ]
 
 _AMINO_ACIDS = [
-    ("GLY_", GLY), ("ALA_", ALA), ("VAL_", VAL), ("LEU_", LEU),
-    ("ILE_", ILE), ("PRO_", PRO), ("PHE_", PHE),
-    ("TRP_", TRP), ("MET_", MET), ("CYS_", CYS),
-    ("SER_", SER), ("THR_", THR), ("ASN_", ASN),
-    ("GLN_", GLN), ("ASP_", ASP), ("GLU_", GLU),
-    ("LYS_", LYS), ("ARG_", ARG), ("HIS_", HIS), ("TYR_", TYR),
+    ("GLY_", Residue.GLY), ("ALA_", Residue.ALA), ("VAL_", Residue.VAL), ("LEU_", Residue.LEU),
+    ("ILE_", Residue.ILE), ("PRO_", Residue.PRO), ("PHE_", Residue.PHE),
+    ("TRP_", Residue.TRP), ("MET_", Residue.MET), ("CYS_", Residue.CYS),
+    ("SER_", Residue.SER), ("THR_", Residue.THR), ("ASN_", Residue.ASN),
+    ("GLN_", Residue.GLN), ("ASP_", Residue.ASP), ("GLU_", Residue.GLU),
+    ("LYS_", Residue.LYS), ("ARG_", Residue.ARG), ("HIS_", Residue.HIS), ("TYR_", Residue.TYR),
 ]
 
 # Protein backbone atom names
@@ -54,7 +44,7 @@ def _filter_atoms(
     Filter atoms across residues using a predicate.
 
     Args:
-        residues: List of (prefix, enum_class) tuples.
+        residues: List of (prefix, ResidueType) tuples.
         predicate: Function that takes an atom name and returns True to include.
 
     Returns:
@@ -62,7 +52,7 @@ def _filter_atoms(
     """
     result = {}
     for prefix, residue in residues:
-        for name, value in residue.dict().items():
+        for name, value in residue.atoms.dict().items():
             if predicate(name):
                 result[prefix + name] = value
     return result

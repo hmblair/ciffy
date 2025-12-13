@@ -557,22 +557,22 @@ class TestTerminalAtoms:
     def test_single_residue_has_all_terminal_atoms(self):
         """Single residue should have both 5' and 3' terminal atoms."""
         from ciffy import from_sequence
-        from ciffy.biochemistry import A  # CCD name for adenosine
+        from ciffy.biochemistry import Residue
 
         # Single residue has all atoms (both termini)
         single = from_sequence("a")
-        full_count = len(list(A))
+        full_count = len(Residue.A)
         assert single.size() == full_count
 
     def test_internal_residues_lack_terminal_atoms(self):
         """Internal residues should not have terminal atoms."""
         from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import A  # CCD name for adenosine
+        from ciffy.biochemistry import Residue
 
         # Use same residue type to control for inherent size differences
         polymer = from_sequence("aaaa")
         apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
-        full_count = len(list(A))
+        full_count = len(Residue.A)
 
         # First residue: all atoms except HO3' (3'-terminal) -> full - 1
         # Middle residues: no OP3, HOP3, HO3' (all terminal) -> full - 3
@@ -726,13 +726,13 @@ class TestBondsAndLinking:
 
     def test_bonds_parsed(self):
         """Test that bonds are correctly parsed from CCD."""
-        from ciffy.biochemistry import A
+        from ciffy.biochemistry import Residue
 
-        assert hasattr(A, 'bonds')
-        assert len(A.bonds) > 30  # Adenosine has ~39 bonds
+        assert hasattr(Residue.A, 'bonds')
+        assert len(Residue.A.bonds) > 30  # Adenosine has ~39 bonds
 
         # Check bonds returns PairEnum with indices() method
-        indices = A.bonds.indices()
+        indices = Residue.A.bonds.indices()
         assert indices.shape[1] == 2  # Each bond has 2 atoms
 
     def test_chain_extends_linearly(self):

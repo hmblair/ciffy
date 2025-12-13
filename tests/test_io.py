@@ -404,15 +404,15 @@ class TestCifSave:
 
             # Specifically check that backbone atoms exist (primed atoms)
             # A.C2' (sugar) vs A.C2 (nucleobase)
-            from ciffy.biochemistry import A  # CCD name for adenosine
-            has_backbone = A.C2p.value in orig_atoms
-            has_nucleobase = A.C2.value in orig_atoms
+            from ciffy.biochemistry import Residue
+            has_backbone = Residue.A.C2p.value in orig_atoms
+            has_nucleobase = Residue.A.C2.value in orig_atoms
 
             if has_backbone:
-                assert A.C2p.value in reload_atoms, \
+                assert Residue.A.C2p.value in reload_atoms, \
                     "Backbone C2' atoms lost in round-trip"
             if has_nucleobase:
-                assert A.C2.value in reload_atoms, \
+                assert Residue.A.C2.value in reload_atoms, \
                     "Nucleobase C2 atoms lost in round-trip"
 
         finally:

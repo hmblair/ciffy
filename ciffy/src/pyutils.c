@@ -5,7 +5,7 @@
  * Provides utilities for converting between C types and Python objects.
  */
 
-#include "python.h"
+#include "pyutils.h"
 
 
 const char *_get_filename(PyObject *args) {

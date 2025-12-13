@@ -6,11 +6,12 @@
  * parsed molecular structure data as Python/NumPy objects.
  */
 
-/* Define CIFFY_MAIN_MODULE before including headers so python.h knows to import numpy */
+/* Define CIFFY_MAIN_MODULE before including headers so pyutils.h knows to import numpy */
 #define CIFFY_MAIN_MODULE
 #include "module.h"
 #include "log.h"
 #include "profile.h"
+#include "internal/internal_module.h"
 
 #ifdef CIFFY_PROFILE
 /* Global profile instance for timing data */
@@ -733,6 +734,23 @@ static PyMethodDef methods[] = {
      "    dict or None: Timing breakdown if profiling enabled, else None.\n"
      "    Keys: file_load, block_parse, line_precomp, metadata,\n"
      "          batch_parse, residue_count, py_convert (all in seconds)\n"},
+    {"_cartesian_to_internal", py_cartesian_to_internal, METH_VARARGS,
+     "Convert Cartesian coordinates to internal coordinates.\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float64 Cartesian coordinates.\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n\n"
+     "Returns:\n"
+     "    tuple: (distances, angles, dihedrals), each (M,) float64.\n"},
+    {"_nerf_reconstruct", py_nerf_reconstruct, METH_VARARGS,
+     "Reconstruct Cartesian coordinates from internal coordinates.\n\n"
+     "Args:\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
+     "    distances (ndarray): (M,) float64 bond lengths.\n"
+     "    angles (ndarray): (M,) float64 bond angles in radians.\n"
+     "    dihedrals (ndarray): (M,) float64 dihedral angles in radians.\n"
+     "    n_atoms (int): Total number of atoms.\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float64 Cartesian coordinates.\n"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -747,5 +765,6 @@ static struct PyModuleDef _c = {
 
 /* Module initialization function */
 PyMODINIT_FUNC PyInit__c(void) {
+    import_array();  /* Initialize NumPy C API */
     return PyModule_Create(&_c);
 }

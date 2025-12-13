@@ -12,9 +12,17 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..backend import Array, is_torch
+from .graph import zmatrix_to_indices
 
 if TYPE_CHECKING:
     from .graph import ZMatrixEntry
+
+# Try to import C extension
+try:
+    from .._c import _nerf_reconstruct as _c_nerf_reconstruct
+    _HAS_C_EXTENSION = True
+except ImportError:
+    _HAS_C_EXTENSION = False
 
 
 def nerf_reconstruct(
@@ -52,50 +60,64 @@ def nerf_reconstruct(
         max_idx = max(entry.atom_idx for entry in zmatrix)
         n_atoms = max_idx + 1
 
-    if is_torch(distances):
-        import torch
-        coords = torch.zeros(n_atoms, 3, dtype=distances.dtype, device=distances.device)
+    # Use C extension if available and using NumPy backend
+    use_c = _HAS_C_EXTENSION and not is_torch(distances)
+
+    if use_c:
+        # Build indices array and ensure inputs are contiguous float32
+        indices = zmatrix_to_indices(zmatrix)
+        dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
+        ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
+        dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
+
+        # Call C extension
+        coords = _c_nerf_reconstruct(indices, dist_f32, ang_f32, dih_f32, n_atoms)
     else:
-        coords = np.zeros((n_atoms, 3), dtype=np.float32)
-
-    # Process entries in BFS order
-    # Each entry places the atom at coords[entry.atom_idx]
-    # References point to original atom indices which are already placed
-    for i, entry in enumerate(zmatrix):
-        atom_idx = entry.atom_idx
-
-        if entry.distance_ref < 0:
-            # First atom: place at origin
-            coords[atom_idx] = _zeros_3(distances)
-
-        elif entry.angle_ref < 0:
-            # Second atom: place along +X axis from first
-            coords[atom_idx] = _place_along_x(
-                coords[entry.distance_ref],
-                distances[i],
-                distances,
-            )
-
-        elif entry.dihedral_ref < 0:
-            # Third atom: place in plane with first two
-            coords[atom_idx] = _place_in_xy_plane(
-                coords[entry.distance_ref],
-                coords[entry.angle_ref],
-                distances[i],
-                angles[i],
-                distances,
-            )
-
+        # Python fallback (also used for PyTorch)
+        if is_torch(distances):
+            import torch
+            coords = torch.zeros(n_atoms, 3, dtype=distances.dtype, device=distances.device)
         else:
-            # Full NERF placement
-            coords[atom_idx] = _nerf_place_atom(
-                coords[entry.dihedral_ref],
-                coords[entry.angle_ref],
-                coords[entry.distance_ref],
-                distances[i],
-                angles[i],
-                dihedrals[i],
-            )
+            coords = np.zeros((n_atoms, 3), dtype=np.float32)
+
+        # Process entries in BFS order
+        # Each entry places the atom at coords[entry.atom_idx]
+        # References point to original atom indices which are already placed
+        for i, entry in enumerate(zmatrix):
+            atom_idx = entry.atom_idx
+
+            if entry.distance_ref < 0:
+                # First atom: place at origin
+                coords[atom_idx] = _zeros_3(distances)
+
+            elif entry.angle_ref < 0:
+                # Second atom: place along +X axis from first
+                coords[atom_idx] = _place_along_x(
+                    coords[entry.distance_ref],
+                    distances[i],
+                    distances,
+                )
+
+            elif entry.dihedral_ref < 0:
+                # Third atom: place in plane with first two
+                coords[atom_idx] = _place_in_xy_plane(
+                    coords[entry.distance_ref],
+                    coords[entry.angle_ref],
+                    distances[i],
+                    angles[i],
+                    distances,
+                )
+
+            else:
+                # Full NERF placement
+                coords[atom_idx] = _nerf_place_atom(
+                    coords[entry.dihedral_ref],
+                    coords[entry.angle_ref],
+                    coords[entry.distance_ref],
+                    distances[i],
+                    angles[i],
+                    dihedrals[i],
+                )
 
     return coords
 

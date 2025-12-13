@@ -496,3 +496,29 @@ def _find_placed_neighbor(
             return atom
 
     return -1
+
+
+def zmatrix_to_indices(zmatrix: list[ZMatrixEntry]) -> np.ndarray:
+    """
+    Build (M, 4) int64 indices array from Z-matrix entries.
+
+    Converts a list of ZMatrixEntry objects to a contiguous NumPy array
+    suitable for passing to C extensions.
+
+    Each row contains: [atom_idx, distance_ref, angle_ref, dihedral_ref].
+    Missing references are represented as -1.
+
+    Args:
+        zmatrix: List of Z-matrix entries in placement order.
+
+    Returns:
+        (M, 4) int64 NumPy array where M is len(zmatrix).
+    """
+    n_entries = len(zmatrix)
+    indices = np.zeros((n_entries, 4), dtype=np.int64)
+    for i, entry in enumerate(zmatrix):
+        indices[i, 0] = entry.atom_idx
+        indices[i, 1] = entry.distance_ref
+        indices[i, 2] = entry.angle_ref
+        indices[i, 3] = entry.dihedral_ref
+    return indices

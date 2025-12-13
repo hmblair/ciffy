@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #include "io.h"
-#include "python.h"
+#include "pyutils.h"
 #include "parser.h"
 #include "writer.h"
 #include "registry.h"

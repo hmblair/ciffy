@@ -163,12 +163,16 @@ ext_module = Extension(
     sources=[
         'ciffy/src/module.c',
         'ciffy/src/io.c',
-        'ciffy/src/python.c',
+        'ciffy/src/pyutils.c',
         'ciffy/src/parser.c',
         'ciffy/src/writer.c',
         'ciffy/src/registry.c',
+        # Internal coordinates C extension
+        'ciffy/src/internal/geometry.c',
+        'ciffy/src/internal/batch.c',
+        'ciffy/src/internal/internal_module.c',
     ],
-    include_dirs=[numpy.get_include()],
+    include_dirs=[numpy.get_include(), 'ciffy/src'],
     extra_compile_args=extra_compile_args,
 )
 

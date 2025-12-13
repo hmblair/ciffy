@@ -15,8 +15,15 @@ from ..backend import Array, is_torch
 if TYPE_CHECKING:
     from ..polymer import Polymer
 
-from .graph import ZMatrixEntry, build_zmatrix
+from .graph import ZMatrixEntry, build_zmatrix, zmatrix_to_indices
 from .internal_polymer import InternalPolymer
+
+# Try to import C extension
+try:
+    from .._c import _cartesian_to_internal as _c_cartesian_to_internal
+    _HAS_C_EXTENSION = True
+except ImportError:
+    _HAS_C_EXTENSION = False
 
 
 def cartesian_to_internal(polymer: "Polymer") -> InternalPolymer:
@@ -54,44 +61,55 @@ def cartesian_to_internal(polymer: "Polymer") -> InternalPolymer:
     else:
         orphan_coords = None
 
-    # Allocate output arrays (sized to Z-matrix, not n_atoms)
-    if is_torch(coords):
-        import torch
-        distances = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
-        angles = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
-        dihedrals = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
+    # Use C extension if available and using NumPy backend
+    use_c = _HAS_C_EXTENSION and not is_torch(coords)
+
+    if use_c:
+        # Build indices array and ensure coords are contiguous float32 for C extension
+        indices = zmatrix_to_indices(zmatrix)
+        coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
+
+        # Call C extension (returns float32 arrays)
+        distances, angles, dihedrals = _c_cartesian_to_internal(coords_f32, indices)
     else:
-        distances = np.zeros(n_zmatrix, dtype=np.float32)
-        angles = np.zeros(n_zmatrix, dtype=np.float32)
-        dihedrals = np.zeros(n_zmatrix, dtype=np.float32)
+        # Python fallback (also used for PyTorch)
+        if is_torch(coords):
+            import torch
+            distances = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
+            angles = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
+            dihedrals = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
+        else:
+            distances = np.zeros(n_zmatrix, dtype=np.float32)
+            angles = np.zeros(n_zmatrix, dtype=np.float32)
+            dihedrals = np.zeros(n_zmatrix, dtype=np.float32)
 
-    # Compute internal coordinates for each atom
-    for i, entry in enumerate(zmatrix):
-        atom_idx = entry.atom_idx
+        # Compute internal coordinates for each atom
+        for i, entry in enumerate(zmatrix):
+            atom_idx = entry.atom_idx
 
-        if entry.distance_ref >= 0:
-            # Compute bond length
-            distances[i] = _compute_distance(
-                coords[atom_idx],
-                coords[entry.distance_ref],
-            )
+            if entry.distance_ref >= 0:
+                # Compute bond length
+                distances[i] = _compute_distance(
+                    coords[atom_idx],
+                    coords[entry.distance_ref],
+                )
 
-        if entry.angle_ref >= 0:
-            # Compute bond angle
-            angles[i] = _compute_angle(
-                coords[atom_idx],
-                coords[entry.distance_ref],
-                coords[entry.angle_ref],
-            )
+            if entry.angle_ref >= 0:
+                # Compute bond angle
+                angles[i] = _compute_angle(
+                    coords[atom_idx],
+                    coords[entry.distance_ref],
+                    coords[entry.angle_ref],
+                )
 
-        if entry.dihedral_ref >= 0:
-            # Compute dihedral angle
-            dihedrals[i] = _compute_dihedral(
-                coords[atom_idx],
-                coords[entry.distance_ref],
-                coords[entry.angle_ref],
-                coords[entry.dihedral_ref],
-            )
+            if entry.dihedral_ref >= 0:
+                # Compute dihedral angle
+                dihedrals[i] = _compute_dihedral(
+                    coords[atom_idx],
+                    coords[entry.distance_ref],
+                    coords[entry.angle_ref],
+                    coords[entry.dihedral_ref],
+                )
 
     return InternalPolymer(
         distances=distances,
@@ -179,8 +197,8 @@ def _compute_dihedral(p1: Array, p2: Array, p3: Array, p4: Array) -> Array:
         import torch
 
         # Normal vectors to planes
-        n1 = torch.cross(b1, b2)
-        n2 = torch.cross(b2, b3)
+        n1 = torch.cross(b1, b2, dim=-1)
+        n2 = torch.cross(b2, b3, dim=-1)
 
         # Normalize
         n1_norm = torch.norm(n1) + 1e-8
@@ -191,7 +209,7 @@ def _compute_dihedral(p1: Array, p2: Array, p3: Array, p4: Array) -> Array:
         # Calculate m1 = n1 x b2_normalized
         b2_norm = torch.norm(b2) + 1e-8
         b2_unit = b2 / b2_norm
-        m1 = torch.cross(n1, b2_unit)
+        m1 = torch.cross(n1, b2_unit, dim=-1)
 
         # atan2(y, x) where y = n2 . m1, x = n2 . n1
         x = (n1 * n2).sum()

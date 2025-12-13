@@ -1,0 +1,58 @@
+/**
+ * @file batch.h
+ * @brief Batch operations for internal coordinate conversion.
+ *
+ * Provides batch versions of coordinate conversion that operate on
+ * arrays, suitable for calling from Python with NumPy arrays.
+ */
+
+#ifndef CIFFY_INTERNAL_BATCH_H
+#define CIFFY_INTERNAL_BATCH_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/**
+ * Batch conversion from Cartesian to internal coordinates.
+ *
+ * Computes bond lengths, angles, and dihedrals for each Z-matrix entry.
+ *
+ * @param coords Input Cartesian coordinates, shape (n_atoms, 3), row-major.
+ * @param n_atoms Number of atoms.
+ * @param indices Z-matrix indices, shape (n_entries, 4).
+ *                Each row: [atom_idx, distance_ref, angle_ref, dihedral_ref].
+ *                Use -1 for missing references.
+ * @param n_entries Number of Z-matrix entries.
+ * @param distances Output bond lengths, size (n_entries,).
+ * @param angles Output bond angles in radians, size (n_entries,).
+ * @param dihedrals Output dihedral angles in radians, size (n_entries,).
+ */
+void batch_cartesian_to_internal(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    float *distances, float *angles, float *dihedrals
+);
+
+/**
+ * Batch NERF reconstruction from internal to Cartesian coordinates.
+ *
+ * Reconstructs Cartesian coordinates from internal coordinates.
+ * MUST be called with entries in placement order (BFS order),
+ * as each atom depends on previously placed atoms.
+ *
+ * @param coords Output Cartesian coordinates, shape (n_atoms, 3).
+ *               Pre-allocated and zero-initialized.
+ * @param n_atoms Number of atoms.
+ * @param indices Z-matrix indices, shape (n_entries, 4).
+ * @param n_entries Number of Z-matrix entries.
+ * @param distances Bond lengths, size (n_entries,).
+ * @param angles Bond angles in radians, size (n_entries,).
+ * @param dihedrals Dihedral angles in radians, size (n_entries,).
+ */
+void batch_nerf_reconstruct(
+    float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals
+);
+
+#endif /* CIFFY_INTERNAL_BATCH_H */

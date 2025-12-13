@@ -48,21 +48,23 @@ def _download_cif(pdb_id: str) -> Path:
         for attempt in range(MAX_RETRIES):
             try:
                 urllib.request.urlretrieve(url, filepath)
-                break
+                return filepath  # Success - return immediately
             except urllib.error.HTTPError as e:
                 if e.code in (502, 503, 504) and attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAY * (2 ** attempt)  # Exponential backoff
                     print(f"  HTTP {e.code}, retrying in {delay}s...")
                     time.sleep(delay)
-                else:
-                    _failed_downloads.add(pdb_id)
-                    pytest.skip(f"RCSB PDB unavailable (HTTP {e.code}): {pdb_id}")
+                    continue
+                # Non-retryable error or last attempt
+                _failed_downloads.add(pdb_id)
+                pytest.skip(f"RCSB PDB unavailable (HTTP {e.code}): {pdb_id}")
             except urllib.error.URLError as e:
                 _failed_downloads.add(pdb_id)
                 pytest.skip(f"Network error downloading {pdb_id}: {e}")
-        else:
-            _failed_downloads.add(pdb_id)
-            pytest.skip(f"RCSB PDB unavailable after {MAX_RETRIES} retries: {pdb_id}")
+
+        # All retries exhausted
+        _failed_downloads.add(pdb_id)
+        pytest.skip(f"RCSB PDB unavailable after {MAX_RETRIES} retries: {pdb_id}")
 
     return filepath
 

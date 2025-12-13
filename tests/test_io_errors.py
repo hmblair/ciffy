@@ -4,14 +4,10 @@ Tests for I/O error handling and edge cases.
 Tests error conditions for loading and saving CIF files.
 """
 
-import tempfile
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif
-
-
-BACKENDS = ["numpy", "torch"]
+from tests.utils import get_test_cif, BACKENDS
 
 
 class TestLoadErrors:

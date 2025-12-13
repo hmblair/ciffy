@@ -7,10 +7,7 @@ Tests reduce, rreduce, expand, and count methods.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif
-
-
-BACKENDS = ["numpy", "torch"]
+from tests.utils import get_test_cif, BACKENDS
 
 
 class TestReduce:

@@ -7,10 +7,7 @@ Tests by_atom, by_residue, by_type, by_index, mask, and __getitem__.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif
-
-
-BACKENDS = ["numpy", "torch"]
+from tests.utils import get_test_cif, BACKENDS
 
 
 class TestByAtom:

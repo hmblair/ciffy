@@ -7,10 +7,7 @@ Tests pairwise_distances, knn, center, align, and moment.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif
-
-
-BACKENDS = ["numpy", "torch"]
+from tests.utils import get_test_cif, BACKENDS, random_coordinates
 
 
 class TestPairwiseDistances:
@@ -227,11 +224,7 @@ class TestCenter:
 
         p = ciffy.from_sequence("a", backend=backend)
         # Give non-zero coordinates
-        if backend == "torch":
-            import torch
-            p.coordinates = torch.randn(p.size(), 3)
-        else:
-            p.coordinates = np.random.randn(p.size(), 3).astype(np.float32)
+        p.coordinates = random_coordinates(p.size(), backend, scale=1.0)
 
         centered, centroid = p.center(Scale.MOLECULE)
 

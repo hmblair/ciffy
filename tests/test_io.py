@@ -9,10 +9,9 @@ import os
 import tempfile
 import pytest
 
-TESTS_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(TESTS_DIR, "data")
-CIF_FILES = sorted(glob.glob(os.path.join(DATA_DIR, "*.cif")))
-BACKENDS = ["numpy", "torch"]
+from tests.utils import DATA_DIR, BACKENDS
+
+CIF_FILES = sorted(glob.glob(str(DATA_DIR / "*.cif")))
 
 
 class TestLoad:

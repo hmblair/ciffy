@@ -1,22 +1,19 @@
 """Tests for ciffy.nn module."""
 
+import glob
 import os
 import pytest
 import numpy as np
 
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-
 import ciffy
 from ciffy import Scale
 
-from tests.utils import get_test_cif as get_cif
-
-TESTS_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(TESTS_DIR, "data")
+from tests.utils import (
+    get_test_cif as get_cif,
+    TORCH_AVAILABLE,
+    skip_if_no_torch,
+    DATA_DIR,
+)
 
 
 # =============================================================================
@@ -29,8 +26,7 @@ class TestKNN:
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_shape(self, backend):
         """Test that knn returns correct shape."""
-        if backend == "torch" and not TORCH_AVAILABLE:
-            pytest.skip("PyTorch not available")
+        skip_if_no_torch(backend)
 
         p = ciffy.load(get_cif("3SKW"), backend=backend)
         k = 5
@@ -41,8 +37,7 @@ class TestKNN:
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_residue_scale(self, backend):
         """Test KNN at residue scale."""
-        if backend == "torch" and not TORCH_AVAILABLE:
-            pytest.skip("PyTorch not available")
+        skip_if_no_torch(backend)
 
         p = ciffy.load(get_cif("3SKW"), backend=backend)
         k = 3
@@ -53,8 +48,7 @@ class TestKNN:
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_excludes_self(self, backend):
         """Test that knn excludes self (no point is its own neighbor)."""
-        if backend == "torch" and not TORCH_AVAILABLE:
-            pytest.skip("PyTorch not available")
+        skip_if_no_torch(backend)
 
         p = ciffy.load(get_cif("3SKW"), backend=backend)
         neighbors = p.knn(k=3, scale=Scale.ATOM)

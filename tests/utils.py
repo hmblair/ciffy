@@ -2,6 +2,7 @@
 Shared test utilities for ciffy tests.
 
 Downloads test CIF files from RCSB PDB on demand.
+Provides common constants, helpers, and fixtures.
 """
 
 import time
@@ -9,7 +10,26 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+import numpy as np
 import pytest
+
+# =============================================================================
+# PyTorch availability check (centralized)
+# =============================================================================
+
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore
+    TORCH_AVAILABLE = False
+
+# =============================================================================
+# Backend configuration
+# =============================================================================
+
+# Available backends for parametrized tests
+BACKENDS = ["numpy", "torch"]
 
 # Test PDB IDs - add new structures here to include them in generic tests
 TEST_PDBS = ["3SKW", "9GCM"]
@@ -85,3 +105,49 @@ def _download_cif(pdb_id: str) -> Path:
 def get_test_cif(pdb_id: str) -> str:
     """Get path to a test CIF file, downloading if necessary."""
     return str(_download_cif(pdb_id))
+
+
+# =============================================================================
+# Test helpers
+# =============================================================================
+
+def skip_if_no_torch(backend: str) -> None:
+    """Skip test if backend is 'torch' but PyTorch is not available.
+
+    Use at the start of parametrized test methods:
+        def test_something(self, backend):
+            skip_if_no_torch(backend)
+            ...
+    """
+    if backend == "torch" and not TORCH_AVAILABLE:
+        pytest.skip("PyTorch not available")
+
+
+def random_coordinates(n: int, backend: str, scale: float = 10.0):
+    """Generate random coordinates for testing.
+
+    Args:
+        n: Number of points (atoms)
+        backend: "numpy" or "torch"
+        scale: Scale factor for coordinates (default 10.0 angstroms)
+
+    Returns:
+        Array/tensor of shape (n, 3) with random coordinates
+    """
+    coords = np.random.randn(n, 3).astype(np.float32) * scale
+    if backend == "torch":
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
+        return torch.from_numpy(coords)
+    return coords
+
+
+def set_random_coordinates(polymer, scale: float = 10.0) -> None:
+    """Set random coordinates on a polymer (in-place).
+
+    Args:
+        polymer: A ciffy.Polymer instance
+        scale: Scale factor for coordinates
+    """
+    coords = random_coordinates(polymer.size(), polymer.backend, scale)
+    polymer.coordinates = coords

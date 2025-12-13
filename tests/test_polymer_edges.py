@@ -7,10 +7,7 @@ Tests operations on empty, single-atom, and single-residue polymers.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif
-
-
-BACKENDS = ["numpy", "torch"]
+from tests.utils import get_test_cif, BACKENDS
 
 
 class TestEmptyPolymer:

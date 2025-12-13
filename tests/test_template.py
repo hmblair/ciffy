@@ -592,6 +592,7 @@ class TestTerminalAtoms:
         assert apr[2] == full_count - 3, f"Middle residue: expected {full_count - 3}, got {apr[2]}"
         assert apr[3] == full_count - 2, f"Last residue: expected {full_count - 2}, got {apr[3]}"
 
+    @pytest.mark.filterwarnings("ignore:Sequence 'AAA' contains only nucleotide")
     def test_protein_terminal_atoms(self):
         """Protein should only have OXT on C-terminus, H2/H3 on N-terminus."""
         from ciffy import from_sequence, Scale

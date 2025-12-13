@@ -83,6 +83,8 @@ RESIDUE_WHITELIST: set[str] | None = {
     "5MC",  # 5-methylcytidine
     "H2U",  # Dihydrouridine
     "4SU",  # 4-thiouridine
+    "FHU",  # 5-fluorohydroxyuridine (modified uracil)
+    "PPU",  # Puromycin (modified adenosine)
     "I",    # Inosine
     "2MA",  # 2-methyladenosine-5'-monophosphate (RNA)
     "6MZ",  # N6-methyladenosine-5'-monophosphate (RNA)
@@ -96,6 +98,7 @@ RESIDUE_WHITELIST: set[str] | None = {
     "TPO",  # Phosphothreonine
     "PTR",  # Phosphotyrosine
     "CSO",  # S-hydroxycysteine
+    "OCS",  # Cysteinesulfonic acid
     "HYP",  # Hydroxyproline
     "MLY",  # N-dimethyl-lysine
     # Water, ions, and common ligands

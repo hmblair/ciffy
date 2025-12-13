@@ -162,12 +162,37 @@ Descriptions:
 ```
 ciffy/
 ├── backend/        # NumPy/PyTorch abstraction layer
-├── types/          # Scale, Molecule enums
-├── biochemistry/   # Element, Residue, nucleotide definitions
+├── types/          # Scale, Molecule enums (Molecule is auto-generated)
+├── biochemistry/   # Element, Residue, atom definitions (mostly auto-generated)
 ├── operations/     # Reduction, alignment operations
 ├── io/             # File loading and writing
+├── src/codegen/    # Code generation from PDB Chemical Component Dictionary
 └── utils/          # Helper functions and base classes
 ```
+
+## Development
+
+### Code Generation
+
+Most biochemistry definitions are auto-generated from the [PDB Chemical Component Dictionary](https://www.wwpdb.org/data/ccd) (CCD). The generator runs automatically during `pip install`:
+
+```bash
+# Generated files (in .gitignore):
+ciffy/biochemistry/_generated_atoms.py      # Atom indices per residue
+ciffy/biochemistry/_generated_elements.py   # Element enum with atomic numbers
+ciffy/biochemistry/_generated_residues.py   # Residue enum and mappings
+ciffy/types/molecule.py                     # Molecule type enum
+ciffy/src/hash/*.c                          # C hash tables for fast lookup
+```
+
+To regenerate manually (requires gperf):
+
+```bash
+# CCD is auto-downloaded to ~/.cache/ciffy/ on first run
+python ciffy/src/codegen/generate.py ~/.cache/ciffy/components.cif
+```
+
+To add new residues, edit `RESIDUE_WHITELIST` in `ciffy/src/codegen/generate.py`.
 
 ## Testing
 

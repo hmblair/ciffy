@@ -4,13 +4,13 @@
 
 ### Performance
 
-ciffy is **50-90x faster** than BioPython and Biotite for parsing CIF files:
+ciffy is **70-125x faster** than BioPython and Biotite for parsing CIF files:
 
 | Structure | Atoms | ciffy | BioPython | Biotite |
 |-----------|------:|------:|----------:|--------:|
-| 3SKW | 2,874 | 0.47 ms | 31 ms (66x) | 28 ms (59x) |
-| 9GCM | 4,466 | 0.71 ms | 40 ms (56x) | 36 ms (51x) |
-| 9MDS | 102,216 | 14 ms | 1266 ms (93x) | 911 ms (67x) |
+| 3SKW | 2,874 | 0.36 ms | 39 ms (106x) | 28 ms (78x) |
+| 9GCM | 4,466 | 0.54 ms | 48 ms (88x) | 38 ms (70x) |
+| 9MDS | 102,216 | 11 ms | 1340 ms (126x) | 946 ms (89x) |
 
 <sub>Benchmarked on Apple M1 Max. Run `python tests/profile.py` to reproduce.</sub>
 

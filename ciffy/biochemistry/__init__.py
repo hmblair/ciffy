@@ -4,7 +4,7 @@ Biochemistry constants and enumerations.
 Defines atoms, residues, elements, and nucleotide structures.
 """
 
-from .elements import Element, ELEMENT_NAMES
+from ._generated_elements import Element, ELEMENT_NAMES
 from ._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
 from ._generated_atoms import (
     # RNA (CCD names)

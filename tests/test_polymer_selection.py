@@ -4,17 +4,10 @@ Tests for Polymer selection method edge cases.
 Tests by_atom, by_residue, by_type, by_index, mask, and __getitem__.
 """
 
-import os
 import pytest
 import numpy as np
 
-TESTS_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(TESTS_DIR, "data")
-
-
-def get_test_cif(pdb_id: str) -> str:
-    """Get path to a test CIF file."""
-    return os.path.join(DATA_DIR, f"{pdb_id}.cif")
+from tests.utils import get_test_cif
 
 
 BACKENDS = ["numpy", "torch"]

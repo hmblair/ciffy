@@ -13,13 +13,10 @@ except ImportError:
 import ciffy
 from ciffy import Scale
 
+from tests.utils import get_test_cif as get_cif
+
 TESTS_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(TESTS_DIR, "data")
-
-
-def get_cif(pdb_id: str) -> str:
-    """Get path to a test CIF file."""
-    return os.path.join(DATA_DIR, f"{pdb_id}.cif")
 
 
 # =============================================================================

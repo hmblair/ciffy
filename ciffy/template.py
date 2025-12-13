@@ -516,3 +516,104 @@ def from_sequence(
     )
 
     return polymer.torch() if backend == "torch" else polymer
+
+
+def from_extract(
+    coords: np.ndarray,
+    atoms: list[int],
+    residue: "ResidueType",
+    backend: str = "numpy",
+    id: str = "extracted",
+) -> Polymer:
+    """
+    Convert extracted coordinates back to a Polymer.
+
+    Takes the output of `extract()` and creates a Polymer that can be
+    saved as a CIF file. Each row in coords becomes a separate residue
+    (in a single chain).
+
+    Args:
+        coords: Coordinate array of shape (n_residues, n_atoms, 3) from extract().
+        atoms: List of atom type indices from extract().
+        residue: The ResidueType that was extracted (e.g., Residue.A).
+        backend: Array backend, either "numpy" or "torch".
+        id: PDB identifier for the polymer.
+
+    Returns:
+        Polymer with the extracted coordinates and correct atom metadata.
+
+    Example:
+        >>> from ciffy import load
+        >>> from ciffy.biochemistry import Residue
+        >>> from ciffy.operations import extract
+        >>> from ciffy.template import from_extract
+        >>>
+        >>> poly = load("structure.cif")
+        >>> coords, atoms = extract(poly, Residue.A, align=True, scale=True)
+        >>>
+        >>> # Process coords (e.g., run through a model)
+        >>> new_coords = model(coords)
+        >>>
+        >>> # Convert back to Polymer for saving
+        >>> result = from_extract(new_coords, atoms, Residue.A)
+        >>> result.write("output.cif")
+    """
+    from .backend import is_torch as _is_torch
+
+    # Handle torch input
+    if _is_torch(coords):
+        coords_np = coords.detach().cpu().numpy()
+    else:
+        coords_np = np.asarray(coords)
+
+    n_residues, n_atoms, _ = coords_np.shape
+
+    if len(atoms) != n_atoms:
+        raise ValueError(
+            f"Mismatch: coords has {n_atoms} atoms per residue, "
+            f"but atoms list has {len(atoms)} entries"
+        )
+
+    # Build atom name -> member lookup for this residue type
+    atom_enum = residue.atoms
+    idx_to_member = {m.value: m for m in atom_enum}
+
+    # Get element indices for each atom
+    element_indices = []
+    for atom_idx in atoms:
+        if atom_idx not in idx_to_member:
+            raise ValueError(
+                f"Atom index {atom_idx} not found in {residue.name} atom enum"
+            )
+        atom_name = idx_to_member[atom_idx].name
+        element_indices.append(_atom_name_to_element(atom_name))
+
+    # Flatten coordinates: (n_residues, n_atoms, 3) -> (n_residues * n_atoms, 3)
+    flat_coords = coords_np.reshape(-1, 3).astype(np.float32)
+
+    # Build arrays for all residues
+    all_atoms = np.tile(atoms, n_residues).astype(np.int64)
+    all_elements = np.tile(element_indices, n_residues).astype(np.int64)
+    sequence = np.full(n_residues, residue.value, dtype=np.int64)
+    atoms_per_res = np.full(n_residues, n_atoms, dtype=np.int64)
+
+    total_atoms = n_residues * n_atoms
+
+    polymer = Polymer(
+        coordinates=flat_coords,
+        atoms=all_atoms,
+        elements=all_elements,
+        sequence=sequence,
+        sizes={
+            Scale.RESIDUE: atoms_per_res,
+            Scale.CHAIN: np.array([total_atoms], dtype=np.int64),
+            Scale.MOLECULE: np.array([total_atoms], dtype=np.int64),
+        },
+        id=id,
+        names=["A"],
+        strands=["A"],
+        lengths=np.array([n_residues], dtype=np.int64),
+        polymer_count=total_atoms,
+    )
+
+    return polymer.torch() if backend == "torch" else polymer

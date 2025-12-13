@@ -26,7 +26,10 @@ from .io.loader import load, load_metadata
 from .io.writer import write_cif
 
 # Template generation
-from .template import from_sequence
+from .template import from_sequence, from_extract
+
+# Ensemble for conformational analysis
+from .ensemble import Ensemble
 
 # Vocabulary sizes (for embedding layers)
 from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
@@ -70,6 +73,8 @@ __all__ = [
     "load_metadata",
     "write_cif",
     "from_sequence",
+    "from_extract",
+    "Ensemble",
     "rmsd",
     "align",
     "tm_score",

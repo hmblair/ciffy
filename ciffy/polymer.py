@@ -696,6 +696,54 @@ class Polymer:
 
         return centered, means
 
+    def scale(
+        self: Polymer,
+        scale: Scale = Scale.MOLECULE,
+        size: float = 1.0,
+    ) -> tuple[Polymer, Array]:
+        """
+        Center and scale coordinates at the specified scale.
+
+        Centers each unit at the specified scale, then scales coordinates
+        so that each unit has standard deviation equal to `size`.
+
+        This is useful for normalizing coordinates before statistical
+        learning, ensuring consistent scale across different residues
+        or molecules.
+
+        Args:
+            scale: Scale at which to center and scale.
+            size: Target standard deviation for each unit. Default 1.0
+                gives unit variance.
+
+        Returns:
+            Tuple of (scaled polymer, standard deviations before scaling).
+        """
+        # Center first
+        centered, _ = self.center(scale)
+
+        # Compute std per unit: sqrt(mean(x^2)) since already centered
+        sq = centered.coordinates ** 2
+        var = self.reduce(sq, scale).mean(axis=-1, keepdims=True)  # (n_units, 1)
+
+        # Backend-agnostic sqrt and maximum
+        if is_torch(var):
+            import torch
+            std = torch.sqrt(var)
+            std = torch.clamp(std, min=1e-8)
+        else:
+            std = np.sqrt(var)
+            std = np.maximum(std, 1e-8)
+
+        # Scale coordinates
+        std_expanded = self.expand(std, scale)
+        coordinates = centered.coordinates / std_expanded * size
+
+        scaled = copy(centered)
+        scaled.coordinates = coordinates
+
+        return scaled, std
+
     def pairwise_distances(self: Polymer, scale: Scale | None = None) -> Array:
         """
         Compute pairwise distances.

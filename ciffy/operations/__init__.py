@@ -12,6 +12,7 @@ from .alignment import (
     kabsch_align,
     align,
 )
+from .extract import extract
 
 __all__ = [
     "Reduction",
@@ -21,4 +22,5 @@ __all__ = [
     "kabsch_rotation",
     "kabsch_align",
     "align",
+    "extract",
 ]

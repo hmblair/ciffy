@@ -4,7 +4,9 @@ Pytest configuration and fixtures for ciffy tests.
 Downloads test CIF files from RCSB PDB on demand.
 """
 
+import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -18,16 +20,38 @@ LARGE_PDBS = ["9MDS", "8CAM"]
 DATA_DIR = Path(__file__).parent / "data"
 PDB_URL = "https://files.rcsb.org/download/{pdb_id}.cif"
 
+# Retry settings for transient network errors
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # seconds
+
 
 def _download_cif(pdb_id: str) -> Path:
-    """Download a CIF file from RCSB PDB if not already cached."""
+    """Download a CIF file from RCSB PDB if not already cached.
+
+    Includes retry logic for transient network errors (502, 503, etc.).
+    """
     DATA_DIR.mkdir(exist_ok=True)
     filepath = DATA_DIR / f"{pdb_id}.cif"
 
     if not filepath.exists():
         url = PDB_URL.format(pdb_id=pdb_id)
         print(f"Downloading {pdb_id}.cif from RCSB PDB...")
-        urllib.request.urlretrieve(url, filepath)
+
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                urllib.request.urlretrieve(url, filepath)
+                break
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code in (502, 503, 504) and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                    print(f"  HTTP {e.code}, retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    raise
+        else:
+            raise last_error
 
     return filepath
 

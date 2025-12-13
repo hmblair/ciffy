@@ -394,6 +394,91 @@ for sequence, target_cif in dataset:
     optimizer.step()
 ```
 
+## Internal Coordinates
+
+For conformational sampling and structure generation, use internal coordinates (bond lengths, angles, dihedrals):
+
+```python
+import ciffy
+
+# Convert Cartesian to internal coordinates
+polymer = ciffy.load("structure.cif", backend="torch")
+internal = polymer.to_internal()
+
+# Access internal coordinate arrays
+print(internal.distances.shape)   # (N,) bond lengths
+print(internal.angles.shape)      # (N,) bond angles
+print(internal.dihedrals.shape)   # (N,) dihedral angles
+
+# Access named backbone dihedrals
+phi = internal.phi    # Protein phi angles
+psi = internal.psi    # Protein psi angles
+```
+
+### Differentiable Reconstruction
+
+The conversion back to Cartesian is fully differentiable:
+
+```python
+polymer = ciffy.load("structure.cif", backend="torch")
+internal = polymer.to_internal()
+
+# Enable gradients on dihedrals
+internal.dihedrals.requires_grad_(True)
+
+# Reconstruct Cartesian coordinates (differentiable)
+reconstructed = internal.to_cartesian()
+
+# Compute loss and backprop
+target = ciffy.load("target.cif", backend="torch")
+loss = ciffy.rmsd(reconstructed, target)
+loss.backward()
+
+# Gradients flow to dihedral angles
+print(internal.dihedrals.grad)
+```
+
+### Conformational Sampling
+
+Modify dihedrals to generate new conformations:
+
+```python
+import torch
+
+polymer = ciffy.load("structure.cif", backend="torch")
+internal = polymer.to_internal()
+
+# Perturb backbone dihedrals
+noise = torch.randn_like(internal.dihedrals) * 0.1
+new_dihedrals = internal.dihedrals + noise
+
+# Create modified structure
+modified = internal.with_dihedrals(new_dihedrals)
+new_structure = modified.to_cartesian()
+```
+
+### Structure Generation from Dihedrals
+
+Generate structures by predicting dihedral angles:
+
+```python
+class DihedralPredictor(nn.Module):
+    def __init__(self, hidden_dim=256):
+        super().__init__()
+        self.encoder = nn.TransformerEncoder(...)
+        self.dihedral_head = nn.Linear(hidden_dim, 1)
+
+    def forward(self, template):
+        # Predict dihedral angles for each atom
+        internal = template.to_internal()
+        h = self.encoder(...)
+        pred_dihedrals = self.dihedral_head(h).squeeze(-1)
+
+        # Reconstruct with predicted dihedrals
+        modified = internal.with_dihedrals(pred_dihedrals)
+        return modified.to_cartesian()
+```
+
 ## Performance Tips
 
 1. **Load once, reuse**: Parse CIF files once and keep polymers in memory

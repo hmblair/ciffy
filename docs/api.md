@@ -47,6 +47,25 @@
         - to
         - write
         - with_coordinates
+        - to_internal
+
+### InternalPolymer
+
+::: ciffy.InternalPolymer
+    options:
+      members:
+        - to_cartesian
+        - with_dihedrals
+        - with_angles
+        - with_distances
+        - backbone_dihedrals
+        - set_backbone_dihedrals
+        - phi
+        - psi
+        - omega
+        - numpy
+        - torch
+        - to
 
 ---
 

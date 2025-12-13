@@ -31,6 +31,9 @@ from .template import from_sequence, from_extract
 # Ensemble for conformational analysis
 from .ensemble import Ensemble
 
+# Internal coordinates
+from .internal import InternalPolymer
+
 # Vocabulary sizes (for embedding layers)
 from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 
@@ -65,6 +68,7 @@ __all__ = [
     "__version__",
     # Core types
     "Polymer",
+    "InternalPolymer",
     "Scale",
     "Molecule",
     "Reduction",

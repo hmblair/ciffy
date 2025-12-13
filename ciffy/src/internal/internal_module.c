@@ -9,6 +9,52 @@
 #include "../pyutils.h"
 #include "batch.h"
 
+/* Helpers to normalize array-like inputs (NumPy, Torch tensor, etc.) to
+ * contiguous NumPy arrays with shape checks.
+ * These are local to this file to avoid spreading Python API surface.
+ */
+static PyArrayObject *require_array_2d(
+    PyObject *obj, int typenum, npy_intp cols, const char *name
+) {
+    PyArrayObject *arr = (PyArrayObject *)PyArray_FROM_OTF(
+        obj, typenum, NPY_ARRAY_IN_ARRAY
+    );
+    if (arr == NULL) {
+        return NULL;
+    }
+    if (PyArray_NDIM(arr) != 2 || PyArray_DIM(arr, 1) != cols) {
+        Py_DECREF(arr);
+        PyErr_Format(PyExc_ValueError, "%s must have shape (N, %ld)", name, (long)cols);
+        return NULL;
+    }
+    return arr;
+}
+
+static PyArrayObject *require_array_1d(
+    PyObject *obj, int typenum, const char *name
+) {
+    PyArrayObject *arr = (PyArrayObject *)PyArray_FROM_OTF(
+        obj, typenum, NPY_ARRAY_IN_ARRAY
+    );
+    if (arr == NULL) {
+        return NULL;
+    }
+    if (PyArray_NDIM(arr) != 1) {
+        Py_DECREF(arr);
+        PyErr_Format(PyExc_ValueError, "%s must be 1D", name);
+        return NULL;
+    }
+    return arr;
+}
+/* Helper to clean up up to four arrays */
+static void decref_arrays(PyArrayObject *a, PyArrayObject *b,
+                          PyArrayObject *c, PyArrayObject *d) {
+    Py_XDECREF(a);
+    Py_XDECREF(b);
+    Py_XDECREF(c);
+    Py_XDECREF(d);
+}
+
 
 /**
  * Convert Cartesian coordinates to internal coordinates.
@@ -32,14 +78,12 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
     }
 
     /* Accept any array-like input (NumPy array, Torch tensor, etc.) */
-    PyArrayObject *coords_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_coords, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
-    );
-    if (coords_arr == NULL) return NULL;
+    PyArrayObject *coords_arr = require_array_2d(py_coords, NPY_FLOAT32, 3, "coords");
+    if (coords_arr == NULL) {
+        return NULL;
+    }
 
-    PyArrayObject *indices_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_indices, NPY_INT64, NPY_ARRAY_IN_ARRAY
-    );
+    PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
     if (indices_arr == NULL) {
         Py_DECREF(coords_arr);
         return NULL;
@@ -119,35 +163,24 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     }
 
     /* Validate input arrays */
-    PyArrayObject *indices_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_indices, NPY_INT64, NPY_ARRAY_IN_ARRAY
-    );
+    PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
     if (indices_arr == NULL) return NULL;
 
-    PyArrayObject *distances_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_distances, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
-    );
+    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
     if (distances_arr == NULL) {
-        Py_DECREF(indices_arr);
+        decref_arrays(indices_arr, NULL, NULL, NULL);
         return NULL;
     }
 
-    PyArrayObject *angles_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_angles, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
-    );
+    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
     if (angles_arr == NULL) {
-        Py_DECREF(indices_arr);
-        Py_DECREF(distances_arr);
+        decref_arrays(indices_arr, distances_arr, NULL, NULL);
         return NULL;
     }
 
-    PyArrayObject *dihedrals_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        py_dihedrals, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
-    );
+    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
     if (dihedrals_arr == NULL) {
-        Py_DECREF(indices_arr);
-        Py_DECREF(distances_arr);
-        Py_DECREF(angles_arr);
+        decref_arrays(indices_arr, distances_arr, angles_arr, NULL);
         return NULL;
     }
 
@@ -156,12 +189,9 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     if (PyArray_DIM(distances_arr, 0) != n_entries ||
         PyArray_DIM(angles_arr, 0) != n_entries ||
         PyArray_DIM(dihedrals_arr, 0) != n_entries) {
-        Py_DECREF(indices_arr);
-        Py_DECREF(distances_arr);
-        Py_DECREF(angles_arr);
-        Py_DECREF(dihedrals_arr);
         PyErr_SetString(PyExc_ValueError,
             "distances, angles, and dihedrals must have same length as indices");
+        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
         return NULL;
     }
 

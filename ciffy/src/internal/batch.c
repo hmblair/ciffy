@@ -12,41 +12,69 @@ void batch_cartesian_to_internal(
     const int64_t *indices, size_t n_entries,
     float *distances, float *angles, float *dihedrals
 ) {
-    (void)n_atoms;  /* Used for bounds checking if needed */
-
     for (size_t i = 0; i < n_entries; i++) {
         int64_t atom_idx = indices[i * 4 + 0];
         int64_t dist_ref = indices[i * 4 + 1];
         int64_t angl_ref = indices[i * 4 + 2];
         int64_t dihe_ref = indices[i * 4 + 3];
 
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        /* Guard against invalid indices in debug builds */
+        if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+            distances[i] = angles[i] = dihedrals[i] = 0.0f;
+            continue;
+        }
+#endif
         const float *atom = &coords[atom_idx * 3];
 
         /* Bond length */
         if (dist_ref >= 0) {
-            const float *ref1 = &coords[dist_ref * 3];
-            distances[i] = compute_distance(atom, ref1);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)dist_ref >= n_atoms) {
+                distances[i] = 0.0f;
+            } else
+#endif
+            {
+                const float *ref1 = &coords[dist_ref * 3];
+                distances[i] = compute_distance(atom, ref1);
+            }
         } else {
             distances[i] = 0.0f;
         }
 
         /* Bond angle */
         if (angl_ref >= 0 && dist_ref >= 0) {
-            const float *ref1 = &coords[dist_ref * 3];
-            const float *ref2 = &coords[angl_ref * 3];
-            /* Angle at dist_ref between atom and angl_ref */
-            angles[i] = compute_angle(atom, ref1, ref2);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)angl_ref >= n_atoms || (size_t)dist_ref >= n_atoms) {
+                angles[i] = 0.0f;
+            } else
+#endif
+            {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
+                /* Angle at dist_ref between atom and angl_ref */
+                angles[i] = compute_angle(atom, ref1, ref2);
+            }
         } else {
             angles[i] = 0.0f;
         }
 
         /* Dihedral angle */
         if (dihe_ref >= 0 && angl_ref >= 0 && dist_ref >= 0) {
-            const float *ref1 = &coords[dist_ref * 3];
-            const float *ref2 = &coords[angl_ref * 3];
-            const float *ref3 = &coords[dihe_ref * 3];
-            /* Dihedral: dihe_ref - angl_ref - dist_ref - atom */
-            dihedrals[i] = compute_dihedral(ref3, ref2, ref1, atom);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)dihe_ref >= n_atoms ||
+                (size_t)angl_ref >= n_atoms ||
+                (size_t)dist_ref >= n_atoms) {
+                dihedrals[i] = 0.0f;
+            } else
+#endif
+            {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
+                const float *ref3 = &coords[dihe_ref * 3];
+                /* Dihedral: dihe_ref - angl_ref - dist_ref - atom */
+                dihedrals[i] = compute_dihedral(ref3, ref2, ref1, atom);
+            }
         } else {
             dihedrals[i] = 0.0f;
         }
@@ -59,14 +87,17 @@ void batch_nerf_reconstruct(
     const int64_t *indices, size_t n_entries,
     const float *distances, const float *angles, const float *dihedrals
 ) {
-    (void)n_atoms;  /* Used for bounds checking if needed */
-
     for (size_t i = 0; i < n_entries; i++) {
         int64_t atom_idx = indices[i * 4 + 0];
         int64_t dist_ref = indices[i * 4 + 1];
         int64_t angl_ref = indices[i * 4 + 2];
         int64_t dihe_ref = indices[i * 4 + 3];
 
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+            continue;
+        }
+#endif
         float *result = &coords[atom_idx * 3];
 
         if (dist_ref < 0) {
@@ -77,21 +108,44 @@ void batch_nerf_reconstruct(
 
         } else if (angl_ref < 0) {
             /* Second atom: place along +X from distance reference */
-            const float *ref = &coords[dist_ref * 3];
-            nerf_place_along_x(ref, distances[i], result);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)dist_ref >= n_atoms) {
+                result[0] = result[1] = result[2] = 0.0f;
+            } else
+#endif
+            {
+                const float *ref = &coords[dist_ref * 3];
+                nerf_place_along_x(ref, distances[i], result);
+            }
 
         } else if (dihe_ref < 0) {
             /* Third atom: place in plane */
-            const float *ref1 = &coords[dist_ref * 3];
-            const float *ref2 = &coords[angl_ref * 3];
-            nerf_place_in_plane(ref1, ref2, distances[i], angles[i], result);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)dist_ref >= n_atoms || (size_t)angl_ref >= n_atoms) {
+                result[0] = result[1] = result[2] = 0.0f;
+            } else
+#endif
+            {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
+                nerf_place_in_plane(ref1, ref2, distances[i], angles[i], result);
+            }
 
         } else {
             /* Full NERF placement */
-            const float *p1 = &coords[dihe_ref * 3];
-            const float *p2 = &coords[angl_ref * 3];
-            const float *p3 = &coords[dist_ref * 3];
-            nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+            if ((size_t)dihe_ref >= n_atoms ||
+                (size_t)angl_ref >= n_atoms ||
+                (size_t)dist_ref >= n_atoms) {
+                result[0] = result[1] = result[2] = 0.0f;
+            } else
+#endif
+            {
+                const float *p1 = &coords[dihe_ref * 3];
+                const float *p2 = &coords[angl_ref * 3];
+                const float *p3 = &coords[dist_ref * 3];
+                nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+            }
         }
     }
 }

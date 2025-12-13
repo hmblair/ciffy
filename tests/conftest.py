@@ -29,6 +29,7 @@ def _download_cif(pdb_id: str) -> Path:
     """Download a CIF file from RCSB PDB if not already cached.
 
     Includes retry logic for transient network errors (502, 503, etc.).
+    Skips test if server is unavailable after retries.
     """
     DATA_DIR.mkdir(exist_ok=True)
     filepath = DATA_DIR / f"{pdb_id}.cif"
@@ -49,9 +50,12 @@ def _download_cif(pdb_id: str) -> Path:
                     print(f"  HTTP {e.code}, retrying in {delay}s...")
                     time.sleep(delay)
                 else:
-                    raise
+                    # Skip test if server unavailable after retries
+                    pytest.skip(f"RCSB PDB unavailable (HTTP {e.code}): {pdb_id}")
+            except urllib.error.URLError as e:
+                pytest.skip(f"Network error downloading {pdb_id}: {e}")
         else:
-            raise last_error
+            pytest.skip(f"RCSB PDB unavailable after {MAX_RETRIES} retries: {pdb_id}")
 
     return filepath
 

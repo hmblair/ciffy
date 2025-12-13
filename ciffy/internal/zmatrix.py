@@ -61,16 +61,29 @@ def cartesian_to_internal(polymer: "Polymer") -> InternalPolymer:
     else:
         orphan_coords = None
 
-    # Use C extension if available and using NumPy backend
-    use_c = _HAS_C_EXTENSION and not is_torch(coords)
+    # Use C extension if available (works for NumPy and Torch tensors)
+    use_c = _HAS_C_EXTENSION
 
     if use_c:
         # Build indices array and ensure coords are contiguous float32 for C extension
         indices = zmatrix_to_indices(zmatrix)
-        coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
 
-        # Call C extension (returns float32 arrays)
-        distances, angles, dihedrals = _c_cartesian_to_internal(coords_f32, indices)
+        if is_torch(coords):
+            import torch
+            coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
+        else:
+            coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
+
+        # Call C extension (returns float32 NumPy arrays)
+        distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(coords_f32, indices)
+
+        if is_torch(coords):
+            import torch
+            distances = torch.from_numpy(distances_np).to(device=coords.device, dtype=coords.dtype)
+            angles = torch.from_numpy(angles_np).to(device=coords.device, dtype=coords.dtype)
+            dihedrals = torch.from_numpy(dihedrals_np).to(device=coords.device, dtype=coords.dtype)
+        else:
+            distances, angles, dihedrals = distances_np, angles_np, dihedrals_np
     else:
         # Python fallback (also used for PyTorch)
         if is_torch(coords):

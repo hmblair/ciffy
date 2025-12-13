@@ -60,18 +60,36 @@ def nerf_reconstruct(
         max_idx = max(entry.atom_idx for entry in zmatrix)
         n_atoms = max_idx + 1
 
-    # Use C extension if available and using NumPy backend
-    use_c = _HAS_C_EXTENSION and not is_torch(distances)
+    # Use C extension if available (works for NumPy and Torch tensors without grad)
+    use_c = _HAS_C_EXTENSION
+    if is_torch(distances):
+        # If any input tensor tracks gradients, stay on the pure torch path.
+        if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
+            use_c = False
 
     if use_c:
         # Build indices array and ensure inputs are contiguous float32
         indices = zmatrix_to_indices(zmatrix)
-        dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
-        ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
-        dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
+        if is_torch(distances):
+            import torch
+            device = distances.device
+            dtype = distances.dtype
+            dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
+            ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
+            dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
+        else:
+            dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
+            ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
+            dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
 
         # Call C extension
-        coords = _c_nerf_reconstruct(indices, dist_f32, ang_f32, dih_f32, n_atoms)
+        coords_np = _c_nerf_reconstruct(indices, dist_f32, ang_f32, dih_f32, n_atoms)
+
+        if is_torch(distances):
+            import torch
+            coords = torch.from_numpy(coords_np).to(device=device, dtype=dtype)
+        else:
+            coords = coords_np
     else:
         # Python fallback (also used for PyTorch)
         if is_torch(distances):

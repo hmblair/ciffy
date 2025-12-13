@@ -31,12 +31,19 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    /* Validate input arrays */
-    PyArrayObject *coords_arr = validate_float32_2d(py_coords, 3, "coords");
+    /* Accept any array-like input (NumPy array, Torch tensor, etc.) */
+    PyArrayObject *coords_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_coords, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
+    );
     if (coords_arr == NULL) return NULL;
 
-    PyArrayObject *indices_arr = validate_int64_2d(py_indices, 4, "indices");
-    if (indices_arr == NULL) return NULL;
+    PyArrayObject *indices_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_indices, NPY_INT64, NPY_ARRAY_IN_ARRAY
+    );
+    if (indices_arr == NULL) {
+        Py_DECREF(coords_arr);
+        return NULL;
+    }
 
     /* Get sizes */
     npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
@@ -69,6 +76,9 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
         indices, (size_t)n_entries,
         distances, angles, dihedrals
     );
+
+    Py_DECREF(coords_arr);
+    Py_DECREF(indices_arr);
 
     /* Build result tuple */
     PyObject *result = PyTuple_Pack(3, py_distances, py_angles, py_dihedrals);
@@ -109,23 +119,47 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     }
 
     /* Validate input arrays */
-    PyArrayObject *indices_arr = validate_int64_2d(py_indices, 4, "indices");
+    PyArrayObject *indices_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_indices, NPY_INT64, NPY_ARRAY_IN_ARRAY
+    );
     if (indices_arr == NULL) return NULL;
 
-    PyArrayObject *distances_arr = validate_float32_1d(py_distances, "distances");
-    if (distances_arr == NULL) return NULL;
+    PyArrayObject *distances_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_distances, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
+    );
+    if (distances_arr == NULL) {
+        Py_DECREF(indices_arr);
+        return NULL;
+    }
 
-    PyArrayObject *angles_arr = validate_float32_1d(py_angles, "angles");
-    if (angles_arr == NULL) return NULL;
+    PyArrayObject *angles_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_angles, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
+    );
+    if (angles_arr == NULL) {
+        Py_DECREF(indices_arr);
+        Py_DECREF(distances_arr);
+        return NULL;
+    }
 
-    PyArrayObject *dihedrals_arr = validate_float32_1d(py_dihedrals, "dihedrals");
-    if (dihedrals_arr == NULL) return NULL;
+    PyArrayObject *dihedrals_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_dihedrals, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY
+    );
+    if (dihedrals_arr == NULL) {
+        Py_DECREF(indices_arr);
+        Py_DECREF(distances_arr);
+        Py_DECREF(angles_arr);
+        return NULL;
+    }
 
     /* Verify array length consistency */
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
     if (PyArray_DIM(distances_arr, 0) != n_entries ||
         PyArray_DIM(angles_arr, 0) != n_entries ||
         PyArray_DIM(dihedrals_arr, 0) != n_entries) {
+        Py_DECREF(indices_arr);
+        Py_DECREF(distances_arr);
+        Py_DECREF(angles_arr);
+        Py_DECREF(dihedrals_arr);
         PyErr_SetString(PyExc_ValueError,
             "distances, angles, and dihedrals must have same length as indices");
         return NULL;
@@ -141,6 +175,10 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     npy_intp dims[2] = {n_atoms, 3};
     PyObject *py_coords = PyArray_ZEROS(2, dims, NPY_FLOAT32, 0);
     if (py_coords == NULL) {
+        Py_DECREF(indices_arr);
+        Py_DECREF(distances_arr);
+        Py_DECREF(angles_arr);
+        Py_DECREF(dihedrals_arr);
         return PyErr_NoMemory();
     }
 
@@ -152,6 +190,11 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
         indices, (size_t)n_entries,
         distances, angles, dihedrals
     );
+
+    Py_DECREF(indices_arr);
+    Py_DECREF(distances_arr);
+    Py_DECREF(angles_arr);
+    Py_DECREF(dihedrals_arr);
 
     return py_coords;
 }

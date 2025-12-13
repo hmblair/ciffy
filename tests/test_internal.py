@@ -149,6 +149,24 @@ class TestInternalCoordinatesTorchBackend:
 
         assert rmsd.item() < 1e-4, f"RMSD {rmsd.item()} exceeds threshold"
 
+    def test_torch_roundtrip_preserves_device_and_dtype(self):
+        """Ensure C extension path returns tensors on the original device/dtype."""
+        import torch
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu", backend="torch")
+        coords = polymer.coordinates
+
+        internal = polymer.to_internal()  # should route through C extension even for torch
+        assert isinstance(internal.distances, torch.Tensor)
+        assert internal.distances.device == coords.device
+        assert internal.distances.dtype == coords.dtype
+
+        reconstructed = internal.to_cartesian()
+        assert isinstance(reconstructed.coordinates, torch.Tensor)
+        assert reconstructed.coordinates.device == coords.device
+        assert reconstructed.coordinates.dtype == coords.dtype
+
     def test_torch_backend_property(self):
         """Test backend property returns 'torch'."""
         from ciffy import from_sequence

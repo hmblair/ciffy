@@ -176,3 +176,122 @@ class IndexEnum(Enum):
                 pairs.append((x, y))
 
         return PairEnum(pairs)
+
+
+class ResidueType:
+    """
+    A residue definition with index, metadata, and atom access.
+
+    Enables nested access pattern:
+        Residue.A.value         # → residue index
+        Residue.A.C3p.value     # → atom index
+        Residue.A.molecule_type # → Molecule.RNA
+        Residue.A.bonds         # → bond list
+
+    Attributes:
+        value: Residue index (for embedding layers).
+        name: Residue name (e.g., 'A', 'ALA').
+        atoms: The atom enum class for this residue.
+        molecule_type: Molecule type (Molecule.RNA, etc.).
+        abbrev: Single-letter abbreviation.
+    """
+
+    __slots__ = ('_name', '_index', '_atoms', '_molecule_type', '_abbrev')
+
+    def __init__(
+        self,
+        name: str,
+        index: int,
+        atoms: type[IndexEnum],
+        molecule_type: int,
+        abbrev: str,
+    ) -> None:
+        self._name = name
+        self._index = index
+        self._atoms = atoms
+        self._molecule_type = molecule_type
+        self._abbrev = abbrev
+
+    @property
+    def value(self) -> int:
+        """Residue index (for embedding layers)."""
+        return self._index
+
+    @property
+    def name(self) -> str:
+        """Residue name (e.g., 'A', 'ALA')."""
+        return self._name
+
+    @property
+    def atoms(self) -> type[IndexEnum]:
+        """The atom enum class for this residue."""
+        return self._atoms
+
+    @property
+    def molecule_type(self) -> int:
+        """Molecule type (Molecule.RNA, Molecule.PROTEIN, etc.)."""
+        return self._molecule_type
+
+    @property
+    def abbrev(self) -> str:
+        """Single-letter abbreviation."""
+        return self._abbrev
+
+    def __getattr__(self, name: str):
+        """Delegate attribute access to atom enum."""
+        return getattr(self._atoms, name)
+
+    def __iter__(self):
+        """Iterate over atoms."""
+        return iter(self._atoms)
+
+    def __len__(self) -> int:
+        """Number of atoms in this residue."""
+        return len(list(self._atoms))
+
+    def __repr__(self) -> str:
+        return f"Residue.{self._name}"
+
+
+class ResidueMeta(type):
+    """
+    Metaclass enabling iteration and reverse lookup on Residue class.
+
+    Enables:
+        list(Residue)     # → iterate over all residues
+        Residue(0)        # → reverse lookup by index
+        Residue["A"]      # → lookup by name
+        len(Residue)      # → number of residues
+        "A" in Residue    # → containment check
+    """
+
+    _members: dict[str, ResidueType]
+    _by_index: dict[int, ResidueType]
+
+    def __iter__(cls):
+        """Iterate over all residue types."""
+        return iter(cls._members.values())
+
+    def __len__(cls) -> int:
+        """Number of residue types."""
+        return len(cls._members)
+
+    def __call__(cls, index: int) -> ResidueType:
+        """Reverse lookup by index."""
+        if index not in cls._by_index:
+            raise ValueError(f"No residue with index {index}")
+        return cls._by_index[index]
+
+    def __getitem__(cls, name: str) -> ResidueType:
+        """Lookup by name."""
+        if name not in cls._members:
+            raise KeyError(f"No residue named '{name}'")
+        return cls._members[name]
+
+    def __contains__(cls, item) -> bool:
+        """Check if name or ResidueType is in Residue."""
+        if isinstance(item, str):
+            return item in cls._members
+        if isinstance(item, ResidueType):
+            return item in cls._members.values()
+        return False

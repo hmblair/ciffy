@@ -10,12 +10,12 @@ from ._generated_atoms import (
     # RNA
     A, C, G, U,
     # DNA
-    Da, Dc, Dg, Dt,
+    DA, DC, DG, DT,
     # Amino acids
-    Ala, Arg, Asn, Asp, Cys,
-    Gln, Glu, Gly, His, Ile,
-    Leu, Lys, Met, Phe, Pro,
-    Ser, Thr, Trp, Tyr, Val,
+    ALA, ARG, ASN, ASP, CYS,
+    GLN, GLU, GLY, HIS, ILE,
+    LEU, LYS, MET, PHE, PRO,
+    SER, THR, TRP, TYR, VAL,
 )
 
 # Residue groupings
@@ -27,19 +27,19 @@ _RNA_NUCLEOTIDES = [
 ]
 
 _DNA_NUCLEOTIDES = [
-    ("DA_", Da),
-    ("DC_", Dc),
-    ("DG_", Dg),
-    ("DT_", Dt),
+    ("DA_", DA),
+    ("DC_", DC),
+    ("DG_", DG),
+    ("DT_", DT),
 ]
 
 _AMINO_ACIDS = [
-    ("GLY_", Gly), ("ALA_", Ala), ("VAL_", Val), ("LEU_", Leu),
-    ("ILE_", Ile), ("PRO_", Pro), ("PHE_", Phe),
-    ("TRP_", Trp), ("MET_", Met), ("CYS_", Cys),
-    ("SER_", Ser), ("THR_", Thr), ("ASN_", Asn),
-    ("GLN_", Gln), ("ASP_", Asp), ("GLU_", Glu),
-    ("LYS_", Lys), ("ARG_", Arg), ("HIS_", His), ("TYR_", Tyr),
+    ("GLY_", GLY), ("ALA_", ALA), ("VAL_", VAL), ("LEU_", LEU),
+    ("ILE_", ILE), ("PRO_", PRO), ("PHE_", PHE),
+    ("TRP_", TRP), ("MET_", MET), ("CYS_", CYS),
+    ("SER_", SER), ("THR_", THR), ("ASN_", ASN),
+    ("GLN_", GLN), ("ASP_", ASP), ("GLU_", GLU),
+    ("LYS_", LYS), ("ARG_", ARG), ("HIS_", HIS), ("TYR_", TYR),
 ]
 
 # Protein backbone atom names

@@ -15,19 +15,8 @@ import numpy as np
 
 from .polymer import Polymer
 from .types import Scale, Molecule
-from .biochemistry._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
+from .biochemistry._generated_residues import Residue
 from .biochemistry.linking import LINKING_BY_TYPE
-from .biochemistry._generated_atoms import (
-    # RNA nucleotides
-    A, C, G, U,
-    # DNA nucleotides
-    Da, Dc, Dg, Dt,
-    # Amino acids
-    Ala, Arg, Asn, Asp, Cys,
-    Gln, Glu, Gly, His, Ile,
-    Leu, Lys, Met, Phe, Pro,
-    Ser, Thr, Trp, Tyr, Val,
-)
 
 
 # =============================================================================
@@ -63,47 +52,6 @@ _PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT'})
 
 
 # =============================================================================
-# RESIDUE -> ATOM ENUM MAPPING
-# =============================================================================
-
-# Maps Residue enum members to their atom enum classes
-# Only includes residues that can be generated from sequences
-RESIDUE_ATOMS: dict[Residue, type] = {
-    # RNA
-    Residue.A: A,
-    Residue.C: C,
-    Residue.G: G,
-    Residue.U: U,
-    # DNA
-    Residue.DA: Da,
-    Residue.DC: Dc,
-    Residue.DG: Dg,
-    Residue.DT: Dt,
-    # Protein
-    Residue.ALA: Ala,
-    Residue.ARG: Arg,
-    Residue.ASN: Asn,
-    Residue.ASP: Asp,
-    Residue.CYS: Cys,
-    Residue.GLN: Gln,
-    Residue.GLU: Glu,
-    Residue.GLY: Gly,
-    Residue.HIS: His,
-    Residue.ILE: Ile,
-    Residue.LEU: Leu,
-    Residue.LYS: Lys,
-    Residue.MET: Met,
-    Residue.PHE: Phe,
-    Residue.PRO: Pro,
-    Residue.SER: Ser,
-    Residue.THR: Thr,
-    Residue.TRP: Trp,
-    Residue.TYR: Tyr,
-    Residue.VAL: Val,
-}
-
-
-# =============================================================================
 # SEQUENCE CHARACTER MAPPINGS (built from generated data)
 # =============================================================================
 
@@ -111,23 +59,39 @@ def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, in
     """
     Build sequence character -> residue index mappings from generated data.
 
+    Only includes canonical residues for sequence generation.
+
     Returns:
         Tuple of (RNA_MAP, DNA_MAP, AMINO_ACID_MAP).
     """
+    # Canonical residue names for sequence generation
+    canonical_rna = {'A', 'C', 'G', 'U', 'I', 'N'}  # I=inosine, N=unknown
+    canonical_dna = {'DA', 'DC', 'DG', 'DT'}
+    canonical_protein = {
+        'ALA', 'ARG', 'ASN', 'ASP', 'CYS',
+        'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
+        'LEU', 'LYS', 'MET', 'PHE', 'PRO',
+        'SER', 'THR', 'TRP', 'TYR', 'VAL',
+    }
+
     rna_map: dict[str, int] = {}
     dna_map: dict[str, int] = {}
     amino_acid_map: dict[str, int] = {}
 
-    for residue in RESIDUE_ATOMS:
-        idx = residue.value
-        abbrev = RESIDUE_ABBREV[idx]
-        mol_type = RESIDUE_MOLECULE_TYPE[idx]
+    for residue in Residue:
+        # Only include canonical residues with atom definitions
+        if residue.atoms is None:
+            continue
 
-        if mol_type == Molecule.RNA:
+        name = residue.name
+        idx = residue.value
+        abbrev = residue.abbrev
+
+        if name in canonical_rna:
             rna_map[abbrev] = idx
-        elif mol_type == Molecule.DNA:
+        elif name in canonical_dna:
             dna_map[abbrev] = idx
-        elif mol_type == Molecule.PROTEIN:
+        elif name in canonical_protein:
             amino_acid_map[abbrev] = idx
 
     return rna_map, dna_map, amino_acid_map
@@ -187,22 +151,21 @@ def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, 
     except ValueError:
         raise ValueError(f"Invalid residue index: {residue_idx}")
 
-    if residue not in RESIDUE_ATOMS:
+    if residue.atoms is None:
         raise ValueError(f"No atom definitions for residue {residue.name}")
 
-    atom_enum = RESIDUE_ATOMS[residue]
     atom_indices = []
     element_indices = []
     atom_names = []
 
-    for member in atom_enum:
+    for member in residue.atoms:
         atom_indices.append(member.value)
         atom_names.append(member.name)
         atom_name_display = member.name.replace('p', "'")  # C5p -> C5'
         element_indices.append(_atom_name_to_element(atom_name_display))
 
-    # Get ideal coordinates from the atom enum class
-    ideal_coords = atom_enum.ideal.copy()
+    # Get ideal coordinates from the residue (delegates to atom enum)
+    ideal_coords = residue.ideal.copy()
 
     return tuple(atom_indices), tuple(element_indices), tuple(atom_names), ideal_coords
 
@@ -381,7 +344,7 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
     n_residues = len(residue_indices)
 
     # Determine if nucleic acid or protein based on first residue
-    first_mol_type = RESIDUE_MOLECULE_TYPE.get(residue_indices[0])
+    first_mol_type = Residue(residue_indices[0]).molecule_type
     is_nucleic_acid = first_mol_type in (Molecule.RNA, Molecule.DNA)
 
     # Get linking definition for this molecule type
@@ -412,18 +375,28 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         if link_def is not None and prev_link_pos is not None:
             # Find current residue's "start" linking atom (P for NA, N for protein)
             curr_link_idx = _find_atom_index(atom_names, link_def.next_atom)
-            if curr_link_idx is not None:
-                # Target position: prev_link_pos + bond_length in extension direction
-                target_pos = prev_link_pos + extension_dir * link_def.bond_length
-                # Compute offset to move curr_link_atom to target
-                offset = target_pos - positioned_coords[curr_link_idx]
-                positioned_coords = positioned_coords + offset
+            if curr_link_idx is None:
+                res_name = Residue(res_idx).name if res_idx < len(Residue) else f"index {res_idx}"
+                raise ValueError(
+                    f"Linking atom '{link_def.next_atom}' not found in residue {res_name}. "
+                    f"Available atoms: {list(atom_names)[:10]}..."
+                )
+            # Target position: prev_link_pos + bond_length in extension direction
+            target_pos = prev_link_pos + extension_dir * link_def.bond_length
+            # Compute offset to move curr_link_atom to target
+            offset = target_pos - positioned_coords[curr_link_idx]
+            positioned_coords = positioned_coords + offset
 
         # Update prev_link_pos for next residue
         if link_def is not None:
             prev_link_idx = _find_atom_index(atom_names, link_def.prev_atom)
-            if prev_link_idx is not None:
-                prev_link_pos = positioned_coords[prev_link_idx].copy()
+            if prev_link_idx is None:
+                res_name = Residue(res_idx).name if res_idx < len(Residue) else f"index {res_idx}"
+                raise ValueError(
+                    f"Linking atom '{link_def.prev_atom}' not found in residue {res_name}. "
+                    f"Available atoms: {list(atom_names)[:10]}..."
+                )
+            prev_link_pos = positioned_coords[prev_link_idx].copy()
 
         # Filter based on position
         filtered_atoms, filtered_elements, filtered_coords = _filter_atoms_by_position(

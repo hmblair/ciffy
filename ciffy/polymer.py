@@ -23,8 +23,6 @@ from .types.molecule import molecule_type
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .biochemistry import (
     Residue,
-    RESIDUE_ABBREV,
-    RESIDUE_MOLECULE_TYPE,
     ATOM_NAMES,
     ELEMENT_NAMES,
     Backbone,
@@ -111,8 +109,14 @@ def _classify_chain_type(min_idx: int, max_idx: int,
     if min_idx == large_sentinel or max_idx == small_sentinel:
         return Molecule.UNKNOWN.value
 
-    min_type = RESIDUE_MOLECULE_TYPE.get(min_idx, Molecule.UNKNOWN)
-    max_type = RESIDUE_MOLECULE_TYPE.get(max_idx, Molecule.UNKNOWN)
+    try:
+        min_type = Residue(min_idx).molecule_type
+    except ValueError:
+        min_type = Molecule.UNKNOWN
+    try:
+        max_type = Residue(max_idx).molecule_type
+    except ValueError:
+        max_type = Molecule.UNKNOWN
 
     # If min and max agree, use that type; otherwise mark as OTHER (mixed)
     if min_type == max_type:
@@ -1167,7 +1171,10 @@ class Polymer:
             Single-letter sequence string.
         """
         def abbrev(x: int) -> str:
-            return RESIDUE_ABBREV.get(x, 'n')
+            try:
+                return Residue(x).abbrev
+            except ValueError:
+                return 'n'
         return "".join(abbrev(ix.item()) for ix in self.sequence)
 
     def atom_names(self: Polymer) -> list[str]:

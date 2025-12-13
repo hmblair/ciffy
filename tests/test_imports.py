@@ -56,14 +56,14 @@ class TestModuleStructure:
 
     def test_biochemistry_imports(self):
         from ciffy.biochemistry import (
-            Element, Residue, RESIDUE_ABBREV,
+            Element, Residue,
             A, C, G, U,  # CCD names for RNA nucleotides
             RibonucleicAcid,
             Backbone, Nucleobase, Phosphate,
         )
         assert Element.C.value == 6
         assert Residue.A.value == 0
-        assert RESIDUE_ABBREV[Residue.ALA.value] == 'A'
+        assert Residue.ALA.abbrev == 'A'  # New API
         assert A.P.value == 2
 
     def test_operations_imports(self):
@@ -151,7 +151,7 @@ class TestBiochemistryConstants:
 
     def test_backbone_contains_rna_dna_protein(self):
         """Test that Backbone includes atoms from all molecule types."""
-        from ciffy.biochemistry import Backbone, A, Da, Ala  # CCD names
+        from ciffy.biochemistry import Backbone, A, DA, ALA  # CCD names
         backbone_values = set(b.value for b in Backbone)
 
         # RNA backbone (sugar-phosphate)
@@ -159,17 +159,17 @@ class TestBiochemistryConstants:
         assert A.C4p.value in backbone_values
 
         # DNA backbone (sugar-phosphate)
-        assert Da.P.value in backbone_values
-        assert Da.C4p.value in backbone_values
+        assert DA.P.value in backbone_values
+        assert DA.C4p.value in backbone_values
 
         # Protein backbone (N-CA-C-O)
-        assert Ala.N.value in backbone_values
-        assert Ala.CA.value in backbone_values
-        assert Ala.C.value in backbone_values
-        assert Ala.O.value in backbone_values
+        assert ALA.N.value in backbone_values
+        assert ALA.CA.value in backbone_values
+        assert ALA.C.value in backbone_values
+        assert ALA.O.value in backbone_values
 
         # Sidechains should NOT be in backbone
-        assert Ala.CB.value not in backbone_values
+        assert ALA.CB.value not in backbone_values
 
     def test_nucleobase_excludes_backbone(self):
         """Test that Nucleobase only contains base atoms, not backbone."""
@@ -186,18 +186,18 @@ class TestBiochemistryConstants:
 
     def test_sidechain_excludes_backbone(self):
         """Test that Sidechain excludes backbone atoms."""
-        from ciffy.biochemistry import Sidechain, Ala, Lys  # CCD names
+        from ciffy.biochemistry import Sidechain, ALA, LYS  # CCD names
         sidechain_values = set(s.value for s in Sidechain)
 
         # Sidechain atoms should be included
-        assert Ala.CB.value in sidechain_values
-        assert Lys.CE.value in sidechain_values
+        assert ALA.CB.value in sidechain_values
+        assert LYS.CE.value in sidechain_values
 
         # Backbone atoms should NOT be included
-        assert Ala.N.value not in sidechain_values
-        assert Ala.CA.value not in sidechain_values
-        assert Ala.C.value not in sidechain_values
-        assert Ala.O.value not in sidechain_values
+        assert ALA.N.value not in sidechain_values
+        assert ALA.CA.value not in sidechain_values
+        assert ALA.C.value not in sidechain_values
+        assert ALA.O.value not in sidechain_values
 
 
 class TestScaleEnum:

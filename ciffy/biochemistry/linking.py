@@ -3,6 +3,15 @@ Inter-residue linking definitions for polymer chains.
 
 Defines the atoms involved in linking consecutive residues and
 their bond lengths for template positioning.
+
+Supported polymer types:
+- RNA, DNA, HYBRID: Phosphodiester linkage (O3' -> P)
+- PROTEIN, PROTEIN_D, CYCLIC_PEPTIDE: Peptide bond (C -> N)
+
+Unsupported polymer types (no linking definition):
+- POLYSACCHARIDE: Glycosidic bonds vary by sugar type
+- PNA: Synthetic backbone with different linkage
+- LIGAND, ION, WATER, OTHER, UNKNOWN: Non-polymeric
 """
 
 from dataclasses import dataclass
@@ -12,10 +21,21 @@ from ..types import Molecule
 
 @dataclass
 class LinkingDefinition:
-    """Definition for inter-residue bonding."""
-    prev_atom: str      # Atom on residue N (e.g., "O3p" for NA, "C" for protein)
-    next_atom: str      # Atom on residue N+1 (e.g., "P" for NA, "N" for protein)
-    bond_length: float  # Standard bond length in Angstroms
+    """
+    Definition for inter-residue bonding.
+
+    Attributes:
+        prev_atom: Atom name on residue N that forms the bond (e.g., "O3p", "C").
+                   Uses Python naming convention (apostrophe -> p).
+        next_atom: Atom name on residue N+1 that forms the bond (e.g., "P", "N").
+        bond_length: Standard bond length in Angstroms.
+
+    Example:
+        For RNA, residue N's O3' binds to residue N+1's P with ~1.6A bond.
+    """
+    prev_atom: str
+    next_atom: str
+    bond_length: float
 
 
 # Phosphodiester bond: O3' of residue N to P of residue N+1
@@ -33,8 +53,14 @@ PEPTIDE_LINK = LinkingDefinition(
 )
 
 # Map molecule type to linking definition
+# Only polymer types with well-defined inter-residue linkages are included
 LINKING_BY_TYPE: dict[int, LinkingDefinition] = {
+    # Nucleic acids (phosphodiester linkage)
     Molecule.RNA: NUCLEIC_ACID_LINK,
     Molecule.DNA: NUCLEIC_ACID_LINK,
+    Molecule.HYBRID: NUCLEIC_ACID_LINK,
+    # Peptides (peptide bond)
     Molecule.PROTEIN: PEPTIDE_LINK,
+    Molecule.PROTEIN_D: PEPTIDE_LINK,
+    Molecule.CYCLIC_PEPTIDE: PEPTIDE_LINK,
 }

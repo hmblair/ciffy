@@ -5,17 +5,17 @@ Defines atoms, residues, elements, and nucleotide structures.
 """
 
 from ._generated_elements import Element, ELEMENT_NAMES
-from ._generated_residues import Residue, RESIDUE_ABBREV, RESIDUE_MOLECULE_TYPE
+from ._generated_residues import Residue, CIF_RESIDUE_NAMES
 from ._generated_atoms import (
     # RNA (CCD names)
     A, C, G, U,
     # DNA (CCD names)
-    Da, Dc, Dg, Dt,
+    DA, DC, DG, DT,
     # Amino acids (CCD names)
-    Ala, Arg, Asn, Asp, Cys,
-    Gln, Glu, Gly, His, Ile,
-    Leu, Lys, Met, Phe, Pro,
-    Ser, Thr, Trp, Tyr, Val,
+    ALA, ARG, ASN, ASP, CYS,
+    GLN, GLU, GLY, HIS, ILE,
+    LEU, LYS, MET, PHE, PRO,
+    SER, THR, TRP, TYR, VAL,
     # Combined enums
     RibonucleicAcid,
     RibonucleicAcidNoPrefix,
@@ -45,8 +45,8 @@ from .linking import (
 # Number of element types (max index + 1)
 NUM_ELEMENTS: int = max(e.value for e in Element) + 1
 
-# Number of residue types (max index + 1)
-NUM_RESIDUES: int = max(r.value for r in Residue) + 1
+# Number of residue types
+NUM_RESIDUES: int = len(Residue)
 
 # Number of atom types (max index + 1)
 NUM_ATOMS: int = max(ATOM_NAMES.keys()) + 1
@@ -60,26 +60,25 @@ __all__ = [
     # Reverse lookups
     "ATOM_NAMES",
     "ELEMENT_NAMES",
+    "CIF_RESIDUE_NAMES",
     # Elements
     "Element",
     # Residues
     "Residue",
-    "RESIDUE_ABBREV",
-    "RESIDUE_MOLECULE_TYPE",
     # RNA nucleotides
     "A", "C", "G", "U",
     "RibonucleicAcid",
     "RibonucleicAcidNoPrefix",
     # DNA nucleotides
-    "Da", "Dc", "Dg", "Dt",
+    "DA", "DC", "DG", "DT",
     "DeoxyribonucleicAcid",
     # Modified nucleotides
     "ModifiedNucleotides",
     # Amino acids
-    "Ala", "Arg", "Asn", "Asp", "Cys",
-    "Gln", "Glu", "Gly", "His", "Ile",
-    "Leu", "Lys", "Met", "Phe", "Pro",
-    "Ser", "Thr", "Trp", "Tyr", "Val",
+    "ALA", "ARG", "ASN", "ASP", "CYS",
+    "GLN", "GLU", "GLY", "HIS", "ILE",
+    "LEU", "LYS", "MET", "PHE", "PRO",
+    "SER", "THR", "TRP", "TYR", "VAL",
     "AminoAcids",
     # Constants
     "Backbone",

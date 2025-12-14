@@ -5,7 +5,7 @@ import pytest
 
 import ciffy
 from ciffy import DihedralType, Scale
-from ciffy.sampling import randomize_backbone, sample_protein_dihedrals
+from ciffy.sampling import randomize_backbone, sample_protein_dihedrals, sample_rna_dihedrals
 from ciffy.utils.gmm import GaussianMixtureModel
 
 
@@ -231,3 +231,113 @@ class TestFromSequenceWithSampling:
         np.testing.assert_array_almost_equal(
             polymer1.coordinates, polymer2.coordinates
         )
+
+
+class TestSampleRNADihedrals:
+    """Tests for RNA dihedral sampling."""
+
+    def test_sample_rna_dihedrals_keys(self):
+        """Test sample_rna_dihedrals returns correct keys."""
+        dihedrals = sample_rna_dihedrals(10)
+        expected = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "chi"}
+        assert set(dihedrals.keys()) == expected
+
+    def test_sample_rna_dihedrals_shapes(self):
+        """Test sampled arrays have correct shapes."""
+        dihedrals = sample_rna_dihedrals(10)
+        for name, arr in dihedrals.items():
+            assert arr.shape == (10,), f"{name} has wrong shape"
+
+    def test_sample_rna_dihedrals_nan_positions(self):
+        """Test that NaN values are at correct terminal positions."""
+        dihedrals = sample_rna_dihedrals(5)
+
+        # Alpha: first residue has no alpha (requires previous O3')
+        assert np.isnan(dihedrals["alpha"][0])
+        assert not np.isnan(dihedrals["alpha"][1:]).any()
+
+        # Epsilon: last residue has no epsilon (requires next P)
+        assert np.isnan(dihedrals["epsilon"][-1])
+        assert not np.isnan(dihedrals["epsilon"][:-1]).any()
+
+        # Zeta: last residue has no zeta (requires next O5')
+        assert np.isnan(dihedrals["zeta"][-1])
+        assert not np.isnan(dihedrals["zeta"][:-1]).any()
+
+    def test_sample_rna_dihedrals_reproducibility(self):
+        """Test reproducibility with seed."""
+        rng1 = np.random.default_rng(42)
+        rng2 = np.random.default_rng(42)
+
+        dihedrals1 = sample_rna_dihedrals(10, rng=rng1)
+        dihedrals2 = sample_rna_dihedrals(10, rng=rng2)
+
+        for name in dihedrals1:
+            np.testing.assert_array_equal(
+                dihedrals1[name], dihedrals2[name],
+                err_msg=f"Reproducibility failed for {name}"
+            )
+
+    def test_sample_rna_dihedrals_finite(self):
+        """Test that sampled angles are finite."""
+        dihedrals = sample_rna_dihedrals(100)
+
+        for name, arr in dihedrals.items():
+            valid = arr[~np.isnan(arr)]
+            # All non-NaN angles should be finite
+            assert np.all(np.isfinite(valid)), f"{name} has non-finite values"
+
+
+class TestRandomizeBackboneRNA:
+    """Tests for randomize_backbone with RNA polymers.
+
+    Note: These tests currently fail because set_dihedral() doesn't work
+    properly for RNA dihedrals. They will pass after the dihedral type array
+    refactor is complete.
+    """
+
+    @pytest.mark.xfail(reason="set_dihedral() not yet working for RNA - pending dihedral refactor")
+    def test_randomize_backbone_rna_changes_coordinates(self):
+        """Test that randomize_backbone modifies RNA coordinates."""
+        polymer = ciffy.from_sequence("acgu")
+        original_coords = polymer.coordinates.copy()
+
+        polymer = randomize_backbone(polymer, seed=42)
+        new_coords = polymer.coordinates
+
+        # Coordinates should be different
+        assert not np.allclose(original_coords, new_coords)
+
+    def test_randomize_backbone_rna_preserves_size(self):
+        """Test that randomize_backbone preserves RNA polymer size."""
+        polymer = ciffy.from_sequence("acgu")
+        original_size = polymer.size()
+        original_n_res = polymer.size(Scale.RESIDUE)
+
+        polymer = randomize_backbone(polymer, seed=42)
+
+        assert polymer.size() == original_size
+        assert polymer.size(Scale.RESIDUE) == original_n_res
+
+    def test_randomize_backbone_rna_reproducibility(self):
+        """Test that randomize_backbone is reproducible for RNA with seed."""
+        polymer1 = ciffy.from_sequence("acgu")
+        polymer2 = ciffy.from_sequence("acgu")
+
+        polymer1 = randomize_backbone(polymer1, seed=42)
+        polymer2 = randomize_backbone(polymer2, seed=42)
+
+        np.testing.assert_array_almost_equal(
+            polymer1.coordinates, polymer2.coordinates
+        )
+
+    @pytest.mark.xfail(reason="set_dihedral() not yet working for RNA - pending dihedral refactor")
+    def test_randomize_backbone_rna_different_seeds(self):
+        """Test that different seeds produce different RNA results."""
+        polymer1 = ciffy.from_sequence("acgu")
+        polymer2 = ciffy.from_sequence("acgu")
+
+        polymer1 = randomize_backbone(polymer1, seed=42)
+        polymer2 = randomize_backbone(polymer2, seed=123)
+
+        assert not np.allclose(polymer1.coordinates, polymer2.coordinates)

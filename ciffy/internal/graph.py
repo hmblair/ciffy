@@ -20,11 +20,13 @@ try:
     from .._c import _build_bond_graph as _build_bond_graph_c
     from .._c import _edges_to_csr as _edges_to_csr_c
     from .._c import _build_zmatrix_from_csr as _build_zmatrix_from_csr_c
+    from .._c import _build_zmatrix_parallel as _build_zmatrix_parallel_c
     _HAS_C_EXTENSION = True
 except ImportError:
     _HAS_C_EXTENSION = False
     _edges_to_csr_c = None
     _build_zmatrix_from_csr_c = None
+    _build_zmatrix_parallel_c = None
 
 
 # =============================================================================
@@ -342,7 +344,10 @@ def _build_bond_graph_python(polymer: "Polymer") -> tuple[np.ndarray, int]:
 
 def edges_to_csr_neighbors(edges: Array, n_atoms: int) -> tuple[Array, Array]:
     """
-    Convert edge list to CSR-style neighbor lists.
+    Convert edge list to CSR-style neighbor lists using counting sort.
+
+    Uses O(n + n_atoms) counting sort instead of O(n log n) comparison sort
+    for better performance on large graphs.
 
     Args:
         edges: (E, 2) array of directed edges
@@ -351,29 +356,38 @@ def edges_to_csr_neighbors(edges: Array, n_atoms: int) -> tuple[Array, Array]:
     Returns:
         Tuple of:
             offsets: (n_atoms+1,) cumulative neighbor counts
-            neighbors: (E,) flattened neighbor indices, sorted by source
+            neighbors: (E,) flattened neighbor indices, grouped by source
     """
+    n_edges = len(edges)
+
     if is_torch(edges):
         import torch
-        # Sort by source node
-        sort_idx = torch.argsort(edges[:, 0])
-        sorted_edges = edges[sort_idx]
-
-        # Compute offsets using bincount
-        sources = sorted_edges[:, 0]
+        # Count edges per source
+        sources = edges[:, 0]
         counts = torch.bincount(sources, minlength=n_atoms)
-        offsets = torch.cat([torch.tensor([0], device=edges.device), counts.cumsum(0)])
-        neighbors = sorted_edges[:, 1]
-    else:
-        # Sort by source node
-        sort_idx = np.argsort(edges[:, 0])
-        sorted_edges = edges[sort_idx]
+        offsets = torch.cat([torch.tensor([0], device=edges.device, dtype=torch.int64),
+                            counts.cumsum(0)])
 
-        # Compute offsets using bincount
-        sources = sorted_edges[:, 0]
+        # Scatter destinations to output positions (counting sort)
+        neighbors = torch.zeros(n_edges, dtype=edges.dtype, device=edges.device)
+        write_pos = offsets[:-1].clone()
+        for i in range(n_edges):
+            src = int(edges[i, 0])
+            neighbors[write_pos[src]] = edges[i, 1]
+            write_pos[src] += 1
+    else:
+        # Count edges per source
+        sources = edges[:, 0]
         counts = np.bincount(sources, minlength=n_atoms)
-        offsets = np.concatenate([[0], counts.cumsum()])
-        neighbors = sorted_edges[:, 1]
+        offsets = np.concatenate([[0], counts.cumsum()]).astype(np.int64)
+
+        # Scatter destinations to output positions (counting sort)
+        neighbors = np.zeros(n_edges, dtype=edges.dtype)
+        write_pos = offsets[:-1].copy()
+        for i in range(n_edges):
+            src = edges[i, 0]
+            neighbors[write_pos[src]] = edges[i, 1]
+            write_pos[src] += 1
 
     return offsets, neighbors
 
@@ -539,7 +553,7 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
     res_sizes = polymer.sizes(Scale.RESIDUE)
 
     # Try C fast-path for entire Z-matrix construction
-    if _HAS_C_EXTENSION and _edges_to_csr_c is not None and _build_zmatrix_from_csr_c is not None:
+    if _HAS_C_EXTENSION and _edges_to_csr_c is not None:
         try:
             # Convert to CSR once for all chains
             offsets, neighbors = _edges_to_csr_c(
@@ -547,7 +561,11 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
                 n_atoms
             )
 
-            all_entries = []
+            # Collect chain info for parallel processing
+            chain_starts = []
+            chain_sizes_list = []
+            roots = []
+
             res_offset = 0
             atom_offset = 0
 
@@ -570,23 +588,49 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
                 # Select root atom
                 root = select_root_atom(polymer, atom_offset, chain_atom_count, res_offset)
 
-                # Use C function for Z-matrix construction (CSR already built)
-                chain_zmatrix = _build_zmatrix_from_csr_c(
-                    offsets,
-                    neighbors,
-                    n_atoms,
-                    atom_offset,
-                    chain_atom_count,
-                    root
-                )
-                all_entries.append(chain_zmatrix)
+                chain_starts.append(atom_offset)
+                chain_sizes_list.append(chain_atom_count)
+                roots.append(root)
 
                 res_offset += chain_len_val
                 atom_offset += chain_atom_count
 
-            # Concatenate all chain Z-matrices
-            if len(all_entries) == 0:
+            if len(chain_starts) == 0:
                 return np.zeros((0, 4), dtype=np.int64)
+
+            # Use parallel C function if available (OpenMP)
+            if _build_zmatrix_parallel_c is not None:
+                zmatrix, counts = _build_zmatrix_parallel_c(
+                    offsets,
+                    neighbors,
+                    n_atoms,
+                    np.array(chain_starts, dtype=np.int64),
+                    np.array(chain_sizes_list, dtype=np.int64),
+                    np.array(roots, dtype=np.int64)
+                )
+                # Trim to actual entries (some chains may have fewer entries than atoms)
+                total_entries = int(counts.sum())
+                if total_entries < len(zmatrix):
+                    # Need to compact the results
+                    result = np.zeros((total_entries, 4), dtype=np.int64)
+                    src_offset = 0
+                    dst_offset = 0
+                    for i, (size, count) in enumerate(zip(chain_sizes_list, counts)):
+                        count = int(count)
+                        result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
+                        src_offset += size
+                        dst_offset += count
+                    return result
+                return zmatrix[:total_entries]
+
+            # Fallback to sequential C (if parallel not available)
+            all_entries = []
+            for chain_start, chain_size, root in zip(chain_starts, chain_sizes_list, roots):
+                chain_zmatrix = _build_zmatrix_from_csr_c(
+                    offsets, neighbors, n_atoms,
+                    chain_start, chain_size, root
+                )
+                all_entries.append(chain_zmatrix)
 
             return np.vstack(all_entries)
 

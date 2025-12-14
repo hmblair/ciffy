@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 /* Maximum atom value we can handle for the lookup table */
 #define MAX_ATOM_VALUE 4096
 
@@ -310,49 +314,43 @@ int edges_to_csr(
     int64_t *out_offsets,
     int64_t *out_neighbors
 ) {
+    /* Initialize offsets to zero */
+    memset(out_offsets, 0, (size_t)(n_atoms + 1) * sizeof(int64_t));
+
     if (n_edges == 0) {
-        /* Empty graph: just zero offsets */
-        for (int64_t i = 0; i <= n_atoms; i++) {
-            out_offsets[i] = 0;
-        }
         return 0;
     }
 
-    /* Allocate temporary sorted edges array */
-    int64_t *sorted_edges = (int64_t *)malloc((size_t)n_edges * 2 * sizeof(int64_t));
-    if (sorted_edges == NULL) {
-        return -1;
-    }
-
-    /* Copy and sort edges by source node */
-    memcpy(sorted_edges, edges, (size_t)n_edges * 2 * sizeof(int64_t));
-    qsort(sorted_edges, (size_t)n_edges, 2 * sizeof(int64_t), compare_edges_by_source);
-
-    /* Initialize offsets to zero */
-    for (int64_t i = 0; i <= n_atoms; i++) {
-        out_offsets[i] = 0;
-    }
-
-    /* Count edges per source node */
+    /* Pass 1: Count edges per source node */
     for (int64_t i = 0; i < n_edges; i++) {
-        int64_t src = sorted_edges[i * 2];
+        int64_t src = edges[i * 2];
         if (src >= 0 && src < n_atoms) {
             out_offsets[src + 1]++;
         }
     }
 
-    /* Cumulative sum to get offsets */
+    /* Cumulative sum to get final offsets */
     for (int64_t i = 1; i <= n_atoms; i++) {
         out_offsets[i] += out_offsets[i - 1];
     }
 
-    /* Fill neighbors array */
+    /* Allocate temporary write positions (copy of offsets) */
+    int64_t *write_pos = (int64_t *)malloc((size_t)n_atoms * sizeof(int64_t));
+    if (write_pos == NULL) {
+        return -1;
+    }
+    memcpy(write_pos, out_offsets, (size_t)n_atoms * sizeof(int64_t));
+
+    /* Pass 2: Scatter edges to final positions (counting sort) */
     for (int64_t i = 0; i < n_edges; i++) {
-        int64_t dst = sorted_edges[i * 2 + 1];
-        out_neighbors[i] = dst;
+        int64_t src = edges[i * 2];
+        int64_t dst = edges[i * 2 + 1];
+        if (src >= 0 && src < n_atoms) {
+            out_neighbors[write_pos[src]++] = dst;
+        }
     }
 
-    free(sorted_edges);
+    free(write_pos);
     return 0;
 }
 
@@ -518,4 +516,79 @@ int64_t build_zmatrix_from_csr(
     free(queue);
 
     return order_len;
+}
+
+
+int64_t build_zmatrix_parallel(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    const int64_t *chain_starts,
+    const int64_t *chain_sizes,
+    const int64_t *roots,
+    int64_t n_chains,
+    int64_t *out_zmatrix,
+    int64_t *out_counts
+) {
+    if (n_chains == 0) return 0;
+
+    /* Compute output offsets for each chain (where each chain's Z-matrix starts) */
+    int64_t *output_offsets = (int64_t *)malloc((size_t)(n_chains + 1) * sizeof(int64_t));
+    if (output_offsets == NULL) return -1;
+
+    output_offsets[0] = 0;
+    for (int64_t i = 0; i < n_chains; i++) {
+        output_offsets[i + 1] = output_offsets[i] + chain_sizes[i];
+    }
+
+    int error_flag = 0;
+
+    /* Process chains in parallel */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int64_t c = 0; c < n_chains; c++) {
+        if (error_flag) continue;  /* Skip if error occurred */
+
+        int64_t chain_start = chain_starts[c];
+        int64_t chain_size = chain_sizes[c];
+        int64_t root = roots[c];
+
+        if (chain_size == 0) {
+            out_counts[c] = 0;
+            continue;
+        }
+
+        /* Output location for this chain's Z-matrix */
+        int64_t *chain_output = &out_zmatrix[output_offsets[c] * 4];
+
+        /* Build Z-matrix for this chain */
+        int64_t count = build_zmatrix_from_csr(
+            offsets, neighbors, n_atoms,
+            chain_start, chain_size, root,
+            chain_output
+        );
+
+        if (count < 0) {
+#ifdef _OPENMP
+            #pragma omp atomic write
+#endif
+            error_flag = 1;
+            out_counts[c] = 0;
+        } else {
+            out_counts[c] = count;
+        }
+    }
+
+    free(output_offsets);
+
+    if (error_flag) return -1;
+
+    /* Compute total entries */
+    int64_t total = 0;
+    for (int64_t c = 0; c < n_chains; c++) {
+        total += out_counts[c];
+    }
+
+    return total;
 }

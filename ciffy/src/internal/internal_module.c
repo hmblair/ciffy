@@ -517,3 +517,146 @@ PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args) {
 
     return py_zmatrix;
 }
+
+
+/**
+ * Build Z-matrix for all chains in parallel using OpenMP.
+ *
+ * Python signature:
+ *   _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots) -> (zmatrix, counts)
+ *
+ * Args:
+ *   offsets: (n_atoms+1,) int64 array of CSR offsets.
+ *   neighbors: (E,) int64 array of neighbor indices.
+ *   n_atoms: Total number of atoms (int).
+ *   chain_starts: (n_chains,) int64 array of first atom index per chain.
+ *   chain_sizes: (n_chains,) int64 array of atoms per chain.
+ *   roots: (n_chains,) int64 array of root atom index per chain.
+ *
+ * Returns:
+ *   Tuple of (zmatrix, counts):
+ *     zmatrix: (total_atoms, 4) int64 Z-matrix entries.
+ *     counts: (n_chains,) int64 entries written per chain.
+ */
+PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_offsets, *py_neighbors, *py_chain_starts, *py_chain_sizes, *py_roots;
+    int n_atoms;
+
+    if (!PyArg_ParseTuple(args, "OOiOOO",
+                          &py_offsets, &py_neighbors, &n_atoms,
+                          &py_chain_starts, &py_chain_sizes, &py_roots)) {
+        return NULL;
+    }
+
+    /* Validate arrays */
+    PyArrayObject *offsets_arr = require_array_1d(py_offsets, NPY_INT64, "offsets");
+    if (offsets_arr == NULL) return NULL;
+
+    PyArrayObject *neighbors_arr = require_array_1d(py_neighbors, NPY_INT64, "neighbors");
+    if (neighbors_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        return NULL;
+    }
+
+    PyArrayObject *chain_starts_arr = require_array_1d(py_chain_starts, NPY_INT64, "chain_starts");
+    if (chain_starts_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        return NULL;
+    }
+
+    PyArrayObject *chain_sizes_arr = require_array_1d(py_chain_sizes, NPY_INT64, "chain_sizes");
+    if (chain_sizes_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        return NULL;
+    }
+
+    PyArrayObject *roots_arr = require_array_1d(py_roots, NPY_INT64, "roots");
+    if (roots_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        return NULL;
+    }
+
+    /* Get array sizes */
+    npy_intp n_chains = PyArray_DIM(chain_starts_arr, 0);
+
+    /* Verify all chain arrays have same length */
+    if (PyArray_DIM(chain_sizes_arr, 0) != n_chains ||
+        PyArray_DIM(roots_arr, 0) != n_chains) {
+        PyErr_SetString(PyExc_ValueError,
+            "chain_starts, chain_sizes, and roots must have same length");
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        Py_DECREF(roots_arr);
+        return NULL;
+    }
+
+    /* Get data pointers */
+    const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
+    const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
+    const int64_t *chain_starts = (const int64_t *)PyArray_DATA(chain_starts_arr);
+    const int64_t *chain_sizes = (const int64_t *)PyArray_DATA(chain_sizes_arr);
+    const int64_t *roots = (const int64_t *)PyArray_DATA(roots_arr);
+
+    /* Compute total output size */
+    int64_t total_size = 0;
+    for (npy_intp i = 0; i < n_chains; i++) {
+        total_size += chain_sizes[i];
+    }
+
+    /* Allocate output arrays */
+    npy_intp zmat_dims[2] = {total_size, 4};
+    npy_intp counts_dims[1] = {n_chains};
+
+    PyObject *py_zmatrix = PyArray_SimpleNew(2, zmat_dims, NPY_INT64);
+    PyObject *py_counts = PyArray_SimpleNew(1, counts_dims, NPY_INT64);
+
+    if (py_zmatrix == NULL || py_counts == NULL) {
+        Py_XDECREF(py_zmatrix);
+        Py_XDECREF(py_counts);
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        Py_DECREF(roots_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
+    int64_t *counts = (int64_t *)PyArray_DATA((PyArrayObject *)py_counts);
+
+    /* Build Z-matrices in parallel */
+    int64_t result = build_zmatrix_parallel(
+        offsets, neighbors, n_atoms,
+        chain_starts, chain_sizes, roots,
+        n_chains, zmatrix, counts
+    );
+
+    Py_DECREF(offsets_arr);
+    Py_DECREF(neighbors_arr);
+    Py_DECREF(chain_starts_arr);
+    Py_DECREF(chain_sizes_arr);
+    Py_DECREF(roots_arr);
+
+    if (result < 0) {
+        Py_DECREF(py_zmatrix);
+        Py_DECREF(py_counts);
+        return PyErr_NoMemory();
+    }
+
+    /* Build result tuple */
+    PyObject *tuple = PyTuple_Pack(2, py_zmatrix, py_counts);
+    Py_DECREF(py_zmatrix);
+    Py_DECREF(py_counts);
+
+    return tuple;
+}

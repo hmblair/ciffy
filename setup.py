@@ -151,11 +151,24 @@ class GenerateAndSdist(sdist):
 
 # Build compile args
 extra_compile_args = ['-O3']
+extra_link_args = []
 
 # Enable profiling if CIFFY_PROFILE environment variable is set
 if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):
     extra_compile_args.append('-DCIFFY_PROFILE')
     print("Profiling enabled: building with -DCIFFY_PROFILE")
+
+# Enable OpenMP unless CIFFY_NO_OPENMP is set
+if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
+    if sys.platform == 'darwin':
+        # macOS: use clang's OpenMP (requires libomp: brew install libomp)
+        extra_compile_args.extend(['-Xpreprocessor', '-fopenmp'])
+        extra_link_args.append('-lomp')
+    else:
+        # Linux/Windows: standard OpenMP flags
+        extra_compile_args.append('-fopenmp')
+        extra_link_args.append('-fopenmp')
+    print("OpenMP enabled for parallel Z-matrix construction")
 
 # C extension module
 ext_module = Extension(
@@ -175,6 +188,7 @@ ext_module = Extension(
     ],
     include_dirs=[numpy.get_include(), 'ciffy/src'],
     extra_compile_args=extra_compile_args,
+    extra_link_args=extra_link_args,
 )
 
 setup(

@@ -778,6 +778,17 @@ static PyMethodDef methods[] = {
      "    root (int): Root atom index for BFS.\n\n"
      "Returns:\n"
      "    ndarray: (M, 4) int64 Z-matrix [atom_idx, dist_ref, ang_ref, dih_ref].\n"},
+    {"_build_zmatrix_parallel", py_build_zmatrix_parallel, METH_VARARGS,
+     "Build Z-matrix for all chains in parallel using OpenMP.\n\n"
+     "Args:\n"
+     "    offsets (ndarray): (n_atoms+1,) int64 CSR offsets.\n"
+     "    neighbors (ndarray): (E,) int64 neighbor indices.\n"
+     "    n_atoms (int): Total number of atoms.\n"
+     "    chain_starts (ndarray): (n_chains,) int64 first atom per chain.\n"
+     "    chain_sizes (ndarray): (n_chains,) int64 atoms per chain.\n"
+     "    roots (ndarray): (n_chains,) int64 root atom per chain.\n\n"
+     "Returns:\n"
+     "    tuple: (zmatrix, counts) - Z-matrix entries and per-chain counts.\n"},
     {NULL, NULL, 0, NULL}
 };
 

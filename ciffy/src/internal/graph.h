@@ -94,4 +94,31 @@ int edges_to_csr(
     int64_t *out_neighbors
 );
 
+
+/**
+ * Build Z-matrix for all chains in parallel using OpenMP.
+ *
+ * @param offsets       (n_atoms+1,) CSR offsets
+ * @param neighbors     (n_edges,) CSR neighbor indices
+ * @param n_atoms       Total number of atoms
+ * @param chain_starts  (n_chains,) int64 first atom index per chain
+ * @param chain_sizes   (n_chains,) int64 number of atoms per chain
+ * @param roots         (n_chains,) int64 root atom index per chain
+ * @param n_chains      Number of chains
+ * @param out_zmatrix   Output: (total_atoms, 4) int64 Z-matrix (caller allocates)
+ * @param out_counts    Output: (n_chains,) int64 entries written per chain
+ * @return              Total entries written, or -1 on error
+ */
+int64_t build_zmatrix_parallel(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    const int64_t *chain_starts,
+    const int64_t *chain_sizes,
+    const int64_t *roots,
+    int64_t n_chains,
+    int64_t *out_zmatrix,
+    int64_t *out_counts
+);
+
 #endif /* _CIFFY_GRAPH_H */

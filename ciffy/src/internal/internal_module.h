@@ -38,4 +38,10 @@ PyObject *py_edges_to_csr(PyObject *self, PyObject *args);
  */
 PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args);
 
+/**
+ * Build Z-matrix for all chains in parallel.
+ * Python: _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots) -> (zmatrix, counts)
+ */
+PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

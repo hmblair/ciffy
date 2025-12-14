@@ -271,7 +271,7 @@ class Polymer:
                 f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.id()}."
             )
 
-        self._coordinates = coordinates
+        # Store atomic properties
         self._atoms = atoms
         self._elements = elements
         self._sequence = sequence
@@ -280,21 +280,34 @@ class Polymer:
         self._molecule_types = molecule_types
         self.descriptions = descriptions
 
+        # Initialize coordinate manager with Cartesian coordinates
+        from .internal.coordinates import CoordinateManager
+        self._coord_manager = CoordinateManager(coordinates, self)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Array Properties (with backend/device validation)
     # ─────────────────────────────────────────────────────────────────────────
 
     @property
     def coordinates(self) -> Array:
-        """(N, 3) tensor of atom positions."""
-        return self._coordinates
+        """
+        (N, 3) tensor of atom positions.
+
+        Automatically reconstructed from internal coordinates if needed.
+        """
+        return self._coord_manager.coordinates
 
     @coordinates.setter
     def coordinates(self, value: Array) -> None:
-        """Set coordinates with backend/device validation."""
-        if hasattr(self, '_coordinates') and self._coordinates is not None:
-            check_compatible(self._coordinates, value, "coordinates")
-        self._coordinates = value
+        """
+        Set coordinates with backend/device validation.
+
+        Invalidates internal coordinate representation.
+        """
+        # Validate backend compatibility
+        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
+            check_compatible(self._coord_manager._coordinates, value, "coordinates")
+        self._coord_manager.coordinates = value
 
     @property
     def atoms(self) -> Array:
@@ -304,8 +317,8 @@ class Polymer:
     @atoms.setter
     def atoms(self, value: Array) -> None:
         """Set atoms with backend/device validation."""
-        if hasattr(self, '_coordinates') and self._coordinates is not None:
-            check_compatible(self._coordinates, value, "atoms")
+        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
+            check_compatible(self._coord_manager._coordinates, value, "atoms")
         self._atoms = value
 
     @property
@@ -316,8 +329,8 @@ class Polymer:
     @elements.setter
     def elements(self, value: Array) -> None:
         """Set elements with backend/device validation."""
-        if hasattr(self, '_coordinates') and self._coordinates is not None:
-            check_compatible(self._coordinates, value, "elements")
+        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
+            check_compatible(self._coord_manager._coordinates, value, "elements")
         self._elements = value
 
     @property
@@ -328,8 +341,8 @@ class Polymer:
     @sequence.setter
     def sequence(self, value: Array) -> None:
         """Set sequence with backend/device validation."""
-        if hasattr(self, '_coordinates') and self._coordinates is not None:
-            check_compatible(self._coordinates, value, "sequence")
+        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
+            check_compatible(self._coord_manager._coordinates, value, "sequence")
         self._sequence = value
 
     @property
@@ -340,9 +353,134 @@ class Polymer:
     @lengths.setter
     def lengths(self, value: Array) -> None:
         """Set lengths with backend/device validation."""
-        if hasattr(self, '_coordinates') and self._coordinates is not None:
-            check_compatible(self._coordinates, value, "lengths")
+        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
+            check_compatible(self._coord_manager._coordinates, value, "lengths")
         self._lengths = value
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Internal Coordinate Properties
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def distances(self) -> Array:
+        """
+        Bond lengths in internal coordinate representation.
+
+        Returns:
+            (N,) array of bond lengths in Angstroms.
+
+        Note:
+            Automatically computed from Cartesian coordinates if needed.
+        """
+        return self._coord_manager.distances
+
+    @distances.setter
+    def distances(self, value: Array) -> None:
+        """
+        Set bond lengths.
+
+        Invalidates Cartesian coordinate representation.
+        """
+        self._coord_manager.distances = value
+
+    @property
+    def angles(self) -> Array:
+        """
+        Bond angles in internal coordinate representation.
+
+        Returns:
+            (N,) array of bond angles in radians.
+
+        Note:
+            Automatically computed from Cartesian coordinates if needed.
+        """
+        return self._coord_manager.angles
+
+    @angles.setter
+    def angles(self, value: Array) -> None:
+        """
+        Set bond angles.
+
+        Invalidates Cartesian coordinate representation.
+        """
+        self._coord_manager.angles = value
+
+    @property
+    def dihedrals(self) -> Array:
+        """
+        Dihedral angles in internal coordinate representation.
+
+        Returns:
+            (N,) array of dihedral angles in radians.
+
+        Note:
+            Automatically computed from Cartesian coordinates if needed.
+        """
+        return self._coord_manager.dihedrals
+
+    @dihedrals.setter
+    def dihedrals(self, value: Array) -> None:
+        """
+        Set dihedral angles.
+
+        Invalidates Cartesian coordinate representation.
+        """
+        self._coord_manager.dihedrals = value
+
+    @property
+    def zmatrix(self) -> list:
+        """
+        Z-matrix structure defining internal coordinate references.
+
+        Returns:
+            List of ZMatrixEntry objects.
+
+        Note:
+            Z-matrix is built automatically when first accessing internal coordinates.
+        """
+        return self._coord_manager.zmatrix
+
+    def dihedral(self, dtype: "DihedralType") -> Array:
+        """
+        Get specific named dihedral angles.
+
+        Args:
+            dtype: Type of dihedral to retrieve (e.g., DihedralType.PHI).
+
+        Returns:
+            Array of dihedral values in radians (one per applicable residue).
+
+        Raises:
+            ValueError: If the specified dihedral type is not found.
+
+        Example:
+            >>> from ciffy import DihedralType
+            >>> phi = polymer.dihedral(DihedralType.PHI)
+            >>> psi = polymer.dihedral(DihedralType.PSI)
+        """
+        from .types import DihedralType
+        return self._coord_manager.get_dihedral(dtype)
+
+    def set_dihedral(self, dtype: "DihedralType", values: Array) -> None:
+        """
+        Set specific named dihedral angles.
+
+        Args:
+            dtype: Type of dihedral to set (e.g., DihedralType.PHI).
+            values: New dihedral values in radians.
+
+        Raises:
+            ValueError: If the specified dihedral type is not found.
+
+        Example:
+            >>> from ciffy import DihedralType
+            >>> import numpy as np
+            >>> # Set all phi angles to -60 degrees
+            >>> n_res = polymer.size(Scale.RESIDUE)
+            >>> polymer.set_dihedral(DihedralType.PHI, np.full(n_res-1, -np.pi/3))
+        """
+        from .types import DihedralType
+        self._coord_manager.set_dihedral(dtype, values)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -692,7 +830,9 @@ class Polymer:
         coordinates = self.coordinates - expanded
 
         centered = copy(self)
-        centered.coordinates = coordinates
+        # Create a new coordinate manager for the copy
+        from .internal.coordinates import CoordinateManager
+        centered._coord_manager = CoordinateManager(coordinates, centered)
 
         return centered, means
 
@@ -1313,7 +1453,9 @@ class Polymer:
         from .backend import to_numpy, is_numpy
         if is_numpy(self.coordinates):
             return self
-        return Polymer(
+
+        # Create new polymer with converted arrays
+        result = Polymer(
             coordinates=to_numpy(self.coordinates),
             atoms=to_numpy(self.atoms),
             elements=to_numpy(self.elements),
@@ -1326,6 +1468,12 @@ class Polymer:
             polymer_count=self.polymer_count,
             molecule_types=to_numpy(self._molecule_types) if self._molecule_types is not None else None,
         )
+
+        # Replace coordinate manager with converted one
+        result._coord_manager = self._coord_manager.to_numpy()
+        result._coord_manager._polymer = result
+
+        return result
 
     def torch(self: Polymer) -> Polymer:
         """
@@ -1340,7 +1488,9 @@ class Polymer:
         from .backend import to_torch, is_torch
         if is_torch(self.coordinates):
             return self
-        return Polymer(
+
+        # Create new polymer with converted arrays
+        result = Polymer(
             coordinates=to_torch(self.coordinates).float(),
             atoms=to_torch(self.atoms).long(),
             elements=to_torch(self.elements).long(),
@@ -1353,6 +1503,12 @@ class Polymer:
             polymer_count=self.polymer_count,
             molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
         )
+
+        # Replace coordinate manager with converted one
+        result._coord_manager = self._coord_manager.to_torch()
+        result._coord_manager._polymer = result
+
+        return result
 
     def to_internal(self: Polymer) -> "InternalPolymer":
         """
@@ -1425,7 +1581,8 @@ class Polymer:
         def move_int(t):
             return t.to(device) if device is not None else t
 
-        return Polymer(
+        # Create new polymer with moved arrays
+        result = Polymer(
             coordinates=coords,
             atoms=move_int(self.atoms),
             elements=move_int(self.elements),
@@ -1437,6 +1594,39 @@ class Polymer:
             lengths=move_int(self.lengths),
             polymer_count=self.polymer_count,
         )
+
+        # Replace coordinate manager with one moved to device/dtype
+        if device is not None or dtype is not None:
+            from .internal.coordinates import CoordinateManager
+            # Create new coordinate manager with updated coordinates
+            result._coord_manager = CoordinateManager(coords, result)
+
+            # If internal coordinates were computed, convert them too
+            if self._coord_manager._internal_valid:
+                # Apply device and/or dtype conversion to internal coordinates
+                def convert_tensor(t):
+                    if t is None:
+                        return None
+                    if device is not None:
+                        t = t.to(device)
+                    if dtype is not None:
+                        t = t.to(dtype)
+                    return t
+
+                result._coord_manager._distances = convert_tensor(self._coord_manager._distances)
+                result._coord_manager._angles = convert_tensor(self._coord_manager._angles)
+                result._coord_manager._dihedrals = convert_tensor(self._coord_manager._dihedrals)
+                result._coord_manager._orphan_coords = convert_tensor(self._coord_manager._orphan_coords)
+                result._coord_manager._internal_valid = True
+                result._coord_manager._zmatrix = self._coord_manager._zmatrix
+                result._coord_manager._orphan_atoms = self._coord_manager._orphan_atoms
+                if self._coord_manager._dihedral_indices is not None:
+                    result._coord_manager._dihedral_indices = {
+                        k: v.to(device) if device is not None else v
+                        for k, v in self._coord_manager._dihedral_indices.items()
+                    }
+
+        return result
 
     # ─────────────────────────────────────────────────────────────────────────
     # I/O
@@ -1488,6 +1678,11 @@ class Polymer:
             TypeError: If backend doesn't match.
             ValueError: If device doesn't match (for PyTorch tensors).
         """
+        # Validate backend and device compatibility
+        check_compatible(self.coordinates, coordinates, "coordinates")
+
         result = copy(self)
-        result.coordinates = coordinates
+        # Create a new coordinate manager for the copy (to avoid sharing state)
+        from .internal.coordinates import CoordinateManager
+        result._coord_manager = CoordinateManager(coordinates, result)
         return result

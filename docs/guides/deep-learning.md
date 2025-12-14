@@ -396,46 +396,51 @@ for sequence, target_cif in dataset:
 
 ## Internal Coordinates
 
-For conformational sampling and structure generation, use internal coordinates (bond lengths, angles, dihedrals):
+Polymer supports dual representation: you can access both Cartesian (XYZ) and internal (bond length, angle, dihedral) coordinates transparently. Conversions happen automatically with lazy evaluation.
 
 ```python
 import ciffy
 
-# Convert Cartesian to internal coordinates
+# Load structure - internal coords computed on first access
 polymer = ciffy.load("structure.cif", backend="torch")
-internal = polymer.to_internal()
 
-# Access internal coordinate arrays
-print(internal.distances.shape)   # (N,) bond lengths
-print(internal.angles.shape)      # (N,) bond angles
-print(internal.dihedrals.shape)   # (N,) dihedral angles
+# Access internal coordinate arrays (computed lazily)
+print(polymer.distances.shape)   # (N,) bond lengths
+print(polymer.angles.shape)      # (N,) bond angles
+print(polymer.dihedrals.shape)   # (N,) dihedral angles
 
-# Access named backbone dihedrals
-phi = internal.phi    # Protein phi angles
-psi = internal.psi    # Protein psi angles
+# Access named backbone dihedrals using enum
+phi = polymer.dihedral(ciffy.DihedralType.PHI)    # Protein phi angles
+psi = polymer.dihedral(ciffy.DihedralType.PSI)    # Protein psi angles
+omega = polymer.dihedral(ciffy.DihedralType.OMEGA)  # Protein omega angles
+
+# Nucleic acid dihedrals
+alpha = polymer.dihedral(ciffy.DihedralType.ALPHA)
+beta = polymer.dihedral(ciffy.DihedralType.BETA)
+# ... gamma, delta, epsilon, zeta, chi_purine, chi_pyrimidine
 ```
 
 ### Differentiable Reconstruction
 
-The conversion back to Cartesian is fully differentiable:
+Modifications to internal coordinates trigger automatic Cartesian reconstruction (fully differentiable):
 
 ```python
 polymer = ciffy.load("structure.cif", backend="torch")
-internal = polymer.to_internal()
 
 # Enable gradients on dihedrals
-internal.dihedrals.requires_grad_(True)
+dihedrals = polymer.dihedrals.requires_grad_(True)
+polymer.dihedrals = dihedrals
 
-# Reconstruct Cartesian coordinates (differentiable)
-reconstructed = internal.to_cartesian()
+# Cartesian coordinates auto-reconstructed on next access (differentiable)
+coords = polymer.coordinates  # NERF reconstruction happens here
 
 # Compute loss and backprop
 target = ciffy.load("target.cif", backend="torch")
-loss = ciffy.rmsd(reconstructed, target)
+loss = ciffy.rmsd(polymer, target)
 loss.backward()
 
 # Gradients flow to dihedral angles
-print(internal.dihedrals.grad)
+print(dihedrals.grad)
 ```
 
 ### Conformational Sampling
@@ -446,15 +451,32 @@ Modify dihedrals to generate new conformations:
 import torch
 
 polymer = ciffy.load("structure.cif", backend="torch")
-internal = polymer.to_internal()
 
 # Perturb backbone dihedrals
-noise = torch.randn_like(internal.dihedrals) * 0.1
-new_dihedrals = internal.dihedrals + noise
+noise = torch.randn_like(polymer.dihedrals) * 0.1
+new_dihedrals = polymer.dihedrals + noise
+polymer.dihedrals = new_dihedrals
 
-# Create modified structure
-modified = internal.with_dihedrals(new_dihedrals)
-new_structure = modified.to_cartesian()
+# Cartesian coordinates automatically recomputed
+new_coords = polymer.coordinates
+```
+
+### Modifying Named Dihedrals
+
+Set specific backbone angles while preserving others:
+
+```python
+polymer = ciffy.load("structure.cif", backend="torch")
+
+# Get current phi angles
+phi = polymer.dihedral(ciffy.DihedralType.PHI)
+
+# Modify phi angles
+new_phi = phi + torch.randn_like(phi) * 0.1
+polymer.set_dihedral(ciffy.DihedralType.PHI, new_phi)
+
+# Cartesian coordinates auto-update on next access
+coords = polymer.coordinates
 ```
 
 ### Structure Generation from Dihedrals
@@ -470,13 +492,12 @@ class DihedralPredictor(nn.Module):
 
     def forward(self, template):
         # Predict dihedral angles for each atom
-        internal = template.to_internal()
         h = self.encoder(...)
         pred_dihedrals = self.dihedral_head(h).squeeze(-1)
 
-        # Reconstruct with predicted dihedrals
-        modified = internal.with_dihedrals(pred_dihedrals)
-        return modified.to_cartesian()
+        # Set dihedrals (Cartesian auto-recomputed)
+        template.dihedrals = pred_dihedrals
+        return template.coordinates
 ```
 
 ## Performance Tips

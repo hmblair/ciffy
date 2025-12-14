@@ -1,0 +1,68 @@
+HIGH Priority
+Fix Multi-Chain Cartesian Reconstruction
+
+Goal: Multi-chain structures lose relative orientation when reconstructed from internal representation. The NERF algorithm places first atoms at origin, requiring storage and restoration of chain relative positions.
+
+Files likely affected:
+
+    ciffy/internal/nerf.py - NERF reconstruction algorithm
+    ciffy/internal/internal_polymer.py - Internal representation storage
+    ciffy/polymer.py - Cartesian to internal conversion methods
+    ciffy/src/internal/geometry.c - C implementation of reconstruction
+    tests/test_internal.py - Multi-chain reconstruction tests
+
+Cartesian-to-Internal Backward Pass
+
+Goal: Implement backward pass for C conversion functions to enable gradient flow.
+
+Files likely affected:
+
+    ciffy/src/internal/geometry.c - C conversion implementations
+    ciffy/src/internal/batch.c - Batch processing functions
+    ciffy/backend/torch_ops.py - PyTorch autograd integration
+    tests/test_internal.py - Gradient testing
+
+Full NN + Internal Test
+
+Goal: End-to-end test: sequence → embedding → dihedral prediction → structure → RMSD → gradient flow.
+
+Files likely affected:
+
+    tests/test_nn.py - Neural network integration tests
+    ciffy/nn/embedding.py - Embedding dimension validation
+    ciffy/template.py - Template from sequence construction
+    ciffy/operations/metrics.py - RMSD computation
+
+MEDIUM Priority
+Improved Polymer Template Construction
+
+Goal: Enhance from_sequence method with ideal dihedral angles and validate internal representation compatibility.
+
+Files likely affected:
+
+    ciffy/template.py - Template construction logic
+    ciffy/biochemistry/_generated_residues.py - Ideal coordinates data
+    ciffy/biochemistry/constants.py - Dihedral angle constants
+    tests/test_template.py - Template validation tests
+
+C Fast-Path for Z Matrix Computation
+
+Goal: Implement parallelized C version of Z matrix calculation bottleneck.
+
+Files likely affected:
+
+    ciffy/internal/zmatrix.py - Current Z matrix implementation
+    ciffy/src/internal/geometry.c - New C implementation
+    ciffy/src/internal/batch.c - Parallel processing support
+    ciffy/backend/ops.py - C function bindings
+
+CUDA Polymer Conversions
+
+Goal: GPU-native conversion algorithms to avoid CPU-GPU memory transfers.
+
+Files likely affected:
+
+    ciffy/backend/torch_ops.py - CUDA operation implementations
+    ciffy/src/internal/ - New CUDA source files
+    ciffy/internal/nerf.py - GPU-aware NERF algorithm
+    tests/test_device.py - GPU testing

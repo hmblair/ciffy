@@ -98,12 +98,16 @@ class TestInternalCoordinatesPDB:
 
     def test_rna_structure_per_chain(self):
         """Test round-trip for RNA structure (per-chain RMSD)."""
-        from ciffy import load, Scale
+        from ciffy import load, Scale, rmsd
         from ciffy.operations.alignment import kabsch_align
 
         polymer = load(get_test_cif("1ZEW")).poly()
         internal = polymer.to_internal()
         reconstructed = internal.to_cartesian()
+
+        # TODO: spin out into a separate test
+        mol_rmsd = rmsd(polymer, reconstructed)
+        assert mol_rmsd < 1e-4, f"All-chain RMSD {mol_rmsd} exceeds threshold"
 
         # Test per-chain RMSD
         res_sizes = polymer.sizes(Scale.RESIDUE)
@@ -120,6 +124,7 @@ class TestInternalCoordinatesPDB:
 
             chain_orig = polymer.coordinates[chain_atoms]
             chain_rec = reconstructed.coordinates[chain_atoms]
+            # TODO: use rmsd rather than manual alignment
             chain_aligned, _, _ = kabsch_align(chain_rec, chain_orig)
             chain_rmsd = np.sqrt(((chain_aligned - chain_orig) ** 2).sum(axis=1).mean())
 

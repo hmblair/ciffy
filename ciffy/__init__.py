@@ -14,7 +14,7 @@ except PackageNotFoundError:
 
 # Core types
 from .polymer import Polymer
-from .types import Scale, Molecule
+from .types import Scale, Molecule, DihedralType
 
 # Operations
 from .operations.reduction import Reduction
@@ -71,6 +71,7 @@ __all__ = [
     "InternalPolymer",
     "Scale",
     "Molecule",
+    "DihedralType",
     "Reduction",
     # Functions
     "load",

@@ -47,25 +47,18 @@
         - to
         - write
         - with_coordinates
-        - to_internal
+        - distances
+        - angles
+        - dihedrals
+        - dihedral
+        - set_dihedral
 
-### InternalPolymer
+### InternalPolymer (Deprecated)
+
+!!! warning "Deprecated"
+    `InternalPolymer` is deprecated. Use `Polymer` directly - it now supports both Cartesian and internal coordinates transparently.
 
 ::: ciffy.InternalPolymer
-    options:
-      members:
-        - to_cartesian
-        - with_dihedrals
-        - with_angles
-        - with_distances
-        - backbone_dihedrals
-        - set_backbone_dihedrals
-        - phi
-        - psi
-        - omega
-        - numpy
-        - torch
-        - to
 
 ---
 
@@ -94,6 +87,10 @@
 ### Molecule
 
 ::: ciffy.Molecule
+
+### DihedralType
+
+::: ciffy.DihedralType
 
 ---
 

@@ -24,6 +24,7 @@ Example:
 """
 
 from .internal_polymer import InternalPolymer
+from .coordinates import CoordinateManager
 from .graph import ZMatrixEntry, build_zmatrix, build_bond_graph
 from .zmatrix import cartesian_to_internal
 from .nerf import nerf_reconstruct
@@ -34,8 +35,9 @@ from .dihedrals import (
 )
 
 __all__ = [
-    # Main class
+    # Main classes
     "InternalPolymer",
+    "CoordinateManager",
     # Z-matrix
     "ZMatrixEntry",
     "build_zmatrix",

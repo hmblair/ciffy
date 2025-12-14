@@ -175,11 +175,12 @@ ext_module = Extension(
     name="ciffy._c",
     sources=[
         'ciffy/src/module.c',
-        'ciffy/src/io.c',
         'ciffy/src/pyutils.c',
-        'ciffy/src/parser.c',
-        'ciffy/src/writer.c',
-        'ciffy/src/registry.c',
+        # CIF I/O module
+        'ciffy/src/cif/io.c',
+        'ciffy/src/cif/parser.c',
+        'ciffy/src/cif/writer.c',
+        'ciffy/src/cif/registry.c',
         # Internal coordinates C extension
         'ciffy/src/internal/geometry.c',
         'ciffy/src/internal/batch.c',

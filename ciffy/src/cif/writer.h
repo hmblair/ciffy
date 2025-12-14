@@ -12,7 +12,7 @@
 
 #include <stdio.h>
 #include "parser.h"
-#include "error.h"
+#include "../error.h"
 
 /**
  * @brief Write mmCIF structure to a file.

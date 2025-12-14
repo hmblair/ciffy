@@ -11,8 +11,8 @@
  */
 
 #include "writer.h"
-#include "hash/reverse.h"
-#include "log.h"
+#include "../hash/reverse.h"
+#include "../log.h"
 
 #include <unistd.h>  /* for isatty */
 

@@ -8,8 +8,8 @@
 
 #include "registry.h"
 #include "parser.h"
-#include "log.h"
-#include "profile.h"
+#include "../log.h"
+#include "../profile.h"
 
 #include <stddef.h>
 #include <stdlib.h>

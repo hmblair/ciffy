@@ -16,10 +16,10 @@ from .backend import Array, is_torch, get_backend, size as arr_size, check_compa
 from .backend import ops as backend
 from .backend import array_protocol as _ap
 from .types import Scale, Molecule
+from .biochemistry.molecule import molecule_type
 
 if TYPE_CHECKING:
     import torch
-from .types.molecule import molecule_type
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .biochemistry import (
     Residue,

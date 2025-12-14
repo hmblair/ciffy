@@ -124,7 +124,7 @@
 #define _CIFFY_REGISTRY_H
 
 #include <stdbool.h>
-#include "error.h"
+#include "../error.h"
 #include "io.h"  /* For mmBlock */
 
 /* ============================================================================

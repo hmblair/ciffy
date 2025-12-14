@@ -4,7 +4,7 @@
  */
 
 #include "io.h"
-#include "log.h"
+#include "../log.h"
 
 #include <errno.h>
 #include <limits.h>

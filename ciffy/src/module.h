@@ -7,11 +7,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "io.h"
+#include "cif/io.h"
 #include "pyutils.h"
-#include "parser.h"
-#include "writer.h"
-#include "registry.h"
+#include "cif/parser.h"
+#include "cif/writer.h"
+#include "cif/registry.h"
 
 #define __py_init() if (PyArray_API == NULL) { import_array(); }
 

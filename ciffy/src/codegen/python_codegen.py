@@ -327,7 +327,7 @@ def generate_python_residues(
         '"""',
         '',
         'from ..utils import ResidueType, ResidueMeta',
-        'from ..types import Molecule',
+        'from .molecule import Molecule',
     ]
 
     # Import atom classes (only those that exist)

@@ -32,6 +32,7 @@ from .linking import (
     PEPTIDE_LINK,
     LINKING_BY_TYPE,
 )
+from .molecule import Molecule, molecule_type
 
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)
@@ -76,4 +77,7 @@ __all__ = [
     "NUCLEIC_ACID_LINK",
     "PEPTIDE_LINK",
     "LINKING_BY_TYPE",
+    # Molecule types
+    "Molecule",
+    "molecule_type",
 ]

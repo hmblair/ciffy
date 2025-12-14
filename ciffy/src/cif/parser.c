@@ -14,19 +14,19 @@
 
 #include "parser.h"
 #include "registry.h"
-#include "log.h"
-#include "profile.h"
+#include "../log.h"
+#include "../profile.h"
 
 #include <math.h>    /* for isnan */
 #include <unistd.h>  /* for isatty */
 
 /* Hash tables for type lookups */
-#include "hash/atom.c"
-#include "hash/residue.c"
-#include "hash/element.c"
-#include "hash/molecule.c"
-#include "hash/entity.c"
-#include "hash/ion.c"
+#include "../hash/atom.c"
+#include "../hash/residue.c"
+#include "../hash/element.c"
+#include "../hash/molecule.c"
+#include "../hash/entity.c"
+#include "../hash/ion.c"
 
 
 /* ============================================================================

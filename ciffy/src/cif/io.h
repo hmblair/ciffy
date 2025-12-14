@@ -14,10 +14,10 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "error.h"
-#include "common.h"
-#include "codegen/lookup.h"
-#include "hash/reverse.h"
+#include "../error.h"
+#include "../common.h"
+#include "../codegen/lookup.h"
+#include "../hash/reverse.h"
 
 /** Sentinel value indicating attribute index not found */
 #define BAD_IX -1

@@ -229,7 +229,7 @@ class TestMoleculeEnum:
         assert hasattr(Molecule, 'UNKNOWN')
 
     def test_molecule_type_function(self):
-        from ciffy.types.molecule import molecule_type, Molecule
+        from ciffy.biochemistry.molecule import molecule_type, Molecule
         assert molecule_type(0) == Molecule.PROTEIN
         assert molecule_type(1) == Molecule.RNA
         assert molecule_type(2) == Molecule.DNA

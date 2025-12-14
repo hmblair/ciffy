@@ -12,6 +12,136 @@ import numpy as np
 
 from ..backend import Array, is_torch
 
+# Try to import C extension
+try:
+    from .._c import _cartesian_to_internal as _c_cartesian_to_internal
+    _HAS_C_EXTENSION = True
+except ImportError:
+    _HAS_C_EXTENSION = False
+
+
+def cartesian_to_internal(
+    coords: Array,
+    zmatrix_indices: Array,
+) -> tuple[Array, Array, Array]:
+    """
+    Convert Cartesian coordinates to internal coordinates.
+
+    Uses C extension when available for optimal performance, otherwise
+    falls back to Python implementation. The Python fallback is also used
+    when PyTorch tensors require gradients.
+
+    Args:
+        coords: (N, 3) array of Cartesian coordinates.
+        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+
+    Returns:
+        Tuple of (distances, angles, dihedrals), each (M,) float32.
+    """
+    n_entries = len(zmatrix_indices)
+
+    # Use C extension if available (but not if we need gradients)
+    use_c = _HAS_C_EXTENSION
+    if is_torch(coords):
+        if coords.requires_grad:
+            use_c = False
+
+    if use_c:
+        # Convert indices to numpy if needed
+        if is_torch(zmatrix_indices):
+            indices_np = zmatrix_indices.cpu().numpy()
+        else:
+            indices_np = np.asarray(zmatrix_indices)
+
+        if is_torch(coords):
+            import torch
+            device = coords.device
+            dtype = coords.dtype
+            coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
+        else:
+            coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
+
+        # Call C extension
+        distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(
+            coords_f32, indices_np
+        )
+
+        if is_torch(coords):
+            import torch
+            distances = torch.from_numpy(distances_np).to(device=device, dtype=dtype)
+            angles = torch.from_numpy(angles_np).to(device=device, dtype=dtype)
+            dihedrals = torch.from_numpy(dihedrals_np).to(device=device, dtype=dtype)
+        else:
+            distances = distances_np
+            angles = angles_np
+            dihedrals = dihedrals_np
+    else:
+        # Python fallback (also used for PyTorch with gradients)
+        distances, angles, dihedrals = _cartesian_to_internal_python(
+            coords, zmatrix_indices
+        )
+
+    return distances, angles, dihedrals
+
+
+def _cartesian_to_internal_python(
+    coords: Array,
+    zmatrix_indices: Array,
+) -> tuple[Array, Array, Array]:
+    """
+    Python implementation of Cartesian to internal coordinate conversion.
+
+    This implementation is fully differentiable for PyTorch tensors.
+
+    Args:
+        coords: (N, 3) array of Cartesian coordinates.
+        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+
+    Returns:
+        Tuple of (distances, angles, dihedrals), each (M,) float32.
+    """
+    n_entries = len(zmatrix_indices)
+
+    if is_torch(coords):
+        import torch
+        distances = torch.zeros(n_entries, dtype=coords.dtype, device=coords.device)
+        angles = torch.zeros(n_entries, dtype=coords.dtype, device=coords.device)
+        dihedrals = torch.zeros(n_entries, dtype=coords.dtype, device=coords.device)
+    else:
+        distances = np.zeros(n_entries, dtype=np.float32)
+        angles = np.zeros(n_entries, dtype=np.float32)
+        dihedrals = np.zeros(n_entries, dtype=np.float32)
+
+    # Compute internal coordinates for each atom
+    for i in range(n_entries):
+        atom_idx = int(zmatrix_indices[i, 0])
+        dist_ref = int(zmatrix_indices[i, 1])
+        ang_ref = int(zmatrix_indices[i, 2])
+        dih_ref = int(zmatrix_indices[i, 3])
+
+        if dist_ref >= 0:
+            distances[i] = _compute_distance(
+                coords[atom_idx],
+                coords[dist_ref],
+            )
+
+        if ang_ref >= 0:
+            angles[i] = _compute_angle(
+                coords[atom_idx],
+                coords[dist_ref],
+                coords[ang_ref],
+            )
+
+        if dih_ref >= 0:
+            dihedrals[i] = _compute_dihedral(
+                coords[atom_idx],
+                coords[dist_ref],
+                coords[ang_ref],
+                coords[dih_ref],
+            )
+
+    return distances, angles, dihedrals
+
 
 def _compute_distance(p1: Array, p2: Array) -> Array:
     """

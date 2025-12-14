@@ -501,7 +501,7 @@ class CoordinateManager:
         and dihedrals from current Cartesian coordinates.
         """
         from .graph import ZMatrix
-        from .zmatrix import _compute_distance, _compute_angle, _compute_dihedral
+        from .zmatrix import cartesian_to_internal
 
         if self._coordinates is None:
             raise RuntimeError("Cannot compute internal coordinates: Cartesian coordinates are None")
@@ -550,81 +550,10 @@ class CoordinateManager:
                 # No reference coords needed for single-atom components
                 self._component_reference_coords.extend([None] * n_orphans)
 
-        zmatrix_indices = self._zmatrix.indices
-        n_zmatrix = len(zmatrix_indices)
-
-        # Try to use C extension
-        try:
-            from .._c import _cartesian_to_internal as _c_cartesian_to_internal
-            use_c = True
-        except ImportError:
-            use_c = False
-
-        if use_c and not (is_torch(coords) and coords.requires_grad):
-            # Use C extension (but not if we need gradients)
-            # Convert indices to numpy if needed
-            if is_torch(zmatrix_indices):
-                indices_np = zmatrix_indices.cpu().numpy()
-            else:
-                indices_np = np.asarray(zmatrix_indices)
-
-            if is_torch(coords):
-                import torch
-                coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
-            else:
-                coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
-
-            # Call C extension
-            distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(coords_f32, indices_np)
-
-            if is_torch(coords):
-                import torch
-                self._distances = torch.from_numpy(distances_np).to(device=coords.device, dtype=coords.dtype)
-                self._angles = torch.from_numpy(angles_np).to(device=coords.device, dtype=coords.dtype)
-                self._dihedrals = torch.from_numpy(dihedrals_np).to(device=coords.device, dtype=coords.dtype)
-            else:
-                self._distances = distances_np
-                self._angles = angles_np
-                self._dihedrals = dihedrals_np
-        else:
-            # Python fallback
-            if is_torch(coords):
-                import torch
-                self._distances = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
-                self._angles = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
-                self._dihedrals = torch.zeros(n_zmatrix, dtype=coords.dtype, device=coords.device)
-            else:
-                self._distances = np.zeros(n_zmatrix, dtype=np.float32)
-                self._angles = np.zeros(n_zmatrix, dtype=np.float32)
-                self._dihedrals = np.zeros(n_zmatrix, dtype=np.float32)
-
-            # Compute internal coordinates for each atom
-            for i in range(n_zmatrix):
-                atom_idx = int(zmatrix_indices[i, 0])
-                dist_ref = int(zmatrix_indices[i, 1])
-                ang_ref = int(zmatrix_indices[i, 2])
-                dih_ref = int(zmatrix_indices[i, 3])
-
-                if dist_ref >= 0:
-                    self._distances[i] = _compute_distance(
-                        coords[atom_idx],
-                        coords[dist_ref],
-                    )
-
-                if ang_ref >= 0:
-                    self._angles[i] = _compute_angle(
-                        coords[atom_idx],
-                        coords[dist_ref],
-                        coords[ang_ref],
-                    )
-
-                if dih_ref >= 0:
-                    self._dihedrals[i] = _compute_dihedral(
-                        coords[atom_idx],
-                        coords[dist_ref],
-                        coords[ang_ref],
-                        coords[dih_ref],
-                    )
+        # Use wrapper function that handles C/Python dispatch
+        self._distances, self._angles, self._dihedrals = cartesian_to_internal(
+            coords, self._zmatrix.indices
+        )
 
         self._internal_valid = True
 

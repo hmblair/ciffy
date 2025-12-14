@@ -46,3 +46,24 @@ class DihedralType(Enum):
     # Glycosidic dihedrals
     CHI_PURINE = "chi_purine"
     CHI_PYRIMIDINE = "chi_pyrimidine"
+
+
+# Mapping from DihedralType to integer index for array-based storage
+# This order is the single source of truth - codegen and internal modules use this
+DIHEDRAL_TYPE_TO_INDEX: dict[DihedralType, int] = {
+    DihedralType.PHI: 0,
+    DihedralType.PSI: 1,
+    DihedralType.OMEGA: 2,
+    DihedralType.ALPHA: 3,
+    DihedralType.BETA: 4,
+    DihedralType.GAMMA: 5,
+    DihedralType.DELTA: 6,
+    DihedralType.EPSILON: 7,
+    DihedralType.ZETA: 8,
+    DihedralType.CHI_PURINE: 9,
+    DihedralType.CHI_PYRIMIDINE: 10,
+}
+
+INDEX_TO_DIHEDRAL_TYPE: dict[int, DihedralType] = {
+    v: k for k, v in DIHEDRAL_TYPE_TO_INDEX.items()
+}

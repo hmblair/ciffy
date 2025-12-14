@@ -558,13 +558,10 @@ def from_extract(
         >>> result = from_extract(new_coords, atoms, Residue.A)
         >>> result.write("output.cif")
     """
-    from .backend import is_torch as _is_torch
+    from .backend import to_numpy as _to_numpy
 
     # Handle torch input
-    if _is_torch(coords):
-        coords_np = coords.detach().cpu().numpy()
-    else:
-        coords_np = np.asarray(coords)
+    coords_np = np.asarray(_to_numpy(coords))
 
     n_residues, n_atoms, _ = coords_np.shape
 

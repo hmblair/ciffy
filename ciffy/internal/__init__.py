@@ -28,6 +28,7 @@ from .dihedrals import (
     NUCLEIC_ACID_DIHEDRALS,
     compute_dihedral_indices,
     DIHEDRAL_TYPE_TO_INDEX,
+    INDEX_TO_DIHEDRAL_TYPE,
 )
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "NUCLEIC_ACID_DIHEDRALS",
     "compute_dihedral_indices",
     "DIHEDRAL_TYPE_TO_INDEX",
+    "INDEX_TO_DIHEDRAL_TYPE",
 ]

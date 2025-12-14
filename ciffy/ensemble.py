@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .backend import Array, is_torch
+from .backend import Array, is_torch, to_numpy
 
 if TYPE_CHECKING:
     from .polymer import Polymer
@@ -191,11 +191,7 @@ class Ensemble:
 
     def numpy(self) -> "Ensemble":
         """Return ensemble with NumPy coordinates."""
-        if is_torch(self.coords):
-            coords = self.coords.detach().cpu().numpy()
-        else:
-            coords = self.coords
-        return Ensemble(coords=coords, atoms=self.atoms, residue=self.residue)
+        return Ensemble(coords=to_numpy(self.coords), atoms=self.atoms, residue=self.residue)
 
     def torch(self, device=None) -> "Ensemble":
         """Return ensemble with PyTorch coordinates."""

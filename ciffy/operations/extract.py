@@ -20,19 +20,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..backend import is_torch, Array
+from ..backend import is_torch, to_numpy, Array
 from .reduction import Reduction
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..utils.enum_base import ResidueType
-
-
-def _to_numpy(arr: Array) -> np.ndarray:
-    """Convert array to numpy, handling torch tensors."""
-    if is_torch(arr):
-        return arr.detach().cpu().numpy()
-    return arr
 
 
 def _from_numpy(arr: np.ndarray, reference: Array) -> Array:
@@ -143,7 +136,7 @@ def extract(
     per_res_coords = sub.reduce(sub.coordinates, Scale.RESIDUE, Reduction.COLLATE)
 
     # Find atoms present in ALL residues (intersection)
-    atom_sets = [set(_to_numpy(a).tolist()) for a in per_res_atoms]
+    atom_sets = [set(to_numpy(a).tolist()) for a in per_res_atoms]
     common_atoms = set.intersection(*atom_sets)
 
     if len(common_atoms) == 0:
@@ -170,8 +163,8 @@ def extract(
     result = np.zeros((n_residues, n_atoms, 3), dtype=np.float32)
 
     for i, (res_atoms, res_coords) in enumerate(zip(per_res_atoms, per_res_coords)):
-        res_atoms_np = _to_numpy(res_atoms)
-        res_coords_np = _to_numpy(res_coords)
+        res_atoms_np = to_numpy(res_atoms)
+        res_coords_np = to_numpy(res_coords)
 
         for atom_idx, coord in zip(res_atoms_np, res_coords_np):
             if atom_idx in atom_to_col:

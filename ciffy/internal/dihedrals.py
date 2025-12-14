@@ -13,28 +13,10 @@ import numpy as np
 
 from ..backend import Array, is_torch
 from ..types import Molecule, Scale, DihedralType
+from ..types.dihedral import DIHEDRAL_TYPE_TO_INDEX, INDEX_TO_DIHEDRAL_TYPE
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-
-
-# Mapping from DihedralType to integer index for array-based storage
-# This matches the order used in code generation (generate.py)
-DIHEDRAL_TYPE_TO_INDEX = {
-    DihedralType.PHI: 0,
-    DihedralType.PSI: 1,
-    DihedralType.OMEGA: 2,
-    DihedralType.ALPHA: 3,
-    DihedralType.BETA: 4,
-    DihedralType.GAMMA: 5,
-    DihedralType.DELTA: 6,
-    DihedralType.EPSILON: 7,
-    DihedralType.ZETA: 8,
-    DihedralType.CHI_PURINE: 9,
-    DihedralType.CHI_PYRIMIDINE: 10,
-}
-
-INDEX_TO_DIHEDRAL_TYPE = {v: k for k, v in DIHEDRAL_TYPE_TO_INDEX.items()}
 
 
 # =============================================================================

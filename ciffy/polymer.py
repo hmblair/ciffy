@@ -12,7 +12,7 @@ from copy import copy
 
 import numpy as np
 
-from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible
+from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
 from .backend import ops as backend
 from .backend import array_protocol as _ap
 from .types import Scale, Molecule
@@ -624,11 +624,11 @@ class Polymer:
         # Create masked copies for min/max reduction
         unknown_mask = self.sequence == -1
         seq_for_min = _ap.to_backend(
-            np.where(_ap.as_numpy(unknown_mask), LARGE_SENTINEL, _ap.as_numpy(self.sequence)),
+            np.where(to_numpy(unknown_mask), LARGE_SENTINEL, to_numpy(self.sequence)),
             self.sequence
         )
         seq_for_max = _ap.to_backend(
-            np.where(_ap.as_numpy(unknown_mask), SMALL_SENTINEL, _ap.as_numpy(self.sequence)),
+            np.where(to_numpy(unknown_mask), SMALL_SENTINEL, to_numpy(self.sequence)),
             self.sequence
         )
 
@@ -637,8 +637,8 @@ class Polymer:
         max_res, _ = self.rreduce(seq_for_max, Scale.CHAIN, Reduction.MAX)
 
         # Convert to numpy for classification (simpler than per-element backend checks)
-        min_np = _ap.as_numpy(min_res)
-        max_np = _ap.as_numpy(max_res)
+        min_np = to_numpy(min_res)
+        max_np = to_numpy(max_res)
 
         # Classify each chain
         result = np.empty(n_chains, dtype=np.int64)
@@ -1381,10 +1381,10 @@ class Polymer:
         Returns:
             List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
         """
-        types_np = _ap.as_numpy(self.molecule_type)
-        lengths_np = _ap.as_numpy(self.lengths)
-        atoms_np = _ap.as_numpy(self._sizes[Scale.CHAIN])
-        elements_np = _ap.as_numpy(self.elements)
+        types_np = to_numpy(self.molecule_type)
+        lengths_np = to_numpy(self.lengths)
+        atoms_np = to_numpy(self._sizes[Scale.CHAIN])
+        elements_np = to_numpy(self.elements)
 
         rows = []
         atom_offset = 0
@@ -1450,7 +1450,7 @@ class Polymer:
         Returns:
             New Polymer with NumPy arrays. If already NumPy, returns self.
         """
-        from .backend import to_numpy, is_numpy
+        from .backend import is_numpy
         if is_numpy(self.coordinates):
             return self
 

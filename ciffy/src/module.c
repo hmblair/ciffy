@@ -760,6 +760,24 @@ static PyMethodDef methods[] = {
      "    chain_lengths (ndarray): (C,) int32 residues per chain.\n\n"
      "Returns:\n"
      "    ndarray: (E, 2) int64 edge array [atom_i, atom_j].\n"},
+    {"_edges_to_csr", py_edges_to_csr, METH_VARARGS,
+     "Convert edge list to CSR format.\n\n"
+     "Args:\n"
+     "    edges (ndarray): (E, 2) int64 symmetric edge array.\n"
+     "    n_atoms (int): Total number of atoms.\n\n"
+     "Returns:\n"
+     "    tuple: (offsets, neighbors) CSR arrays.\n"},
+    {"_build_zmatrix_from_csr", py_build_zmatrix_from_csr, METH_VARARGS,
+     "Build Z-matrix from CSR graph for a chain.\n\n"
+     "Args:\n"
+     "    offsets (ndarray): (n_atoms+1,) int64 CSR offsets.\n"
+     "    neighbors (ndarray): (E,) int64 neighbor indices.\n"
+     "    n_atoms (int): Total number of atoms.\n"
+     "    chain_start (int): First atom index for this chain.\n"
+     "    chain_size (int): Number of atoms in this chain.\n"
+     "    root (int): Root atom index for BFS.\n\n"
+     "Returns:\n"
+     "    ndarray: (M, 4) int64 Z-matrix [atom_idx, dist_ref, ang_ref, dih_ref].\n"},
     {NULL, NULL, 0, NULL}
 };
 

@@ -210,3 +210,312 @@ int64_t build_bond_graph_c(
     free(value_to_local);
     return edge_count;
 }
+
+
+/* ========================================================================== */
+/* Z-MATRIX CONSTRUCTION */
+/* ========================================================================== */
+
+/**
+ * Compare function for qsort on edges by source node.
+ */
+static int compare_edges_by_source(const void *a, const void *b) {
+    const int64_t *ea = (const int64_t *)a;
+    const int64_t *eb = (const int64_t *)b;
+    if (ea[0] < eb[0]) return -1;
+    if (ea[0] > eb[0]) return 1;
+    /* Secondary sort by destination for determinism */
+    if (ea[1] < eb[1]) return -1;
+    if (ea[1] > eb[1]) return 1;
+    return 0;
+}
+
+/**
+ * Find a placed atom that is a child of target (has target as parent).
+ * Returns -1 if not found.
+ *
+ * @param order       Array of global atom indices in BFS order
+ * @param order_len   Number of atoms placed so far
+ * @param parent      Array mapping local index -> global parent index
+ * @param chain_start First atom index of the chain (for local index computation)
+ * @param target      Global index of target atom
+ * @param exclude     Global index of atom to exclude
+ */
+static int64_t find_child_of(
+    const int64_t *order,
+    int64_t order_len,
+    const int64_t *parent,
+    int64_t chain_start,
+    int64_t target,
+    int64_t exclude
+) {
+    for (int64_t i = 0; i < order_len; i++) {
+        int64_t atom = order[i];  /* Global index */
+        if (atom == exclude || atom == target) continue;
+        int64_t atom_local = atom - chain_start;
+        if (parent[atom_local] == target) return atom;
+    }
+    /* Fallback: any placed atom not excluded */
+    for (int64_t i = order_len - 1; i >= 0; i--) {
+        int64_t atom = order[i];
+        if (atom != exclude && atom != target) return atom;
+    }
+    return -1;
+}
+
+/**
+ * Find a placed neighbor (sibling or any placed atom).
+ *
+ * @param order       Array of global atom indices in BFS order
+ * @param order_len   Number of atoms placed so far
+ * @param parent      Array mapping local index -> global parent index
+ * @param chain_start First atom index of the chain (for local index computation)
+ * @param target      Global index of target atom
+ * @param exclude1-3  Global indices of atoms to exclude
+ */
+static int64_t find_placed_neighbor(
+    const int64_t *order,
+    int64_t order_len,
+    const int64_t *parent,
+    int64_t chain_start,
+    int64_t target,
+    int64_t exclude1,
+    int64_t exclude2,
+    int64_t exclude3
+) {
+    int64_t target_local = target - chain_start;
+    int64_t target_parent = parent[target_local];
+
+    /* First, try to find a sibling */
+    for (int64_t i = 0; i < order_len; i++) {
+        int64_t atom = order[i];  /* Global index */
+        if (atom == exclude1 || atom == exclude2 || atom == exclude3 || atom == target) continue;
+        int64_t atom_local = atom - chain_start;
+        if (parent[atom_local] == target_parent) return atom;
+    }
+    /* Fallback: any placed atom not excluded */
+    for (int64_t i = order_len - 1; i >= 0; i--) {
+        int64_t atom = order[i];
+        if (atom != exclude1 && atom != exclude2 && atom != exclude3 && atom != target) {
+            return atom;
+        }
+    }
+    return -1;
+}
+
+int edges_to_csr(
+    const int64_t *edges,
+    int64_t n_edges,
+    int64_t n_atoms,
+    int64_t *out_offsets,
+    int64_t *out_neighbors
+) {
+    if (n_edges == 0) {
+        /* Empty graph: just zero offsets */
+        for (int64_t i = 0; i <= n_atoms; i++) {
+            out_offsets[i] = 0;
+        }
+        return 0;
+    }
+
+    /* Allocate temporary sorted edges array */
+    int64_t *sorted_edges = (int64_t *)malloc((size_t)n_edges * 2 * sizeof(int64_t));
+    if (sorted_edges == NULL) {
+        return -1;
+    }
+
+    /* Copy and sort edges by source node */
+    memcpy(sorted_edges, edges, (size_t)n_edges * 2 * sizeof(int64_t));
+    qsort(sorted_edges, (size_t)n_edges, 2 * sizeof(int64_t), compare_edges_by_source);
+
+    /* Initialize offsets to zero */
+    for (int64_t i = 0; i <= n_atoms; i++) {
+        out_offsets[i] = 0;
+    }
+
+    /* Count edges per source node */
+    for (int64_t i = 0; i < n_edges; i++) {
+        int64_t src = sorted_edges[i * 2];
+        if (src >= 0 && src < n_atoms) {
+            out_offsets[src + 1]++;
+        }
+    }
+
+    /* Cumulative sum to get offsets */
+    for (int64_t i = 1; i <= n_atoms; i++) {
+        out_offsets[i] += out_offsets[i - 1];
+    }
+
+    /* Fill neighbors array */
+    for (int64_t i = 0; i < n_edges; i++) {
+        int64_t dst = sorted_edges[i * 2 + 1];
+        out_neighbors[i] = dst;
+    }
+
+    free(sorted_edges);
+    return 0;
+}
+
+
+int64_t build_zmatrix_from_csr(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    int64_t chain_start,
+    int64_t chain_size,
+    int64_t root,
+    int64_t *out_zmatrix
+) {
+    if (chain_size == 0) return 0;
+
+    /* Validate root is in bounds */
+    if (root < 0 || root >= n_atoms) {
+        return -1;
+    }
+
+    /* Check if root has any neighbors */
+    if (offsets[root + 1] == offsets[root]) {
+        /* No bonds from root: single atom with no references */
+        out_zmatrix[0] = root;
+        out_zmatrix[1] = -1;
+        out_zmatrix[2] = -1;
+        out_zmatrix[3] = -1;
+        return 1;
+    }
+
+    /*
+     * Allocate working arrays sized to chain_size, not n_atoms.
+     * BFS only visits atoms in [chain_start, chain_end), so we use
+     * local indices (atom - chain_start) into these arrays.
+     */
+    int64_t *parent = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+    int64_t *grandparent = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+    int8_t *visited = (int8_t *)calloc((size_t)chain_size, sizeof(int8_t));
+    int64_t *order = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+    int64_t *queue = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+
+    if (!parent || !grandparent || !visited || !order || !queue) {
+        free(parent);
+        free(grandparent);
+        free(visited);
+        free(order);
+        free(queue);
+        return -1;
+    }
+
+    /* Initialize parent and grandparent to -1 (only chain_size elements) */
+    for (int64_t i = 0; i < chain_size; i++) {
+        parent[i] = -1;
+        grandparent[i] = -1;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 1: BFS spanning tree from root                                */
+    /* ------------------------------------------------------------------ */
+
+    int64_t chain_end = chain_start + chain_size;
+    int64_t order_len = 0;
+    int64_t queue_head = 0, queue_tail = 0;
+
+    /* Enqueue root (use local index for visited) */
+    int64_t root_local = root - chain_start;
+    queue[queue_tail++] = root;
+    visited[root_local] = 1;
+
+    while (queue_head < queue_tail) {
+        int64_t current = queue[queue_head++];
+        order[order_len++] = current;
+
+        /* Get neighbors from CSR */
+        int64_t start = offsets[current];
+        int64_t end = offsets[current + 1];
+
+        for (int64_t i = start; i < end; i++) {
+            int64_t neighbor = neighbors[i];
+
+            /* Only process atoms in this chain */
+            if (neighbor < chain_start || neighbor >= chain_end) continue;
+
+            int64_t neighbor_local = neighbor - chain_start;
+            if (visited[neighbor_local]) continue;
+
+            visited[neighbor_local] = 1;
+            parent[neighbor_local] = current;  /* Store global index as parent */
+            queue[queue_tail++] = neighbor;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 2: Build Z-matrix entries                                     */
+    /* ------------------------------------------------------------------ */
+
+    for (int64_t i = 0; i < order_len; i++) {
+        int64_t atom = order[i];  /* Global index */
+        int64_t atom_local = atom - chain_start;
+        int64_t p = parent[atom_local];  /* Parent is stored as global index */
+        int64_t *entry = &out_zmatrix[i * 4];
+
+        if (i == 0) {
+            /* First atom: no references */
+            entry[0] = atom;
+            entry[1] = -1;
+            entry[2] = -1;
+            entry[3] = -1;
+        }
+        else if (i == 1) {
+            /* Second atom: distance to parent only */
+            entry[0] = atom;
+            entry[1] = p;
+            entry[2] = -1;
+            entry[3] = -1;
+        }
+        else if (i == 2) {
+            /* Third atom: distance and angle */
+            int64_t p_local = p - chain_start;
+            int64_t gp = parent[p_local];  /* Grandparent (global) */
+            if (gp == -1) {
+                gp = find_child_of(order, i, parent, chain_start, p, atom);
+            }
+            grandparent[atom_local] = gp;
+
+            entry[0] = atom;
+            entry[1] = p;
+            entry[2] = gp;
+            entry[3] = -1;
+        }
+        else {
+            /* Full Z-matrix entry */
+            int64_t p_local = p - chain_start;
+            int64_t gp = parent[p_local];
+            if (gp == -1) {
+                gp = find_child_of(order, i, parent, chain_start, p, atom);
+            }
+
+            /* Find great-grandparent for dihedral */
+            int64_t gp_local = (gp >= chain_start) ? gp - chain_start : -1;
+            int64_t ggp = (gp_local >= 0) ? grandparent[p_local] : -1;
+            if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
+                ggp = (gp_local >= 0) ? parent[gp_local] : -1;
+            }
+            if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
+                ggp = find_placed_neighbor(order, i, parent, chain_start, gp, atom, p, gp);
+            }
+
+            grandparent[atom_local] = gp;
+
+            entry[0] = atom;
+            entry[1] = p;
+            entry[2] = gp;
+            entry[3] = ggp;
+        }
+    }
+
+    /* Cleanup */
+    free(parent);
+    free(grandparent);
+    free(visited);
+    free(order);
+    free(queue);
+
+    return order_len;
+}

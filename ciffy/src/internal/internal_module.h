@@ -26,4 +26,16 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args);
  */
 PyObject *py_build_bond_graph(PyObject *self, PyObject *args);
 
+/**
+ * Convert edge list to CSR format.
+ * Python: _edges_to_csr(edges, n_atoms) -> (offsets, neighbors)
+ */
+PyObject *py_edges_to_csr(PyObject *self, PyObject *args);
+
+/**
+ * Build Z-matrix from CSR graph for a chain.
+ * Python: _build_zmatrix_from_csr(offsets, neighbors, n_atoms, chain_start, chain_size, root) -> zmatrix
+ */
+PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

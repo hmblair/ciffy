@@ -350,3 +350,170 @@ PyObject *py_build_bond_graph(PyObject *self, PyObject *args) {
 
     return py_edges;
 }
+
+
+/**
+ * Convert edge list to CSR format.
+ *
+ * Python signature:
+ *   _edges_to_csr(edges, n_atoms) -> (offsets, neighbors)
+ *
+ * Args:
+ *   edges: (E, 2) int64 array of symmetric edges.
+ *   n_atoms: Total number of atoms (int).
+ *
+ * Returns:
+ *   Tuple of (offsets, neighbors):
+ *     offsets: (n_atoms+1,) int64 array of CSR offsets.
+ *     neighbors: (E,) int64 array of neighbor indices.
+ */
+PyObject *py_edges_to_csr(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_edges;
+    int n_atoms;
+
+    if (!PyArg_ParseTuple(args, "Oi", &py_edges, &n_atoms)) {
+        return NULL;
+    }
+
+    /* Validate edges array */
+    PyArrayObject *edges_arr = require_array_2d(py_edges, NPY_INT64, 2, "edges");
+    if (edges_arr == NULL) return NULL;
+
+    npy_intp n_edges = PyArray_DIM(edges_arr, 0);
+    const int64_t *edges = (const int64_t *)PyArray_DATA(edges_arr);
+
+    /* Validate parameters */
+    if (n_atoms <= 0) {
+        Py_DECREF(edges_arr);
+        PyErr_SetString(PyExc_ValueError, "n_atoms must be positive");
+        return NULL;
+    }
+
+    /* Allocate output arrays */
+    npy_intp offset_dims[1] = {n_atoms + 1};
+    npy_intp neighbor_dims[1] = {n_edges};
+
+    PyObject *py_offsets = PyArray_SimpleNew(1, offset_dims, NPY_INT64);
+    PyObject *py_neighbors = PyArray_SimpleNew(1, neighbor_dims, NPY_INT64);
+
+    if (py_offsets == NULL || py_neighbors == NULL) {
+        Py_XDECREF(py_offsets);
+        Py_XDECREF(py_neighbors);
+        Py_DECREF(edges_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *offsets = (int64_t *)PyArray_DATA((PyArrayObject *)py_offsets);
+    int64_t *neighbors = (int64_t *)PyArray_DATA((PyArrayObject *)py_neighbors);
+
+    /* Convert to CSR */
+    int result = edges_to_csr(edges, n_edges, n_atoms, offsets, neighbors);
+
+    Py_DECREF(edges_arr);
+
+    if (result < 0) {
+        Py_DECREF(py_offsets);
+        Py_DECREF(py_neighbors);
+        return PyErr_NoMemory();
+    }
+
+    /* Build result tuple */
+    PyObject *tuple = PyTuple_Pack(2, py_offsets, py_neighbors);
+    Py_DECREF(py_offsets);
+    Py_DECREF(py_neighbors);
+
+    return tuple;
+}
+
+
+/**
+ * Build Z-matrix from CSR graph for a single chain.
+ *
+ * Python signature:
+ *   _build_zmatrix_from_csr(offsets, neighbors, n_atoms, chain_start, chain_size, root) -> zmatrix
+ *
+ * Args:
+ *   offsets: (n_atoms+1,) int64 array of CSR offsets.
+ *   neighbors: (E,) int64 array of neighbor indices.
+ *   n_atoms: Total number of atoms (int).
+ *   chain_start: First atom index for this chain (int).
+ *   chain_size: Number of atoms in this chain (int).
+ *   root: Root atom index for BFS (int).
+ *
+ * Returns:
+ *   zmatrix: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref].
+ */
+PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_offsets, *py_neighbors;
+    int n_atoms, chain_start, chain_size, root;
+
+    if (!PyArg_ParseTuple(args, "OOiiii",
+                          &py_offsets, &py_neighbors,
+                          &n_atoms, &chain_start, &chain_size, &root)) {
+        return NULL;
+    }
+
+    /* Validate arrays */
+    PyArrayObject *offsets_arr = require_array_1d(py_offsets, NPY_INT64, "offsets");
+    if (offsets_arr == NULL) return NULL;
+
+    PyArrayObject *neighbors_arr = require_array_1d(py_neighbors, NPY_INT64, "neighbors");
+    if (neighbors_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        return NULL;
+    }
+
+    const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
+    const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
+
+    /* Validate parameters */
+    if (chain_size < 0 || chain_start < 0 || root < 0 || n_atoms <= 0) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        PyErr_SetString(PyExc_ValueError, "Invalid chain parameters");
+        return NULL;
+    }
+
+    /* Allocate output array */
+    npy_intp dims[2] = {chain_size, 4};
+    PyObject *py_zmatrix = PyArray_SimpleNew(2, dims, NPY_INT64);
+    if (py_zmatrix == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
+
+    /* Build Z-matrix */
+    int64_t n_entries = build_zmatrix_from_csr(
+        offsets, neighbors, n_atoms,
+        chain_start, chain_size, root,
+        zmatrix
+    );
+
+    Py_DECREF(offsets_arr);
+    Py_DECREF(neighbors_arr);
+
+    if (n_entries < 0) {
+        Py_DECREF(py_zmatrix);
+        return PyErr_NoMemory();
+    }
+
+    /* Resize output if needed (some atoms may be unreachable) */
+    if (n_entries < chain_size) {
+        npy_intp new_dims[2] = {n_entries, 4};
+        PyArray_Dims new_shape = {new_dims, 2};
+        PyObject *resized = PyArray_Resize((PyArrayObject *)py_zmatrix, &new_shape, 0, NPY_CORDER);
+        if (resized == NULL) {
+            /* Resize failed, but original array is still valid */
+            PyErr_Clear();
+        }
+    }
+
+    return py_zmatrix;
+}

@@ -53,4 +53,45 @@ int64_t estimate_max_edges(
     int64_t n_residues
 );
 
+
+/**
+ * Build Z-matrix from edge list for a single chain (with pre-built CSR).
+ *
+ * @param offsets     (n_atoms+1,) CSR offsets
+ * @param neighbors   (n_edges,) CSR neighbor indices
+ * @param n_atoms     Total number of atoms
+ * @param chain_start First atom index for this chain
+ * @param chain_size  Number of atoms in this chain
+ * @param root        Root atom index for BFS
+ * @param out_zmatrix Output: (chain_size, 4) int64 Z-matrix entries
+ * @return            Number of entries written, or -1 on error
+ */
+int64_t build_zmatrix_from_csr(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    int64_t chain_start,
+    int64_t chain_size,
+    int64_t root,
+    int64_t *out_zmatrix
+);
+
+/**
+ * Convert edge list to CSR format.
+ *
+ * @param edges       (n_edges, 2) int64 edge list
+ * @param n_edges     Number of edges
+ * @param n_atoms     Total number of atoms
+ * @param out_offsets Output: (n_atoms+1,) int64 CSR offsets (caller allocates)
+ * @param out_neighbors Output: (n_edges,) int64 neighbor indices (caller allocates)
+ * @return            0 on success, -1 on error
+ */
+int edges_to_csr(
+    const int64_t *edges,
+    int64_t n_edges,
+    int64_t n_atoms,
+    int64_t *out_offsets,
+    int64_t *out_neighbors
+);
+
 #endif /* _CIFFY_GRAPH_H */

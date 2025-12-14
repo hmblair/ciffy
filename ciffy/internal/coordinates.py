@@ -18,6 +18,65 @@ if TYPE_CHECKING:
     from .graph import ZMatrix
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend Polymorphism Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _copy(arr: Array) -> Array:
+    """Copy array regardless of backend."""
+    return arr.clone() if is_torch(arr) else arr.copy()
+
+
+def _to_torch_dtype(dtype):
+    """Convert numpy dtype to torch dtype."""
+    import torch
+    if dtype == np.int64:
+        return torch.int64
+    elif dtype == np.float32:
+        return torch.float32
+    elif dtype == np.float64:
+        return torch.float64
+    return dtype  # Assume already torch dtype
+
+
+def _zeros(shape: tuple, dtype, backend_like: Array) -> Array:
+    """Create zeros array matching backend of backend_like."""
+    if is_torch(backend_like):
+        import torch
+        return torch.zeros(shape, dtype=_to_torch_dtype(dtype), device=backend_like.device)
+    return np.zeros(shape, dtype=dtype)
+
+
+def _array(data, dtype, backend_like: Array) -> Array:
+    """Create array from data matching backend of backend_like."""
+    if is_torch(backend_like):
+        import torch
+        return torch.tensor(data, dtype=_to_torch_dtype(dtype), device=backend_like.device)
+    return np.array(data, dtype=dtype)
+
+
+def _stack(arrays: list, backend_like: Array) -> Array:
+    """Stack arrays matching backend of backend_like."""
+    if is_torch(backend_like):
+        import torch
+        return torch.stack(arrays)
+    return np.array(arrays)
+
+
+def _empty_array(dtype, backend_like: Array) -> Array:
+    """Create empty 1D array matching backend of backend_like."""
+    if is_torch(backend_like):
+        import torch
+        return torch.tensor([], dtype=_to_torch_dtype(dtype), device=backend_like.device)
+    return np.array([], dtype=dtype)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CoordinateManager Class
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class CoordinateManager:
     """
     Manages dual representation of molecular coordinates with lazy evaluation.
@@ -63,6 +122,7 @@ class CoordinateManager:
         '_component_atoms',     # (N,) int64 (flattened atom indices)
         '_component_centroids', # (C, 3) float32/64
         '_component_reference_coords',  # List of (n_i, 3) centered coords for multi-atom chains
+        '_component_contiguous',  # List of bool - whether each component's atoms are contiguous
 
         # Dihedral indices (CSR format)
         '_dihedral_offsets',  # (NUM_DIHEDRAL_TYPES+1,) int64
@@ -70,6 +130,7 @@ class CoordinateManager:
 
         '_internal_valid',
         '_n_atoms',  # Total atom count (set from initial coordinates)
+        '_is_torch',  # Cached backend flag
 
         # Reference to parent Polymer
         '_polymer',
@@ -93,6 +154,7 @@ class CoordinateManager:
         self._coordinates = coordinates
         self._cartesian_valid = True
         self._n_atoms = len(coordinates) if coordinates is not None else 0
+        self._is_torch = is_torch(coordinates) if coordinates is not None else False
 
         # Initialize internal representation as invalid (not yet computed)
         self._distances: Array | None = None
@@ -105,6 +167,7 @@ class CoordinateManager:
         self._component_atoms: Array | None = None
         self._component_centroids: Array | None = None
         self._component_reference_coords: list | None = None  # List of centered coords per chain
+        self._component_contiguous: list | None = None  # Whether each component's atoms are contiguous
 
         # Dihedral indices (CSR format)
         self._dihedral_offsets: Array | None = None
@@ -161,6 +224,22 @@ class CoordinateManager:
         self._dihedral_offsets = None
         self._dihedral_indices = None
 
+    def _invalidate_structure(self) -> None:
+        """
+        Invalidate structure-dependent caches.
+
+        Call this when the polymer topology changes (bonds, residues, chains).
+        This invalidates the Z-matrix and all dependent data.
+
+        Note:
+            This is more aggressive than _invalidate_internal() which preserves
+            the Z-matrix. Use this only when the molecular structure itself changes.
+        """
+        self._zmatrix = None
+        self._dihedral_offsets = None
+        self._dihedral_indices = None
+        self._invalidate_internal()
+
     def _update_connected_components(self) -> None:
         """
         Identify connected components and store their centroids and reference coordinates.
@@ -206,36 +285,26 @@ class CoordinateManager:
             centroid = chain_coords.mean(axis=0)
             centered_coords = chain_coords - centroid
 
-            if is_torch(coords):
-                centroid = centroid.clone()
-                centered_coords = centered_coords.clone()
-            else:
-                centroid = centroid.copy()
-                centered_coords = centered_coords.copy()
-
-            components_list.append((atom_indices, centroid, centered_coords))
+            components_list.append((atom_indices, _copy(centroid), _copy(centered_coords)))
 
             atom_offset += chain_atom_count
             res_offset += chain_len_val
 
         # Convert to CSR format
+        int64_dtype = np.int64  # Works for both numpy and torch
         if not components_list:
             # No components - create empty arrays
-            if is_torch(coords):
-                import torch
-                self._component_offsets = torch.tensor([0], dtype=torch.int64, device=coords.device)
-                self._component_atoms = torch.tensor([], dtype=torch.int64, device=coords.device)
-                self._component_centroids = torch.zeros((0, 3), dtype=coords.dtype, device=coords.device)
-            else:
-                self._component_offsets = np.array([0], dtype=np.int64)
-                self._component_atoms = np.array([], dtype=np.int64)
-                self._component_centroids = np.zeros((0, 3), dtype=coords.dtype)
+            self._component_offsets = _array([0], int64_dtype, coords)
+            self._component_atoms = _empty_array(int64_dtype, coords)
+            self._component_centroids = _zeros((0, 3), coords.dtype, coords)
             self._component_reference_coords = []
+            self._component_contiguous = []
         else:
             offsets = [0]
             all_atoms = []
             all_centroids = []
             all_reference_coords = []
+            all_contiguous = []
 
             for atom_indices, centroid, centered_coords in components_list:
                 all_atoms.extend(atom_indices)
@@ -246,19 +315,15 @@ class CoordinateManager:
                 else:
                     all_reference_coords.append(None)  # Single-atom, no orientation needed
                 offsets.append(len(all_atoms))
+                # Chains from polymer.lengths are always contiguous
+                all_contiguous.append(True)
 
             # Store as arrays
-            if is_torch(coords):
-                import torch
-                self._component_offsets = torch.tensor(offsets, dtype=torch.int64, device=coords.device)
-                self._component_atoms = torch.tensor(all_atoms, dtype=torch.int64, device=coords.device)
-                self._component_centroids = torch.stack(all_centroids)
-            else:
-                self._component_offsets = np.array(offsets, dtype=np.int64)
-                self._component_atoms = np.array(all_atoms, dtype=np.int64)
-                self._component_centroids = np.array(all_centroids)
-
+            self._component_offsets = _array(offsets, int64_dtype, coords)
+            self._component_atoms = _array(all_atoms, int64_dtype, coords)
+            self._component_centroids = _stack(all_centroids, coords)
             self._component_reference_coords = all_reference_coords
+            self._component_contiguous = all_contiguous
 
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Cartesian
@@ -438,6 +503,12 @@ class CoordinateManager:
 
         # Build Z-matrix if not already cached
         if self._zmatrix is None:
+            if self._polymer is None:
+                raise RuntimeError(
+                    "Cannot compute internal coordinates without polymer reference. "
+                    "This CoordinateManager was created by slicing and doesn't have "
+                    "access to bond information needed for Z-matrix construction."
+                )
             self._zmatrix = ZMatrix.from_polymer(self._polymer)
 
             # Detect orphan atoms (atoms not in Z-matrix - no bonds)
@@ -653,8 +724,8 @@ class CoordinateManager:
 
                 original_centroid = self._component_centroids[comp_idx]
 
-                # Check if atoms are contiguous (common case)
-                if atom_end - atom_start == component_size:
+                # Use pre-computed contiguity flag (avoids per-iteration check)
+                if self._component_contiguous[comp_idx]:
                     # Contiguous atoms - use slice
                     component_coords = coords[atom_start:atom_end]
                     reconstructed_centroid = component_coords.mean(axis=0)
@@ -689,6 +760,25 @@ class CoordinateManager:
 
         self._coordinates = coords
         self._cartesian_valid = True
+        self._validate_coordinates()
+
+    def _validate_coordinates(self) -> None:
+        """
+        Validate coordinates after reconstruction.
+
+        Raises:
+            ValueError: If coordinates contain NaN, Inf, or unreasonable values.
+        """
+        coords = to_numpy(self._coordinates)
+        if np.any(np.isnan(coords)):
+            raise ValueError("Invalid coordinates after reconstruction (NaN detected)")
+        if np.any(np.isinf(coords)):
+            raise ValueError("Invalid coordinates after reconstruction (Inf detected)")
+        if np.any(np.abs(coords) > 10000):
+            raise ValueError(
+                "Coordinates exceed 10000 Angstroms - likely reconstruction error. "
+                "Check that internal coordinates are within reasonable bounds."
+            )
 
     def _compute_dihedral_indices(self) -> None:
         """
@@ -700,7 +790,17 @@ class CoordinateManager:
         Stores results in CSR format:
         - offsets: (NUM_DIHEDRAL_TYPES+1,) cumulative counts
         - indices: (total_dihedrals,) flattened Z-matrix indices
+
+        Raises:
+            RuntimeError: If polymer reference is not set (e.g., on sliced manager).
         """
+        if self._polymer is None:
+            raise RuntimeError(
+                "Cannot compute named dihedral indices without polymer reference. "
+                "This CoordinateManager was created by slicing and doesn't have "
+                "access to residue information needed for named dihedrals."
+            )
+
         from .dihedrals import compute_dihedral_indices
 
         if self._zmatrix is None:
@@ -714,9 +814,8 @@ class CoordinateManager:
         )
 
         # Convert to CSR format
-        # DihedralType has 11 types (0-10 indices)
         from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
-        num_types = 11  # PHI(0) through CHI_PYRIMIDINE(10)
+        num_types = len(DIHEDRAL_TYPE_TO_INDEX)
 
         offsets = [0]
         all_indices = []
@@ -739,13 +838,9 @@ class CoordinateManager:
 
         # Store as arrays
         coords = self._coordinates
-        if is_torch(coords):
-            import torch
-            self._dihedral_offsets = torch.tensor(offsets, dtype=torch.int64, device=coords.device)
-            self._dihedral_indices = torch.tensor(all_indices, dtype=torch.int64, device=coords.device) if all_indices else torch.tensor([], dtype=torch.int64, device=coords.device)
-        else:
-            self._dihedral_offsets = np.array(offsets, dtype=np.int64)
-            self._dihedral_indices = np.array(all_indices, dtype=np.int64) if all_indices else np.array([], dtype=np.int64)
+        int64_dtype = np.int64
+        self._dihedral_offsets = _array(offsets, int64_dtype, coords)
+        self._dihedral_indices = _array(all_indices, int64_dtype, coords) if all_indices else _empty_array(int64_dtype, coords)
 
     # ─────────────────────────────────────────────────────────────────────
     # Named Dihedral API
@@ -779,21 +874,13 @@ class CoordinateManager:
         type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
         if type_idx is None or type_idx >= len(self._dihedral_offsets) - 1:
             # Type index out of range
-            if is_torch(self._dihedrals):
-                import torch
-                return torch.tensor([], dtype=self._dihedrals.dtype, device=self._dihedrals.device)
-            else:
-                return np.array([], dtype=self._dihedrals.dtype)
+            return _empty_array(self._dihedrals.dtype, self._dihedrals)
 
         start = int(self._dihedral_offsets[type_idx])
         end = int(self._dihedral_offsets[type_idx + 1])
 
         if start == end:  # Empty range
-            if is_torch(self._dihedrals):
-                import torch
-                return torch.tensor([], dtype=self._dihedrals.dtype, device=self._dihedrals.device)
-            else:
-                return np.array([], dtype=self._dihedrals.dtype)
+            return _empty_array(self._dihedrals.dtype, self._dihedrals)
 
         indices = self._dihedral_indices[start:end]
         return self._dihedrals[indices]
@@ -842,10 +929,7 @@ class CoordinateManager:
         indices = self._dihedral_indices[start:end]
 
         # Copy dihedrals array to avoid in-place modification issues
-        if is_torch(self._dihedrals):
-            new_dihedrals = self._dihedrals.clone()
-        else:
-            new_dihedrals = self._dihedrals.copy()
+        new_dihedrals = _copy(self._dihedrals)
 
         # Update specific dihedrals
         new_dihedrals[indices] = values
@@ -1051,6 +1135,7 @@ class CoordinateManager:
         new_manager._coordinates = sliced_coords
         new_manager._cartesian_valid = True
         new_manager._n_atoms = len(sliced_coords)
+        new_manager._is_torch = is_torch(sliced_coords)
         new_manager._polymer = None  # Must be set by caller
 
         # Internal representation starts invalid (lazy recomputation)
@@ -1065,6 +1150,7 @@ class CoordinateManager:
         new_manager._component_atoms = None
         new_manager._component_centroids = None
         new_manager._component_reference_coords = None
+        new_manager._component_contiguous = None
         new_manager._dihedral_offsets = None
         new_manager._dihedral_indices = None
 

@@ -761,3 +761,160 @@ class TestEndToEndNNPipeline:
         assert dihedrals.grad is not None
         assert not torch.all(dihedrals.grad == 0)
 
+
+class TestProteinInternalCoordinates:
+    """Tests for protein internal coordinate handling."""
+
+    def test_protein_roundtrip(self):
+        """Test round-trip conversion for protein chain."""
+        from ciffy import load
+        from ciffy.operations.alignment import kabsch_align
+
+        polymer = load(get_test_cif("9GCM"))
+
+        # Get a protein chain (chain B or C)
+        protein_chain = None
+        for chain in polymer.chains():
+            # Check if it's a protein (molecule_type[0] == 0)
+            if hasattr(chain, 'molecule_type') and len(chain.molecule_type) > 0:
+                if chain.molecule_type[0] == 0:  # PROTEIN type
+                    protein_chain = chain
+                    break
+
+        if protein_chain is None:
+            pytest.skip("No protein chain found in 9GCM")
+
+        orig_coords = protein_chain.coordinates.copy()
+
+        # Access internal coordinates, then modify to trigger reconstruction
+        dihedrals = protein_chain.dihedrals.copy()
+        protein_chain.dihedrals = dihedrals
+
+        # Coordinates should be reconstructed
+        aligned, _, _ = kabsch_align(protein_chain.coordinates, orig_coords)
+        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
+
+        # Protein chains may have slightly higher RMSD due to more complex topology
+        assert rmsd < 0.1, f"Protein RMSD {rmsd} exceeds threshold"
+
+    def test_protein_internal_properties(self):
+        """Test protein has valid internal coordinate properties."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("9GCM"))
+
+        # Get a protein chain
+        protein_chain = None
+        for chain in polymer.chains():
+            if hasattr(chain, 'molecule_type') and len(chain.molecule_type) > 0:
+                if chain.molecule_type[0] == 0:  # PROTEIN type
+                    protein_chain = chain
+                    break
+
+        if protein_chain is None:
+            pytest.skip("No protein chain found in 9GCM")
+
+        # All non-root distances should be positive (first entry is root with no distance)
+        distances = protein_chain.distances
+        assert np.all(distances[1:] > 0), "Non-root distances should be positive"
+
+        # Angles should be in valid range [0, pi] (skip first 2 entries - root atoms)
+        angles = protein_chain.angles
+        valid_angles = angles[2:]  # First two atoms don't have valid angles
+        assert np.all(valid_angles >= 0)
+        assert np.all(valid_angles <= np.pi + 1e-5)
+
+        # Dihedrals should be in valid range [-pi, pi] (skip first 3 entries)
+        dihedrals = protein_chain.dihedrals
+        valid_dihedrals = dihedrals[3:]  # First three atoms don't have valid dihedrals
+        assert np.all(valid_dihedrals >= -np.pi - 1e-5)
+        assert np.all(valid_dihedrals <= np.pi + 1e-5)
+
+
+class TestNumericalEdgeCases:
+    """Tests for numerical edge cases and stability."""
+
+    def test_small_perturbation_roundtrip(self):
+        """Test very small dihedral changes preserve structure."""
+        from ciffy import from_sequence
+        from ciffy.operations.alignment import kabsch_align
+
+        polymer = from_sequence("acgu")
+        orig_coords = polymer.coordinates.copy()
+        orig_dihedrals = polymer.dihedrals.copy()
+
+        # Apply very small perturbation (0.001 radians ~ 0.06 degrees)
+        polymer.dihedrals = orig_dihedrals + 0.001
+
+        # Reconstruction should still work
+        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
+        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
+
+        # Small perturbation should give small change
+        assert rmsd < 0.5, f"Small perturbation gave large RMSD {rmsd}"
+
+    def test_zero_perturbation_preserves_structure(self):
+        """Test zero perturbation exactly preserves structure."""
+        from ciffy import from_sequence
+        from ciffy.operations.alignment import kabsch_align
+
+        polymer = from_sequence("acgu")
+        orig_coords = polymer.coordinates.copy()
+        orig_dihedrals = polymer.dihedrals.copy()
+
+        # Zero perturbation
+        polymer.dihedrals = orig_dihedrals + 0.0
+
+        # Should be essentially identical
+        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
+        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
+
+        assert rmsd < 1e-4, f"Zero perturbation changed structure: RMSD {rmsd}"
+
+
+class TestErrorHandling:
+    """Tests for error handling and edge cases."""
+
+    def test_sliced_manager_dihedral_access_works(self):
+        """Test that properly sliced chain can access dihedrals."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("1ZEW"))
+
+        # Get a chain (uses slicing via __getitem__)
+        chain = None
+        for c in polymer.chains():
+            chain = c
+            break
+
+        # Access dihedrals should work on properly sliced chain
+        dihedrals = chain.dihedrals
+        assert len(dihedrals) > 0
+
+    def test_nan_dihedral_fails_reconstruction(self):
+        """Test NaN dihedral causes reconstruction to fail gracefully."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+
+        # Access dihedrals to trigger Z-matrix building
+        dihedrals = polymer.dihedrals.copy()
+
+        # Set NaN at a position that affects reconstruction (not root atoms)
+        dihedrals[10] = np.nan
+        polymer.dihedrals = dihedrals
+
+        # Reconstruction should fail (SVD won't converge with NaN coords)
+        with pytest.raises((ValueError, np.linalg.LinAlgError)):
+            _ = polymer.coordinates
+
+    def test_validation_method_exists(self):
+        """Test that CoordinateManager has validation method."""
+        from ciffy import from_sequence
+        from ciffy.internal.coordinates import CoordinateManager
+
+        polymer = from_sequence("acgu")
+
+        # Verify validation method exists
+        assert hasattr(polymer._coord_manager, '_validate_coordinates')
+

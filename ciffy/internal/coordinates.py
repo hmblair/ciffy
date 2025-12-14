@@ -15,7 +15,7 @@ from ..types import DihedralType
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from .graph import ZMatrixEntry
+    from .graph import ZMatrix
 
 
 class CoordinateManager:
@@ -56,10 +56,19 @@ class CoordinateManager:
         '_distances',
         '_angles',
         '_dihedrals',
-        '_zmatrix',
-        '_dihedral_indices',
-        '_connected_components',  # List of (atom_indices, centroid) for each component
+        '_zmatrix',  # ZMatrix object wrapping (M, 4) int64 array
+
+        # Connected components (CSR format)
+        '_component_offsets',   # (C+1,) int64
+        '_component_atoms',     # (N,) int64 (flattened atom indices)
+        '_component_centroids', # (C, 3) float32/64
+
+        # Dihedral indices (CSR format)
+        '_dihedral_offsets',  # (NUM_DIHEDRAL_TYPES+1,) int64
+        '_dihedral_indices',  # (total_dihedrals,) int64
+
         '_internal_valid',
+        '_n_atoms',  # Total atom count (set from initial coordinates)
 
         # Reference to parent Polymer
         '_polymer',
@@ -82,14 +91,23 @@ class CoordinateManager:
         # Initialize Cartesian representation as valid
         self._coordinates = coordinates
         self._cartesian_valid = True
+        self._n_atoms = len(coordinates) if coordinates is not None else 0
 
         # Initialize internal representation as invalid (not yet computed)
         self._distances: Optional[Array] = None
         self._angles: Optional[Array] = None
         self._dihedrals: Optional[Array] = None
-        self._zmatrix: Optional[list["ZMatrixEntry"]] = None
-        self._dihedral_indices: Optional[Dict[str, Array]] = None
-        self._connected_components: Optional[list[tuple[list[int], Array]]] = None
+        self._zmatrix: Optional["ZMatrix"] = None
+
+        # Connected components (CSR format)
+        self._component_offsets: Optional[Array] = None
+        self._component_atoms: Optional[Array] = None
+        self._component_centroids: Optional[Array] = None
+
+        # Dihedral indices (CSR format)
+        self._dihedral_offsets: Optional[Array] = None
+        self._dihedral_indices: Optional[Array] = None
+
         self._internal_valid = False
 
         # Store connected component centroids from initial coordinates
@@ -138,17 +156,21 @@ class CoordinateManager:
         self._dihedrals = None
         # Note: Keep Z-matrix cached - it's structure-based, not coordinate-based
         # Only invalidate dihedral indices as they depend on Z-matrix order
+        self._dihedral_offsets = None
         self._dihedral_indices = None
 
     def _update_connected_components(self) -> None:
         """
-        Identify connected components and store their centroids.
+        Identify connected components and store their centroids in CSR format.
 
         Connected components are groups of bonded atoms. This includes:
         - Chains (multi-atom connected components)
         - Single atoms with no bonds (orphan atoms)
 
-        Stores list of (atom_indices, centroid) tuples.
+        Stores in CSR format:
+        - offsets: (C+1,) cumulative counts
+        - atoms: (N,) flattened atom indices
+        - centroids: (C, 3) centroid positions
         """
         from ..types import Scale
 
@@ -158,7 +180,7 @@ class CoordinateManager:
         coords = self._coordinates
         res_sizes = self._polymer.sizes(Scale.RESIDUE)
 
-        components = []
+        components_list = []  # Temporary list of (atom_indices, centroid)
         atom_offset = 0
         res_offset = 0
 
@@ -183,12 +205,43 @@ class CoordinateManager:
             else:
                 centroid = centroid.copy()
 
-            components.append((atom_indices, centroid))
+            components_list.append((atom_indices, centroid))
 
             atom_offset += chain_atom_count
             res_offset += chain_len_val
 
-        self._connected_components = components
+        # Convert to CSR format
+        if not components_list:
+            # No components - create empty arrays
+            if is_torch(coords):
+                import torch
+                self._component_offsets = torch.tensor([0], dtype=torch.int64, device=coords.device)
+                self._component_atoms = torch.tensor([], dtype=torch.int64, device=coords.device)
+                self._component_centroids = torch.zeros((0, 3), dtype=coords.dtype, device=coords.device)
+            else:
+                self._component_offsets = np.array([0], dtype=np.int64)
+                self._component_atoms = np.array([], dtype=np.int64)
+                self._component_centroids = np.zeros((0, 3), dtype=coords.dtype)
+        else:
+            offsets = [0]
+            all_atoms = []
+            all_centroids = []
+
+            for atom_indices, centroid in components_list:
+                all_atoms.extend(atom_indices)
+                all_centroids.append(centroid)
+                offsets.append(len(all_atoms))
+
+            # Store as arrays
+            if is_torch(coords):
+                import torch
+                self._component_offsets = torch.tensor(offsets, dtype=torch.int64, device=coords.device)
+                self._component_atoms = torch.tensor(all_atoms, dtype=torch.int64, device=coords.device)
+                self._component_centroids = torch.stack(all_centroids)
+            else:
+                self._component_offsets = np.array(offsets, dtype=np.int64)
+                self._component_atoms = np.array(all_atoms, dtype=np.int64)
+                self._component_centroids = np.array(all_centroids)
 
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Cartesian
@@ -319,12 +372,12 @@ class CoordinateManager:
         self._invalidate_cartesian()
 
     @property
-    def zmatrix(self) -> list["ZMatrixEntry"]:
+    def zmatrix(self) -> "ZMatrix":
         """
         Z-matrix structure (read-only).
 
         Returns:
-            List of ZMatrixEntry objects defining coordinate references.
+            ZMatrix object wrapping (M, 4) int64 array.
 
         Note:
             If Z-matrix hasn't been built yet, triggers internal coordinate
@@ -334,6 +387,17 @@ class CoordinateManager:
             # Trigger internal computation to build Z-matrix
             _ = self.dihedrals
         return self._zmatrix
+
+    @property
+    def zmatrix_indices(self) -> Array:
+        """
+        Z-matrix structure as raw array (read-only).
+
+        Returns:
+            (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+            where -1 indicates "no reference" (for root atoms).
+        """
+        return self.zmatrix.indices
 
     # ─────────────────────────────────────────────────────────────────────
     # Recomputation Methods
@@ -346,7 +410,7 @@ class CoordinateManager:
         Builds Z-matrix (if not cached) and computes bond lengths, angles,
         and dihedrals from current Cartesian coordinates.
         """
-        from .graph import build_zmatrix, zmatrix_to_indices
+        from .graph import ZMatrix
         from .zmatrix import _compute_distance, _compute_angle, _compute_dihedral
 
         if self._coordinates is None:
@@ -357,24 +421,73 @@ class CoordinateManager:
 
         # Build Z-matrix if not already cached
         if self._zmatrix is None:
-            self._zmatrix = build_zmatrix(self._polymer)
+            self._zmatrix = ZMatrix.from_polymer(self._polymer)
 
             # Detect orphan atoms (atoms not in Z-matrix - no bonds)
             # Add them as single-atom connected components
-            zmatrix_atoms = {entry.atom_idx for entry in self._zmatrix}
+            zmatrix_indices = self._zmatrix.indices
+            if len(zmatrix_indices) > 0:
+                zmatrix_atoms = set(int(idx) for idx in zmatrix_indices[:, 0])
+            else:
+                zmatrix_atoms = set()
+
             orphan_atoms = [i for i in range(n_atoms) if i not in zmatrix_atoms]
 
-            if orphan_atoms and self._connected_components is not None:
+            if orphan_atoms and self._component_offsets is not None:
                 # Add each orphan atom as a single-atom connected component
+                # Need to extend CSR arrays
+                new_atoms = []
+                new_centroids = []
+
                 for atom_idx in orphan_atoms:
+                    new_atoms.append(atom_idx)
                     if is_torch(coords):
-                        centroid = coords[atom_idx].clone()
+                        new_centroids.append(coords[atom_idx].clone())
                     else:
-                        centroid = coords[atom_idx].copy()
-                    self._connected_components.append(([atom_idx], centroid))
+                        new_centroids.append(coords[atom_idx].copy())
 
+                if new_atoms:
+                    # Extend CSR format
+                    if is_torch(coords):
+                        import torch
+                        # Extend offsets
+                        old_end = int(self._component_offsets[-1])
+                        new_offsets = [old_end + i + 1 for i in range(len(new_atoms))]
+                        self._component_offsets = torch.cat([
+                            self._component_offsets,
+                            torch.tensor(new_offsets, dtype=torch.int64, device=coords.device)
+                        ])
+                        # Extend atoms
+                        self._component_atoms = torch.cat([
+                            self._component_atoms,
+                            torch.tensor(new_atoms, dtype=torch.int64, device=coords.device)
+                        ])
+                        # Extend centroids
+                        self._component_centroids = torch.cat([
+                            self._component_centroids,
+                            torch.stack(new_centroids)
+                        ])
+                    else:
+                        # Extend offsets
+                        old_end = int(self._component_offsets[-1])
+                        new_offsets = [old_end + i + 1 for i in range(len(new_atoms))]
+                        self._component_offsets = np.concatenate([
+                            self._component_offsets,
+                            np.array(new_offsets, dtype=np.int64)
+                        ])
+                        # Extend atoms
+                        self._component_atoms = np.concatenate([
+                            self._component_atoms,
+                            np.array(new_atoms, dtype=np.int64)
+                        ])
+                        # Extend centroids
+                        self._component_centroids = np.concatenate([
+                            self._component_centroids,
+                            np.array(new_centroids)
+                        ])
 
-        n_zmatrix = len(self._zmatrix)
+        zmatrix_indices = self._zmatrix.indices
+        n_zmatrix = len(zmatrix_indices)
 
         # Try to use C extension
         try:
@@ -385,7 +498,11 @@ class CoordinateManager:
 
         if use_c and not (is_torch(coords) and coords.requires_grad):
             # Use C extension (but not if we need gradients)
-            indices = zmatrix_to_indices(self._zmatrix)
+            # Convert indices to numpy if needed
+            if is_torch(zmatrix_indices):
+                indices_np = zmatrix_indices.cpu().numpy()
+            else:
+                indices_np = np.asarray(zmatrix_indices)
 
             if is_torch(coords):
                 import torch
@@ -394,7 +511,7 @@ class CoordinateManager:
                 coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
 
             # Call C extension
-            distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(coords_f32, indices)
+            distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(coords_f32, indices_np)
 
             if is_torch(coords):
                 import torch
@@ -418,28 +535,31 @@ class CoordinateManager:
                 self._dihedrals = np.zeros(n_zmatrix, dtype=np.float32)
 
             # Compute internal coordinates for each atom
-            for i, entry in enumerate(self._zmatrix):
-                atom_idx = entry.atom_idx
+            for i in range(n_zmatrix):
+                atom_idx = int(zmatrix_indices[i, 0])
+                dist_ref = int(zmatrix_indices[i, 1])
+                ang_ref = int(zmatrix_indices[i, 2])
+                dih_ref = int(zmatrix_indices[i, 3])
 
-                if entry.distance_ref >= 0:
+                if dist_ref >= 0:
                     self._distances[i] = _compute_distance(
                         coords[atom_idx],
-                        coords[entry.distance_ref],
+                        coords[dist_ref],
                     )
 
-                if entry.angle_ref >= 0:
+                if ang_ref >= 0:
                     self._angles[i] = _compute_angle(
                         coords[atom_idx],
-                        coords[entry.distance_ref],
-                        coords[entry.angle_ref],
+                        coords[dist_ref],
+                        coords[ang_ref],
                     )
 
-                if entry.dihedral_ref >= 0:
+                if dih_ref >= 0:
                     self._dihedrals[i] = _compute_dihedral(
                         coords[atom_idx],
-                        coords[entry.distance_ref],
-                        coords[entry.angle_ref],
-                        coords[entry.dihedral_ref],
+                        coords[dist_ref],
+                        coords[ang_ref],
+                        coords[dih_ref],
                     )
 
         self._internal_valid = True
@@ -459,80 +579,91 @@ class CoordinateManager:
         if self._zmatrix is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: Z-matrix is None")
 
-        if self._connected_components is None:
+        if self._component_offsets is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: connected components not computed")
 
-        # Get atom count from connected components
-        n_atoms = sum(len(atom_indices) for atom_indices, _ in self._connected_components)
+        zmatrix_indices = self._zmatrix.indices
+
+        # Get atom count (stored from initial coordinates)
+        n_atoms = self._n_atoms
 
         # NERF reconstruction (places each chain root at origin)
         coords = nerf_reconstruct(
+            zmatrix_indices,
             self._distances,
             self._angles,
             self._dihedrals,
-            self._zmatrix,
             n_atoms=n_atoms,
         )
 
-        # Restore positions of all connected components
-        # Identify which atoms belong to each component in Z-matrix
-        zmatrix_atoms = {entry.atom_idx for entry in self._zmatrix}
+        # Restore chain centroids and orphan atoms
+        # This is needed to preserve relative chain positions after NERF reconstruction
+        n_components = len(self._component_offsets) - 1
 
-        # Process multi-atom components (chains) from Z-matrix
-        chain_boundaries = []  # List of Z-matrix indices where new components start
-        for i, entry in enumerate(self._zmatrix):
-            if entry.distance_ref == -1 and entry.angle_ref == -1 and entry.dihedral_ref == -1:
-                chain_boundaries.append(i)
+        # Build set of atoms in Z-matrix for orphan detection
+        if len(zmatrix_indices) > 0:
+            zmatrix_atoms = set(zmatrix_indices[:, 0].tolist() if hasattr(zmatrix_indices, 'tolist')
+                               else [int(x) for x in zmatrix_indices[:, 0]])
+        else:
+            zmatrix_atoms = set()
 
-        # Add end boundary
-        chain_boundaries.append(len(self._zmatrix))
+        # Process each component (chains store centroids, orphans store positions)
+        for comp_idx in range(n_components):
+            comp_start = int(self._component_offsets[comp_idx])
+            comp_end = int(self._component_offsets[comp_idx + 1])
+            component_size = comp_end - comp_start
 
-        # Match Z-matrix chains with connected components
-        chain_idx = 0
-        for boundary_idx in range(len(chain_boundaries) - 1):
-            start_idx = chain_boundaries[boundary_idx]
-            end_idx = chain_boundaries[boundary_idx + 1]
+            if component_size == 1:
+                # Single-atom component (orphan)
+                atom_idx = int(self._component_atoms[comp_start])
+                if atom_idx not in zmatrix_atoms and atom_idx < n_atoms:
+                    coords[atom_idx] = self._component_centroids[comp_idx]
+            else:
+                # Multi-atom component (chain) - restore centroid
+                # Get atom indices as slice for efficiency
+                atom_start = int(self._component_atoms[comp_start])
+                atom_end = int(self._component_atoms[comp_end - 1]) + 1
 
-            # Get atom indices for this chain from Z-matrix
-            zmatrix_chain_atoms = [self._zmatrix[i].atom_idx for i in range(start_idx, end_idx)]
+                # Skip if out of bounds
+                if atom_end > n_atoms:
+                    continue
 
-            # Find matching connected component
-            for component_atoms, original_centroid in self._connected_components:
-                if len(component_atoms) > 1 and component_atoms[0] in zmatrix_chain_atoms:
-                    # This is the matching multi-atom component
-                    # Compute centroid of reconstructed atoms
-                    if is_torch(coords):
-                        import torch
-                        component_coords = torch.stack([coords[idx] for idx in component_atoms])
-                    else:
-                        component_coords = np.stack([coords[idx] for idx in component_atoms])
+                # Check if atoms are contiguous (common case)
+                if atom_end - atom_start == component_size:
+                    # Contiguous atoms - use slice
+                    component_coords = coords[atom_start:atom_end]
                     reconstructed_centroid = component_coords.mean(axis=0)
-
-                    # Translation: move from reconstructed centroid to original centroid
+                    original_centroid = self._component_centroids[comp_idx]
                     translation = original_centroid - reconstructed_centroid
-
-                    # Apply translation to all atoms in this component
-                    for atom_idx in component_atoms:
-                        coords[atom_idx] = coords[atom_idx] + translation
-                    break
-
-        # Restore single-atom components (orphan atoms)
-        for component_atoms, original_position in self._connected_components:
-            if len(component_atoms) == 1:
-                atom_idx = component_atoms[0]
-                if atom_idx not in zmatrix_atoms:
-                    # This is an orphan atom - just set its position directly
-                    coords[atom_idx] = original_position
+                    coords[atom_start:atom_end] = component_coords + translation
+                else:
+                    # Non-contiguous atoms - use indexing
+                    atom_indices = self._component_atoms[comp_start:comp_end]
+                    if is_torch(coords):
+                        component_coords = coords[atom_indices.long()]
+                    else:
+                        component_coords = coords[atom_indices]
+                    reconstructed_centroid = component_coords.mean(axis=0)
+                    original_centroid = self._component_centroids[comp_idx]
+                    translation = original_centroid - reconstructed_centroid
+                    if is_torch(coords):
+                        coords[atom_indices.long()] = component_coords + translation
+                    else:
+                        coords[atom_indices] = component_coords + translation
 
         self._coordinates = coords
         self._cartesian_valid = True
 
     def _compute_dihedral_indices(self) -> None:
         """
-        Compute indices into the dihedral array for named dihedrals.
+        Compute indices into the dihedral array for named dihedrals in CSR format.
 
         Identifies which Z-matrix entries correspond to standard backbone
         dihedrals (phi, psi, omega, etc.) based on atom types and topology.
+
+        Stores results in CSR format:
+        - offsets: (NUM_DIHEDRAL_TYPES+1,) cumulative counts
+        - indices: (total_dihedrals,) flattened Z-matrix indices
         """
         from .dihedrals import compute_dihedral_indices
 
@@ -540,10 +671,45 @@ class CoordinateManager:
             # Trigger internal computation to build Z-matrix
             _ = self.dihedrals
 
-        self._dihedral_indices = compute_dihedral_indices(
+        # Get dict[int, Array] mapping dihedral type → Z-matrix indices
+        result = compute_dihedral_indices(
             self._polymer,
-            self._zmatrix,
+            self._zmatrix.indices,
         )
+
+        # Convert to CSR format
+        # DihedralType has 11 types (0-10 indices)
+        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+        num_types = 11  # PHI(0) through CHI_PYRIMIDINE(10)
+
+        offsets = [0]
+        all_indices = []
+
+        for type_idx in range(num_types):
+            indices = result.get(type_idx, [])
+            if hasattr(indices, '__iter__') and not isinstance(indices, (str, bytes)):
+                # Convert to list if it's an array
+                if hasattr(indices, 'tolist'):
+                    indices_list = indices.tolist()
+                elif is_torch(indices):
+                    indices_list = indices.cpu().tolist()
+                else:
+                    indices_list = list(indices)
+            else:
+                indices_list = []
+
+            all_indices.extend(indices_list)
+            offsets.append(len(all_indices))
+
+        # Store as arrays
+        coords = self._coordinates
+        if is_torch(coords):
+            import torch
+            self._dihedral_offsets = torch.tensor(offsets, dtype=torch.int64, device=coords.device)
+            self._dihedral_indices = torch.tensor(all_indices, dtype=torch.int64, device=coords.device) if all_indices else torch.tensor([], dtype=torch.int64, device=coords.device)
+        else:
+            self._dihedral_offsets = np.array(offsets, dtype=np.int64)
+            self._dihedral_indices = np.array(all_indices, dtype=np.int64) if all_indices else np.array([], dtype=np.int64)
 
     # ─────────────────────────────────────────────────────────────────────
     # Named Dihedral API
@@ -551,7 +717,7 @@ class CoordinateManager:
 
     def get_dihedral(self, dtype: DihedralType) -> Array:
         """
-        Get specific named dihedral angles.
+        Get specific named dihedral angles using CSR lookup.
 
         Args:
             dtype: Type of dihedral to retrieve (e.g., DihedralType.PHI).
@@ -569,19 +735,31 @@ class CoordinateManager:
             self._recompute_internal()
 
         # Compute dihedral indices if not already cached
-        if self._dihedral_indices is None:
+        if self._dihedral_offsets is None:
             self._compute_dihedral_indices()
 
-        # Lookup indices for this dihedral type
-        indices = self._dihedral_indices.get(dtype.value)
-        if indices is None or len(indices) == 0:
-            # Return empty array with correct backend type
+        # CSR lookup by DihedralType integer index
+        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+        type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
+        if type_idx is None or type_idx >= len(self._dihedral_offsets) - 1:
+            # Type index out of range
             if is_torch(self._dihedrals):
                 import torch
                 return torch.tensor([], dtype=self._dihedrals.dtype, device=self._dihedrals.device)
             else:
                 return np.array([], dtype=self._dihedrals.dtype)
 
+        start = int(self._dihedral_offsets[type_idx])
+        end = int(self._dihedral_offsets[type_idx + 1])
+
+        if start == end:  # Empty range
+            if is_torch(self._dihedrals):
+                import torch
+                return torch.tensor([], dtype=self._dihedrals.dtype, device=self._dihedrals.device)
+            else:
+                return np.array([], dtype=self._dihedrals.dtype)
+
+        indices = self._dihedral_indices[start:end]
         return self._dihedrals[indices]
 
     def set_dihedral(self, dtype: DihedralType, values: Array) -> None:
@@ -604,16 +782,28 @@ class CoordinateManager:
             self._recompute_internal()
 
         # Compute dihedral indices if not already cached
-        if self._dihedral_indices is None:
+        if self._dihedral_offsets is None:
             self._compute_dihedral_indices()
 
-        # Lookup indices for this dihedral type
-        indices = self._dihedral_indices.get(dtype.value)
-        if indices is None:
+        # CSR lookup by DihedralType integer index
+        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+        type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
+        if type_idx is None or type_idx >= len(self._dihedral_offsets) - 1:
             raise ValueError(
-                f"No {dtype.value} dihedrals found in structure. "
+                f"No {dtype.name} dihedrals found in structure. "
                 f"This may be because the structure doesn't contain the appropriate molecule type."
             )
+
+        start = int(self._dihedral_offsets[type_idx])
+        end = int(self._dihedral_offsets[type_idx + 1])
+
+        if start == end:  # Empty range
+            raise ValueError(
+                f"No {dtype.name} dihedrals found in structure. "
+                f"This may be because the structure doesn't contain the appropriate molecule type."
+            )
+
+        indices = self._dihedral_indices[start:end]
 
         # Copy dihedrals array to avoid in-place modification issues
         if is_torch(self._dihedrals):
@@ -654,21 +844,20 @@ class CoordinateManager:
             new_manager._dihedrals = to_numpy(self._dihedrals)
             new_manager._internal_valid = True
 
-        # Copy Z-matrix (backend-independent structure)
-        new_manager._zmatrix = self._zmatrix
+        # Convert Z-matrix
+        if self._zmatrix is not None:
+            new_manager._zmatrix = self._zmatrix.to_numpy()
 
-        # Convert connected components
-        if self._connected_components is not None:
-            new_manager._connected_components = [
-                (atom_indices, to_numpy(centroid))
-                for atom_indices, centroid in self._connected_components
-            ]
+        # Convert connected components (CSR format)
+        if self._component_offsets is not None:
+            new_manager._component_offsets = to_numpy(self._component_offsets)
+            new_manager._component_atoms = to_numpy(self._component_atoms)
+            new_manager._component_centroids = to_numpy(self._component_centroids)
 
-        # Convert dihedral indices if they exist
-        if self._dihedral_indices is not None:
-            new_manager._dihedral_indices = {
-                k: to_numpy(v) for k, v in self._dihedral_indices.items()
-            }
+        # Convert dihedral indices (CSR format)
+        if self._dihedral_offsets is not None:
+            new_manager._dihedral_offsets = to_numpy(self._dihedral_offsets)
+            new_manager._dihedral_indices = to_numpy(self._dihedral_indices)
 
         return new_manager
 
@@ -695,21 +884,20 @@ class CoordinateManager:
             new_manager._dihedrals = to_torch(self._dihedrals)
             new_manager._internal_valid = True
 
-        # Copy Z-matrix (backend-independent structure)
-        new_manager._zmatrix = self._zmatrix
+        # Convert Z-matrix
+        if self._zmatrix is not None:
+            new_manager._zmatrix = self._zmatrix.to_torch()
 
-        # Convert connected components
-        if self._connected_components is not None:
-            new_manager._connected_components = [
-                (atom_indices, to_torch(centroid))
-                for atom_indices, centroid in self._connected_components
-            ]
+        # Convert connected components (CSR format)
+        if self._component_offsets is not None:
+            new_manager._component_offsets = to_torch(self._component_offsets)
+            new_manager._component_atoms = to_torch(self._component_atoms)
+            new_manager._component_centroids = to_torch(self._component_centroids)
 
-        # Convert dihedral indices if they exist
-        if self._dihedral_indices is not None:
-            new_manager._dihedral_indices = {
-                k: to_torch(v) for k, v in self._dihedral_indices.items()
-            }
+        # Convert dihedral indices (CSR format)
+        if self._dihedral_offsets is not None:
+            new_manager._dihedral_offsets = to_torch(self._dihedral_offsets)
+            new_manager._dihedral_indices = to_torch(self._dihedral_indices)
 
         return new_manager
 
@@ -748,16 +936,19 @@ class CoordinateManager:
             new_manager._dihedrals = self._dihedrals.to(device)
             new_manager._internal_valid = True
 
-        # Copy Z-matrix and orphan atoms
-        new_manager._zmatrix = self._zmatrix
-        new_manager._orphan_atoms = self._orphan_atoms
-        if self._orphan_coords is not None:
-            new_manager._orphan_coords = self._orphan_coords.to(device)
+        # Copy Z-matrix (move to device if PyTorch)
+        if self._zmatrix is not None:
+            new_manager._zmatrix = self._zmatrix.to(device)
 
-        # Move dihedral indices if they exist
-        if self._dihedral_indices is not None:
-            new_manager._dihedral_indices = {
-                k: v.to(device) for k, v in self._dihedral_indices.items()
-            }
+        # Move connected components (CSR format)
+        if self._component_offsets is not None:
+            new_manager._component_offsets = self._component_offsets.to(device)
+            new_manager._component_atoms = self._component_atoms.to(device)
+            new_manager._component_centroids = self._component_centroids.to(device)
+
+        # Move dihedral indices (CSR format)
+        if self._dihedral_offsets is not None:
+            new_manager._dihedral_offsets = self._dihedral_offsets.to(device)
+            new_manager._dihedral_indices = self._dihedral_indices.to(device)
 
         return new_manager

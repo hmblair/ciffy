@@ -12,11 +12,29 @@ from typing import TYPE_CHECKING, Dict
 import numpy as np
 
 from ..backend import Array, is_torch
-from ..types import Molecule, Scale
+from ..types import Molecule, Scale, DihedralType
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from .graph import ZMatrixEntry
+
+
+# Mapping from DihedralType to integer index for array-based storage
+# This matches the order used in code generation (generate.py)
+DIHEDRAL_TYPE_TO_INDEX = {
+    DihedralType.PHI: 0,
+    DihedralType.PSI: 1,
+    DihedralType.OMEGA: 2,
+    DihedralType.ALPHA: 3,
+    DihedralType.BETA: 4,
+    DihedralType.GAMMA: 5,
+    DihedralType.DELTA: 6,
+    DihedralType.EPSILON: 7,
+    DihedralType.ZETA: 8,
+    DihedralType.CHI_PURINE: 9,
+    DihedralType.CHI_PYRIMIDINE: 10,
+}
+
+INDEX_TO_DIHEDRAL_TYPE = {v: k for k, v in DIHEDRAL_TYPE_TO_INDEX.items()}
 
 
 # =============================================================================
@@ -58,79 +76,90 @@ NUCLEIC_ACID_DIHEDRALS = {
 
 def compute_dihedral_indices(
     polymer: "Polymer",
-    zmatrix: list["ZMatrixEntry"],
-) -> Dict[str, Array]:
+    zmatrix_indices: Array,
+) -> Dict[int, Array]:
     """
-    Compute indices into the dihedral array for named dihedrals.
+    Compute dihedral indices using precomputed residue patterns.
 
-    Identifies which Z-matrix entries correspond to standard backbone
-    dihedrals based on the atom types and bond topology.
+    Uses the precomputed dihedral_patterns from Residue definitions instead of
+    searching through all Z-matrix entries. Returns integer-keyed dict for
+    CSR conversion.
 
     Args:
-        polymer: Source polymer with atom type information.
-        zmatrix: Z-matrix defining coordinate references.
+        polymer: Source polymer with sequence information.
+        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
 
     Returns:
-        Dict mapping dihedral names to arrays of indices into the
-        dihedral array. Missing dihedrals (e.g., phi for first residue)
-        are excluded from the arrays.
+        Dict mapping DihedralType.value (int) → array of Z-matrix indices.
     """
-    from ..biochemistry import Residue, ATOM_NAMES
+    from ..biochemistry import Residue
+    from ..types import DihedralType
 
-    # Determine molecule type from first residue
-    if polymer.size(Scale.RESIDUE) == 0:
-        return {}
+    result: Dict[int, list] = {}
 
-    first_res_type = int(polymer.sequence[0])
-    try:
-        mol_type = Residue(first_res_type).molecule_type
-    except ValueError:
-        return {}
+    # Build mapping: global_atom_idx → zmatrix_position
+    atom_to_z: Dict[int, int] = {}
+    for i in range(len(zmatrix_indices)):
+        atom_idx = int(zmatrix_indices[i, 0])
+        atom_to_z[atom_idx] = i
 
-    # Select appropriate dihedral definitions
-    if mol_type in (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.CYCLIC_PEPTIDE):
-        dihedral_defs = PROTEIN_DIHEDRALS
-    elif mol_type in (Molecule.RNA, Molecule.DNA, Molecule.HYBRID):
-        dihedral_defs = NUCLEIC_ACID_DIHEDRALS
-    else:
-        return {}
+    # Get residue sizes
+    res_sizes = polymer.sizes(Scale.RESIDUE)
 
-    # Build atom index -> name mapping (using Python naming convention)
-    idx_to_name: Dict[int, str] = {}
-    for i in range(polymer.size()):
-        atom_value = int(polymer.atoms[i])
-        name = ATOM_NAMES.get(atom_value, "")
-        # Convert to Python naming: O3' -> O3p, H5'' -> H5pp
-        py_name = name.replace("'", "p").replace('"', "pp")
-        idx_to_name[i] = py_name
+    atom_offset = 0
+    for res_idx in range(len(res_sizes)):
+        res_size = int(res_sizes[res_idx])
+        res_type_idx = int(polymer.sequence[res_idx])
 
-    # Find matching dihedrals
-    result: Dict[str, list] = {name: [] for name in dihedral_defs}
+        try:
+            residue = Residue(res_type_idx)
+            patterns = residue.dihedral_patterns  # dict[int, Array]
 
-    for z_idx, entry in enumerate(zmatrix):
-        if entry.dihedral_ref < 0:
-            continue
+            for type_val, local_pattern in patterns.items():
+                # Convert local indices to global atom indices
+                global_atoms = []
+                valid = True
 
-        # Get atom names for this Z-matrix entry's dihedral definition
-        # The dihedral is: atom -> distance_ref -> angle_ref -> dihedral_ref
-        a1_name = idx_to_name.get(entry.atom_idx, "")
-        a2_name = idx_to_name.get(entry.distance_ref, "")
-        a3_name = idx_to_name.get(entry.angle_ref, "")
-        a4_name = idx_to_name.get(entry.dihedral_ref, "")
+                for local_idx in local_pattern:
+                    local_idx_int = int(local_idx)
+                    if local_idx_int == -1:
+                        # Inter-residue atom - not supported yet in fast path
+                        # (would need to look at adjacent residues)
+                        valid = False
+                        break
+                    global_idx = atom_offset + local_idx_int
+                    global_atoms.append(global_idx)
 
-        # Check against each dihedral definition
-        for dihedral_name, (d1, d2, d3, d4) in dihedral_defs.items():
-            if (a1_name == d1 and a2_name == d2 and
-                a3_name == d3 and a4_name == d4):
-                result[dihedral_name].append(z_idx)
-                break
+                if valid and len(global_atoms) == 4:
+                    # Check if these atoms form a dihedral in Z-matrix
+                    # The dihedral should be: a0 -> a1 -> a2 -> a3
+                    # In Z-matrix: atom=a0, dist_ref=a1, ang_ref=a2, dih_ref=a3
+                    z_idx = atom_to_z.get(global_atoms[0], -1)
+                    if z_idx >= 0:
+                        # Verify this Z-matrix entry matches the pattern
+                        entry_dist = int(zmatrix_indices[z_idx, 1])
+                        entry_ang = int(zmatrix_indices[z_idx, 2])
+                        entry_dih = int(zmatrix_indices[z_idx, 3])
+
+                        if (entry_dist == global_atoms[1] and
+                            entry_ang == global_atoms[2] and
+                            entry_dih == global_atoms[3]):
+                            # Match found!
+                            if type_val not in result:
+                                result[type_val] = []
+                            result[type_val].append(z_idx)
+
+        except ValueError:
+            pass
+
+        atom_offset += res_size
 
     # Convert to arrays
     coords = polymer.coordinates
     if is_torch(coords):
         import torch
         return {
-            k: torch.tensor(v, dtype=torch.long, device=coords.device)
+            k: torch.tensor(v, dtype=torch.int64, device=coords.device)
             for k, v in result.items() if v
         }
     else:

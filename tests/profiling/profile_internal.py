@@ -79,27 +79,51 @@ def benchmark_internal_coords(filepath: str, backend: str = "numpy",
         "chains": polymer.size(ciffy.Scale.CHAIN),
     }
 
-    # Benchmark to_internal (Cartesian -> Internal)
+    # Benchmark Cartesian -> Internal (accessing dihedrals triggers computation)
     def to_internal():
-        return polymer.to_internal()
+        # Create fresh polymer to reset internal coords
+        p = ciffy.load(filepath, backend=backend).poly()
+        return p.dihedrals
 
     results["to_internal"] = _benchmark(to_internal, runs=runs)
 
-    # Get internal representation for to_cartesian benchmark
-    internal = polymer.to_internal()
-    results["zmatrix_size"] = len(internal.zmatrix)
-    results["orphan_atoms"] = len(internal._orphan_atoms)
+    # Get Z-matrix size after initial computation
+    _ = polymer.dihedrals  # Trigger computation
+    zmatrix = polymer._coord_manager.zmatrix
+    results["zmatrix_size"] = len(zmatrix)
 
-    # Benchmark to_cartesian (Internal -> Cartesian)
+    # Count orphan atoms
+    mgr = polymer._coord_manager
+    n_components = len(mgr._component_offsets) - 1
+    orphan_count = sum(
+        1 for i in range(n_components)
+        if int(mgr._component_offsets[i + 1]) - int(mgr._component_offsets[i]) == 1
+    )
+    results["orphan_atoms"] = orphan_count
+
+    # Benchmark Internal -> Cartesian (setting dihedrals triggers reconstruction)
+    orig_coords = polymer.coordinates.copy() if backend == "numpy" else polymer.coordinates.clone()
+
     def to_cartesian():
-        return internal.to_cartesian()
+        # Copy dihedrals and set them back to trigger reconstruction
+        if backend == "numpy":
+            dihedrals = polymer.dihedrals.copy()
+        else:
+            dihedrals = polymer.dihedrals.clone()
+        polymer.dihedrals = dihedrals
+        return polymer.coordinates
 
     results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
 
     # Benchmark round-trip
     def round_trip():
-        i = polymer.to_internal()
-        return i.to_cartesian()
+        p = ciffy.load(filepath, backend=backend).poly()
+        if backend == "numpy":
+            dihedrals = p.dihedrals.copy()
+        else:
+            dihedrals = p.dihedrals.clone()
+        p.dihedrals = dihedrals
+        return p.coordinates
 
     results["round_trip"] = _benchmark(round_trip, runs=runs)
 
@@ -132,23 +156,27 @@ def benchmark_torch_gpu(filepath: str, runs: int = BENCHMARK_RUNS) -> dict | Non
         "device": str(polymer.coordinates.device),
     }
 
-    # Benchmark to_internal on GPU
+    # Benchmark Cartesian -> Internal on GPU
     def to_internal():
         torch.cuda.synchronize()
-        internal = polymer.to_internal()
+        dihedrals = polymer.dihedrals
         torch.cuda.synchronize()
-        return internal
+        return dihedrals
+
+    # Reset internal coords for fresh benchmark
+    polymer._coord_manager._internal_valid = False
+    polymer._coord_manager._zmatrix = None
 
     results["to_internal"] = _benchmark(to_internal, runs=runs)
 
-    # Get internal for to_cartesian benchmark
-    internal = polymer.to_internal()
-
+    # Benchmark Internal -> Cartesian on GPU
     def to_cartesian():
         torch.cuda.synchronize()
-        cart = internal.to_cartesian()
+        dihedrals = polymer.dihedrals.clone()
+        polymer.dihedrals = dihedrals
+        coords = polymer.coordinates
         torch.cuda.synchronize()
-        return cart
+        return coords
 
     results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
 

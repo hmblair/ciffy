@@ -56,8 +56,9 @@ class TestInternalCoordinatesBasic:
         angles = polymer.angles
         dihedrals = polymer.dihedrals
 
-        # Check array shapes
-        n_zmatrix = len(polymer._coord_manager._zmatrix)
+        # Check array shapes using ZMatrix
+        zmatrix = polymer._coord_manager.zmatrix
+        n_zmatrix = len(zmatrix)
         assert distances.shape == (n_zmatrix,)
         assert angles.shape == (n_zmatrix,)
         assert dihedrals.shape == (n_zmatrix,)
@@ -68,11 +69,12 @@ class TestInternalCoordinatesBasic:
 
         polymer = from_sequence("acgu")
         distances = polymer.distances
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
         # First entry has no distance (root atom)
-        for i, entry in enumerate(zmatrix):
-            if entry.distance_ref >= 0:
+        for i in range(len(zmatrix)):
+            dist_ref = int(zmatrix.distance_refs[i])
+            if dist_ref >= 0:
                 assert distances[i] > 0, f"Distance at {i} is not positive"
 
     def test_angles_in_valid_range(self):
@@ -81,10 +83,11 @@ class TestInternalCoordinatesBasic:
 
         polymer = from_sequence("acgu")
         angles = polymer.angles
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
-        for i, entry in enumerate(zmatrix):
-            if entry.angle_ref >= 0:
+        for i in range(len(zmatrix)):
+            ang_ref = int(zmatrix.angle_refs[i])
+            if ang_ref >= 0:
                 angle = angles[i]
                 assert 0 <= angle <= np.pi, f"Angle at {i} is {angle}, not in [0, pi]"
 
@@ -94,10 +97,11 @@ class TestInternalCoordinatesBasic:
 
         polymer = from_sequence("acgu")
         dihedrals = polymer.dihedrals
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
-        for i, entry in enumerate(zmatrix):
-            if entry.dihedral_ref >= 0:
+        for i in range(len(zmatrix)):
+            dih_ref = int(zmatrix.dihedral_refs[i])
+            if dih_ref >= 0:
                 dih = dihedrals[i]
                 assert -np.pi <= dih <= np.pi, f"Dihedral at {i} is {dih}, not in [-pi, pi]"
 
@@ -349,9 +353,17 @@ class TestOrphanAtoms:
         _ = polymer.dihedrals
 
         # Should have single-atom components (waters, ions)
-        components = polymer._coord_manager._connected_components
-        single_atom_components = [c for c in components if len(c[0]) == 1]
-        assert len(single_atom_components) > 0
+        # Access CSR format components
+        mgr = polymer._coord_manager
+        n_components = len(mgr._component_offsets) - 1
+        single_atom_count = 0
+        for i in range(n_components):
+            start = int(mgr._component_offsets[i])
+            end = int(mgr._component_offsets[i + 1])
+            if end - start == 1:
+                single_atom_count += 1
+
+        assert single_atom_count > 0
 
     def test_orphan_coords_restored(self):
         """Test orphan coordinates are restored after round-trip."""
@@ -364,17 +376,20 @@ class TestOrphanAtoms:
         dihedrals = polymer.dihedrals.copy()
         polymer.dihedrals = dihedrals
 
-        # Find single-atom components
-        components = polymer._coord_manager._connected_components
-        single_atom_components = [c for c in components if len(c[0]) == 1]
+        # Find single-atom components using CSR format
+        mgr = polymer._coord_manager
+        n_components = len(mgr._component_offsets) - 1
 
-        # Orphan atoms should have original coordinates
-        for atom_indices, _ in single_atom_components:
-            atom_idx = atom_indices[0]
-            orig_coord = orig_coords[atom_idx]
-            rec_coord = polymer.coordinates[atom_idx]
-            assert np.allclose(orig_coord, rec_coord), \
-                f"Orphan atom {atom_idx} coords not restored"
+        for i in range(n_components):
+            start = int(mgr._component_offsets[i])
+            end = int(mgr._component_offsets[i + 1])
+            if end - start == 1:
+                # This is a single-atom component
+                atom_idx = int(mgr._component_atoms[start])
+                orig_coord = orig_coords[atom_idx]
+                rec_coord = polymer.coordinates[atom_idx]
+                assert np.allclose(orig_coord, rec_coord), \
+                    f"Orphan atom {atom_idx} coords not restored"
 
     def test_no_orphans_for_clean_polymer(self):
         """Test no orphans for polymer-only structure."""
@@ -386,9 +401,16 @@ class TestOrphanAtoms:
         _ = polymer.dihedrals
 
         # Should have no single-atom components
-        components = polymer._coord_manager._connected_components
-        single_atom_components = [c for c in components if len(c[0]) == 1]
-        assert len(single_atom_components) == 0
+        mgr = polymer._coord_manager
+        n_components = len(mgr._component_offsets) - 1
+        single_atom_count = 0
+        for i in range(n_components):
+            start = int(mgr._component_offsets[i])
+            end = int(mgr._component_offsets[i + 1])
+            if end - start == 1:
+                single_atom_count += 1
+
+        assert single_atom_count == 0
 
 
 class TestZMatrix:
@@ -402,26 +424,10 @@ class TestZMatrix:
 
         # Access internal coords to build Z-matrix
         _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
-        placed = set()
-        for i, entry in enumerate(zmatrix):
-            # Distance ref should be already placed (or -1)
-            if entry.distance_ref >= 0:
-                assert entry.distance_ref in placed, \
-                    f"Entry {i}: distance_ref {entry.distance_ref} not yet placed"
-
-            # Angle ref should be already placed (or -1)
-            if entry.angle_ref >= 0:
-                assert entry.angle_ref in placed, \
-                    f"Entry {i}: angle_ref {entry.angle_ref} not yet placed"
-
-            # Dihedral ref should be already placed (or -1)
-            if entry.dihedral_ref >= 0:
-                assert entry.dihedral_ref in placed, \
-                    f"Entry {i}: dihedral_ref {entry.dihedral_ref} not yet placed"
-
-            placed.add(entry.atom_idx)
+        # Use validate() method from ZMatrix class
+        zmatrix.validate()  # Should not raise
 
     def test_zmatrix_distinct_references(self):
         """Test Z-matrix references are distinct for full entries."""
@@ -431,14 +437,20 @@ class TestZMatrix:
 
         # Access internal coords to build Z-matrix
         _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
-        for i, entry in enumerate(zmatrix):
-            if entry.dihedral_ref >= 0:
+        for i in range(len(zmatrix)):
+            dih_ref = int(zmatrix.dihedral_refs[i])
+            if dih_ref >= 0:
                 # All four atoms should be distinct
-                atoms = {entry.atom_idx, entry.distance_ref, entry.angle_ref, entry.dihedral_ref}
+                atoms = {
+                    int(zmatrix.atom_indices[i]),
+                    int(zmatrix.distance_refs[i]),
+                    int(zmatrix.angle_refs[i]),
+                    dih_ref,
+                }
                 assert len(atoms) == 4, \
-                    f"Entry {i}: atoms not all distinct: {entry}"
+                    f"Entry {i}: atoms not all distinct"
 
     def test_first_atom_at_origin(self):
         """Test first atom has no references (placed at origin)."""
@@ -448,12 +460,11 @@ class TestZMatrix:
 
         # Access internal coords to build Z-matrix
         _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager._zmatrix
+        zmatrix = polymer._coord_manager.zmatrix
 
-        first = zmatrix[0]
-        assert first.distance_ref == -1
-        assert first.angle_ref == -1
-        assert first.dihedral_ref == -1
+        assert int(zmatrix.distance_refs[0]) == -1
+        assert int(zmatrix.angle_refs[0]) == -1
+        assert int(zmatrix.dihedral_refs[0]) == -1
 
 
 class TestBondGraph:
@@ -465,11 +476,18 @@ class TestBondGraph:
         from ciffy.internal import build_bond_graph
 
         polymer = from_sequence("acgu")
-        graph = build_bond_graph(polymer)
+        edges, n_atoms = build_bond_graph(polymer)
 
-        for atom, neighbors in graph.items():
+        # Build adjacency dict from edges for testing
+        adj = {i: set() for i in range(n_atoms)}
+        for i in range(len(edges)):
+            a, b = int(edges[i, 0]), int(edges[i, 1])
+            adj[a].add(b)
+
+        # Check symmetry
+        for atom, neighbors in adj.items():
             for neighbor in neighbors:
-                assert atom in graph[neighbor], \
+                assert atom in adj[neighbor], \
                     f"Bond {atom}-{neighbor} not symmetric"
 
     def test_bond_graph_has_expected_bonds(self):
@@ -478,12 +496,11 @@ class TestBondGraph:
         from ciffy.internal import build_bond_graph
 
         polymer = from_sequence("acgu")
-        graph = build_bond_graph(polymer)
+        edges, n_atoms = build_bond_graph(polymer)
 
-        # Count total bonds
-        total_bonds = sum(len(neighbors) for neighbors in graph.values()) // 2
+        # Count total bonds (edges are symmetric, so divide by 2)
+        total_bonds = len(edges) // 2
 
         # Should have roughly 1 bond per atom (organic molecules)
-        n_atoms = polymer.size()
         assert total_bonds >= n_atoms - 4  # At least n-4 bonds (tree + some cycles)
         assert total_bonds <= n_atoms * 2  # At most 2 bonds per atom on average

@@ -7,15 +7,10 @@ gradient-based optimization and machine learning.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..backend import Array, is_torch
-from .graph import zmatrix_to_indices
-
-if TYPE_CHECKING:
-    from .graph import ZMatrixEntry
 
 # Try to import C extension
 try:
@@ -26,10 +21,10 @@ except ImportError:
 
 
 def nerf_reconstruct(
+    zmatrix_indices: Array,
     distances: Array,
     angles: Array,
     dihedrals: Array,
-    zmatrix: list["ZMatrixEntry"],
     n_atoms: int | None = None,
 ) -> Array:
     """
@@ -43,22 +38,25 @@ def nerf_reconstruct(
     This implementation is fully differentiable for PyTorch tensors.
 
     Args:
-        distances: (N,) bond lengths in Angstroms (in BFS order).
-        angles: (N,) bond angles in radians (in BFS order).
-        dihedrals: (N,) dihedral angles in radians (in BFS order).
-        zmatrix: Z-matrix entries in BFS (placement) order.
+        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+        distances: (M,) bond lengths in Angstroms (in BFS order).
+        angles: (M,) bond angles in radians (in BFS order).
+        dihedrals: (M,) dihedral angles in radians (in BFS order).
         n_atoms: Total number of atoms (including orphans). If None,
             inferred from max Z-matrix index.
 
     Returns:
         (N, 3) array of Cartesian coordinates in original atom order.
     """
-    n_entries = len(zmatrix)
+    n_entries = len(zmatrix_indices)
 
     # Find max atom index to allocate coords array
     if n_atoms is None:
-        max_idx = max(entry.atom_idx for entry in zmatrix)
-        n_atoms = max_idx + 1
+        if n_entries > 0:
+            max_idx = int(zmatrix_indices[:, 0].max())
+            n_atoms = max_idx + 1
+        else:
+            n_atoms = 0
 
     # Use C extension if available (works for NumPy and Torch tensors without grad)
     use_c = _HAS_C_EXTENSION
@@ -68,8 +66,12 @@ def nerf_reconstruct(
             use_c = False
 
     if use_c:
-        # Build indices array and ensure inputs are contiguous float32
-        indices = zmatrix_to_indices(zmatrix)
+        # Ensure indices are numpy int64
+        if is_torch(zmatrix_indices):
+            indices_np = zmatrix_indices.cpu().numpy()
+        else:
+            indices_np = np.asarray(zmatrix_indices)
+
         if is_torch(distances):
             import torch
             device = distances.device
@@ -83,7 +85,7 @@ def nerf_reconstruct(
             dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
 
         # Call C extension
-        coords_np = _c_nerf_reconstruct(indices, dist_f32, ang_f32, dih_f32, n_atoms)
+        coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
 
         if is_torch(distances):
             import torch
@@ -101,26 +103,29 @@ def nerf_reconstruct(
         # Process entries in BFS order
         # Each entry places the atom at coords[entry.atom_idx]
         # References point to original atom indices which are already placed
-        for i, entry in enumerate(zmatrix):
-            atom_idx = entry.atom_idx
+        for i in range(n_entries):
+            atom_idx = int(zmatrix_indices[i, 0])
+            dist_ref = int(zmatrix_indices[i, 1])
+            ang_ref = int(zmatrix_indices[i, 2])
+            dih_ref = int(zmatrix_indices[i, 3])
 
-            if entry.distance_ref < 0:
+            if dist_ref < 0:
                 # First atom: place at origin
                 coords[atom_idx] = _zeros_3(distances)
 
-            elif entry.angle_ref < 0:
+            elif ang_ref < 0:
                 # Second atom: place along +X axis from first
                 coords[atom_idx] = _place_along_x(
-                    coords[entry.distance_ref],
+                    coords[dist_ref],
                     distances[i],
                     distances,
                 )
 
-            elif entry.dihedral_ref < 0:
+            elif dih_ref < 0:
                 # Third atom: place in plane with first two
                 coords[atom_idx] = _place_in_xy_plane(
-                    coords[entry.distance_ref],
-                    coords[entry.angle_ref],
+                    coords[dist_ref],
+                    coords[ang_ref],
                     distances[i],
                     angles[i],
                     distances,
@@ -129,9 +134,9 @@ def nerf_reconstruct(
             else:
                 # Full NERF placement
                 coords[atom_idx] = _nerf_place_atom(
-                    coords[entry.dihedral_ref],
-                    coords[entry.angle_ref],
-                    coords[entry.distance_ref],
+                    coords[dih_ref],
+                    coords[ang_ref],
+                    coords[dist_ref],
                     distances[i],
                     angles[i],
                     dihedrals[i],

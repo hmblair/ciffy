@@ -7,63 +7,199 @@ Residue.X.bonds with inter-residue linking from LinkingDefinition.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from collections import deque
-from dataclasses import dataclass
 
 import numpy as np
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
 
+from ..backend import Array, is_torch, to_numpy, to_torch
 
-@dataclass
-class ZMatrixEntry:
+
+# =============================================================================
+# ZMATRIX CLASS
+# =============================================================================
+
+
+class ZMatrix:
     """
-    Single entry in a Z-matrix.
+    Z-matrix representation as (M, 4) array.
 
-    Each atom (except the first three) is defined by:
-    - distance to a reference atom (bond length)
-    - angle with two reference atoms (bond angle)
-    - dihedral with three reference atoms (torsion angle)
+    Each row defines how an atom is placed relative to reference atoms:
+    - Column 0: atom_idx - the atom being placed
+    - Column 1: distance_ref - reference for bond length (-1 if none)
+    - Column 2: angle_ref - reference for bond angle (-1 if none)
+    - Column 3: dihedral_ref - reference for dihedral angle (-1 if none)
 
-    Attributes:
-        atom_idx: Global atom index in the molecule.
-        distance_ref: Atom index for bond length reference (-1 for first atom).
-        angle_ref: Atom index for bond angle reference (-1 for first two atoms).
-        dihedral_ref: Atom index for dihedral reference (-1 for first three atoms).
+    Entries are in BFS order, so references always point to earlier atoms.
+
+    Example:
+        >>> zmatrix = ZMatrix.from_polymer(polymer)
+        >>> print(len(zmatrix))  # Number of atoms in Z-matrix
+        >>> print(zmatrix.atom_indices)  # Column 0
+        >>> print(zmatrix[0])  # First row as array
     """
-    atom_idx: int
-    distance_ref: int
-    angle_ref: int
-    dihedral_ref: int
+
+    __slots__ = ('_indices',)
+
+    def __init__(self, indices: Array) -> None:
+        """
+        Initialize Z-matrix from indices array.
+
+        Args:
+            indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+        """
+        self._indices = indices
+
+    @classmethod
+    def from_polymer(cls, polymer: "Polymer") -> "ZMatrix":
+        """
+        Build Z-matrix from polymer using BFS traversal.
+
+        Processes each chain independently with its own spanning tree.
+        Returns entries in BFS order so references always point to
+        earlier (already placed) atoms.
+
+        Args:
+            polymer: Polymer structure.
+
+        Returns:
+            ZMatrix with entries in placement order.
+        """
+        indices = _build_zmatrix_indices(polymer)
+        return cls(indices)
+
+    @property
+    def indices(self) -> Array:
+        """Raw (M, 4) array."""
+        return self._indices
+
+    @property
+    def atom_indices(self) -> Array:
+        """Column 0: atom indices being placed."""
+        return self._indices[:, 0]
+
+    @property
+    def distance_refs(self) -> Array:
+        """Column 1: distance reference atoms (-1 for first atom)."""
+        return self._indices[:, 1]
+
+    @property
+    def angle_refs(self) -> Array:
+        """Column 2: angle reference atoms (-1 for first two atoms)."""
+        return self._indices[:, 2]
+
+    @property
+    def dihedral_refs(self) -> Array:
+        """Column 3: dihedral reference atoms (-1 for first three atoms)."""
+        return self._indices[:, 3]
+
+    def __len__(self) -> int:
+        """Number of entries in Z-matrix."""
+        return len(self._indices)
+
+    def __getitem__(self, idx) -> Array:
+        """Index into the Z-matrix array."""
+        return self._indices[idx]
+
+    def validate(self) -> None:
+        """
+        Validate Z-matrix structure.
+
+        Checks that:
+        - All reference atoms are either -1 or point to earlier atoms
+        - Reference progression is correct (dist before angle before dihedral)
+
+        Raises:
+            ValueError: If validation fails.
+        """
+        placed = set()
+        for i in range(len(self._indices)):
+            atom_idx = int(self._indices[i, 0])
+            dist_ref = int(self._indices[i, 1])
+            ang_ref = int(self._indices[i, 2])
+            dih_ref = int(self._indices[i, 3])
+
+            # Check distance reference
+            if dist_ref >= 0 and dist_ref not in placed:
+                raise ValueError(
+                    f"Entry {i}: distance_ref {dist_ref} not yet placed"
+                )
+
+            # Check angle reference
+            if ang_ref >= 0 and ang_ref not in placed:
+                raise ValueError(
+                    f"Entry {i}: angle_ref {ang_ref} not yet placed"
+                )
+
+            # Check dihedral reference
+            if dih_ref >= 0 and dih_ref not in placed:
+                raise ValueError(
+                    f"Entry {i}: dihedral_ref {dih_ref} not yet placed"
+                )
+
+            # Check progression: can't have angle without distance, etc.
+            if ang_ref >= 0 and dist_ref < 0:
+                raise ValueError(
+                    f"Entry {i}: has angle_ref but no distance_ref"
+                )
+            if dih_ref >= 0 and ang_ref < 0:
+                raise ValueError(
+                    f"Entry {i}: has dihedral_ref but no angle_ref"
+                )
+
+            placed.add(atom_idx)
+
+    def to_numpy(self) -> "ZMatrix":
+        """Convert indices to NumPy array."""
+        return ZMatrix(to_numpy(self._indices))
+
+    def to_torch(self) -> "ZMatrix":
+        """Convert indices to PyTorch tensor."""
+        return ZMatrix(to_torch(self._indices))
+
+    def to(self, device: str) -> "ZMatrix":
+        """Move to specified device (PyTorch only)."""
+        if not is_torch(self._indices):
+            raise RuntimeError("to() requires PyTorch backend")
+        return ZMatrix(self._indices.to(device))
+
+    def __repr__(self) -> str:
+        backend = "torch" if is_torch(self._indices) else "numpy"
+        return f"ZMatrix({len(self)} entries, {backend})"
 
 
-def build_bond_graph(polymer: "Polymer") -> dict[int, set[int]]:
+# =============================================================================
+# BOND GRAPH CONSTRUCTION
+# =============================================================================
+
+
+def build_bond_graph(polymer: "Polymer") -> tuple[np.ndarray, int]:
     """
-    Build adjacency list representation of molecular bonds.
+    Build edge list representation of molecular bonds.
 
-    Combines intra-residue bonds from Residue.X.bonds with inter-residue
-    bonds from LinkingDefinition.
+    Constructs bonds as an (E, 2) array for array-based processing.
+    Combines intra-residue bonds from Residue.bond_indices and inter-residue
+    bonds from LINKING_BY_TYPE.
 
     Args:
         polymer: Polymer structure with sequence and atoms.
 
     Returns:
-        Dict mapping atom index -> set of bonded atom indices.
+        Tuple of:
+            edges: (E, 2) int64 array of [atom_i, atom_j] pairs (symmetric)
+            n_atoms: Total number of atoms
     """
     from ..biochemistry import Residue, LINKING_BY_TYPE, ATOM_NAMES
     from ..types import Scale
 
-    n_atoms = polymer.size()
-    graph: dict[int, set[int]] = {i: set() for i in range(n_atoms)}
-
-    # Get residue sizes
+    intra_bonds = []
+    atom_offset = 0
     res_sizes = polymer.sizes(Scale.RESIDUE)
     n_residues = len(res_sizes)
 
-    # Build atom value -> local index mapping per residue
-    atom_offset = 0
-    res_atom_info: list[tuple[int, dict[int, int], dict[str, int]]] = []
+    # Build per-residue atom value mappings
+    res_atom_info = []  # (offset, value_to_local, name_to_local)
 
     for res_idx in range(n_residues):
         res_size = int(res_sizes[res_idx])
@@ -76,7 +212,7 @@ def build_bond_graph(polymer: "Polymer") -> dict[int, set[int]]:
             atom_value = int(polymer.atoms[atom_offset + local_idx])
             value_to_local[atom_value] = local_idx
 
-            # Get atom name and convert to Python naming (O3' -> O3p)
+            # Get atom name from ATOM_NAMES
             atom_name = ATOM_NAMES.get(atom_value, "")
             py_name = atom_name.replace("'", "p").replace('"', "pp")
             name_to_local[py_name] = local_idx
@@ -84,58 +220,36 @@ def build_bond_graph(polymer: "Polymer") -> dict[int, set[int]]:
         res_atom_info.append((atom_offset, value_to_local, name_to_local))
         atom_offset += res_size
 
-    # Add intra-residue bonds
-    atom_offset = 0
+    # Step 1: Collect intra-residue bonds
     for res_idx in range(n_residues):
-        res_size = int(res_sizes[res_idx])
         res_type_idx = int(polymer.sequence[res_idx])
+        res_offset, value_to_local, _ = res_atom_info[res_idx]
 
         try:
             residue = Residue(res_type_idx)
+            bond_idx = residue.bond_indices  # (M, 2) array from Residue
+
+            if bond_idx is not None:
+                # Translate from global atom values to global indices
+                global_bonds = []
+                for bond in bond_idx:
+                    local1 = value_to_local.get(int(bond[0]))
+                    local2 = value_to_local.get(int(bond[1]))
+                    if local1 is not None and local2 is not None:
+                        global_bonds.append([
+                            res_offset + local1,
+                            res_offset + local2
+                        ])
+
+                if global_bonds:
+                    intra_bonds.append(np.array(global_bonds, dtype=np.int64))
+
         except ValueError:
-            atom_offset += res_size
-            continue
+            pass
 
-        if not hasattr(residue, 'bonds') or residue.bonds is None:
-            atom_offset += res_size
-            continue
+    # Step 2: Build inter-residue bonds
+    inter_bonds_list = []
 
-        # Get mapping for this residue
-        _, value_to_local, _ = res_atom_info[res_idx]
-
-        # Add bonds
-        bond_indices = residue.bonds.indices()
-        for bond in bond_indices:
-            val1, val2 = int(bond[0]), int(bond[1])
-            local1 = value_to_local.get(val1)
-            local2 = value_to_local.get(val2)
-
-            if local1 is not None and local2 is not None:
-                global1 = atom_offset + local1
-                global2 = atom_offset + local2
-                graph[global1].add(global2)
-                graph[global2].add(global1)
-
-        atom_offset += res_size
-
-    # Add inter-residue bonds
-    _add_inter_residue_bonds(polymer, graph, res_atom_info)
-
-    return graph
-
-
-def _add_inter_residue_bonds(
-    polymer: "Polymer",
-    graph: dict[int, set[int]],
-    res_atom_info: list[tuple[int, dict[int, int], dict[str, int]]],
-) -> None:
-    """Add bonds between consecutive residues based on molecule type."""
-    from ..biochemistry import Residue, LINKING_BY_TYPE
-    from ..types import Scale
-
-    n_residues = len(res_atom_info)
-
-    # Process each chain
     chain_start_res = 0
     for chain_len in polymer.lengths:
         chain_len_val = int(chain_len)
@@ -164,52 +278,67 @@ def _add_inter_residue_bonds(
                 if prev_local is not None and next_local is not None:
                     global_prev = curr_offset + prev_local
                     global_next = next_offset + next_local
-                    graph[global_prev].add(global_next)
-                    graph[global_next].add(global_prev)
+                    inter_bonds_list.append([global_prev, global_next])
 
         chain_start_res = chain_end_res
 
+    # Step 3: Concatenate all bonds
+    all_bonds_list = intra_bonds
+    if inter_bonds_list:
+        all_bonds_list.append(np.array(inter_bonds_list, dtype=np.int64))
 
-def build_spanning_tree(
-    graph: dict[int, set[int]],
-    root: int,
-    atom_set: set[int] | None = None,
-) -> tuple[list[int], dict[int, int]]:
+    if not all_bonds_list:
+        return np.zeros((0, 2), dtype=np.int64), polymer.size()
+
+    all_bonds = np.vstack(all_bonds_list)
+
+    # Step 4: Symmetrize (add reverse edges for undirected graph)
+    edges = np.vstack([all_bonds, all_bonds[:, [1, 0]]])
+
+    return edges, polymer.size()
+
+
+def edges_to_csr_neighbors(edges: Array, n_atoms: int) -> tuple[Array, Array]:
     """
-    Build spanning tree from bond graph using BFS.
+    Convert edge list to CSR-style neighbor lists.
 
     Args:
-        graph: Bond adjacency list.
-        root: Starting atom index.
-        atom_set: Optional set of atoms to include (for chain subgraphs).
+        edges: (E, 2) array of directed edges
+        n_atoms: Total number of atoms
 
     Returns:
         Tuple of:
-        - Ordered list of atom indices (BFS order)
-        - Parent dict mapping atom -> parent atom in tree (-1 for root)
+            offsets: (n_atoms+1,) cumulative neighbor counts
+            neighbors: (E,) flattened neighbor indices, sorted by source
     """
-    visited = {root}
-    parent = {root: -1}
-    order = [root]
-    queue = deque([root])
+    if is_torch(edges):
+        import torch
+        # Sort by source node
+        sort_idx = torch.argsort(edges[:, 0])
+        sorted_edges = edges[sort_idx]
 
-    while queue:
-        current = queue.popleft()
-        neighbors = graph.get(current, set())
+        # Compute offsets using bincount
+        sources = sorted_edges[:, 0]
+        counts = torch.bincount(sources, minlength=n_atoms)
+        offsets = torch.cat([torch.tensor([0], device=edges.device), counts.cumsum(0)])
+        neighbors = sorted_edges[:, 1]
+    else:
+        # Sort by source node
+        sort_idx = np.argsort(edges[:, 0])
+        sorted_edges = edges[sort_idx]
 
-        # Sort for deterministic ordering
-        for neighbor in sorted(neighbors):
-            if neighbor in visited:
-                continue
-            if atom_set is not None and neighbor not in atom_set:
-                continue
+        # Compute offsets using bincount
+        sources = sorted_edges[:, 0]
+        counts = np.bincount(sources, minlength=n_atoms)
+        offsets = np.concatenate([[0], counts.cumsum()])
+        neighbors = sorted_edges[:, 1]
 
-            visited.add(neighbor)
-            parent[neighbor] = current
-            order.append(neighbor)
-            queue.append(neighbor)
+    return offsets, neighbors
 
-    return order, parent
+
+# =============================================================================
+# SPANNING TREE CONSTRUCTION
+# =============================================================================
 
 
 def select_root_atom(
@@ -263,36 +392,108 @@ def select_root_atom(
     return chain_start_atom
 
 
-def build_zmatrix(polymer: "Polymer") -> list[ZMatrixEntry]:
+def build_spanning_tree(
+    offsets: Array,
+    neighbors: Array,
+    root: int,
+    atom_mask: Array | None = None
+) -> tuple[Array, Array]:
     """
-    Build complete Z-matrix for a polymer.
+    BFS spanning tree using CSR-format graph.
 
-    Processes each chain independently with its own spanning tree.
-    Returns entries in BFS (placement) order, so NERF can iterate
-    through them sequentially and all reference atoms will have been
-    placed before they are needed.
+    Args:
+        offsets: (N+1,) CSR offsets
+        neighbors: (E,) CSR neighbor indices
+        root: Root atom index
+        atom_mask: Optional (N,) boolean mask of valid atoms
 
-    The Z-matrix defines how each atom is positioned relative to
-    previously placed atoms using internal coordinates:
-    - First atom: placed at origin (no references)
-    - Second atom: defined by distance to first (one reference)
-    - Third atom: defined by distance and angle (two references)
-    - All others: defined by distance, angle, and dihedral (three references)
+    Returns:
+        Tuple of:
+            order: (M,) array of atom indices in BFS order
+            parent: (N,) array mapping atom -> parent (-1 for root/unvisited)
+    """
+    n_atoms = len(offsets) - 1
+
+    # Convert to numpy for CPU-based BFS
+    if is_torch(offsets):
+        offsets_np = offsets.cpu().numpy()
+        neighbors_np = neighbors.cpu().numpy()
+        if atom_mask is not None:
+            atom_mask_np = atom_mask.cpu().numpy()
+        else:
+            atom_mask_np = None
+        original_device = offsets.device
+    else:
+        offsets_np = offsets
+        neighbors_np = neighbors
+        atom_mask_np = atom_mask
+        original_device = None
+
+    # Initialize
+    parent = np.full(n_atoms, -1, dtype=np.int64)
+    visited = np.zeros(n_atoms, dtype=bool)
+    order = []
+
+    # BFS queue
+    queue = [root]
+    visited[root] = True
+
+    while queue:
+        current = queue.pop(0)
+        order.append(current)
+
+        # Get neighbors
+        start = offsets_np[current]
+        end = offsets_np[current + 1]
+        current_neighbors = neighbors_np[start:end]
+
+        # Sort for determinism
+        current_neighbors = np.sort(current_neighbors)
+
+        for neighbor in current_neighbors:
+            if atom_mask_np is not None and not atom_mask_np[neighbor]:
+                continue
+
+            if not visited[neighbor]:
+                visited[neighbor] = True
+                parent[neighbor] = current
+                queue.append(neighbor)
+
+    # Convert back to original backend
+    if original_device is not None:
+        import torch
+        return (
+            torch.tensor(order, dtype=torch.int64, device=original_device),
+            torch.from_numpy(parent).to(original_device)
+        )
+    else:
+        return np.array(order, dtype=np.int64), parent
+
+
+# =============================================================================
+# Z-MATRIX CONSTRUCTION
+# =============================================================================
+
+
+def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
+    """
+    Build Z-matrix as (M, 4) int64 array.
+
+    Internal function used by ZMatrix.from_polymer().
 
     Args:
         polymer: Polymer structure.
 
     Returns:
-        List of ZMatrixEntry in BFS order (placement order).
-        Each entry's atom_idx gives the original atom index.
+        (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
     """
     from ..types import Scale
 
-    # Build full bond graph
-    graph = build_bond_graph(polymer)
+    # Build array-based graph
+    edges, n_atoms = build_bond_graph(polymer)
+    offsets, neighbors = edges_to_csr_neighbors(edges, n_atoms)
 
-    # Result list - will be in BFS order
-    result: list[ZMatrixEntry] = []
+    all_entries = []
 
     # Get residue sizes
     res_sizes = polymer.sizes(Scale.RESIDUE)
@@ -317,87 +518,52 @@ def build_zmatrix(polymer: "Polymer") -> list[ZMatrixEntry]:
             res_offset += chain_len_val
             continue
 
-        # Get atom range for this chain
-        chain_atoms = set(range(atom_offset, atom_offset + chain_atom_count))
+        # Build atom mask for this chain
+        atom_mask = np.zeros(n_atoms, dtype=bool)
+        atom_mask[atom_offset:atom_offset + chain_atom_count] = True
 
-        # Build spanning tree for this chain
+        # Select root atom
         root = select_root_atom(polymer, atom_offset, chain_atom_count, res_offset)
-        order, parent = build_spanning_tree(graph, root, chain_atoms)
 
-        # Build Z-matrix entries for this chain (in BFS order)
-        chain_entries = _build_chain_zmatrix_ordered(order, parent)
-        result.extend(chain_entries)
+        # BFS with array graph
+        order, parent = build_spanning_tree(offsets, neighbors, root, atom_mask)
+
+        # Convert to list for Z-matrix building
+        order_list = order.tolist() if hasattr(order, 'tolist') else list(order)
+        parent_dict = {i: int(parent[i]) for i in range(len(parent)) if parent[i] >= 0}
+        parent_dict[root] = -1  # Ensure root has parent -1
+
+        # Build Z-matrix entries
+        chain_entries = _build_chain_zmatrix(order_list, parent_dict)
+        all_entries.extend(chain_entries)
 
         res_offset += chain_len_val
         atom_offset += chain_atom_count
 
-    return result
+    # Convert to (M, 4) array
+    if len(all_entries) == 0:
+        return np.zeros((0, 4), dtype=np.int64)
 
-
-def _build_chain_zmatrix_ordered(
-    order: list[int],
-    parent: dict[int, int],
-) -> list[ZMatrixEntry]:
-    """
-    Build Z-matrix entries for atoms in a chain, in BFS order.
-
-    Returns entries in the order atoms should be placed, so each
-    entry's references point to previously placed atoms.
-    """
-    result: list[ZMatrixEntry] = []
-
-    # Track grandparent for angle references
-    grandparent: dict[int, int] = {}
-
-    for i, atom in enumerate(order):
-        p = parent[atom]
-
-        if i == 0:
-            # First atom: no references
-            result.append(ZMatrixEntry(atom, -1, -1, -1))
-
-        elif i == 1:
-            # Second atom: distance to parent only
-            result.append(ZMatrixEntry(atom, p, -1, -1))
-
-        elif i == 2:
-            # Third atom: distance and angle
-            gp = parent[p]
-            if gp == -1:
-                # Parent was root, find another child of p (sibling of current atom)
-                gp = _find_child_of(order[:i], parent, p, exclude=atom)
-            grandparent[atom] = gp
-            result.append(ZMatrixEntry(atom, p, gp, -1))
-
-        else:
-            # Full Z-matrix entry
-            gp = parent[p]
-            if gp == -1:
-                # Parent was root, find another child of p
-                gp = _find_child_of(order[:i], parent, p, exclude=atom)
-
-            # Find great-grandparent for dihedral
-            # Must be distinct from atom, p, and gp
-            ggp = grandparent.get(p)
-            if ggp is None or ggp in (atom, p, gp, -1):
-                ggp = parent.get(gp, -1)
-            if ggp in (atom, p, gp, -1):
-                # Find any placed atom distinct from atom, p, gp
-                ggp = _find_placed_neighbor(order[:i], parent, gp, exclude={atom, p, gp})
-
-            grandparent[atom] = gp
-            result.append(ZMatrixEntry(atom, p, gp, ggp))
-
-    return result
+    return np.array(all_entries, dtype=np.int64)
 
 
 def _build_chain_zmatrix(
     order: list[int],
     parent: dict[int, int],
-    zmatrix: list[ZMatrixEntry | None],
-) -> None:
-    """Build Z-matrix entries for atoms in a chain (legacy, stores at atom index)."""
-    # Track grandparent for angle references
+) -> list[list[int]]:
+    """
+    Build Z-matrix entries for atoms in a chain.
+
+    Returns entries in BFS order so references point to earlier atoms.
+
+    Args:
+        order: Atom indices in BFS traversal order.
+        parent: Mapping from atom -> parent in spanning tree.
+
+    Returns:
+        List of [atom_idx, dist_ref, ang_ref, dih_ref] entries.
+    """
+    result: list[list[int]] = []
     grandparent: dict[int, int] = {}
 
     for i, atom in enumerate(order):
@@ -405,36 +571,38 @@ def _build_chain_zmatrix(
 
         if i == 0:
             # First atom: no references
-            zmatrix[atom] = ZMatrixEntry(atom, -1, -1, -1)
+            result.append([atom, -1, -1, -1])
 
         elif i == 1:
             # Second atom: distance to parent only
-            zmatrix[atom] = ZMatrixEntry(atom, p, -1, -1)
+            result.append([atom, p, -1, -1])
 
         elif i == 2:
             # Third atom: distance and angle
             gp = parent[p]
             if gp == -1:
-                # Parent was root, use sibling if available
-                gp = _find_placed_neighbor(order[:i], parent, p, exclude=atom)
+                # Parent was root, find another child of p
+                gp = _find_child_of(order[:i], parent, p, exclude=atom)
             grandparent[atom] = gp
-            zmatrix[atom] = ZMatrixEntry(atom, p, gp, -1)
+            result.append([atom, p, gp, -1])
 
         else:
             # Full Z-matrix entry
             gp = parent[p]
             if gp == -1:
-                gp = _find_placed_neighbor(order[:i], parent, p, exclude=atom)
+                gp = _find_child_of(order[:i], parent, p, exclude=atom)
 
             # Find great-grandparent for dihedral
             ggp = grandparent.get(p)
-            if ggp is None:
+            if ggp is None or ggp in (atom, p, gp, -1):
                 ggp = parent.get(gp, -1)
-            if ggp == -1:
-                ggp = _find_placed_neighbor(order[:i], parent, gp, exclude={atom, p})
+            if ggp in (atom, p, gp, -1):
+                ggp = _find_placed_neighbor(order[:i], parent, gp, exclude={atom, p, gp})
 
             grandparent[atom] = gp
-            zmatrix[atom] = ZMatrixEntry(atom, p, gp, ggp)
+            result.append([atom, p, gp, ggp])
+
+    return result
 
 
 def _find_child_of(
@@ -445,23 +613,17 @@ def _find_child_of(
 ) -> int:
     """
     Find a placed atom that is a child of target (has target as parent).
-
-    Used to find angle_ref when grandparent is the root - we need another
-    atom bonded to the distance_ref.
     """
     if isinstance(exclude, int):
         exclude = {exclude} if exclude >= 0 else set()
 
-    # Find atoms whose parent is target (children of target)
     for atom in placed:
-        if atom in exclude:
-            continue
-        if atom == target:
+        if atom in exclude or atom == target:
             continue
         if parent.get(atom) == target:
             return atom
 
-    # Fallback: any placed atom not in exclude (and not target itself)
+    # Fallback: any placed atom not in exclude
     for atom in reversed(placed):
         if atom not in exclude and atom != target:
             return atom
@@ -475,50 +637,24 @@ def _find_placed_neighbor(
     target: int,
     exclude: int | set[int] = -1,
 ) -> int:
-    """Find a placed atom that shares the same parent (sibling) or any placed atom."""
+    """
+    Find a placed atom that shares the same parent (sibling) or any placed atom.
+    """
     if isinstance(exclude, int):
         exclude = {exclude} if exclude >= 0 else set()
 
     target_parent = parent.get(target, -1)
 
-    # First, try to find a sibling (atom with same parent)
+    # First, try to find a sibling
     for atom in placed:
-        if atom in exclude:
-            continue
-        if atom == target:
+        if atom in exclude or atom == target:
             continue
         if parent.get(atom) == target_parent:
             return atom
 
-    # Fallback: any placed atom not in exclude (and not target)
+    # Fallback: any placed atom not in exclude
     for atom in reversed(placed):
         if atom not in exclude and atom != target:
             return atom
 
     return -1
-
-
-def zmatrix_to_indices(zmatrix: list[ZMatrixEntry]) -> np.ndarray:
-    """
-    Build (M, 4) int64 indices array from Z-matrix entries.
-
-    Converts a list of ZMatrixEntry objects to a contiguous NumPy array
-    suitable for passing to C extensions.
-
-    Each row contains: [atom_idx, distance_ref, angle_ref, dihedral_ref].
-    Missing references are represented as -1.
-
-    Args:
-        zmatrix: List of Z-matrix entries in placement order.
-
-    Returns:
-        (M, 4) int64 NumPy array where M is len(zmatrix).
-    """
-    n_entries = len(zmatrix)
-    indices = np.zeros((n_entries, 4), dtype=np.int64)
-    for i, entry in enumerate(zmatrix):
-        indices[i, 0] = entry.atom_idx
-        indices[i, 1] = entry.distance_ref
-        indices[i, 2] = entry.angle_ref
-        indices[i, 3] = entry.dihedral_ref
-    return indices

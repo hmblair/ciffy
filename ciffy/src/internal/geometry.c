@@ -4,6 +4,7 @@
  */
 
 #include "geometry.h"
+#include "primitives.h"
 #include <math.h>
 
 /* Small epsilon for numerical stability */
@@ -87,12 +88,12 @@ float compute_dihedral(const float *a, const float *b,
     float b2uy = b2y / b2_norm;
     float b2uz = b2z / b2_norm;
 
-    /* m1 = n1 x b2_unit */
+    /* m1 = n1_hat x b2_hat */
     float m1x = n1y*b2uz - n1z*b2uy;
     float m1y = n1z*b2ux - n1x*b2uz;
     float m1z = n1x*b2uy - n1y*b2ux;
 
-    /* atan2(y, x) where y = n2 . m1, x = n2 . n1 */
+    /* x = n1_hat · n2_hat = cos(φ), y = m1 · n2_hat = sin(φ) */
     float x = n1x*n2x + n1y*n2y + n1z*n2z;
     float y = m1x*n2x + m1y*n2y + m1z*n2z;
 
@@ -311,24 +312,28 @@ void compute_dihedral_backward(
     float *grad_a, float *grad_b, float *grad_c, float *grad_d
 ) {
     /*
-     * Dihedral angle φ between planes (a,b,c) and (b,c,d).
-     * Uses the formula: φ = atan2(y, x) where
-     *   b1 = b - a, b2 = c - b, b3 = d - c
-     *   n1 = b1 × b2 (normal to plane abc)
-     *   n2 = b2 × b3 (normal to plane bcd)
-     *   m1 = n1 × b2_unit
-     *   x = n1 · n2, y = m1 · n2
+     * Backward pass for dihedral angle, composed from primitive operations.
      *
-     * Gradient derivation follows Blondel et al., differentiating through
-     * the cross products and atan2.
+     * Forward:
+     *   b1 = b - a, b2 = c - b, b3 = d - c
+     *   n1 = b1 × b2, n2 = b2 × b3
+     *   n1_hat = n1 / |n1|, n2_hat = n2 / |n2|, b2_hat = b2 / |b2|
+     *   m1 = n1_hat × b2_hat
+     *   x = n1_hat · n2_hat, y = m1 · n2_hat
+     *   φ = atan2(y, x)
+     *
+     * We backprop through each operation using standard rules:
+     *   cross: ∂L/∂a = b × grad, ∂L/∂b = grad × a
+     *   normalize: ∂L/∂v = (grad - v_hat * (v_hat · grad)) / |v|
+     *   dot: ∂L/∂a = grad * b, ∂L/∂b = grad * a
+     *   atan2: ∂L/∂y = grad * x / (x²+y²), ∂L/∂x = grad * (-y) / (x²+y²)
      */
 
-    /* Bond vectors */
+    /* === Forward pass (save intermediates) === */
     float b1x = b[0] - a[0], b1y = b[1] - a[1], b1z = b[2] - a[2];
     float b2x = c[0] - b[0], b2y = c[1] - b[1], b2z = c[2] - b[2];
     float b3x = d[0] - c[0], b3y = d[1] - c[1], b3z = d[2] - c[2];
 
-    /* Cross products: n1 = b1 × b2, n2 = b2 × b3 */
     float n1x = b1y*b2z - b1z*b2y;
     float n1y = b1z*b2x - b1x*b2z;
     float n1z = b1x*b2y - b1y*b2x;
@@ -337,76 +342,111 @@ void compute_dihedral_backward(
     float n2y = b2z*b3x - b2x*b3z;
     float n2z = b2x*b3y - b2y*b3x;
 
-    /* Squared norms */
-    float n1_sq = n1x*n1x + n1y*n1y + n1z*n1z;
-    float n2_sq = n2x*n2x + n2y*n2y + n2z*n2z;
-    float b2_sq = b2x*b2x + b2y*b2y + b2z*b2z;
+    float n1_norm = sqrtf(n1x*n1x + n1y*n1y + n1z*n1z) + EPS;
+    float n2_norm = sqrtf(n2x*n2x + n2y*n2y + n2z*n2z) + EPS;
+    float b2_norm = sqrtf(b2x*b2x + b2y*b2y + b2z*b2z) + EPS;
 
-    float n1_norm = sqrtf(n1_sq) + EPS;
-    float n2_norm = sqrtf(n2_sq) + EPS;
-    float b2_norm = sqrtf(b2_sq) + EPS;
+    float n1hx = n1x/n1_norm, n1hy = n1y/n1_norm, n1hz = n1z/n1_norm;
+    float n2hx = n2x/n2_norm, n2hy = n2y/n2_norm, n2hz = n2z/n2_norm;
+    float b2hx = b2x/b2_norm, b2hy = b2y/b2_norm, b2hz = b2z/b2_norm;
 
-    /* Dot products for gradient formula */
-    float b1_dot_b2 = b1x*b2x + b1y*b2y + b1z*b2z;
-    float b2_dot_b3 = b2x*b3x + b2y*b3y + b2z*b3z;
+    float m1x = n1hy*b2hz - n1hz*b2hy;
+    float m1y = n1hz*b2hx - n1hx*b2hz;
+    float m1z = n1hx*b2hy - n1hy*b2hx;
 
-    /*
-     * The gradient of dihedral w.r.t. coordinates can be expressed as:
-     * ∂φ/∂a = -|b2| / |n1|² * n1
-     * ∂φ/∂d =  |b2| / |n2|² * n2
-     * ∂φ/∂b = (b1·b2)/|b2|² * ∂φ/∂a - (b2·b3)/|b2|² * ∂φ/∂d - ∂φ/∂a
-     * ∂φ/∂c = (b2·b3)/|b2|² * ∂φ/∂d - (b1·b2)/|b2|² * ∂φ/∂a - ∂φ/∂d
-     *
-     * Reference: Blondel & Bhattacharyay (ECCV 2020), or standard MD force derivations.
-     */
+    float x = n1hx*n2hx + n1hy*n2hy + n1hz*n2hz;
+    float y = m1x*n2hx + m1y*n2hy + m1z*n2hz;
 
-    float inv_n1_sq = 1.0f / (n1_sq + EPS);
-    float inv_n2_sq = 1.0f / (n2_sq + EPS);
-    float inv_b2_sq = 1.0f / (b2_sq + EPS);
+    /* === Backward pass === */
 
-    float coef_a = -b2_norm * inv_n1_sq;
-    float coef_d = b2_norm * inv_n2_sq;
+    /* φ = atan2(y, x) */
+    float denom = x*x + y*y + EPS;
+    float grad_y = grad_output * x / denom;
+    float grad_x = grad_output * (-y) / denom;
 
-    /* ∂φ/∂a */
-    float da_x = coef_a * n1x;
-    float da_y = coef_a * n1y;
-    float da_z = coef_a * n1z;
+    /* x = n1_hat · n2_hat */
+    float gn1h_x = grad_x * n2hx;
+    float gn1h_y = grad_x * n2hy;
+    float gn1h_z = grad_x * n2hz;
+    float gn2h_x = grad_x * n1hx;
+    float gn2h_y = grad_x * n1hy;
+    float gn2h_z = grad_x * n1hz;
 
-    /* ∂φ/∂d */
-    float dd_x = coef_d * n2x;
-    float dd_y = coef_d * n2y;
-    float dd_z = coef_d * n2z;
+    /* y = m1 · n2_hat */
+    float gm1x = grad_y * n2hx;
+    float gm1y = grad_y * n2hy;
+    float gm1z = grad_y * n2hz;
+    gn2h_x += grad_y * m1x;
+    gn2h_y += grad_y * m1y;
+    gn2h_z += grad_y * m1z;
 
-    /* Coefficients for b and c */
-    float r1 = b1_dot_b2 * inv_b2_sq;
-    float r2 = b2_dot_b3 * inv_b2_sq;
+    /* m1 = n1_hat × b2_hat */
+    /* ∂L/∂n1_hat = b2_hat × grad_m1 */
+    gn1h_x += b2hy*gm1z - b2hz*gm1y;
+    gn1h_y += b2hz*gm1x - b2hx*gm1z;
+    gn1h_z += b2hx*gm1y - b2hy*gm1x;
+    /* ∂L/∂b2_hat = grad_m1 × n1_hat */
+    float gb2h_x = gm1y*n1hz - gm1z*n1hy;
+    float gb2h_y = gm1z*n1hx - gm1x*n1hz;
+    float gb2h_z = gm1x*n1hy - gm1y*n1hx;
 
-    /* ∂φ/∂b = r1 * ∂φ/∂a - r2 * ∂φ/∂d - ∂φ/∂a */
-    float db_x = r1 * da_x - r2 * dd_x - da_x;
-    float db_y = r1 * da_y - r2 * dd_y - da_y;
-    float db_z = r1 * da_z - r2 * dd_z - da_z;
+    /* b2_hat = b2 / |b2| (normalize backward) */
+    float b2h_dot_gb2h = b2hx*gb2h_x + b2hy*gb2h_y + b2hz*gb2h_z;
+    float gb2_x = (gb2h_x - b2hx * b2h_dot_gb2h) / b2_norm;
+    float gb2_y = (gb2h_y - b2hy * b2h_dot_gb2h) / b2_norm;
+    float gb2_z = (gb2h_z - b2hz * b2h_dot_gb2h) / b2_norm;
 
-    /* ∂φ/∂c = r2 * ∂φ/∂d - r1 * ∂φ/∂a - ∂φ/∂d */
-    float dc_x = r2 * dd_x - r1 * da_x - dd_x;
-    float dc_y = r2 * dd_y - r1 * da_y - dd_y;
-    float dc_z = r2 * dd_z - r1 * da_z - dd_z;
+    /* n2_hat = n2 / |n2| */
+    float n2h_dot_gn2h = n2hx*gn2h_x + n2hy*gn2h_y + n2hz*gn2h_z;
+    float gn2x = (gn2h_x - n2hx * n2h_dot_gn2h) / n2_norm;
+    float gn2y = (gn2h_y - n2hy * n2h_dot_gn2h) / n2_norm;
+    float gn2z = (gn2h_z - n2hz * n2h_dot_gn2h) / n2_norm;
 
-    /* Apply upstream gradient */
-    grad_a[0] = grad_output * da_x;
-    grad_a[1] = grad_output * da_y;
-    grad_a[2] = grad_output * da_z;
+    /* n1_hat = n1 / |n1| */
+    float n1h_dot_gn1h = n1hx*gn1h_x + n1hy*gn1h_y + n1hz*gn1h_z;
+    float gn1x = (gn1h_x - n1hx * n1h_dot_gn1h) / n1_norm;
+    float gn1y = (gn1h_y - n1hy * n1h_dot_gn1h) / n1_norm;
+    float gn1z = (gn1h_z - n1hz * n1h_dot_gn1h) / n1_norm;
 
-    grad_b[0] = grad_output * db_x;
-    grad_b[1] = grad_output * db_y;
-    grad_b[2] = grad_output * db_z;
+    /* n2 = b2 × b3 */
+    /* ∂L/∂b2 += b3 × grad_n2 */
+    gb2_x += b3y*gn2z - b3z*gn2y;
+    gb2_y += b3z*gn2x - b3x*gn2z;
+    gb2_z += b3x*gn2y - b3y*gn2x;
+    /* ∂L/∂b3 = grad_n2 × b2 */
+    float gb3_x = gn2y*b2z - gn2z*b2y;
+    float gb3_y = gn2z*b2x - gn2x*b2z;
+    float gb3_z = gn2x*b2y - gn2y*b2x;
 
-    grad_c[0] = grad_output * dc_x;
-    grad_c[1] = grad_output * dc_y;
-    grad_c[2] = grad_output * dc_z;
+    /* n1 = b1 × b2 */
+    /* ∂L/∂b1 = b2 × grad_n1 */
+    float gb1_x = b2y*gn1z - b2z*gn1y;
+    float gb1_y = b2z*gn1x - b2x*gn1z;
+    float gb1_z = b2x*gn1y - b2y*gn1x;
+    /* ∂L/∂b2 += grad_n1 × b1 */
+    gb2_x += gn1y*b1z - gn1z*b1y;
+    gb2_y += gn1z*b1x - gn1x*b1z;
+    gb2_z += gn1x*b1y - gn1y*b1x;
 
-    grad_d[0] = grad_output * dd_x;
-    grad_d[1] = grad_output * dd_y;
-    grad_d[2] = grad_output * dd_z;
+    /* Bond vectors to atom gradients */
+    /* b1 = b - a  =>  grad_a = -grad_b1, grad_b += grad_b1 */
+    /* b2 = c - b  =>  grad_b -= grad_b2, grad_c = grad_b2 */
+    /* b3 = d - c  =>  grad_c -= grad_b3, grad_d = grad_b3 */
+    grad_a[0] = -gb1_x;
+    grad_a[1] = -gb1_y;
+    grad_a[2] = -gb1_z;
+
+    grad_b[0] = gb1_x - gb2_x;
+    grad_b[1] = gb1_y - gb2_y;
+    grad_b[2] = gb1_z - gb2_z;
+
+    grad_c[0] = gb2_x - gb3_x;
+    grad_c[1] = gb2_y - gb3_y;
+    grad_c[2] = gb2_z - gb3_z;
+
+    grad_d[0] = gb3_x;
+    grad_d[1] = gb3_y;
+    grad_d[2] = gb3_z;
 }
 
 
@@ -418,158 +458,212 @@ void nerf_place_atom_backward(
     float *grad_distance, float *grad_angle, float *grad_dihedral
 ) {
     /*
-     * NERF placement: result = c + d_z * z + d_x * x + d_y * y
-     * where:
-     *   z = (b - c) / |b - c|  (unit vector from c towards b)
-     *   v = (a - c) / |a - c|  (unit vector from c towards a)
-     *   y = normalize(z × v)   (normal to plane)
-     *   x = y × z              (in plane, perpendicular to z)
+     * Backward pass for NERF placement using primitive operations.
+     *
+     * Forward computation graph:
+     *   z_raw = b - c           (vec_sub)
+     *   z = z_raw / |z_raw|     (vec_normalize)
+     *   v_raw = a - c           (vec_sub)
+     *   v = v_raw / |v_raw|     (vec_normalize)
+     *   y_raw = z × v           (vec_cross)
+     *   y = y_raw / |y_raw|     (vec_normalize)
+     *   x = y × z               (vec_cross)
      *   d_z = distance * cos(angle)
      *   d_perp = distance * sin(angle)
      *   d_x = d_perp * cos(dihedral)
      *   d_y = d_perp * sin(dihedral)
-     *
-     * We need gradients w.r.t. a, b, c, distance, angle, dihedral.
+     *   result = c + d_z * z + d_x * x + d_y * y   (vec_lincomb3 + vec_add)
      */
 
-    /* Recompute forward pass intermediate values */
-    float zx = b[0] - c[0], zy = b[1] - c[1], zz_val = b[2] - c[2];
-    float z_len = sqrtf(zx*zx + zy*zy + zz_val*zz_val) + EPS;
-    zx /= z_len; zy /= z_len; zz_val /= z_len;
+    /* === Forward pass: save all intermediates === */
+    float z_raw[3], z[3], v_raw[3], v[3], y_raw[3], y[3], x[3];
+    float z_norm, v_norm, y_norm;
 
-    float vx = a[0] - c[0], vy = a[1] - c[1], vz = a[2] - c[2];
-    float v_len = sqrtf(vx*vx + vy*vy + vz*vz) + EPS;
-    vx /= v_len; vy /= v_len; vz /= v_len;
+    vec_sub(b, c, z_raw);
+    z_norm = vec_normalize(z_raw, z);
 
-    /* y = z × v (normalized) */
-    float yx = zy*vz - zz_val*vy;
-    float yy = zz_val*vx - zx*vz;
-    float yz = zx*vy - zy*vx;
-    float y_len = sqrtf(yx*yx + yy*yy + yz*yz) + EPS;
-    yx /= y_len; yy /= y_len; yz /= y_len;
+    vec_sub(a, c, v_raw);
+    v_norm = vec_normalize(v_raw, v);
 
-    /* x = y × z */
-    float xx = yy*zz_val - yz*zy;
-    float xy = yz*zx - yx*zz_val;
-    float xz = yx*zy - yy*zx;
+    vec_cross(z, v, y_raw);
+    y_norm = vec_normalize(y_raw, y);
 
-    float cos_a = cosf(angle);
-    float sin_a = sinf(angle);
-    float cos_d = cosf(dihedral);
-    float sin_d = sinf(dihedral);
+    vec_cross(y, z, x);
+
+    float cos_a = cosf(angle), sin_a = sinf(angle);
+    float cos_d = cosf(dihedral), sin_d = sinf(dihedral);
 
     float d_z = distance * cos_a;
     float d_perp = distance * sin_a;
     float d_x = d_perp * cos_d;
     float d_y = d_perp * sin_d;
 
-    /* Gradient of result w.r.t. distance, angle, dihedral */
+    /* === Backward pass: reverse order === */
+
+    /* Initialize output gradients to zero */
+    vec_zero(grad_a);
+    vec_zero(grad_b);
+    vec_zero(grad_c);
+    *grad_distance = 0.0f;
+    *grad_angle = 0.0f;
+    *grad_dihedral = 0.0f;
+
+    /* Intermediate gradients */
+    float grad_z[3] = {0}, grad_v[3] = {0}, grad_y[3] = {0}, grad_x[3] = {0};
+    float grad_z_raw[3] = {0}, grad_v_raw[3] = {0}, grad_y_raw[3] = {0};
+    float grad_d_z = 0, grad_d_x = 0, grad_d_y = 0, grad_d_perp = 0;
+
     /* result = c + d_z * z + d_x * x + d_y * y */
+    /* ∂c += grad_result (direct contribution) */
+    vec_acc(grad_result, grad_c);
 
-    /* ∂result/∂distance = cos_a * z + sin_a * (cos_d * x + sin_d * y) */
-    float dr_dd_x = cos_a * zx + sin_a * (cos_d * xx + sin_d * yx);
-    float dr_dd_y = cos_a * zy + sin_a * (cos_d * xy + sin_d * yy);
-    float dr_dd_z = cos_a * zz_val + sin_a * (cos_d * xz + sin_d * yz);
+    /* Backward through lincomb: grad_si = grad_out · vi, grad_vi = si * grad_out */
+    vec_lincomb3_backward(
+        d_z, z, d_x, x, d_y, y,
+        grad_result,
+        &grad_d_z, grad_z,
+        &grad_d_x, grad_x,
+        &grad_d_y, grad_y
+    );
 
-    *grad_distance = grad_result[0] * dr_dd_x +
-                     grad_result[1] * dr_dd_y +
-                     grad_result[2] * dr_dd_z;
+    /* d_x = d_perp * cos_d, d_y = d_perp * sin_d */
+    /* ∂d_perp = ∂d_x * cos_d + ∂d_y * sin_d */
+    grad_d_perp = grad_d_x * cos_d + grad_d_y * sin_d;
+    /* ∂dihedral = d_perp * (-sin_d * ∂d_x + cos_d * ∂d_y) */
+    *grad_dihedral = d_perp * (-sin_d * grad_d_x + cos_d * grad_d_y);
 
-    /* ∂result/∂angle = distance * (-sin_a * z + cos_a * (cos_d * x + sin_d * y)) */
-    float dr_da_x = distance * (-sin_a * zx + cos_a * (cos_d * xx + sin_d * yx));
-    float dr_da_y = distance * (-sin_a * zy + cos_a * (cos_d * xy + sin_d * yy));
-    float dr_da_z = distance * (-sin_a * zz_val + cos_a * (cos_d * xz + sin_d * yz));
+    /* d_z = distance * cos_a, d_perp = distance * sin_a */
+    /* ∂distance = ∂d_z * cos_a + ∂d_perp * sin_a */
+    *grad_distance = grad_d_z * cos_a + grad_d_perp * sin_a;
+    /* ∂angle = distance * (-sin_a * ∂d_z + cos_a * ∂d_perp) */
+    *grad_angle = distance * (-sin_a * grad_d_z + cos_a * grad_d_perp);
 
-    *grad_angle = grad_result[0] * dr_da_x +
-                  grad_result[1] * dr_da_y +
-                  grad_result[2] * dr_da_z;
+    /* x = y × z */
+    vec_cross_backward(y, z, grad_x, grad_y, grad_z);
 
-    /* ∂result/∂dihedral = d_perp * (-sin_d * x + cos_d * y) */
-    float dr_dph_x = d_perp * (-sin_d * xx + cos_d * yx);
-    float dr_dph_y = d_perp * (-sin_d * xy + cos_d * yy);
-    float dr_dph_z = d_perp * (-sin_d * xz + cos_d * yz);
+    /* y = y_raw / |y_raw| */
+    vec_normalize_backward(y, y_norm, grad_y, grad_y_raw);
 
-    *grad_dihedral = grad_result[0] * dr_dph_x +
-                     grad_result[1] * dr_dph_y +
-                     grad_result[2] * dr_dph_z;
+    /* y_raw = z × v */
+    vec_cross_backward(z, v, grad_y_raw, grad_z, grad_v);
 
+    /* v = v_raw / |v_raw| */
+    vec_normalize_backward(v, v_norm, grad_v, grad_v_raw);
+
+    /* z = z_raw / |z_raw| */
+    vec_normalize_backward(z, z_norm, grad_z, grad_z_raw);
+
+    /* v_raw = a - c */
+    vec_sub_backward(grad_v_raw, grad_a, grad_c);
+
+    /* z_raw = b - c */
+    vec_sub_backward(grad_z_raw, grad_b, grad_c);
+}
+
+
+void nerf_place_in_plane_backward(
+    const float *ref1, const float *ref2,
+    float distance, float angle,
+    const float *grad_result,
+    float *grad_ref1, float *grad_ref2,
+    float *grad_distance, float *grad_angle
+) {
     /*
-     * For gradients w.r.t. a, b, c, we need to differentiate through
-     * the coordinate system construction. This is more complex.
+     * Backward pass for in-plane placement using primitive operations.
      *
-     * For now, we compute the gradient w.r.t. c directly (it appears
-     * as the base position), and use numerical stability considerations
-     * for a and b gradients through the frame construction.
-     *
-     * ∂result/∂c = I + ∂(d_z*z + d_x*x + d_y*y)/∂c
-     *
-     * This involves differentiating z, y, x w.r.t. c, which affects
-     * z (through z = (b-c)/|b-c|) and v (through v = (a-c)/|a-c|).
+     * Forward computation graph:
+     *   u_raw = ref2 - ref1           (vec_sub)
+     *   u = u_raw / |u_raw|           (vec_normalize)
+     *   perp_raw = z_axis × u         (vec_cross, z_axis = [0,0,1])
+     *   perp = perp_raw / |perp_raw|  (vec_normalize, with fallback)
+     *   result = ref1 + distance * (cos(angle) * u + sin(angle) * perp)
      */
 
-    /* Simplified gradient: c contributes directly as base position */
-    /* The full gradient through frame rotation is complex; for now use identity */
-    grad_c[0] = grad_result[0];
-    grad_c[1] = grad_result[1];
-    grad_c[2] = grad_result[2];
+    /* === Forward pass: save all intermediates === */
+    float u_raw[3], u[3];
+    vec_sub(ref2, ref1, u_raw);
+    float u_norm = vec_normalize(u_raw, u);
 
-    /* Gradients through z = (b - c) / |b - c| */
-    /* The contribution of b through z is: d_z * ∂z/∂b */
-    /* ∂z/∂b = (I - z⊗z) / |b - c| */
-    float inv_z_len = 1.0f / z_len;
+    /* perp = z_axis × u = [-u[1], u[0], 0] (before normalization) */
+    float perp_raw[3] = {-u[1], u[0], 0.0f};
+    float perp_norm_val = vec_norm(perp_raw);
 
-    /* Gradient of d_z * z w.r.t. b */
-    /* ∂(d_z * z)/∂b = d_z * (I - z⊗z) / z_len */
-    float gz_x = grad_result[0] * d_z;
-    float gz_y = grad_result[1] * d_z;
-    float gz_z = grad_result[2] * d_z;
+    float perp[3];
+    int use_fallback = (perp_norm_val < PRIM_EPS);
+    if (use_fallback) {
+        /* u parallel to z, use x_axis × u = [0, u[2], -u[1]] */
+        perp_raw[0] = 0.0f;
+        perp_raw[1] = u[2];
+        perp_raw[2] = -u[1];
+        perp_norm_val = vec_norm(perp_raw);
+    }
+    perp_norm_val += PRIM_EPS;
+    perp[0] = perp_raw[0] / perp_norm_val;
+    perp[1] = perp_raw[1] / perp_norm_val;
+    perp[2] = perp_raw[2] / perp_norm_val;
 
-    /* Project out z component: (I - z⊗z) * grad */
-    float z_dot_g = zx * gz_x + zy * gz_y + zz_val * gz_z;
-    grad_b[0] = (gz_x - zx * z_dot_g) * inv_z_len;
-    grad_b[1] = (gz_y - zy * z_dot_g) * inv_z_len;
-    grad_b[2] = (gz_z - zz_val * z_dot_g) * inv_z_len;
+    float cos_a = cosf(angle), sin_a = sinf(angle);
 
-    /* Also add contribution from x (which depends on z through y×z) */
-    /* For simplicity, approximate remaining contributions */
-    float gx_x = grad_result[0] * d_x;
-    float gx_y = grad_result[1] * d_x;
-    float gx_z = grad_result[2] * d_x;
+    /* === Backward pass === */
 
-    /* x = y × z, so ∂x/∂z involves cross product derivative */
-    /* ∂(y×z)/∂z = [y]× (skew-symmetric matrix of y) */
-    /* This gives: grad_b += d_x * (grad_result · ∂x/∂z) * ∂z/∂b */
-    /* Approximate: contribution is smaller, include basic term */
-    float gy_x = grad_result[0] * d_y;
-    float gy_y = grad_result[1] * d_y;
-    float gy_z = grad_result[2] * d_y;
+    /* Initialize output gradients */
+    vec_zero(grad_ref1);
+    vec_zero(grad_ref2);
+    *grad_distance = 0.0f;
+    *grad_angle = 0.0f;
 
-    /* Combined effect through z on x and y (simplified) */
-    float x_dot_g = xx * gx_x + xy * gx_y + xz * gx_z;
-    float y_dot_g = yx * gy_x + yy * gy_y + yz * gy_z;
+    /* Intermediate gradients */
+    float grad_u[3] = {0}, grad_perp[3] = {0};
+    float grad_u_raw[3] = {0}, grad_perp_raw[3] = {0};
 
-    grad_b[0] += (gx_x + gy_x - (zx * x_dot_g + zx * y_dot_g)) * inv_z_len * 0.5f;
-    grad_b[1] += (gx_y + gy_y - (zy * x_dot_g + zy * y_dot_g)) * inv_z_len * 0.5f;
-    grad_b[2] += (gx_z + gy_z - (zz_val * x_dot_g + zz_val * y_dot_g)) * inv_z_len * 0.5f;
+    /* result = ref1 + distance * (cos_a * u + sin_a * perp) */
+    /* Let disp = cos_a * u + sin_a * perp */
+    float disp[3];
+    float zeros[3] = {0, 0, 0};
+    vec_lincomb3(cos_a, u, sin_a, perp, 0.0f, zeros, disp);
 
-    /* Update grad_c to include negative of grad_b contribution through z */
-    grad_c[0] -= grad_b[0];
-    grad_c[1] -= grad_b[1];
-    grad_c[2] -= grad_b[2];
+    /* ∂ref1 += grad_result */
+    vec_acc(grad_result, grad_ref1);
 
-    /* Gradient w.r.t. a through v = (a - c) / |a - c| */
-    /* v contributes to y = z × v */
-    float inv_v_len = 1.0f / v_len;
+    /* ∂distance = grad_result · disp */
+    *grad_distance = vec_dot(grad_result, disp);
 
-    /* The contribution of a through y is more complex */
-    /* y = normalize(z × v), so ∂y/∂v involves cross product and normalization */
-    /* Approximate: a has smaller contribution through the frame */
-    grad_a[0] = gy_x * inv_v_len * 0.1f;
-    grad_a[1] = gy_y * inv_v_len * 0.1f;
-    grad_a[2] = gy_z * inv_v_len * 0.1f;
+    /* ∂disp = distance * grad_result */
+    float grad_disp[3];
+    vec_scale(distance, grad_result, grad_disp);
 
-    /* Also update grad_c for v contribution */
-    grad_c[0] -= grad_a[0];
-    grad_c[1] -= grad_a[1];
-    grad_c[2] -= grad_a[2];
+    /* disp = cos_a * u + sin_a * perp */
+    /* ∂cos_a = grad_disp · u, ∂sin_a = grad_disp · perp */
+    float grad_cos_a = vec_dot(grad_disp, u);
+    float grad_sin_a = vec_dot(grad_disp, perp);
+
+    /* ∂u += cos_a * grad_disp */
+    vec_acc_scaled(cos_a, grad_disp, grad_u);
+    /* ∂perp += sin_a * grad_disp */
+    vec_acc_scaled(sin_a, grad_disp, grad_perp);
+
+    /* cos_a = cos(angle), sin_a = sin(angle) */
+    /* ∂angle = -sin_a * ∂cos_a + cos_a * ∂sin_a */
+    *grad_angle = -sin_a * grad_cos_a + cos_a * grad_sin_a;
+
+    /* perp = perp_raw / |perp_raw| */
+    vec_normalize_backward(perp, perp_norm_val, grad_perp, grad_perp_raw);
+
+    /* perp_raw depends on u (via cross product with z or x axis) */
+    if (!use_fallback) {
+        /* perp_raw = [-u[1], u[0], 0] = z × u */
+        /* ∂u[0] += ∂perp_raw[1], ∂u[1] += -∂perp_raw[0] */
+        grad_u[0] += grad_perp_raw[1];
+        grad_u[1] += -grad_perp_raw[0];
+    } else {
+        /* perp_raw = [0, u[2], -u[1]] = x × u */
+        grad_u[1] += -grad_perp_raw[2];
+        grad_u[2] += grad_perp_raw[1];
+    }
+
+    /* u = u_raw / |u_raw| */
+    vec_normalize_backward(u, u_norm, grad_u, grad_u_raw);
+
+    /* u_raw = ref2 - ref1 */
+    vec_sub_backward(grad_u_raw, grad_ref2, grad_ref1);
 }

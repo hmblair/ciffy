@@ -4,6 +4,12 @@ Backend abstraction for NumPy and PyTorch array operations.
 This module provides a unified interface for array operations that can work
 with either NumPy arrays or PyTorch tensors. The backend is automatically
 detected from the array type.
+
+Submodules
+----------
+autograd
+    PyTorch autograd functions for differentiable internal coordinate
+    conversions. See :mod:`ciffy.backend.autograd` for details.
 """
 
 from __future__ import annotations

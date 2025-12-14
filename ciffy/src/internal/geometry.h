@@ -183,4 +183,26 @@ void nerf_place_atom_backward(
     float *grad_a, float *grad_b, float *grad_c,
     float *grad_distance, float *grad_angle, float *grad_dihedral);
 
+/**
+ * Backward pass for nerf_place_in_plane.
+ *
+ * Computes gradients with respect to reference positions and internal coords.
+ *
+ * @param ref1 Distance reference position (3 floats).
+ * @param ref2 Angle reference position (3 floats).
+ * @param distance Bond length.
+ * @param angle Bond angle in radians.
+ * @param grad_result Upstream gradient for result position (3 floats).
+ * @param grad_ref1 Output gradient for ref1 (3 floats).
+ * @param grad_ref2 Output gradient for ref2 (3 floats).
+ * @param grad_distance Output gradient for distance (scalar pointer).
+ * @param grad_angle Output gradient for angle (scalar pointer).
+ */
+void nerf_place_in_plane_backward(
+    const float *ref1, const float *ref2,
+    float distance, float angle,
+    const float *grad_result,
+    float *grad_ref1, float *grad_ref2,
+    float *grad_distance, float *grad_angle);
+
 #endif /* CIFFY_INTERNAL_GEOMETRY_H */

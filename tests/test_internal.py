@@ -503,3 +503,181 @@ class TestBondGraph:
         # Should have roughly 1 bond per atom (organic molecules)
         assert total_bonds >= n_atoms - 4  # At least n-4 bonds (tree + some cycles)
         assert total_bonds <= n_atoms * 2  # At most 2 bonds per atom on average
+
+
+class TestAutogradGradients:
+    """Tests for autograd gradient correctness."""
+
+    def test_cartesian_to_internal_gradcheck(self):
+        """Test cartesian_to_internal gradients match numerical differentiation."""
+        import torch
+        from ciffy.backend.autograd import cartesian_to_internal, HAS_C_EXTENSION
+
+        if not HAS_C_EXTENSION:
+            pytest.skip("C extension not available")
+
+        # Test coordinates
+        coords_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [2.0, 1.5, 0.0],
+            [3.5, 1.5, 1.0]
+        ], dtype=np.float32)
+
+        # Z-matrix indices
+        indices_np = np.array([
+            [0, -1, -1, -1],
+            [1,  0, -1, -1],
+            [2,  1,  0, -1],
+            [3,  2,  1,  0],
+        ], dtype=np.int64)
+
+        indices = torch.tensor(indices_np)
+
+        def wrapper(coords):
+            coords32 = coords.float()
+            d, a, dh = cartesian_to_internal(coords32, indices)
+            return d.double(), a.double(), dh.double()
+
+        coords_check = torch.tensor(coords_np, requires_grad=True, dtype=torch.float64)
+        assert torch.autograd.gradcheck(wrapper, coords_check, eps=1e-4, atol=1e-3, rtol=1e-2)
+
+    def test_distance_gradient_direct(self):
+        """Test distance gradient directly against PyTorch autograd."""
+        import torch
+        from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
+
+        coords_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.3, 0.2],
+        ], dtype=np.float32)
+
+        # Only distance
+        indices_np = np.array([[1, 0, -1, -1]], dtype=np.int64)
+
+        # C extension forward/backward
+        distances, _, _ = _cartesian_to_internal(coords_np, indices_np)
+        grad_coords = _cartesian_to_internal_backward(
+            coords_np, indices_np, distances,
+            np.array([0.0], dtype=np.float32),
+            np.array([1.0], dtype=np.float32),  # grad_distance = 1
+            np.array([0.0], dtype=np.float32),
+            np.array([0.0], dtype=np.float32),
+        )
+
+        # PyTorch reference
+        coords = torch.tensor(coords_np, requires_grad=True)
+        d = torch.norm(coords[1] - coords[0])
+        d.backward()
+
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-5)
+
+    def test_angle_gradient_direct(self):
+        """Test angle gradient directly against PyTorch autograd."""
+        import torch
+        from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
+
+        coords_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [2.0, 1.5, 0.2],
+        ], dtype=np.float32)
+
+        # Angle at atom 1 between 2 and 0
+        indices_np = np.array([[2, 1, 0, -1]], dtype=np.int64)
+
+        # C extension
+        distances, angles, _ = _cartesian_to_internal(coords_np, indices_np)
+        grad_coords = _cartesian_to_internal_backward(
+            coords_np, indices_np, distances, angles,
+            np.array([0.0], dtype=np.float32),
+            np.array([1.0], dtype=np.float32),  # grad_angle = 1
+            np.array([0.0], dtype=np.float32),
+        )
+
+        # PyTorch reference
+        coords = torch.tensor(coords_np, requires_grad=True)
+        v1 = coords[2] - coords[1]
+        v2 = coords[0] - coords[1]
+        cos_angle = torch.dot(v1, v2) / (v1.norm() * v2.norm())
+        angle = torch.acos(cos_angle.clamp(-1, 1))
+        angle.backward()
+
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-4)
+
+    def test_dihedral_gradient_direct(self):
+        """Test dihedral gradient directly against PyTorch autograd."""
+        import torch
+        from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
+
+        coords_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [2.0, 1.5, 0.0],
+            [3.5, 1.5, 1.0]
+        ], dtype=np.float32)
+
+        indices_np = np.array([[3, 2, 1, 0]], dtype=np.int64)
+
+        # C extension
+        distances, angles, dihedrals = _cartesian_to_internal(coords_np, indices_np)
+        grad_coords = _cartesian_to_internal_backward(
+            coords_np, indices_np, distances, angles,
+            np.array([0.0], dtype=np.float32),
+            np.array([0.0], dtype=np.float32),
+            np.array([1.0], dtype=np.float32),  # grad_dihedral = 1
+        )
+
+        # PyTorch reference using same normalized formula as C code
+        EPS = 1e-6
+        coords = torch.tensor(coords_np, requires_grad=True)
+        a, b, c, d = coords[0], coords[1], coords[2], coords[3]
+        b1 = b - a
+        b2 = c - b
+        b3 = d - c
+        n1 = torch.linalg.cross(b1, b2)
+        n2 = torch.linalg.cross(b2, b3)
+        n1_hat = n1 / (n1.norm() + EPS)
+        n2_hat = n2 / (n2.norm() + EPS)
+        b2_hat = b2 / (b2.norm() + EPS)
+        m1 = torch.linalg.cross(n1_hat, b2_hat)
+        x = torch.dot(n1_hat, n2_hat)
+        y = torch.dot(m1, n2_hat)
+        dihedral = torch.atan2(y, x)
+        dihedral.backward()
+
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-4)
+
+    def test_multiple_entries_gradients(self):
+        """Test gradients with multiple Z-matrix entries."""
+        import torch
+        from ciffy.backend.autograd import cartesian_to_internal
+
+        coords_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [2.0, 1.5, 0.0],
+            [3.5, 1.5, 1.0],
+            [4.0, 2.5, 1.5],
+        ], dtype=np.float32)
+
+        indices_np = np.array([
+            [0, -1, -1, -1],
+            [1,  0, -1, -1],
+            [2,  1,  0, -1],
+            [3,  2,  1,  0],
+            [4,  3,  2,  1],
+        ], dtype=np.int64)
+
+        coords = torch.tensor(coords_np, requires_grad=True)
+        indices = torch.tensor(indices_np)
+
+        distances, angles, dihedrals = cartesian_to_internal(coords, indices)
+
+        # Loss using all outputs
+        loss = distances.sum() + angles.sum() + dihedrals.sum()
+        loss.backward()
+
+        # Gradient should exist and not be all zeros
+        assert coords.grad is not None
+        assert not torch.all(coords.grad == 0)

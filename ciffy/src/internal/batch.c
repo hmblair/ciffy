@@ -298,40 +298,31 @@ void batch_nerf_reconstruct_backward(
 
         } else if (dihe_ref < 0) {
             /* Third atom: placed in plane */
-            /* Simplified gradient: mainly through distance and angle */
-            const float *ref1 = &coords[dist_ref * 3];
-            const float *ref2 = &coords[angl_ref * 3];
+            if ((size_t)angl_ref < n_atoms && (size_t)dist_ref < n_atoms) {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
 
-            /* Direction from ref1 to ref2 */
-            float ux = ref2[0] - ref1[0];
-            float uy = ref2[1] - ref1[1];
-            float uz = ref2[2] - ref1[2];
-            float u_norm = sqrtf(ux*ux + uy*uy + uz*uz) + 1e-6f;
-            ux /= u_norm; uy /= u_norm; uz /= u_norm;
+                float grad_ref1[3], grad_ref2[3];
+                nerf_place_in_plane_backward(
+                    ref1, ref2,
+                    distances[idx], angles[idx],
+                    grad_result,
+                    grad_ref1, grad_ref2,
+                    &grad_distances[idx], &grad_angles[idx]
+                );
+                grad_dihedrals[idx] = 0.0f;
 
-            float cos_a = cosf(angles[idx]);
-            float sin_a = sinf(angles[idx]);
-
-            /* ∂result/∂distance ≈ (cos_a * u + sin_a * perp) */
-            /* Simplified: dot with gradient */
-            grad_distances[idx] = grad_result[0] * cos_a * ux +
-                                  grad_result[1] * cos_a * uy +
-                                  grad_result[2] * cos_a * uz;
-
-            /* ∂result/∂angle ≈ distance * (-sin_a * u + cos_a * perp) */
-            grad_angles[idx] = distances[idx] * (
-                grad_result[0] * (-sin_a * ux) +
-                grad_result[1] * (-sin_a * uy) +
-                grad_result[2] * (-sin_a * uz)
-            );
-
-            grad_dihedrals[idx] = 0.0f;
-
-            /* Propagate gradient to reference atoms */
-            if ((size_t)dist_ref < n_atoms) {
-                grad_coords[dist_ref * 3 + 0] += grad_result[0];
-                grad_coords[dist_ref * 3 + 1] += grad_result[1];
-                grad_coords[dist_ref * 3 + 2] += grad_result[2];
+                /* Propagate gradients to reference atoms */
+                grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+                grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+                grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+                grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+                grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+                grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+            } else {
+                grad_distances[idx] = 0.0f;
+                grad_angles[idx] = 0.0f;
+                grad_dihedrals[idx] = 0.0f;
             }
 
         } else {

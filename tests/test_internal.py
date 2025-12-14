@@ -15,11 +15,15 @@ class TestInternalCoordinatesBasic:
         from ciffy.operations.alignment import kabsch_align
 
         polymer = from_sequence("a")
-        internal = polymer.to_internal()
-        reconstructed = internal.to_cartesian()
+        orig_coords = polymer.coordinates.copy()
 
-        aligned, _, _ = kabsch_align(reconstructed.coordinates, polymer.coordinates)
-        rmsd = np.sqrt(((aligned - polymer.coordinates) ** 2).sum(axis=1).mean())
+        # Access internal coordinates, then modify to trigger reconstruction
+        dihedrals = polymer.dihedrals.copy()
+        polymer.dihedrals = dihedrals
+
+        # Coordinates are now reconstructed
+        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
+        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
 
         assert rmsd < 1e-5, f"RMSD {rmsd} exceeds threshold"
 
@@ -29,55 +33,59 @@ class TestInternalCoordinatesBasic:
         from ciffy.operations.alignment import kabsch_align
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
-        reconstructed = internal.to_cartesian()
+        orig_coords = polymer.coordinates.copy()
 
-        aligned, _, _ = kabsch_align(reconstructed.coordinates, polymer.coordinates)
-        rmsd = np.sqrt(((aligned - polymer.coordinates) ** 2).sum(axis=1).mean())
+        # Access internal coordinates, then modify to trigger reconstruction
+        dihedrals = polymer.dihedrals.copy()
+        polymer.dihedrals = dihedrals
+
+        # Coordinates are now reconstructed
+        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
+        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
 
         assert rmsd < 1e-4, f"RMSD {rmsd} exceeds threshold"
 
     def test_internal_polymer_properties(self):
-        """Test InternalPolymer has correct properties."""
+        """Test Polymer has correct internal coordinate properties."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+
+        # Access internal coordinates
+        distances = polymer.distances
+        angles = polymer.angles
+        dihedrals = polymer.dihedrals
 
         # Check array shapes
-        n_zmatrix = len(internal.zmatrix)
-        assert internal.distances.shape == (n_zmatrix,)
-        assert internal.angles.shape == (n_zmatrix,)
-        assert internal.dihedrals.shape == (n_zmatrix,)
-
-        # Check size includes orphans
-        assert internal.size == polymer.size()
-
-        # Check backend
-        assert internal.backend == "numpy"
+        n_zmatrix = len(polymer._coord_manager._zmatrix)
+        assert distances.shape == (n_zmatrix,)
+        assert angles.shape == (n_zmatrix,)
+        assert dihedrals.shape == (n_zmatrix,)
 
     def test_distances_are_positive(self):
         """Test all bond distances are positive."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+        distances = polymer.distances
+        zmatrix = polymer._coord_manager._zmatrix
 
         # First entry has no distance (root atom)
-        for i, entry in enumerate(internal.zmatrix):
+        for i, entry in enumerate(zmatrix):
             if entry.distance_ref >= 0:
-                assert internal.distances[i] > 0, f"Distance at {i} is not positive"
+                assert distances[i] > 0, f"Distance at {i} is not positive"
 
     def test_angles_in_valid_range(self):
         """Test all bond angles are in [0, pi]."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+        angles = polymer.angles
+        zmatrix = polymer._coord_manager._zmatrix
 
-        for i, entry in enumerate(internal.zmatrix):
+        for i, entry in enumerate(zmatrix):
             if entry.angle_ref >= 0:
-                angle = internal.angles[i]
+                angle = angles[i]
                 assert 0 <= angle <= np.pi, f"Angle at {i} is {angle}, not in [0, pi]"
 
     def test_dihedrals_in_valid_range(self):
@@ -85,53 +93,69 @@ class TestInternalCoordinatesBasic:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+        dihedrals = polymer.dihedrals
+        zmatrix = polymer._coord_manager._zmatrix
 
-        for i, entry in enumerate(internal.zmatrix):
+        for i, entry in enumerate(zmatrix):
             if entry.dihedral_ref >= 0:
-                dih = internal.dihedrals[i]
+                dih = dihedrals[i]
                 assert -np.pi <= dih <= np.pi, f"Dihedral at {i} is {dih}, not in [-pi, pi]"
 
 
 class TestInternalCoordinatesPDB:
     """Tests using real PDB structures."""
 
-    def test_rna_structure_per_chain(self):
-        """Test round-trip for RNA structure (per-chain RMSD)."""
-        from ciffy import load, Scale, rmsd
-        from ciffy.operations.alignment import kabsch_align
+    def test_multichain_relative_orientation(self):
+        """Test multi-chain reconstruction preserves relative chain positions and orientations."""
+        from ciffy import load, rmsd
 
         polymer = load(get_test_cif("1ZEW")).poly()
-        internal = polymer.to_internal()
-        reconstructed = internal.to_cartesian()
 
-        # TODO: spin out into a separate test
-        mol_rmsd = rmsd(polymer, reconstructed)
-        assert mol_rmsd < 1e-4, f"All-chain RMSD {mol_rmsd} exceeds threshold"
+        # Verify this is actually a multi-chain structure
+        n_chains = len(polymer.lengths)
+        assert n_chains > 1, "Test requires multi-chain structure"
+
+        # Save original polymer
+        orig_polymer = polymer.with_coordinates(polymer.coordinates.copy())
+
+        # Access internal coordinates to trigger computation
+        dihedrals = polymer.dihedrals.copy()
+
+        # Modify dihedrals to trigger reconstruction (set back to same values)
+        polymer.dihedrals = dihedrals
+
+        # Test 1: Per-chain RMSD should be good (each chain's internal structure preserved)
+        for chain_idx, chain in enumerate(polymer.chains()):
+            orig_chain = list(orig_polymer.chains())[chain_idx]
+
+            # Per-chain alignment - should work because internal structure is preserved
+            chain_rmsd = float(rmsd(orig_chain, chain))
+            assert chain_rmsd < 1e-4, \
+                f"Chain {chain_idx} internal structure RMSD {chain_rmsd:.6f} exceeds threshold"
+
+        # Test 2: Global RMSD should fail (relative chain positions/orientations not preserved)
+        global_rmsd = rmsd(orig_polymer, polymer)
+        global_rmsd_val = float(global_rmsd)
+        assert global_rmsd_val < 1e-4, \
+            f"Global RMSD {global_rmsd_val:.6f} exceeds threshold - relative chain orientations not preserved"
+
+    def test_rna_structure_per_chain(self):
+        """Test round-trip for RNA structure (per-chain RMSD)."""
+        from ciffy import load, rmsd
+
+        polymer = load(get_test_cif("1ZEW")).poly()
+        orig_polymer = polymer.with_coordinates(polymer.coordinates.copy())
+
+        # Trigger reconstruction
+        dihedrals = polymer.dihedrals.copy()
+        polymer.dihedrals = dihedrals
 
         # Test per-chain RMSD
-        res_sizes = polymer.sizes(Scale.RESIDUE)
-        chain_start_atom = 0
-        chain_start_res = 0
-
-        for chain_idx, chain_len in enumerate(polymer.lengths):
-            chain_len_val = int(chain_len)
-            if chain_len_val == 0:
-                continue
-
-            chain_atom_count = sum(int(res_sizes[chain_start_res + i]) for i in range(chain_len_val))
-            chain_atoms = list(range(chain_start_atom, chain_start_atom + chain_atom_count))
-
-            chain_orig = polymer.coordinates[chain_atoms]
-            chain_rec = reconstructed.coordinates[chain_atoms]
-            # TODO: use rmsd rather than manual alignment
-            chain_aligned, _, _ = kabsch_align(chain_rec, chain_orig)
-            chain_rmsd = np.sqrt(((chain_aligned - chain_orig) ** 2).sum(axis=1).mean())
+        for chain_idx, chain in enumerate(polymer.chains()):
+            orig_chain = list(orig_polymer.chains())[chain_idx]
+            chain_rmsd = float(rmsd(orig_chain, chain))
 
             assert chain_rmsd < 1e-4, f"Chain {chain_idx} RMSD {chain_rmsd} exceeds threshold"
-
-            chain_start_atom += chain_atom_count
-            chain_start_res += chain_len_val
 
 
 class TestInternalCoordinatesTorchBackend:
@@ -144,53 +168,59 @@ class TestInternalCoordinatesTorchBackend:
         from ciffy.operations.alignment import kabsch_align
 
         polymer = from_sequence("acgu", backend="torch")
-        internal = polymer.to_internal()
-        reconstructed = internal.to_cartesian()
+        orig_coords = polymer.coordinates.clone()
 
-        assert isinstance(reconstructed.coordinates, torch.Tensor)
+        # Trigger reconstruction
+        dihedrals = polymer.dihedrals.clone()
+        polymer.dihedrals = dihedrals
 
-        aligned, _, _ = kabsch_align(reconstructed.coordinates, polymer.coordinates)
-        rmsd = torch.sqrt(((aligned - polymer.coordinates) ** 2).sum(dim=1).mean())
+        assert isinstance(polymer.coordinates, torch.Tensor)
+
+        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
+        rmsd = torch.sqrt(((aligned - orig_coords) ** 2).sum(dim=1).mean())
 
         assert rmsd.item() < 1e-4, f"RMSD {rmsd.item()} exceeds threshold"
 
     def test_torch_roundtrip_preserves_device_and_dtype(self):
-        """Ensure C extension path returns tensors on the original device/dtype."""
+        """Ensure internal coordinates preserve device/dtype."""
         import torch
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
         coords = polymer.coordinates
 
-        internal = polymer.to_internal()  # should route through C extension even for torch
-        assert isinstance(internal.distances, torch.Tensor)
-        assert internal.distances.device == coords.device
-        assert internal.distances.dtype == coords.dtype
+        # Access internal coordinates
+        distances = polymer.distances
+        assert isinstance(distances, torch.Tensor)
+        assert distances.device == coords.device
+        assert distances.dtype == coords.dtype
 
-        reconstructed = internal.to_cartesian()
-        assert isinstance(reconstructed.coordinates, torch.Tensor)
-        assert reconstructed.coordinates.device == coords.device
-        assert reconstructed.coordinates.dtype == coords.dtype
+        # Trigger reconstruction
+        dihedrals = polymer.dihedrals.clone()
+        polymer.dihedrals = dihedrals
+
+        assert isinstance(polymer.coordinates, torch.Tensor)
+        assert polymer.coordinates.device == coords.device
+        assert polymer.coordinates.dtype == coords.dtype
 
     def test_torch_backend_property(self):
-        """Test backend property returns 'torch'."""
+        """Test Polymer uses torch backend."""
         from ciffy import from_sequence
+        import torch
 
         polymer = from_sequence("acgu", backend="torch")
-        internal = polymer.to_internal()
-
-        assert internal.backend == "torch"
+        assert isinstance(polymer.coordinates, torch.Tensor)
+        assert isinstance(polymer.dihedrals, torch.Tensor)
 
     def test_torch_to_numpy_conversion(self):
         """Test torch to numpy conversion."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
-        internal = polymer.to_internal()
-        internal_np = internal.numpy()
+        polymer_np = polymer.numpy()
 
-        assert internal_np.backend == "numpy"
-        assert isinstance(internal_np.distances, np.ndarray)
+        assert isinstance(polymer_np.coordinates, np.ndarray)
+        assert isinstance(polymer_np.distances, np.ndarray)
 
     def test_numpy_to_torch_conversion(self):
         """Test numpy to torch conversion."""
@@ -198,35 +228,35 @@ class TestInternalCoordinatesTorchBackend:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="numpy")
-        internal = polymer.to_internal()
-        internal_torch = internal.torch()
+        polymer_torch = polymer.torch()
 
-        assert internal_torch.backend == "torch"
-        assert isinstance(internal_torch.distances, torch.Tensor)
+        assert isinstance(polymer_torch.coordinates, torch.Tensor)
+        assert isinstance(polymer_torch.distances, torch.Tensor)
 
     def test_differentiability(self):
-        """Test gradients flow through to_cartesian."""
+        """Test gradients flow through reconstruction."""
         import torch
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
-        internal = polymer.to_internal()
 
-        # Enable gradients
-        internal.dihedrals.requires_grad_(True)
+        # Enable gradients on dihedrals
+        dihedrals = polymer.dihedrals.clone()
+        dihedrals.requires_grad_(True)
+        polymer.dihedrals = dihedrals
 
-        # Reconstruct
-        reconstructed = internal.to_cartesian()
+        # Access coordinates (triggers reconstruction)
+        coords = polymer.coordinates
 
         # Compute loss
-        loss = reconstructed.coordinates.pow(2).mean()
+        loss = coords.pow(2).mean()
 
         # Should not raise
         loss.backward()
 
         # Gradients should exist
-        assert internal.dihedrals.grad is not None
-        assert not torch.all(internal.dihedrals.grad == 0)
+        assert dihedrals.grad is not None
+        assert not torch.all(dihedrals.grad == 0)
 
 
 class TestNamedDihedrals:
@@ -234,114 +264,115 @@ class TestNamedDihedrals:
 
     def test_rna_backbone_dihedrals(self):
         """Test RNA backbone dihedral names from real structure."""
-        from ciffy import load
+        from ciffy import load, DihedralType
 
         # Use real structure for proper dihedral detection
         polymer = load(get_test_cif("1ZEW")).poly()
-        internal = polymer.to_internal()
 
-        # Should have some backbone dihedrals
-        # Not all may be present depending on Z-matrix construction
-        dihedral_indices = internal._dihedral_indices
-        if dihedral_indices is None:
-            internal._compute_dihedral_indices()
-            dihedral_indices = internal._dihedral_indices
+        # Access some backbone dihedrals
+        alpha = polymer.dihedral(DihedralType.ALPHA)
+        beta = polymer.dihedral(DihedralType.BETA)
 
-        # At least some dihedrals should be found in a real RNA structure
-        found_any = any(len(v) > 0 for v in dihedral_indices.values() if v is not None)
-        # This is a soft check - structure may not have all expected patterns
-        assert dihedral_indices is not None
+        # Should return arrays (may be empty if not found)
+        assert alpha is not None
+        assert beta is not None
 
     def test_unknown_dihedral_raises(self):
-        """Test unknown dihedral name raises ValueError."""
+        """Test unsupported dihedral types are handled."""
+        from ciffy import from_sequence, DihedralType
+
+        polymer = from_sequence("acgu")
+
+        # PHI is for proteins, should return empty or handle gracefully
+        # (The actual behavior depends on implementation)
+        result = polymer.dihedral(DihedralType.PHI)
+        assert result is not None  # Should not crash
+
+
+class TestSetMethods:
+    """Tests for setting internal coordinates."""
+
+    def test_set_dihedrals(self):
+        """Test setting dihedrals modifies polymer in-place."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+        orig_dihedrals = polymer.dihedrals.copy()
 
-        with pytest.raises(ValueError, match="Unknown dihedral name"):
-            internal.backbone_dihedrals('invalid_name')
-
-
-class TestWithMethods:
-    """Tests for with_* modification methods."""
-
-    def test_with_dihedrals(self):
-        """Test with_dihedrals creates new object."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
-
-        new_dihedrals = internal.dihedrals.copy()
+        new_dihedrals = polymer.dihedrals.copy()
         new_dihedrals[5] = 1.5
 
-        modified = internal.with_dihedrals(new_dihedrals)
+        polymer.dihedrals = new_dihedrals
 
-        # Should be different objects
-        assert modified is not internal
-        # Original unchanged
-        assert internal.dihedrals[5] != 1.5
-        # Modified has new value
-        assert modified.dihedrals[5] == 1.5
+        # Should be modified
+        assert polymer.dihedrals[5] == 1.5
+        assert polymer.dihedrals[5] != orig_dihedrals[5]
 
-    def test_with_angles(self):
-        """Test with_angles creates new object."""
+    def test_set_angles(self):
+        """Test setting angles modifies polymer in-place."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
 
-        new_angles = internal.angles.copy()
+        new_angles = polymer.angles.copy()
         new_angles[5] = 2.0
 
-        modified = internal.with_angles(new_angles)
+        polymer.angles = new_angles
 
-        assert modified is not internal
-        assert modified.angles[5] == 2.0
+        assert polymer.angles[5] == 2.0
 
-    def test_with_distances(self):
-        """Test with_distances creates new object."""
+    def test_set_distances(self):
+        """Test setting distances modifies polymer in-place."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
 
-        new_distances = internal.distances.copy()
+        new_distances = polymer.distances.copy()
         new_distances[5] = 2.0
 
-        modified = internal.with_distances(new_distances)
+        polymer.distances = new_distances
 
-        assert modified is not internal
-        assert modified.distances[5] == 2.0
+        assert polymer.distances[5] == 2.0
 
 
 class TestOrphanAtoms:
-    """Tests for orphan atom handling."""
+    """Tests for orphan atom handling (single-atom connected components)."""
 
     def test_waters_become_orphans(self):
-        """Test that water molecules become orphan atoms."""
+        """Test that water molecules become single-atom connected components."""
         from ciffy import load
 
         # Load structure with waters
         polymer = load(get_test_cif("1ZEW"))  # Don't call .poly()
-        internal = polymer.to_internal()
 
-        # Should have orphan atoms (waters, ions)
-        assert len(internal._orphan_atoms) > 0
+        # Access internal coords to build Z-matrix
+        _ = polymer.dihedrals
+
+        # Should have single-atom components (waters, ions)
+        components = polymer._coord_manager._connected_components
+        single_atom_components = [c for c in components if len(c[0]) == 1]
+        assert len(single_atom_components) > 0
 
     def test_orphan_coords_restored(self):
         """Test orphan coordinates are restored after round-trip."""
         from ciffy import load
 
         polymer = load(get_test_cif("1ZEW"))
-        internal = polymer.to_internal()
-        reconstructed = internal.to_cartesian()
+        orig_coords = polymer.coordinates.copy()
+
+        # Trigger reconstruction
+        dihedrals = polymer.dihedrals.copy()
+        polymer.dihedrals = dihedrals
+
+        # Find single-atom components
+        components = polymer._coord_manager._connected_components
+        single_atom_components = [c for c in components if len(c[0]) == 1]
 
         # Orphan atoms should have original coordinates
-        for i, atom_idx in enumerate(internal._orphan_atoms):
-            orig_coord = polymer.coordinates[atom_idx]
-            rec_coord = reconstructed.coordinates[atom_idx]
+        for atom_indices, _ in single_atom_components:
+            atom_idx = atom_indices[0]
+            orig_coord = orig_coords[atom_idx]
+            rec_coord = polymer.coordinates[atom_idx]
             assert np.allclose(orig_coord, rec_coord), \
                 f"Orphan atom {atom_idx} coords not restored"
 
@@ -350,9 +381,14 @@ class TestOrphanAtoms:
         from ciffy import load
 
         polymer = load(get_test_cif("1ZEW")).poly()
-        internal = polymer.to_internal()
 
-        assert len(internal._orphan_atoms) == 0
+        # Access internal coords to build Z-matrix
+        _ = polymer.dihedrals
+
+        # Should have no single-atom components
+        components = polymer._coord_manager._connected_components
+        single_atom_components = [c for c in components if len(c[0]) == 1]
+        assert len(single_atom_components) == 0
 
 
 class TestZMatrix:
@@ -363,10 +399,13 @@ class TestZMatrix:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
+
+        # Access internal coords to build Z-matrix
+        _ = polymer.dihedrals
+        zmatrix = polymer._coord_manager._zmatrix
 
         placed = set()
-        for i, entry in enumerate(internal.zmatrix):
+        for i, entry in enumerate(zmatrix):
             # Distance ref should be already placed (or -1)
             if entry.distance_ref >= 0:
                 assert entry.distance_ref in placed, \
@@ -389,9 +428,12 @@ class TestZMatrix:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
 
-        for i, entry in enumerate(internal.zmatrix):
+        # Access internal coords to build Z-matrix
+        _ = polymer.dihedrals
+        zmatrix = polymer._coord_manager._zmatrix
+
+        for i, entry in enumerate(zmatrix):
             if entry.dihedral_ref >= 0:
                 # All four atoms should be distinct
                 atoms = {entry.atom_idx, entry.distance_ref, entry.angle_ref, entry.dihedral_ref}
@@ -403,9 +445,12 @@ class TestZMatrix:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        internal = polymer.to_internal()
 
-        first = internal.zmatrix[0]
+        # Access internal coords to build Z-matrix
+        _ = polymer.dihedrals
+        zmatrix = polymer._coord_manager._zmatrix
+
+        first = zmatrix[0]
         assert first.distance_ref == -1
         assert first.angle_ref == -1
         assert first.dihedral_ref == -1

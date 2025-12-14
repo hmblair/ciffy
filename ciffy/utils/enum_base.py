@@ -237,6 +237,27 @@ class ResidueType:
         """Single-letter abbreviation."""
         return self._abbrev
 
+    @property
+    def bond_indices(self):
+        """
+        (M, 2) int32 array of bonded atom pairs (global indices).
+
+        Returns None if no bonds are defined for this residue.
+        """
+        return getattr(self._atoms, 'bond_indices', None)
+
+    @property
+    def dihedral_patterns(self) -> dict:
+        """
+        Dict[int -> np.ndarray] mapping dihedral type index to local atom indices.
+
+        Maps integer dihedral type (0-10) to (4,) int32 array of local atom indices.
+        Local indices of -1 indicate atoms in adjacent residues.
+
+        Returns empty dict if no dihedral patterns are defined.
+        """
+        return getattr(self._atoms, 'dihedral_patterns', {})
+
     def __getattr__(self, name: str):
         """Delegate attribute access to atom enum."""
         return getattr(self._atoms, name)

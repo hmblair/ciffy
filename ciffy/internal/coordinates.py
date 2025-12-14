@@ -58,8 +58,7 @@ class CoordinateManager:
         '_dihedrals',
         '_zmatrix',
         '_dihedral_indices',
-        '_orphan_atoms',
-        '_orphan_coords',
+        '_connected_components',  # List of (atom_indices, centroid) for each component
         '_internal_valid',
 
         # Reference to parent Polymer
@@ -90,9 +89,11 @@ class CoordinateManager:
         self._dihedrals: Optional[Array] = None
         self._zmatrix: Optional[list["ZMatrixEntry"]] = None
         self._dihedral_indices: Optional[Dict[str, Array]] = None
-        self._orphan_atoms: Optional[list[int]] = None
-        self._orphan_coords: Optional[Array] = None
+        self._connected_components: Optional[list[tuple[list[int], Array]]] = None
         self._internal_valid = False
+
+        # Store connected component centroids from initial coordinates
+        self._update_connected_components()
 
     # ─────────────────────────────────────────────────────────────────────
     # String Representation
@@ -139,6 +140,56 @@ class CoordinateManager:
         # Only invalidate dihedral indices as they depend on Z-matrix order
         self._dihedral_indices = None
 
+    def _update_connected_components(self) -> None:
+        """
+        Identify connected components and store their centroids.
+
+        Connected components are groups of bonded atoms. This includes:
+        - Chains (multi-atom connected components)
+        - Single atoms with no bonds (orphan atoms)
+
+        Stores list of (atom_indices, centroid) tuples.
+        """
+        from ..types import Scale
+
+        if self._coordinates is None:
+            return
+
+        coords = self._coordinates
+        res_sizes = self._polymer.sizes(Scale.RESIDUE)
+
+        components = []
+        atom_offset = 0
+        res_offset = 0
+
+        # Each chain is a connected component
+        for chain_len in self._polymer.lengths:
+            chain_len_val = int(chain_len)
+            if chain_len_val == 0:
+                continue
+
+            # Get atom count for this chain
+            chain_atom_count = sum(int(res_sizes[res_offset + i]) for i in range(chain_len_val))
+
+            # Get atom indices for this chain
+            atom_indices = list(range(atom_offset, atom_offset + chain_atom_count))
+
+            # Compute centroid for this chain
+            chain_coords = coords[atom_offset:atom_offset + chain_atom_count]
+            centroid = chain_coords.mean(axis=0)
+
+            if is_torch(coords):
+                centroid = centroid.clone()
+            else:
+                centroid = centroid.copy()
+
+            components.append((atom_indices, centroid))
+
+            atom_offset += chain_atom_count
+            res_offset += chain_len_val
+
+        self._connected_components = components
+
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Cartesian
     # ─────────────────────────────────────────────────────────────────────
@@ -170,6 +221,10 @@ class CoordinateManager:
         check_compatible(self._get_reference_array(), value, "coordinates")
         self._coordinates = value
         self._cartesian_valid = True
+
+        # Update connected component centroids for reconstruction
+        self._update_connected_components()
+
         self._invalidate_internal()
 
     # ─────────────────────────────────────────────────────────────────────
@@ -304,19 +359,20 @@ class CoordinateManager:
         if self._zmatrix is None:
             self._zmatrix = build_zmatrix(self._polymer)
 
-            # Detect orphan atoms (not in Z-matrix - no bonds)
+            # Detect orphan atoms (atoms not in Z-matrix - no bonds)
+            # Add them as single-atom connected components
             zmatrix_atoms = {entry.atom_idx for entry in self._zmatrix}
-            self._orphan_atoms = [i for i in range(n_atoms) if i not in zmatrix_atoms]
+            orphan_atoms = [i for i in range(n_atoms) if i not in zmatrix_atoms]
 
-            # Store orphan coordinates
-            if self._orphan_atoms:
-                if is_torch(coords):
-                    import torch
-                    self._orphan_coords = torch.stack([coords[i] for i in self._orphan_atoms])
-                else:
-                    self._orphan_coords = np.stack([coords[i] for i in self._orphan_atoms])
-            else:
-                self._orphan_coords = None
+            if orphan_atoms and self._connected_components is not None:
+                # Add each orphan atom as a single-atom connected component
+                for atom_idx in orphan_atoms:
+                    if is_torch(coords):
+                        centroid = coords[atom_idx].clone()
+                    else:
+                        centroid = coords[atom_idx].copy()
+                    self._connected_components.append(([atom_idx], centroid))
+
 
         n_zmatrix = len(self._zmatrix)
 
@@ -403,10 +459,13 @@ class CoordinateManager:
         if self._zmatrix is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: Z-matrix is None")
 
-        # Get atom count from internal coordinates (avoids circular dependency with polymer.size())
-        n_atoms = len(self._zmatrix) + len(self._orphan_atoms if self._orphan_atoms else [])
+        if self._connected_components is None:
+            raise RuntimeError("Cannot reconstruct Cartesian coordinates: connected components not computed")
 
-        # NERF reconstruction
+        # Get atom count from connected components
+        n_atoms = sum(len(atom_indices) for atom_indices, _ in self._connected_components)
+
+        # NERF reconstruction (places each chain root at origin)
         coords = nerf_reconstruct(
             self._distances,
             self._angles,
@@ -415,10 +474,55 @@ class CoordinateManager:
             n_atoms=n_atoms,
         )
 
-        # Restore orphan atom coordinates
-        if self._orphan_atoms and self._orphan_coords is not None:
-            for i, atom_idx in enumerate(self._orphan_atoms):
-                coords[atom_idx] = self._orphan_coords[i]
+        # Restore positions of all connected components
+        # Identify which atoms belong to each component in Z-matrix
+        zmatrix_atoms = {entry.atom_idx for entry in self._zmatrix}
+
+        # Process multi-atom components (chains) from Z-matrix
+        chain_boundaries = []  # List of Z-matrix indices where new components start
+        for i, entry in enumerate(self._zmatrix):
+            if entry.distance_ref == -1 and entry.angle_ref == -1 and entry.dihedral_ref == -1:
+                chain_boundaries.append(i)
+
+        # Add end boundary
+        chain_boundaries.append(len(self._zmatrix))
+
+        # Match Z-matrix chains with connected components
+        chain_idx = 0
+        for boundary_idx in range(len(chain_boundaries) - 1):
+            start_idx = chain_boundaries[boundary_idx]
+            end_idx = chain_boundaries[boundary_idx + 1]
+
+            # Get atom indices for this chain from Z-matrix
+            zmatrix_chain_atoms = [self._zmatrix[i].atom_idx for i in range(start_idx, end_idx)]
+
+            # Find matching connected component
+            for component_atoms, original_centroid in self._connected_components:
+                if len(component_atoms) > 1 and component_atoms[0] in zmatrix_chain_atoms:
+                    # This is the matching multi-atom component
+                    # Compute centroid of reconstructed atoms
+                    if is_torch(coords):
+                        import torch
+                        component_coords = torch.stack([coords[idx] for idx in component_atoms])
+                    else:
+                        component_coords = np.stack([coords[idx] for idx in component_atoms])
+                    reconstructed_centroid = component_coords.mean(axis=0)
+
+                    # Translation: move from reconstructed centroid to original centroid
+                    translation = original_centroid - reconstructed_centroid
+
+                    # Apply translation to all atoms in this component
+                    for atom_idx in component_atoms:
+                        coords[atom_idx] = coords[atom_idx] + translation
+                    break
+
+        # Restore single-atom components (orphan atoms)
+        for component_atoms, original_position in self._connected_components:
+            if len(component_atoms) == 1:
+                atom_idx = component_atoms[0]
+                if atom_idx not in zmatrix_atoms:
+                    # This is an orphan atom - just set its position directly
+                    coords[atom_idx] = original_position
 
         self._coordinates = coords
         self._cartesian_valid = True
@@ -454,9 +558,7 @@ class CoordinateManager:
 
         Returns:
             Array of dihedral values in radians (one per applicable residue).
-
-        Raises:
-            ValueError: If the specified dihedral type is not found in the structure.
+            Returns empty array if the specified dihedral type is not found.
 
         Example:
             >>> phi = manager.get_dihedral(DihedralType.PHI)
@@ -473,10 +575,12 @@ class CoordinateManager:
         # Lookup indices for this dihedral type
         indices = self._dihedral_indices.get(dtype.value)
         if indices is None or len(indices) == 0:
-            raise ValueError(
-                f"No {dtype.value} dihedrals found in structure. "
-                f"This may be because the structure doesn't contain the appropriate molecule type."
-            )
+            # Return empty array with correct backend type
+            if is_torch(self._dihedrals):
+                import torch
+                return torch.tensor([], dtype=self._dihedrals.dtype, device=self._dihedrals.device)
+            else:
+                return np.array([], dtype=self._dihedrals.dtype)
 
         return self._dihedrals[indices]
 
@@ -550,11 +654,15 @@ class CoordinateManager:
             new_manager._dihedrals = to_numpy(self._dihedrals)
             new_manager._internal_valid = True
 
-        # Copy Z-matrix and dihedral indices (these are backend-independent structures)
+        # Copy Z-matrix (backend-independent structure)
         new_manager._zmatrix = self._zmatrix
-        new_manager._orphan_atoms = self._orphan_atoms
-        if self._orphan_coords is not None:
-            new_manager._orphan_coords = to_numpy(self._orphan_coords)
+
+        # Convert connected components
+        if self._connected_components is not None:
+            new_manager._connected_components = [
+                (atom_indices, to_numpy(centroid))
+                for atom_indices, centroid in self._connected_components
+            ]
 
         # Convert dihedral indices if they exist
         if self._dihedral_indices is not None:
@@ -587,11 +695,15 @@ class CoordinateManager:
             new_manager._dihedrals = to_torch(self._dihedrals)
             new_manager._internal_valid = True
 
-        # Copy Z-matrix and orphan atoms
+        # Copy Z-matrix (backend-independent structure)
         new_manager._zmatrix = self._zmatrix
-        new_manager._orphan_atoms = self._orphan_atoms
-        if self._orphan_coords is not None:
-            new_manager._orphan_coords = to_torch(self._orphan_coords)
+
+        # Convert connected components
+        if self._connected_components is not None:
+            new_manager._connected_components = [
+                (atom_indices, to_torch(centroid))
+                for atom_indices, centroid in self._connected_components
+            ]
 
         # Convert dihedral indices if they exist
         if self._dihedral_indices is not None:

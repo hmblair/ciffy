@@ -1,0 +1,56 @@
+/**
+ * @file graph.h
+ * @brief Bond graph construction for Z-matrix generation.
+ */
+
+#ifndef _CIFFY_GRAPH_H
+#define _CIFFY_GRAPH_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/**
+ * Build bond graph edge list from polymer data.
+ *
+ * Combines intra-residue bonds (from precomputed patterns) and
+ * inter-residue linking bonds into a single edge array.
+ *
+ * @param atoms         (N,) int32 atom values
+ * @param sequence      (R,) int32 residue type indices
+ * @param res_sizes     (R,) int32 number of atoms per residue
+ * @param chain_lengths (C,) int32 number of residues per chain
+ * @param n_atoms       Total number of atoms N
+ * @param n_residues    Total number of residues R
+ * @param n_chains      Number of chains C
+ * @param out_edges     Output: (E, 2) int64 edge array (caller allocates)
+ * @param max_edges     Maximum number of edges that can be stored
+ * @return              Number of edges written, or -1 on error
+ */
+int64_t build_bond_graph_c(
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int32_t *res_sizes,
+    const int32_t *chain_lengths,
+    int64_t n_atoms,
+    int64_t n_residues,
+    int64_t n_chains,
+    int64_t *out_edges,
+    int64_t max_edges
+);
+
+/**
+ * Estimate maximum number of edges for allocation.
+ *
+ * Conservative upper bound: 2 * (sum of intra-residue bonds + inter-residue bonds).
+ * Factor of 2 accounts for symmetric edges.
+ *
+ * @param sequence    (R,) int32 residue type indices
+ * @param n_residues  Total number of residues
+ * @return            Upper bound on number of symmetric edges
+ */
+int64_t estimate_max_edges(
+    const int32_t *sequence,
+    int64_t n_residues
+);
+
+#endif /* _CIFFY_GRAPH_H */

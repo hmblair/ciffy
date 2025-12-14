@@ -751,6 +751,15 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    ndarray: (N, 3) float64 Cartesian coordinates.\n"},
+    {"_build_bond_graph", py_build_bond_graph, METH_VARARGS,
+     "Build molecular bond graph from polymer arrays.\n\n"
+     "Args:\n"
+     "    atoms (ndarray): (N,) int32 atom values.\n"
+     "    sequence (ndarray): (R,) int32 residue type indices.\n"
+     "    res_sizes (ndarray): (R,) int32 atoms per residue.\n"
+     "    chain_lengths (ndarray): (C,) int32 residues per chain.\n\n"
+     "Returns:\n"
+     "    ndarray: (E, 2) int64 edge array [atom_i, atom_j].\n"},
     {NULL, NULL, 0, NULL}
 };
 

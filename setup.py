@@ -170,6 +170,7 @@ ext_module = Extension(
         # Internal coordinates C extension
         'ciffy/src/internal/geometry.c',
         'ciffy/src/internal/batch.c',
+        'ciffy/src/internal/graph.c',
         'ciffy/src/internal/internal_module.c',
     ],
     include_dirs=[numpy.get_include(), 'ciffy/src'],

@@ -20,4 +20,10 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args);
  */
 PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args);
 
+/**
+ * Build bond graph edge list from polymer arrays.
+ * Python: _build_bond_graph(atoms, sequence, res_sizes, chain_lengths) -> edges
+ */
+PyObject *py_build_bond_graph(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

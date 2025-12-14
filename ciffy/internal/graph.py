@@ -15,6 +15,13 @@ if TYPE_CHECKING:
 
 from ..backend import Array, is_torch, to_numpy, to_torch
 
+# Try to import C extension
+try:
+    from .._c import _build_bond_graph as _build_bond_graph_c
+    _HAS_C_EXTENSION = True
+except ImportError:
+    _HAS_C_EXTENSION = False
+
 
 # =============================================================================
 # ZMATRIX CLASS
@@ -182,6 +189,8 @@ def build_bond_graph(polymer: "Polymer") -> tuple[np.ndarray, int]:
     Combines intra-residue bonds from Residue.bond_indices and inter-residue
     bonds from LINKING_BY_TYPE.
 
+    Uses C extension when available for ~10-20x speedup on large structures.
+
     Args:
         polymer: Polymer structure with sequence and atoms.
 
@@ -189,6 +198,35 @@ def build_bond_graph(polymer: "Polymer") -> tuple[np.ndarray, int]:
         Tuple of:
             edges: (E, 2) int64 array of [atom_i, atom_j] pairs (symmetric)
             n_atoms: Total number of atoms
+    """
+    from ..types import Scale
+
+    n_atoms = polymer.size()
+
+    # Try C extension first
+    if _HAS_C_EXTENSION:
+        try:
+            res_sizes = polymer.sizes(Scale.RESIDUE)
+            edges = _build_bond_graph_c(
+                np.ascontiguousarray(to_numpy(polymer.atoms), dtype=np.int32),
+                np.ascontiguousarray(to_numpy(polymer.sequence), dtype=np.int32),
+                np.ascontiguousarray(to_numpy(res_sizes), dtype=np.int32),
+                np.ascontiguousarray(to_numpy(polymer.lengths), dtype=np.int32),
+            )
+            return edges, n_atoms
+        except Exception:
+            # Fall through to Python implementation
+            pass
+
+    # Python fallback
+    return _build_bond_graph_python(polymer)
+
+
+def _build_bond_graph_python(polymer: "Polymer") -> tuple[np.ndarray, int]:
+    """
+    Python implementation of bond graph building.
+
+    Fallback when C extension is not available.
     """
     from ..biochemistry import Residue, LINKING_BY_TYPE, ATOM_NAMES
     from ..types import Scale

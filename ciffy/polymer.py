@@ -444,22 +444,25 @@ class Polymer:
         """
         Get specific named dihedral angles.
 
+        Computes backbone dihedral angles directly from Cartesian coordinates.
+        Returns one value per residue, with NaN for residues where the dihedral
+        cannot be computed (terminal residues, missing atoms, chain boundaries).
+
         Args:
             dtype: Type of dihedral to retrieve (e.g., DihedralType.PHI).
 
         Returns:
-            Array of dihedral values in radians (one per applicable residue).
-
-        Raises:
-            ValueError: If the specified dihedral type is not found.
+            (N_residues,) array of dihedral values in radians, with NaN for invalid.
 
         Example:
             >>> from ciffy import DihedralType
-            >>> phi = polymer.dihedral(DihedralType.PHI)
+            >>> phi = polymer.dihedral(DihedralType.PHI)  # One per residue
             >>> psi = polymer.dihedral(DihedralType.PSI)
+            >>> # First residue has NaN for phi (no previous C atom)
+            >>> print(np.isnan(phi[0]))  # True
         """
-        from .types import DihedralType
-        return self._coord_manager.get_dihedral(dtype)
+        from .internal.dihedrals import compute_named_dihedral
+        return compute_named_dihedral(self, dtype)
 
     def set_dihedral(self, dtype: "DihedralType", values: Array) -> None:
         """

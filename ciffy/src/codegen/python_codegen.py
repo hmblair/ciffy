@@ -232,11 +232,14 @@ def generate_python_atoms(
                 lines.append('')
 
             # Add dihedral_patterns as dict of numpy arrays
+            # Each pattern is a (4, 2) array: [[offset1, idx1], [offset2, idx2], ...]
             dihedral_patterns = compute_dihedral_patterns(res)
             if dihedral_patterns:
                 lines.append(f"{res.class_name}.dihedral_patterns = {{")
-                for type_idx, indices in sorted(dihedral_patterns.items()):
-                    lines.append(f"    {type_idx}: np.array({indices}, dtype=np.int32),")
+                for type_idx, pattern in sorted(dihedral_patterns.items()):
+                    # pattern is list of (offset, idx) tuples
+                    array_repr = [[offset, idx] for offset, idx in pattern]
+                    lines.append(f"    {type_idx}: np.array({array_repr}, dtype=np.int32),")
                 lines.append("}")
                 lines.append('')
 

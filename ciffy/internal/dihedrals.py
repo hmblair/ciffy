@@ -85,40 +85,60 @@ def compute_dihedral_indices(
         atom_idx = int(zmatrix_indices[i, 0])
         atom_to_z[atom_idx] = i
 
-    # Get residue sizes
+    # Get residue sizes and build cumulative atom offsets
     res_sizes = polymer.sizes(Scale.RESIDUE)
+    n_residues = len(res_sizes)
 
-    atom_offset = 0
-    for res_idx in range(len(res_sizes)):
-        res_size = int(res_sizes[res_idx])
+    # Build cumulative atom offsets: atom_offsets[i] = first atom index of residue i
+    atom_offsets = [0]
+    for i in range(n_residues):
+        atom_offsets.append(atom_offsets[-1] + int(res_sizes[i]))
+
+    # Process each residue
+    for res_idx in range(n_residues):
         res_type_idx = int(polymer.sequence[res_idx])
 
         try:
             residue = Residue(res_type_idx)
-            patterns = residue.dihedral_patterns  # dict[int, Array]
+            patterns = residue.dihedral_patterns  # dict[int, Array(4,2)]
 
-            for type_val, local_pattern in patterns.items():
-                # Convert local indices to global atom indices
+            for type_val, pattern in patterns.items():
+                # Pattern is (4, 2) array: [[offset, local_idx], ...]
+                # Convert to global atom indices
                 global_atoms = []
                 valid = True
 
-                for local_idx in local_pattern:
-                    local_idx_int = int(local_idx)
-                    if local_idx_int == -1:
-                        # Inter-residue atom - not supported yet in fast path
-                        # (would need to look at adjacent residues)
+                for i in range(4):
+                    offset = int(pattern[i, 0])
+                    local_idx = int(pattern[i, 1])
+
+                    # Compute target residue index
+                    target_res = res_idx + offset
+
+                    # Check bounds
+                    if target_res < 0 or target_res >= n_residues:
                         valid = False
                         break
-                    global_idx = atom_offset + local_idx_int
+
+                    # Compute global atom index
+                    global_idx = atom_offsets[target_res] + local_idx
                     global_atoms.append(global_idx)
 
                 if valid and len(global_atoms) == 4:
-                    # Check if these atoms form a dihedral in Z-matrix
-                    # The dihedral should be: a0 -> a1 -> a2 -> a3
-                    # In Z-matrix: atom=a0, dist_ref=a1, ang_ref=a2, dih_ref=a3
+                    # Search Z-matrix for this dihedral pattern
+                    # The dihedral a0-a1-a2-a3 could be stored in forward or reverse order
+                    # depending on how the Z-matrix was built from bond connectivity.
+                    #
+                    # Forward: Z-matrix entry [a0, a1, a2, a3] stores dihedral a0-a1-a2-a3
+                    # Reverse: Z-matrix entry [a3, a2, a1, a0] stores dihedral a3-a2-a1-a0
+                    #          (same angle, opposite sign convention)
+                    #
+                    # Strategy: Check both forward and reverse patterns
+                    found = False
+
+                    # Try forward pattern: entry for global_atoms[0]
                     z_idx = atom_to_z.get(global_atoms[0], -1)
                     if z_idx >= 0:
-                        # Verify this Z-matrix entry matches the pattern
                         entry_dist = int(zmatrix_indices[z_idx, 1])
                         entry_ang = int(zmatrix_indices[z_idx, 2])
                         entry_dih = int(zmatrix_indices[z_idx, 3])
@@ -126,15 +146,28 @@ def compute_dihedral_indices(
                         if (entry_dist == global_atoms[1] and
                             entry_ang == global_atoms[2] and
                             entry_dih == global_atoms[3]):
-                            # Match found!
                             if type_val not in result:
                                 result[type_val] = []
                             result[type_val].append(z_idx)
+                            found = True
+
+                    # Try reverse pattern: entry for global_atoms[3]
+                    if not found:
+                        z_idx = atom_to_z.get(global_atoms[3], -1)
+                        if z_idx >= 0:
+                            entry_dist = int(zmatrix_indices[z_idx, 1])
+                            entry_ang = int(zmatrix_indices[z_idx, 2])
+                            entry_dih = int(zmatrix_indices[z_idx, 3])
+
+                            if (entry_dist == global_atoms[2] and
+                                entry_ang == global_atoms[1] and
+                                entry_dih == global_atoms[0]):
+                                if type_val not in result:
+                                    result[type_val] = []
+                                result[type_val].append(z_idx)
 
         except ValueError:
             pass
-
-        atom_offset += res_size
 
     # Convert to arrays
     coords = polymer.coordinates
@@ -149,6 +182,137 @@ def compute_dihedral_indices(
             k: np.array(v, dtype=np.int64)
             for k, v in result.items() if v
         }
+
+
+def compute_named_dihedral(
+    polymer: "Polymer",
+    dtype: "DihedralType",
+) -> Array:
+    """
+    Compute named dihedral angles directly from Cartesian coordinates.
+
+    Returns one value per residue, with NaN for residues where the dihedral
+    cannot be computed (terminal residues, missing atoms, chain boundaries).
+
+    This is more reliable than Z-matrix lookup because it handles:
+    - Chain boundaries (different connected components)
+    - Missing residues (0-atom residues)
+    - Any 4-atom pattern regardless of Z-matrix structure
+
+    Args:
+        polymer: Source polymer with coordinates and sequence.
+        dtype: Type of dihedral to compute.
+
+    Returns:
+        (N_residues,) array of dihedral angles in radians, with NaN for invalid.
+    """
+    from ..biochemistry import Residue
+    from ..types.dihedral import DIHEDRAL_TYPE_TO_INDEX
+
+    coords = polymer.coordinates
+    res_sizes = polymer.sizes(Scale.RESIDUE)
+    n_residues = len(res_sizes)
+
+    # Get dihedral type index
+    type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
+    if type_idx is None:
+        # Unknown dihedral type
+        if is_torch(coords):
+            import torch
+            return torch.full((n_residues,), float('nan'), dtype=coords.dtype, device=coords.device)
+        return np.full(n_residues, np.nan, dtype=coords.dtype)
+
+    # Build cumulative atom offsets
+    atom_offsets = [0]
+    for i in range(n_residues):
+        atom_offsets.append(atom_offsets[-1] + int(res_sizes[i]))
+
+    # Initialize result with NaN
+    if is_torch(coords):
+        import torch
+        result = torch.full((n_residues,), float('nan'), dtype=coords.dtype, device=coords.device)
+    else:
+        result = np.full(n_residues, np.nan, dtype=coords.dtype)
+
+    # Compute dihedral for each residue
+    for res_idx in range(n_residues):
+        res_type_idx = int(polymer.sequence[res_idx])
+
+        try:
+            residue = Residue(res_type_idx)
+            patterns = residue.dihedral_patterns
+
+            if type_idx not in patterns:
+                continue
+
+            pattern = patterns[type_idx]  # (4, 2) array: [[offset, local_idx], ...]
+
+            # Resolve global atom indices
+            global_atoms = []
+            valid = True
+
+            for i in range(4):
+                offset = int(pattern[i, 0])
+                local_idx = int(pattern[i, 1])
+
+                # Compute target residue index
+                target_res = res_idx + offset
+
+                # Check bounds
+                if target_res < 0 or target_res >= n_residues:
+                    valid = False
+                    break
+
+                # Check that target residue has atoms
+                target_size = int(res_sizes[target_res])
+                if target_size == 0 or local_idx >= target_size:
+                    valid = False
+                    break
+
+                # Compute global atom index
+                global_idx = atom_offsets[target_res] + local_idx
+                global_atoms.append(global_idx)
+
+            if not valid or len(global_atoms) != 4:
+                continue
+
+            # Get coordinates of the 4 atoms
+            p0 = coords[global_atoms[0]]
+            p1 = coords[global_atoms[1]]
+            p2 = coords[global_atoms[2]]
+            p3 = coords[global_atoms[3]]
+
+            # Compute dihedral angle
+            # Vectors along the bonds
+            b1 = p1 - p0
+            b2 = p2 - p1
+            b3 = p3 - p2
+
+            # Normal vectors to planes
+            # Standard dihedral: looking down b2 (the central bond),
+            # positive angle = clockwise rotation from b1 to b3
+            if is_torch(coords):
+                import torch
+                n1 = torch.cross(b1, b2)
+                n2 = torch.cross(b2, b3)
+                m1 = torch.cross(n1, b2 / torch.norm(b2))
+                x = torch.dot(n1, n2)
+                y = torch.dot(m1, n2)
+                # Negate to match IUPAC convention for backbone dihedrals
+                result[res_idx] = -torch.atan2(y, x)
+            else:
+                n1 = np.cross(b1, b2)
+                n2 = np.cross(b2, b3)
+                m1 = np.cross(n1, b2 / np.linalg.norm(b2))
+                x = np.dot(n1, n2)
+                y = np.dot(m1, n2)
+                # Negate to match IUPAC convention for backbone dihedrals
+                result[res_idx] = -np.arctan2(y, x)
+
+        except (ValueError, IndexError):
+            continue
+
+    return result
 
 
 def get_residue_dihedral_atoms(

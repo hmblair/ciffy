@@ -4,10 +4,16 @@ Named dihedral angle definitions for proteins and nucleic acids.
 Provides definitions for standard backbone dihedrals (phi, psi, omega for
 proteins; alpha-zeta and chi for nucleic acids) and functions to identify
 which Z-matrix entries correspond to these dihedrals.
+
+Note: The primary dihedral lookup mechanism now uses the `dihedral_types`
+array built by `annotate_dihedral_types()` in graph.py, which uses
+precomputed data from the codegen system. The functions in this module
+are kept for reference and backward compatibility.
 """
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Dict
+import warnings
 
 import numpy as np
 
@@ -63,6 +69,11 @@ def compute_dihedral_indices(
     """
     Compute dihedral indices using precomputed residue patterns.
 
+    .. deprecated::
+        This function is deprecated. The primary mechanism now uses the
+        `dihedral_types` array built by `annotate_dihedral_types()` in graph.py,
+        which is faster and more reliable.
+
     Uses the precomputed dihedral_patterns from Residue definitions instead of
     searching through all Z-matrix entries. Returns integer-keyed dict for
     CSR conversion.
@@ -74,6 +85,12 @@ def compute_dihedral_indices(
     Returns:
         Dict mapping DihedralType.value (int) → array of Z-matrix indices.
     """
+    warnings.warn(
+        "compute_dihedral_indices is deprecated. Use the dihedral_types array "
+        "from ZMatrix.dihedral_types instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from ..biochemistry import Residue
     from ..types import DihedralType
 

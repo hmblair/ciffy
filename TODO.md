@@ -1,30 +1,9 @@
 HIGH Priority
-Cartesian-to-Internal Backward Pass
-
-Goal: Implement backward pass for C conversion functions to enable gradient flow.
-
-Files likely affected:
-
-    ciffy/src/internal/geometry.c - C conversion implementations
-    ciffy/src/internal/batch.c - Batch processing functions
-    ciffy/backend/torch_ops.py - PyTorch autograd integration
-    tests/test_internal.py - Gradient testing
-
-Full NN + Internal Test
-
-Goal: End-to-end test: load .cif → embedding (PolymerEmbedding) → dihedral prediction → structure → RMSD → gradient flow.
-
-Files likely affected:
-
-    tests/test_nn.py - Neural network integration tests
-    ciffy/nn/embedding.py - Embedding dimension validation
-    ciffy/template.py - Template from sequence construction
-    ciffy/operations/metrics.py - RMSD computation
 
 MEDIUM Priority
 Improved Polymer Template Construction
 
-Goal: Enhance from_sequence method with ideal dihedral angles and validate internal representation compatibility.
+Goal: Enhance from_sequence method with ideal dihedral angles.
 
 Files likely affected:
 

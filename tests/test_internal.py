@@ -747,17 +747,19 @@ class TestEndToEndNNPipeline:
 
         template = copy.deepcopy(target_chain)
 
-        # Set dihedrals with gradients
-        dihedrals = template.dihedrals.clone().requires_grad_(True)
+        # Set dihedrals with gradients - add perturbation so RMSD > 0
+        # (If dihedrals are identical, RMSD=0 and gradients are correctly zero)
+        dihedrals = (template.dihedrals.clone() + 0.1).requires_grad_(True)
         template.dihedrals = dihedrals
 
-        # Compute RMSD
+        # Compute RMSD (should be non-zero due to perturbation)
         loss = rmsd(template, target_chain)
+        assert loss > 0, "RMSD should be non-zero after perturbation"
 
         # Backward should work
         loss.backward()
 
-        # Gradients should exist
+        # Gradients should exist and be non-zero
         assert dihedrals.grad is not None
         assert not torch.all(dihedrals.grad == 0)
 

@@ -132,9 +132,8 @@ class CoordinateManager:
         '_component_reference_coords',  # List of (n_i, 3) centered coords for multi-atom chains
         '_component_contiguous',  # List of bool - whether each component's atoms are contiguous
 
-        # Dihedral indices (CSR format)
-        '_dihedral_offsets',  # (NUM_DIHEDRAL_TYPES+1,) int64
-        '_dihedral_indices',  # (total_dihedrals,) int64
+        # Dihedral types (from ZMatrix annotation)
+        '_dihedral_types',  # (M,) int8 - dihedral type for each Z-matrix entry (-1 if unnamed)
 
         '_internal_valid',
         '_n_atoms',  # Total atom count (set from initial coordinates)
@@ -177,9 +176,8 @@ class CoordinateManager:
         self._component_reference_coords: list | None = None  # List of centered coords per chain
         self._component_contiguous: list | None = None  # Whether each component's atoms are contiguous
 
-        # Dihedral indices (CSR format)
-        self._dihedral_offsets: Array | None = None
-        self._dihedral_indices: Array | None = None
+        # Dihedral types (from ZMatrix annotation)
+        self._dihedral_types: Array | None = None
 
         self._internal_valid = False
 
@@ -227,10 +225,7 @@ class CoordinateManager:
         self._distances = None
         self._angles = None
         self._dihedrals = None
-        # Note: Keep Z-matrix cached - it's structure-based, not coordinate-based
-        # Only invalidate dihedral indices as they depend on Z-matrix order
-        self._dihedral_offsets = None
-        self._dihedral_indices = None
+        # Note: Keep Z-matrix and dihedral_types cached - they're structure-based
 
     def _invalidate_structure(self) -> None:
         """
@@ -244,8 +239,7 @@ class CoordinateManager:
             the Z-matrix. Use this only when the molecular structure itself changes.
         """
         self._zmatrix = None
-        self._dihedral_offsets = None
-        self._dihedral_indices = None
+        self._dihedral_types = None
         self._invalidate_internal()
 
     def _update_connected_components(self) -> None:
@@ -519,6 +513,9 @@ class CoordinateManager:
                 )
             self._zmatrix = ZMatrix.from_polymer(self._polymer)
 
+            # Store dihedral types from ZMatrix (for get/set_dihedral)
+            self._dihedral_types = self._zmatrix.dihedral_types
+
             # Detect orphan atoms (atoms not in Z-matrix - no bonds)
             # Add them as single-atom connected components
             zmatrix_indices = self._zmatrix.indices
@@ -685,75 +682,13 @@ class CoordinateManager:
                 "Check that internal coordinates are within reasonable bounds."
             )
 
-    def _compute_dihedral_indices(self) -> None:
-        """
-        Compute indices into the dihedral array for named dihedrals in CSR format.
-
-        Identifies which Z-matrix entries correspond to standard backbone
-        dihedrals (phi, psi, omega, etc.) based on atom types and topology.
-
-        Stores results in CSR format:
-        - offsets: (NUM_DIHEDRAL_TYPES+1,) cumulative counts
-        - indices: (total_dihedrals,) flattened Z-matrix indices
-
-        Raises:
-            RuntimeError: If polymer reference is not set (e.g., on sliced manager).
-        """
-        if self._polymer is None:
-            raise RuntimeError(
-                "Cannot compute named dihedral indices without polymer reference. "
-                "This CoordinateManager was created by slicing and doesn't have "
-                "access to residue information needed for named dihedrals."
-            )
-
-        from .dihedrals import compute_dihedral_indices
-
-        if self._zmatrix is None:
-            # Trigger internal computation to build Z-matrix
-            _ = self.dihedrals
-
-        # Get dict[int, Array] mapping dihedral type → Z-matrix indices
-        result = compute_dihedral_indices(
-            self._polymer,
-            self._zmatrix.indices,
-        )
-
-        # Convert to CSR format
-        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
-        num_types = len(DIHEDRAL_TYPE_TO_INDEX)
-
-        offsets = [0]
-        all_indices = []
-
-        for type_idx in range(num_types):
-            indices = result.get(type_idx, [])
-            if hasattr(indices, '__iter__') and not isinstance(indices, (str, bytes)):
-                # Convert to list if it's an array
-                if hasattr(indices, 'tolist'):
-                    indices_list = indices.tolist()
-                elif is_torch(indices):
-                    indices_list = indices.cpu().tolist()
-                else:
-                    indices_list = list(indices)
-            else:
-                indices_list = []
-
-            all_indices.extend(indices_list)
-            offsets.append(len(all_indices))
-
-        # Store as arrays
-        coords = self._coordinates
-        int64_dtype = np.int64
-        self._dihedral_offsets = _array(offsets, int64_dtype, coords)
-        self._dihedral_indices = _array(all_indices, int64_dtype, coords) if all_indices else _empty_array(int64_dtype, coords)
-
     # ─────────────────────────────────────────────────────────────────────
     # Named Dihedral API
     # ─────────────────────────────────────────────────────────────────────
 
     def get_dihedral(self, dtype: DihedralType) -> Array:
         """
-        Get specific named dihedral angles using CSR lookup.
+        Get specific named dihedral angles using array masking.
 
         Args:
             dtype: Type of dihedral to retrieve (e.g., DihedralType.PHI).
@@ -766,33 +701,27 @@ class CoordinateManager:
             >>> phi = manager.get_dihedral(DihedralType.PHI)
             >>> psi = manager.get_dihedral(DihedralType.PSI)
         """
+        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+
         # Ensure internal coordinates are computed
         if not self._internal_valid:
             self._recompute_internal()
 
-        # Compute dihedral indices if not already cached
-        if self._dihedral_offsets is None:
-            self._compute_dihedral_indices()
+        if self._dihedral_types is None:
+            return _empty_array(self._dihedrals.dtype, self._dihedrals)
 
-        # CSR lookup by DihedralType integer index
-        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+        # Get integer type index
         type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
-        if type_idx is None or type_idx >= len(self._dihedral_offsets) - 1:
-            # Type index out of range
+        if type_idx is None:
             return _empty_array(self._dihedrals.dtype, self._dihedrals)
 
-        start = int(self._dihedral_offsets[type_idx])
-        end = int(self._dihedral_offsets[type_idx + 1])
-
-        if start == end:  # Empty range
-            return _empty_array(self._dihedrals.dtype, self._dihedrals)
-
-        indices = self._dihedral_indices[start:end]
-        return self._dihedrals[indices]
+        # Simple array masking - same mechanism as set_dihedral
+        mask = self._dihedral_types == type_idx
+        return self._dihedrals[mask]
 
     def set_dihedral(self, dtype: DihedralType, values: Array) -> None:
         """
-        Set specific named dihedral angles.
+        Set specific named dihedral angles using array masking.
 
         Args:
             dtype: Type of dihedral to set (e.g., DihedralType.PHI).
@@ -805,39 +734,39 @@ class CoordinateManager:
             >>> # Set all phi angles to -60 degrees
             >>> manager.set_dihedral(DihedralType.PHI, np.full(n_residues, -np.pi/3))
         """
+        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+
         # Ensure internal coordinates are computed
         if not self._internal_valid:
             self._recompute_internal()
 
-        # Compute dihedral indices if not already cached
-        if self._dihedral_offsets is None:
-            self._compute_dihedral_indices()
+        if self._dihedral_types is None:
+            raise ValueError("No dihedral types available")
 
-        # CSR lookup by DihedralType integer index
-        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
+        # Get integer type index
         type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
-        if type_idx is None or type_idx >= len(self._dihedral_offsets) - 1:
+        if type_idx is None:
+            raise ValueError(f"Unknown dihedral type: {dtype}")
+
+        # Simple array masking - same mechanism as get_dihedral
+        mask = self._dihedral_types == type_idx
+
+        if is_torch(mask):
+            has_dihedrals = mask.any().item()
+        else:
+            has_dihedrals = mask.any()
+
+        if not has_dihedrals:
             raise ValueError(
                 f"No {dtype.name} dihedrals found in structure. "
                 f"This may be because the structure doesn't contain the appropriate molecule type."
             )
-
-        start = int(self._dihedral_offsets[type_idx])
-        end = int(self._dihedral_offsets[type_idx + 1])
-
-        if start == end:  # Empty range
-            raise ValueError(
-                f"No {dtype.name} dihedrals found in structure. "
-                f"This may be because the structure doesn't contain the appropriate molecule type."
-            )
-
-        indices = self._dihedral_indices[start:end]
 
         # Copy dihedrals array to avoid in-place modification issues
         new_dihedrals = _copy(self._dihedrals)
 
         # Update specific dihedrals
-        new_dihedrals[indices] = values
+        new_dihedrals[mask] = values
 
         # Use setter to trigger invalidation
         self.dihedrals = new_dihedrals
@@ -885,10 +814,9 @@ class CoordinateManager:
                     for rc in self._component_reference_coords
                 ]
 
-        # Convert dihedral indices (CSR format)
-        if self._dihedral_offsets is not None:
-            new_manager._dihedral_offsets = to_numpy(self._dihedral_offsets)
-            new_manager._dihedral_indices = to_numpy(self._dihedral_indices)
+        # Convert dihedral types
+        if self._dihedral_types is not None:
+            new_manager._dihedral_types = to_numpy(self._dihedral_types)
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -934,10 +862,9 @@ class CoordinateManager:
                     for rc in self._component_reference_coords
                 ]
 
-        # Convert dihedral indices (CSR format)
-        if self._dihedral_offsets is not None:
-            new_manager._dihedral_offsets = to_torch(self._dihedral_offsets)
-            new_manager._dihedral_indices = to_torch(self._dihedral_indices)
+        # Convert dihedral types
+        if self._dihedral_types is not None:
+            new_manager._dihedral_types = to_torch(self._dihedral_types)
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -995,10 +922,9 @@ class CoordinateManager:
                     for rc in self._component_reference_coords
                 ]
 
-        # Move dihedral indices (CSR format)
-        if self._dihedral_offsets is not None:
-            new_manager._dihedral_offsets = self._dihedral_offsets.to(device)
-            new_manager._dihedral_indices = self._dihedral_indices.to(device)
+        # Move dihedral types
+        if self._dihedral_types is not None:
+            new_manager._dihedral_types = self._dihedral_types.to(device)
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -1056,7 +982,6 @@ class CoordinateManager:
         new_manager._component_centroids = None
         new_manager._component_reference_coords = None
         new_manager._component_contiguous = None
-        new_manager._dihedral_offsets = None
-        new_manager._dihedral_indices = None
+        new_manager._dihedral_types = None
 
         return new_manager

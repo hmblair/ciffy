@@ -289,14 +289,8 @@ class TestSampleRNADihedrals:
 
 
 class TestRandomizeBackboneRNA:
-    """Tests for randomize_backbone with RNA polymers.
+    """Tests for randomize_backbone with RNA polymers."""
 
-    Note: These tests currently fail because set_dihedral() doesn't work
-    properly for RNA dihedrals. They will pass after the dihedral type array
-    refactor is complete.
-    """
-
-    @pytest.mark.xfail(reason="set_dihedral() not yet working for RNA - pending dihedral refactor")
     def test_randomize_backbone_rna_changes_coordinates(self):
         """Test that randomize_backbone modifies RNA coordinates."""
         polymer = ciffy.from_sequence("acgu")
@@ -331,7 +325,6 @@ class TestRandomizeBackboneRNA:
             polymer1.coordinates, polymer2.coordinates
         )
 
-    @pytest.mark.xfail(reason="set_dihedral() not yet working for RNA - pending dihedral refactor")
     def test_randomize_backbone_rna_different_seeds(self):
         """Test that different seeds produce different RNA results."""
         polymer1 = ciffy.from_sequence("acgu")

@@ -55,16 +55,18 @@ class ZMatrix:
         >>> print(zmatrix[0])  # First row as array
     """
 
-    __slots__ = ('_indices',)
+    __slots__ = ('_indices', '_dihedral_types')
 
-    def __init__(self, indices: Array) -> None:
+    def __init__(self, indices: Array, dihedral_types: Array | None = None) -> None:
         """
         Initialize Z-matrix from indices array.
 
         Args:
             indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+            dihedral_types: (M,) int8 array mapping entry -> dihedral type (-1 if unnamed)
         """
         self._indices = indices
+        self._dihedral_types = dihedral_types
 
     @classmethod
     def from_polymer(cls, polymer: "Polymer") -> "ZMatrix":
@@ -73,16 +75,46 @@ class ZMatrix:
 
         Processes each chain independently with its own spanning tree.
         Returns entries in BFS order so references always point to
-        earlier (already placed) atoms.
+        earlier (already placed) atoms. Post-processes to annotate
+        named dihedral types and update references for dihedral owners.
 
         Args:
             polymer: Polymer structure.
 
         Returns:
-            ZMatrix with entries in placement order.
+            ZMatrix with entries in placement order and dihedral type annotations.
         """
+        from ..types import Scale
+
+        # Build Z-matrix using BFS
         indices = _build_zmatrix_indices(polymer)
-        return cls(indices)
+
+        if len(indices) == 0:
+            return cls(indices, np.array([], dtype=np.int8))
+
+        # Compute residue start offsets
+        res_sizes = polymer.sizes(Scale.RESIDUE)
+        residue_starts = np.concatenate([[0], np.cumsum(to_numpy(res_sizes))])
+
+        # Get chain boundaries (residue indices where new chains start)
+        chain_boundaries = [0]
+        res_offset = 0
+        for chain_len in polymer.lengths:
+            res_offset += int(chain_len)
+            chain_boundaries.append(res_offset)
+        # Remove the last entry (it's past the end)
+        chain_boundaries = np.array(chain_boundaries[:-1], dtype=np.int64)
+
+        # Post-process to annotate dihedral types and update references
+        indices, dihedral_types = annotate_dihedral_types(
+            to_numpy(indices),
+            to_numpy(polymer.atoms),
+            to_numpy(polymer.sequence),
+            residue_starts,
+            chain_boundaries,
+        )
+
+        return cls(indices, dihedral_types)
 
     @property
     def indices(self) -> Array:
@@ -108,6 +140,11 @@ class ZMatrix:
     def dihedral_refs(self) -> Array:
         """Column 3: dihedral reference atoms (-1 for first three atoms)."""
         return self._indices[:, 3]
+
+    @property
+    def dihedral_types(self) -> Array | None:
+        """(M,) int8 array mapping Z-matrix entry -> dihedral type (-1 if unnamed)."""
+        return self._dihedral_types
 
     def __len__(self) -> int:
         """Number of entries in Z-matrix."""
@@ -167,21 +204,202 @@ class ZMatrix:
 
     def numpy(self) -> "ZMatrix":
         """Convert indices to NumPy array."""
-        return ZMatrix(to_numpy(self._indices))
+        dihedral_types = to_numpy(self._dihedral_types) if self._dihedral_types is not None else None
+        return ZMatrix(to_numpy(self._indices), dihedral_types)
 
     def torch(self) -> "ZMatrix":
         """Convert indices to PyTorch tensor."""
-        return ZMatrix(to_torch(self._indices))
+        dihedral_types = to_torch(self._dihedral_types) if self._dihedral_types is not None else None
+        return ZMatrix(to_torch(self._indices), dihedral_types)
 
     def to(self, device: str) -> "ZMatrix":
         """Move to specified device (PyTorch only)."""
         if not is_torch(self._indices):
             raise RuntimeError("to() requires PyTorch backend")
-        return ZMatrix(self._indices.to(device))
+        dihedral_types = self._dihedral_types.to(device) if self._dihedral_types is not None else None
+        return ZMatrix(self._indices.to(device), dihedral_types)
 
     def __repr__(self) -> str:
         backend = "torch" if is_torch(self._indices) else "numpy"
         return f"ZMatrix({len(self)} entries, {backend})"
+
+
+# =============================================================================
+# DIHEDRAL TYPE ANNOTATION
+# =============================================================================
+
+
+def annotate_dihedral_types(
+    zmatrix_indices: np.ndarray,
+    atoms: np.ndarray,
+    sequence: np.ndarray,
+    residue_starts: np.ndarray,
+    chain_boundaries: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Post-process Z-matrix to annotate named dihedral types.
+
+    For atoms that "own" a named dihedral (PHI, PSI, ALPHA, etc.), this function:
+    1. Updates the Z-matrix entry to use the correct reference atoms
+    2. Records the dihedral type in a parallel array
+
+    Args:
+        zmatrix_indices: (M, 4) int64 - existing Z-matrix [atom, dist, ang, dih]
+        atoms: (N,) int32 - atom enum values for all atoms
+        sequence: (R,) int32 - residue enum values
+        residue_starts: (R+1,) int64 - cumulative atom offsets per residue
+        chain_boundaries: (C,) int64 - residue indices where chains start
+
+    Returns:
+        updated_zmatrix: (M, 4) int64 - Z-matrix with updated references
+        dihedral_types: (M,) int8 - dihedral type for each entry (-1 if unnamed)
+    """
+    from ..biochemistry import ATOM_DIHEDRAL_TYPE, ATOM_DIHEDRAL_REFS, Residue
+
+    n_entries = len(zmatrix_indices)
+    n_residues = len(sequence)
+    n_atoms = len(atoms)
+
+    # Handle empty arrays
+    if len(ATOM_DIHEDRAL_TYPE) == 0:
+        return zmatrix_indices.copy(), np.full(n_entries, -1, dtype=np.int8)
+
+    # Build atom_idx -> zmatrix_position mapping
+    atom_to_z = {int(zmatrix_indices[i, 0]): i for i in range(n_entries)}
+
+    # Build atom_idx -> residue_idx mapping
+    atom_to_res = np.zeros(n_atoms, dtype=np.int64)
+    for res_idx in range(n_residues):
+        start = int(residue_starts[res_idx])
+        end = int(residue_starts[res_idx + 1]) if res_idx + 1 < len(residue_starts) else n_atoms
+        atom_to_res[start:end] = res_idx
+
+    # Build chain boundary set for detecting chain breaks
+    chain_start_residues = set(int(b) for b in chain_boundaries)
+
+    # Cache: residue_type -> list of canonical atom types in order
+    canonical_atoms_cache: dict[int, list[int]] = {}
+
+    def get_canonical_atom_types(res_type: int) -> list[int]:
+        """Get canonical atom types for a residue type."""
+        if res_type not in canonical_atoms_cache:
+            try:
+                res = Residue(res_type)
+                canonical_atoms_cache[res_type] = [atom.value for atom in res.atoms]
+            except ValueError:
+                canonical_atoms_cache[res_type] = []
+        return canonical_atoms_cache[res_type]
+
+    def find_atom_by_type(target_res: int, expected_type: int) -> int:
+        """Find global atom index by type within a residue. Returns -1 if not found."""
+        start = int(residue_starts[target_res])
+        end = int(residue_starts[target_res + 1]) if target_res + 1 < len(residue_starts) else n_atoms
+        for i in range(start, end):
+            if int(atoms[i]) == expected_type:
+                return i
+        return -1
+
+    # Initialize outputs
+    updated_zmatrix = zmatrix_indices.copy()
+    dihedral_types = np.full(n_entries, -1, dtype=np.int8)
+
+    # Process each Z-matrix entry
+    for z_idx in range(n_entries):
+        atom_idx = int(zmatrix_indices[z_idx, 0])
+        atom_type = int(atoms[atom_idx])
+
+        # Check bounds for atom_type lookup
+        if atom_type < 0 or atom_type >= len(ATOM_DIHEDRAL_TYPE):
+            continue
+
+        # Check if this atom owns a named dihedral
+        dtype_idx = int(ATOM_DIHEDRAL_TYPE[atom_type])
+        if dtype_idx < 0:
+            continue  # Not a dihedral owner
+
+        # Get residue index for this atom
+        res_idx = int(atom_to_res[atom_idx])
+        res_type = int(sequence[res_idx])
+
+        # Get canonical atom types for the owner's residue type
+        canonical_atoms = get_canonical_atom_types(res_type)
+        if not canonical_atoms:
+            continue
+
+        # Get reference pattern: [dih_ref, ang_ref, dist_ref] as (offset, canonical_local_idx)
+        refs = ATOM_DIHEDRAL_REFS[atom_type]  # (3, 2) array
+
+        # Resolve references to global atom indices
+        valid = True
+        resolved_refs = []
+
+        for ref_idx in range(3):
+            offset = int(refs[ref_idx, 0])
+            canonical_local_idx = int(refs[ref_idx, 1])
+
+            target_res = res_idx + offset
+
+            # Check residue bounds
+            if target_res < 0 or target_res >= n_residues:
+                valid = False
+                break
+
+            # Check chain boundary (don't span chains)
+            if offset != 0:
+                # Check if we cross a chain boundary
+                min_res = min(res_idx, target_res)
+                max_res = max(res_idx, target_res)
+                for boundary_res in chain_start_residues:
+                    if min_res < boundary_res <= max_res:
+                        valid = False
+                        break
+                if not valid:
+                    break
+
+            # Get the expected atom TYPE from canonical ordering
+            # For offset != 0, we need the canonical atoms of the TARGET residue
+            if offset != 0:
+                target_res_type = int(sequence[target_res])
+                target_canonical = get_canonical_atom_types(target_res_type)
+            else:
+                target_canonical = canonical_atoms
+
+            if canonical_local_idx >= len(target_canonical):
+                valid = False
+                break
+
+            expected_atom_type = target_canonical[canonical_local_idx]
+
+            # Find atom of this type in the target residue
+            global_idx = find_atom_by_type(target_res, expected_atom_type)
+
+            if global_idx < 0:
+                valid = False
+                break
+
+            # Verify atom exists in Z-matrix (was reachable from bonds)
+            if global_idx not in atom_to_z:
+                valid = False
+                break
+
+            # Verify referenced atom appears BEFORE current atom in Z-matrix
+            # (required for Z-matrix validity - references must point to earlier entries)
+            ref_z_idx = atom_to_z[global_idx]
+            if ref_z_idx >= z_idx:
+                valid = False
+                break
+
+            resolved_refs.append(global_idx)
+
+        if valid and len(resolved_refs) == 3:
+            # Update Z-matrix entry with correct references
+            # refs[0] = dih_ref, refs[1] = ang_ref, refs[2] = dist_ref
+            updated_zmatrix[z_idx, 1] = resolved_refs[2]  # dist_ref
+            updated_zmatrix[z_idx, 2] = resolved_refs[1]  # ang_ref
+            updated_zmatrix[z_idx, 3] = resolved_refs[0]  # dih_ref
+            dihedral_types[z_idx] = dtype_idx
+
+    return updated_zmatrix, dihedral_types
 
 
 # =============================================================================

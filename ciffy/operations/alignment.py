@@ -179,10 +179,7 @@ def kabsch_distance(
         scale: Scale at which to compute distance. Default is MOLECULE.
 
     Returns:
-        Array of squared distances, one per scale unit.
-
-    Note:
-        The returned value is the squared distance. Take sqrt() for RMSD.
+        Array of RMSD values (Angstroms), one per scale unit.
     """
     from ..types import Scale
 
@@ -202,6 +199,7 @@ def kabsch_distance(
 
     # Handle reflection case
     if is_torch(sigma):
+        import torch
         sigma = sigma.clone()
         sigma[det < 0, -1] = -sigma[det < 0, -1]
     else:
@@ -213,8 +211,13 @@ def kabsch_distance(
     var1 = polymer1_c.moment(2, scale).mean(-1)
     var2 = polymer2_c.moment(2, scale).mean(-1)
 
-    # Compute Kabsch distance
-    return var1 + var2 - 2 * sigma
+    # Compute Kabsch distance (RMSD)
+    msd = var1 + var2 - 2 * sigma
+    if is_torch(msd):
+        import torch
+        return torch.sqrt(torch.clamp(msd, min=0.0))
+    else:
+        return np.sqrt(np.maximum(msd, 0.0))
 
 
 def align(

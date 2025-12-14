@@ -468,7 +468,7 @@ class TestKabschDistance:
 
         # Kabsch distance should be ~0 (rotation is aligned out)
         dist = kabsch_distance(polymer, rotated, Scale.MOLECULE)
-        assert np.allclose(dist, 0, atol=1e-5)
+        assert np.allclose(dist, 0, atol=1e-3)  # RMSD in Angstroms
 
     def test_translation_zero_rmsd(self, any_cif):
         """Translating a polymer should give zero RMSD after alignment."""
@@ -484,7 +484,7 @@ class TestKabschDistance:
 
         # Kabsch distance should be ~0 (translation is centered out)
         dist = kabsch_distance(polymer, translated, Scale.MOLECULE)
-        assert np.allclose(dist, 0, atol=1e-5)
+        assert np.allclose(dist, 0, atol=1e-3)  # RMSD in Angstroms
 
     def test_flip_nonzero_rmsd(self, any_cif):
         """Flipping/reflecting coordinates should give nonzero RMSD."""

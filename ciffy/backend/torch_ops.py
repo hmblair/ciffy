@@ -5,7 +5,6 @@ Provides pure PyTorch implementations without torch_scatter dependency.
 """
 
 from __future__ import annotations
-from typing import Tuple, Optional
 
 import torch
 
@@ -75,7 +74,7 @@ def scatter_max(
     src: torch.Tensor,
     index: torch.Tensor,
     dim_size: int,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Maximum values at specified indices.
 
@@ -113,7 +112,7 @@ def scatter_min(
     src: torch.Tensor,
     index: torch.Tensor,
     dim_size: int,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Minimum values at specified indices.
 
@@ -179,7 +178,7 @@ def cdist(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
 
 
 def zeros(
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     dtype: torch.dtype = torch.float32,
     device: str = 'cpu'
 ) -> torch.Tensor:
@@ -188,7 +187,7 @@ def zeros(
 
 
 def ones(
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     dtype: torch.dtype = torch.float32,
     device: str = 'cpu'
 ) -> torch.Tensor:

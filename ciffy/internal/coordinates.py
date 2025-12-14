@@ -6,7 +6,7 @@ coordinate representations with lazy evaluation and automatic conversion.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Dict
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -95,20 +95,20 @@ class CoordinateManager:
         self._n_atoms = len(coordinates) if coordinates is not None else 0
 
         # Initialize internal representation as invalid (not yet computed)
-        self._distances: Optional[Array] = None
-        self._angles: Optional[Array] = None
-        self._dihedrals: Optional[Array] = None
-        self._zmatrix: Optional["ZMatrix"] = None
+        self._distances: Array | None = None
+        self._angles: Array | None = None
+        self._dihedrals: Array | None = None
+        self._zmatrix: ZMatrix | None = None
 
         # Connected components (CSR format)
-        self._component_offsets: Optional[Array] = None
-        self._component_atoms: Optional[Array] = None
-        self._component_centroids: Optional[Array] = None
-        self._component_reference_coords: Optional[list] = None  # List of centered coords per chain
+        self._component_offsets: Array | None = None
+        self._component_atoms: Array | None = None
+        self._component_centroids: Array | None = None
+        self._component_reference_coords: list | None = None  # List of centered coords per chain
 
         # Dihedral indices (CSR format)
-        self._dihedral_offsets: Optional[Array] = None
-        self._dihedral_indices: Optional[Array] = None
+        self._dihedral_offsets: Array | None = None
+        self._dihedral_indices: Array | None = None
 
         self._internal_valid = False
 

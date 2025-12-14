@@ -33,17 +33,6 @@ Files likely affected:
     ciffy/biochemistry/constants.py - Dihedral angle constants
     tests/test_template.py - Template validation tests
 
-C Fast-Path for Z Matrix Computation
-
-Goal: Implement parallelized C version of Z matrix calculation bottleneck.
-
-Files likely affected:
-
-    ciffy/internal/zmatrix.py - Current Z matrix implementation
-    ciffy/src/internal/geometry.c - New C implementation
-    ciffy/src/internal/batch.c - Parallel processing support
-    ciffy/backend/ops.py - C function bindings
-
 CUDA Polymer Conversions
 
 Goal: GPU-native conversion algorithms to avoid CPU-GPU memory transfers.

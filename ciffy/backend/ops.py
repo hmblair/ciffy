@@ -6,7 +6,7 @@ and dispatch to the appropriate implementation using a dispatch table pattern.
 """
 
 from __future__ import annotations
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from . import get_backend, Backend, Array
 
@@ -61,7 +61,7 @@ def scatter_mean(src: Array, index: Array, dim_size: int) -> Array:
     return _get_ops(src).scatter_mean(src, index, dim_size)
 
 
-def scatter_max(src: Array, index: Array, dim_size: int) -> Tuple[Array, Optional[Array]]:
+def scatter_max(src: Array, index: Array, dim_size: int) -> tuple[Array, Array | None]:
     """
     Maximum values at specified indices.
 
@@ -76,7 +76,7 @@ def scatter_max(src: Array, index: Array, dim_size: int) -> Tuple[Array, Optiona
     return _get_ops(src).scatter_max(src, index, dim_size)
 
 
-def scatter_min(src: Array, index: Array, dim_size: int) -> Tuple[Array, Optional[Array]]:
+def scatter_min(src: Array, index: Array, dim_size: int) -> tuple[Array, Array | None]:
     """
     Minimum values at specified indices.
 

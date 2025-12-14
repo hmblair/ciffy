@@ -5,7 +5,6 @@ Provides NumPy equivalents of PyTorch operations for backend-agnostic code.
 """
 
 from __future__ import annotations
-from typing import Tuple, Optional
 
 import numpy as np
 
@@ -63,7 +62,7 @@ def scatter_max(
     src: np.ndarray,
     index: np.ndarray,
     dim_size: int,
-) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Maximum values at specified indices.
 
@@ -98,7 +97,7 @@ def scatter_min(
     src: np.ndarray,
     index: np.ndarray,
     dim_size: int,
-) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Minimum values at specified indices.
 
@@ -159,12 +158,12 @@ def cdist(x1: np.ndarray, x2: np.ndarray) -> np.ndarray:
     return np.sqrt((diff ** 2).sum(axis=-1))
 
 
-def zeros(shape: Tuple[int, ...], dtype: type = np.float32) -> np.ndarray:
+def zeros(shape: tuple[int, ...], dtype: type = np.float32) -> np.ndarray:
     """Create a zeros array."""
     return np.zeros(shape, dtype=dtype)
 
 
-def ones(shape: Tuple[int, ...], dtype: type = np.float32) -> np.ndarray:
+def ones(shape: tuple[int, ...], dtype: type = np.float32) -> np.ndarray:
     """Create a ones array."""
     return np.ones(shape, dtype=dtype)
 

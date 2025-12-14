@@ -8,7 +8,7 @@ operate on them directly. This module provides utilities for:
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Union, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -61,7 +61,7 @@ def as_numpy(arr: Array) -> np.ndarray:
 # Linear Algebra Operations (via array protocol)
 # =============================================================================
 
-def eigh(arr: Array) -> Tuple[Array, Array]:
+def eigh(arr: Array) -> tuple[Array, Array]:
     """
     Eigenvalue decomposition of a symmetric/Hermitian matrix.
 

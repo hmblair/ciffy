@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     import torch
 
 # Type alias for arrays that can be either NumPy or PyTorch
+# Note: Using Union instead of | because this is a runtime type alias, not just an annotation
 Array = Union[np.ndarray, "torch.Tensor"]
 
 

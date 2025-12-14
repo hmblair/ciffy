@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..backend import Array, is_torch
-from ..backend import ops as backend
 from ..types import Scale, Molecule
 
 if TYPE_CHECKING:

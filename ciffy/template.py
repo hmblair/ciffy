@@ -47,8 +47,8 @@ _NA_3_TERMINAL_ATOMS = frozenset({'HO3p'})
 # Protein terminal atoms
 # N-terminal only: extra ammonium hydrogens (NH3+ vs NH in peptide bond)
 _PROTEIN_N_TERMINAL_ATOMS = frozenset({'H2', 'H3'})
-# C-terminal only: second carboxyl oxygen (COO- vs C=O in peptide bond)
-_PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT'})
+# C-terminal only: second carboxyl oxygen and its hydrogen (COO- vs C=O in peptide bond)
+_PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT', 'HXT'})
 
 
 # =============================================================================
@@ -420,13 +420,15 @@ def from_sequence(
     sequence: str | Sequence[str],
     backend: str = "numpy",
     id: str = "template",
+    sample_dihedrals: bool = False,
+    seed: int | None = None,
 ) -> Polymer:
     """
     Generate a template Polymer from a sequence string or list of sequences.
 
     Creates a Polymer with correct atom types, elements, and residue sequence
-    but zero coordinates. Useful for generative modeling where coordinates
-    are generated separately.
+    using ideal CCD coordinates. Useful for generative modeling where coordinates
+    are generated separately, or for generating realistic conformations.
 
     Args:
         sequence: Single-letter sequence string, or list of strings for multi-chain.
@@ -437,13 +439,18 @@ def from_sequence(
             - List creates multiple chains: ['acgu', 'acgt']
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
+        sample_dihedrals: If True, randomize backbone dihedrals using empirical
+            Ramachandran distributions fitted to PDB data. Only affects proteins.
+        seed: Random seed for reproducible dihedral sampling. Only used when
+            sample_dihedrals=True.
 
     Returns:
-        Polymer with zero coordinates but correct:
+        Polymer with:
         - atoms: Global atom type indices
         - elements: Atomic numbers (H=1, C=6, N=7, O=8, P=15, S=16)
         - sequence: Residue type indices (matching Residue enum)
         - sizes: Atoms per residue/chain/molecule
+        - coordinates: Ideal CCD coordinates (or randomized if sample_dihedrals=True)
 
     Raises:
         ValueError: If sequence is empty, mixed case, contains both 'u' and 't',
@@ -467,6 +474,9 @@ def from_sequence(
         >>> multi = from_sequence(["acgu", "acgu"])  # Two RNA chains
         >>> multi.size(Scale.CHAIN)
         2
+
+        >>> # Generate protein with random backbone conformations
+        >>> protein = from_sequence("MGKLF", sample_dihedrals=True, seed=42)
     """
     # Normalize input
     sequences = [sequence] if isinstance(sequence, str) else list(sequence)
@@ -514,6 +524,11 @@ def from_sequence(
         lengths=np.array(residues_per_chain, dtype=np.int64),
         polymer_count=n_atoms,
     )
+
+    # Apply backbone dihedral sampling if requested (proteins only)
+    if sample_dihedrals:
+        from .sampling.backbone import randomize_backbone
+        polymer = randomize_backbone(polymer, seed=seed)
 
     return polymer.torch() if backend == "torch" else polymer
 

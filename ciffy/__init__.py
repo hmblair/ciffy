@@ -28,6 +28,9 @@ from .io.writer import write_cif
 # Template generation
 from .template import from_sequence, from_extract
 
+# Sampling utilities
+from .sampling import randomize_backbone
+
 # Ensemble for conformational analysis
 from .ensemble import Ensemble
 
@@ -75,6 +78,7 @@ __all__ = [
     "write_cif",
     "from_sequence",
     "from_extract",
+    "randomize_backbone",
     "Ensemble",
     "rmsd",
     "align",

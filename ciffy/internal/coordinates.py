@@ -62,6 +62,7 @@ class CoordinateManager:
         '_component_offsets',   # (C+1,) int64
         '_component_atoms',     # (N,) int64 (flattened atom indices)
         '_component_centroids', # (C, 3) float32/64
+        '_component_reference_coords',  # List of (n_i, 3) centered coords for multi-atom chains
 
         # Dihedral indices (CSR format)
         '_dihedral_offsets',  # (NUM_DIHEDRAL_TYPES+1,) int64
@@ -103,6 +104,7 @@ class CoordinateManager:
         self._component_offsets: Optional[Array] = None
         self._component_atoms: Optional[Array] = None
         self._component_centroids: Optional[Array] = None
+        self._component_reference_coords: Optional[list] = None  # List of centered coords per chain
 
         # Dihedral indices (CSR format)
         self._dihedral_offsets: Optional[Array] = None
@@ -161,7 +163,7 @@ class CoordinateManager:
 
     def _update_connected_components(self) -> None:
         """
-        Identify connected components and store their centroids in CSR format.
+        Identify connected components and store their centroids and reference coordinates.
 
         Connected components are groups of bonded atoms. This includes:
         - Chains (multi-atom connected components)
@@ -171,6 +173,9 @@ class CoordinateManager:
         - offsets: (C+1,) cumulative counts
         - atoms: (N,) flattened atom indices
         - centroids: (C, 3) centroid positions
+
+        Also stores reference coordinates (centered) for multi-atom chains
+        to enable orientation restoration after NERF reconstruction.
         """
         from ..types import Scale
 
@@ -180,7 +185,7 @@ class CoordinateManager:
         coords = self._coordinates
         res_sizes = self._polymer.sizes(Scale.RESIDUE)
 
-        components_list = []  # Temporary list of (atom_indices, centroid)
+        components_list = []  # Temporary list of (atom_indices, centroid, centered_coords)
         atom_offset = 0
         res_offset = 0
 
@@ -196,16 +201,19 @@ class CoordinateManager:
             # Get atom indices for this chain
             atom_indices = list(range(atom_offset, atom_offset + chain_atom_count))
 
-            # Compute centroid for this chain
+            # Compute centroid and centered coordinates for this chain
             chain_coords = coords[atom_offset:atom_offset + chain_atom_count]
             centroid = chain_coords.mean(axis=0)
+            centered_coords = chain_coords - centroid
 
             if is_torch(coords):
                 centroid = centroid.clone()
+                centered_coords = centered_coords.clone()
             else:
                 centroid = centroid.copy()
+                centered_coords = centered_coords.copy()
 
-            components_list.append((atom_indices, centroid))
+            components_list.append((atom_indices, centroid, centered_coords))
 
             atom_offset += chain_atom_count
             res_offset += chain_len_val
@@ -222,14 +230,21 @@ class CoordinateManager:
                 self._component_offsets = np.array([0], dtype=np.int64)
                 self._component_atoms = np.array([], dtype=np.int64)
                 self._component_centroids = np.zeros((0, 3), dtype=coords.dtype)
+            self._component_reference_coords = []
         else:
             offsets = [0]
             all_atoms = []
             all_centroids = []
+            all_reference_coords = []
 
-            for atom_indices, centroid in components_list:
+            for atom_indices, centroid, centered_coords in components_list:
                 all_atoms.extend(atom_indices)
                 all_centroids.append(centroid)
+                # Only store reference coords for multi-atom chains (needed for orientation)
+                if len(atom_indices) > 1:
+                    all_reference_coords.append(centered_coords)
+                else:
+                    all_reference_coords.append(None)  # Single-atom, no orientation needed
                 offsets.append(len(all_atoms))
 
             # Store as arrays
@@ -242,6 +257,8 @@ class CoordinateManager:
                 self._component_offsets = np.array(offsets, dtype=np.int64)
                 self._component_atoms = np.array(all_atoms, dtype=np.int64)
                 self._component_centroids = np.array(all_centroids)
+
+            self._component_reference_coords = all_reference_coords
 
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Cartesian
@@ -596,8 +613,10 @@ class CoordinateManager:
             n_atoms=n_atoms,
         )
 
-        # Restore chain centroids and orphan atoms
-        # This is needed to preserve relative chain positions after NERF reconstruction
+        # Restore chain positions AND orientations, plus orphan atoms
+        # NERF places each chain in a canonical frame - we need to rotate back to original
+        from ..operations.alignment import kabsch_rotation
+
         n_components = len(self._component_offsets) - 1
 
         # Build set of atoms in Z-matrix for orphan detection
@@ -607,20 +626,19 @@ class CoordinateManager:
         else:
             zmatrix_atoms = set()
 
-        # Process each component (chains store centroids, orphans store positions)
+        # Process each component (chains need rotation+translation, orphans just position)
         for comp_idx in range(n_components):
             comp_start = int(self._component_offsets[comp_idx])
             comp_end = int(self._component_offsets[comp_idx + 1])
             component_size = comp_end - comp_start
 
             if component_size == 1:
-                # Single-atom component (orphan)
+                # Single-atom component (orphan) - just restore position
                 atom_idx = int(self._component_atoms[comp_start])
                 if atom_idx not in zmatrix_atoms and atom_idx < n_atoms:
                     coords[atom_idx] = self._component_centroids[comp_idx]
             else:
-                # Multi-atom component (chain) - restore centroid
-                # Get atom indices as slice for efficiency
+                # Multi-atom component (chain) - restore orientation AND position
                 atom_start = int(self._component_atoms[comp_start])
                 atom_end = int(self._component_atoms[comp_end - 1]) + 1
 
@@ -628,14 +646,26 @@ class CoordinateManager:
                 if atom_end > n_atoms:
                     continue
 
+                # Get reference coordinates for this chain (centered original coords)
+                reference_coords = self._component_reference_coords[comp_idx]
+                if reference_coords is None:
+                    continue
+
+                original_centroid = self._component_centroids[comp_idx]
+
                 # Check if atoms are contiguous (common case)
                 if atom_end - atom_start == component_size:
                     # Contiguous atoms - use slice
                     component_coords = coords[atom_start:atom_end]
                     reconstructed_centroid = component_coords.mean(axis=0)
-                    original_centroid = self._component_centroids[comp_idx]
-                    translation = original_centroid - reconstructed_centroid
-                    coords[atom_start:atom_end] = component_coords + translation
+                    centered_reconstructed = component_coords - reconstructed_centroid
+
+                    # Compute Kabsch rotation: reconstructed → original orientation
+                    R = kabsch_rotation(centered_reconstructed, reference_coords)
+
+                    # Apply rotation then translate to original centroid
+                    aligned = centered_reconstructed @ R.T + original_centroid
+                    coords[atom_start:atom_end] = aligned
                 else:
                     # Non-contiguous atoms - use indexing
                     atom_indices = self._component_atoms[comp_start:comp_end]
@@ -643,13 +673,19 @@ class CoordinateManager:
                         component_coords = coords[atom_indices.long()]
                     else:
                         component_coords = coords[atom_indices]
+
                     reconstructed_centroid = component_coords.mean(axis=0)
-                    original_centroid = self._component_centroids[comp_idx]
-                    translation = original_centroid - reconstructed_centroid
+                    centered_reconstructed = component_coords - reconstructed_centroid
+
+                    # Compute Kabsch rotation: reconstructed → original orientation
+                    R = kabsch_rotation(centered_reconstructed, reference_coords)
+
+                    # Apply rotation then translate to original centroid
+                    aligned = centered_reconstructed @ R.T + original_centroid
                     if is_torch(coords):
-                        coords[atom_indices.long()] = component_coords + translation
+                        coords[atom_indices.long()] = aligned
                     else:
-                        coords[atom_indices] = component_coords + translation
+                        coords[atom_indices] = aligned
 
         self._coordinates = coords
         self._cartesian_valid = True
@@ -853,11 +889,20 @@ class CoordinateManager:
             new_manager._component_offsets = to_numpy(self._component_offsets)
             new_manager._component_atoms = to_numpy(self._component_atoms)
             new_manager._component_centroids = to_numpy(self._component_centroids)
+            # Convert reference coordinates list
+            if self._component_reference_coords is not None:
+                new_manager._component_reference_coords = [
+                    to_numpy(rc) if rc is not None else None
+                    for rc in self._component_reference_coords
+                ]
 
         # Convert dihedral indices (CSR format)
         if self._dihedral_offsets is not None:
             new_manager._dihedral_offsets = to_numpy(self._dihedral_offsets)
             new_manager._dihedral_indices = to_numpy(self._dihedral_indices)
+
+        # Copy atom count
+        new_manager._n_atoms = self._n_atoms
 
         return new_manager
 
@@ -893,11 +938,20 @@ class CoordinateManager:
             new_manager._component_offsets = to_torch(self._component_offsets)
             new_manager._component_atoms = to_torch(self._component_atoms)
             new_manager._component_centroids = to_torch(self._component_centroids)
+            # Convert reference coordinates list
+            if self._component_reference_coords is not None:
+                new_manager._component_reference_coords = [
+                    to_torch(rc) if rc is not None else None
+                    for rc in self._component_reference_coords
+                ]
 
         # Convert dihedral indices (CSR format)
         if self._dihedral_offsets is not None:
             new_manager._dihedral_offsets = to_torch(self._dihedral_offsets)
             new_manager._dihedral_indices = to_torch(self._dihedral_indices)
+
+        # Copy atom count
+        new_manager._n_atoms = self._n_atoms
 
         return new_manager
 
@@ -945,10 +999,19 @@ class CoordinateManager:
             new_manager._component_offsets = self._component_offsets.to(device)
             new_manager._component_atoms = self._component_atoms.to(device)
             new_manager._component_centroids = self._component_centroids.to(device)
+            # Move reference coordinates list
+            if self._component_reference_coords is not None:
+                new_manager._component_reference_coords = [
+                    rc.to(device) if rc is not None else None
+                    for rc in self._component_reference_coords
+                ]
 
         # Move dihedral indices (CSR format)
         if self._dihedral_offsets is not None:
             new_manager._dihedral_offsets = self._dihedral_offsets.to(device)
             new_manager._dihedral_indices = self._dihedral_indices.to(device)
+
+        # Copy atom count
+        new_manager._n_atoms = self._n_atoms
 
         return new_manager

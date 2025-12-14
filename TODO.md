@@ -1,16 +1,4 @@
 HIGH Priority
-Fix Multi-Chain Cartesian Reconstruction
-
-Goal: Multi-chain structures lose relative orientation when reconstructed from internal representation. The NERF algorithm places first atoms at origin, requiring storage and restoration of chain relative positions.
-
-Files likely affected:
-
-    ciffy/internal/nerf.py - NERF reconstruction algorithm
-    ciffy/internal/internal_polymer.py - Internal representation storage
-    ciffy/polymer.py - Cartesian to internal conversion methods
-    ciffy/src/internal/geometry.c - C implementation of reconstruction
-    tests/test_internal.py - Multi-chain reconstruction tests
-
 Cartesian-to-Internal Backward Pass
 
 Goal: Implement backward pass for C conversion functions to enable gradient flow.

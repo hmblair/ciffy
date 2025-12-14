@@ -133,13 +133,12 @@ class TestInternalCoordinatesPDB:
             orig_chain = list(orig_polymer.chains())[chain_idx]
 
             # Per-chain alignment - should work because internal structure is preserved
-            chain_rmsd = float(rmsd(orig_chain, chain))
+            chain_rmsd = rmsd(orig_chain, chain).item()
             assert chain_rmsd < 1e-4, \
                 f"Chain {chain_idx} internal structure RMSD {chain_rmsd:.6f} exceeds threshold"
 
         # Test 2: Global RMSD should fail (relative chain positions/orientations not preserved)
-        global_rmsd = rmsd(orig_polymer, polymer)
-        global_rmsd_val = float(global_rmsd)
+        global_rmsd_val = rmsd(orig_polymer, polymer).item()
         assert global_rmsd_val < 1e-4, \
             f"Global RMSD {global_rmsd_val:.6f} exceeds threshold - relative chain orientations not preserved"
 
@@ -157,7 +156,7 @@ class TestInternalCoordinatesPDB:
         # Test per-chain RMSD
         for chain_idx, chain in enumerate(polymer.chains()):
             orig_chain = list(orig_polymer.chains())[chain_idx]
-            chain_rmsd = float(rmsd(orig_chain, chain))
+            chain_rmsd = rmsd(orig_chain, chain).item()
 
             assert chain_rmsd < 1e-4, f"Chain {chain_idx} RMSD {chain_rmsd} exceeds threshold"
 

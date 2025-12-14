@@ -212,7 +212,7 @@ def _place_in_xy_plane(
         import torch
         # For simplicity, use a fixed perpendicular (works when u is in XY plane)
         perp = torch.tensor([0.0, 0.0, 1.0], dtype=like.dtype, device=like.device)
-        perp = torch.cross(perp, u)
+        perp = torch.cross(perp, u, dim=0)
         perp_norm = torch.norm(perp) + 1e-8
         perp = perp / perp_norm
     else:
@@ -260,7 +260,7 @@ def _nerf_place_atom(
         import torch
         sin, cos = torch.sin, torch.cos
         norm = torch.norm
-        cross = torch.cross
+        cross = lambda a, b: torch.cross(a, b, dim=0)
     else:
         sin, cos = np.sin, np.cos
         norm = np.linalg.norm

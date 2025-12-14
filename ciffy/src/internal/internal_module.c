@@ -660,3 +660,222 @@ PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
 
     return tuple;
 }
+
+
+/**
+ * Backward pass for cartesian_to_internal.
+ *
+ * Python signature:
+ *   _cartesian_to_internal_backward(
+ *       coords, indices, distances, angles,
+ *       grad_distances, grad_angles, grad_dihedrals
+ *   ) -> grad_coords
+ */
+PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_coords, *py_indices, *py_distances, *py_angles;
+    PyObject *py_grad_distances, *py_grad_angles, *py_grad_dihedrals;
+
+    if (!PyArg_ParseTuple(args, "OOOOOOO",
+                          &py_coords, &py_indices, &py_distances, &py_angles,
+                          &py_grad_distances, &py_grad_angles, &py_grad_dihedrals)) {
+        return NULL;
+    }
+
+    /* Validate input arrays */
+    PyArrayObject *coords_arr = require_array_2d(py_coords, NPY_FLOAT32, 3, "coords");
+    if (coords_arr == NULL) return NULL;
+
+    PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
+    if (indices_arr == NULL) {
+        Py_DECREF(coords_arr);
+        return NULL;
+    }
+
+    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
+    if (distances_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, NULL, NULL);
+        return NULL;
+    }
+
+    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
+    if (angles_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
+        return NULL;
+    }
+
+    PyArrayObject *grad_distances_arr = require_array_1d(py_grad_distances, NPY_FLOAT32, "grad_distances");
+    if (grad_distances_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return NULL;
+    }
+
+    PyArrayObject *grad_angles_arr = require_array_1d(py_grad_angles, NPY_FLOAT32, "grad_angles");
+    if (grad_angles_arr == NULL) {
+        Py_DECREF(grad_distances_arr);
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return NULL;
+    }
+
+    PyArrayObject *grad_dihedrals_arr = require_array_1d(py_grad_dihedrals, NPY_FLOAT32, "grad_dihedrals");
+    if (grad_dihedrals_arr == NULL) {
+        Py_DECREF(grad_distances_arr);
+        Py_DECREF(grad_angles_arr);
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return NULL;
+    }
+
+    npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
+    npy_intp n_entries = PyArray_DIM(indices_arr, 0);
+
+    /* Allocate output gradient array (initialized to zero) */
+    npy_intp dims[2] = {n_atoms, 3};
+    PyObject *py_grad_coords = PyArray_ZEROS(2, dims, NPY_FLOAT32, 0);
+    if (py_grad_coords == NULL) {
+        Py_DECREF(grad_distances_arr);
+        Py_DECREF(grad_angles_arr);
+        Py_DECREF(grad_dihedrals_arr);
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return PyErr_NoMemory();
+    }
+
+    /* Get data pointers */
+    const float *coords = (const float *)PyArray_DATA(coords_arr);
+    const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
+    const float *distances = (const float *)PyArray_DATA(distances_arr);
+    const float *angles = (const float *)PyArray_DATA(angles_arr);
+    const float *grad_distances = (const float *)PyArray_DATA(grad_distances_arr);
+    const float *grad_angles = (const float *)PyArray_DATA(grad_angles_arr);
+    const float *grad_dihedrals = (const float *)PyArray_DATA(grad_dihedrals_arr);
+    float *grad_coords = (float *)PyArray_DATA((PyArrayObject *)py_grad_coords);
+
+    /* Call batch backward function */
+    batch_cartesian_to_internal_backward(
+        coords, (size_t)n_atoms,
+        indices, (size_t)n_entries,
+        distances, angles,
+        grad_distances, grad_angles, grad_dihedrals,
+        grad_coords
+    );
+
+    /* Clean up input arrays */
+    Py_DECREF(grad_distances_arr);
+    Py_DECREF(grad_angles_arr);
+    Py_DECREF(grad_dihedrals_arr);
+    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+
+    return py_grad_coords;
+}
+
+
+/**
+ * Backward pass for nerf_reconstruct.
+ *
+ * Python signature:
+ *   _nerf_reconstruct_backward(
+ *       coords, indices, distances, angles, dihedrals, grad_coords
+ *   ) -> (grad_distances, grad_angles, grad_dihedrals)
+ */
+PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_coords, *py_indices, *py_distances, *py_angles, *py_dihedrals, *py_grad_coords;
+
+    if (!PyArg_ParseTuple(args, "OOOOOO",
+                          &py_coords, &py_indices, &py_distances, &py_angles,
+                          &py_dihedrals, &py_grad_coords)) {
+        return NULL;
+    }
+
+    /* Validate input arrays */
+    PyArrayObject *coords_arr = require_array_2d(py_coords, NPY_FLOAT32, 3, "coords");
+    if (coords_arr == NULL) return NULL;
+
+    PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
+    if (indices_arr == NULL) {
+        Py_DECREF(coords_arr);
+        return NULL;
+    }
+
+    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
+    if (distances_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, NULL, NULL);
+        return NULL;
+    }
+
+    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
+    if (angles_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
+        return NULL;
+    }
+
+    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
+    if (dihedrals_arr == NULL) {
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return NULL;
+    }
+
+    /* grad_coords needs to be writable - make a copy */
+    PyArrayObject *grad_coords_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_grad_coords, NPY_FLOAT32, NPY_ARRAY_INOUT_ARRAY2
+    );
+    if (grad_coords_arr == NULL) {
+        Py_DECREF(dihedrals_arr);
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return NULL;
+    }
+
+    npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
+    npy_intp n_entries = PyArray_DIM(indices_arr, 0);
+
+    /* Allocate output gradient arrays */
+    npy_intp dims[1] = {n_entries};
+    PyObject *py_grad_distances = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyObject *py_grad_angles = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    PyObject *py_grad_dihedrals = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+
+    if (py_grad_distances == NULL || py_grad_angles == NULL || py_grad_dihedrals == NULL) {
+        Py_XDECREF(py_grad_distances);
+        Py_XDECREF(py_grad_angles);
+        Py_XDECREF(py_grad_dihedrals);
+        Py_DECREF(grad_coords_arr);
+        Py_DECREF(dihedrals_arr);
+        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        return PyErr_NoMemory();
+    }
+
+    /* Get data pointers */
+    const float *coords = (const float *)PyArray_DATA(coords_arr);
+    const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
+    const float *distances = (const float *)PyArray_DATA(distances_arr);
+    const float *angles = (const float *)PyArray_DATA(angles_arr);
+    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    float *grad_coords = (float *)PyArray_DATA(grad_coords_arr);
+    float *grad_distances = (float *)PyArray_DATA((PyArrayObject *)py_grad_distances);
+    float *grad_angles = (float *)PyArray_DATA((PyArrayObject *)py_grad_angles);
+    float *grad_dihedrals_out = (float *)PyArray_DATA((PyArrayObject *)py_grad_dihedrals);
+
+    /* Call batch backward function */
+    batch_nerf_reconstruct_backward(
+        coords, (size_t)n_atoms,
+        indices, (size_t)n_entries,
+        distances, angles, dihedrals,
+        grad_coords,
+        grad_distances, grad_angles, grad_dihedrals_out
+    );
+
+    /* Clean up input arrays */
+    PyArray_ResolveWritebackIfCopy(grad_coords_arr);
+    Py_DECREF(grad_coords_arr);
+    Py_DECREF(dihedrals_arr);
+    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+
+    /* Build result tuple */
+    PyObject *result = PyTuple_Pack(3, py_grad_distances, py_grad_angles, py_grad_dihedrals);
+    Py_DECREF(py_grad_distances);
+    Py_DECREF(py_grad_angles);
+    Py_DECREF(py_grad_dihedrals);
+
+    return result;
+}

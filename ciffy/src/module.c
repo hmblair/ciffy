@@ -789,6 +789,29 @@ static PyMethodDef methods[] = {
      "    roots (ndarray): (n_chains,) int64 root atom per chain.\n\n"
      "Returns:\n"
      "    tuple: (zmatrix, counts) - Z-matrix entries and per-chain counts.\n"},
+    {"_cartesian_to_internal_backward", py_cartesian_to_internal_backward, METH_VARARGS,
+     "Backward pass for Cartesian to internal coordinate conversion.\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float32 Cartesian coordinates.\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
+     "    distances (ndarray): (M,) float32 forward pass distances.\n"
+     "    angles (ndarray): (M,) float32 forward pass angles.\n"
+     "    grad_distances (ndarray): (M,) float32 upstream gradients.\n"
+     "    grad_angles (ndarray): (M,) float32 upstream gradients.\n"
+     "    grad_dihedrals (ndarray): (M,) float32 upstream gradients.\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float32 gradients for coordinates.\n"},
+    {"_nerf_reconstruct_backward", py_nerf_reconstruct_backward, METH_VARARGS,
+     "Backward pass for NERF reconstruction.\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
+     "    distances (ndarray): (M,) float32 bond lengths.\n"
+     "    angles (ndarray): (M,) float32 bond angles.\n"
+     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
+     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n\n"
+     "Returns:\n"
+     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
     {NULL, NULL, 0, NULL}
 };
 

@@ -44,4 +44,18 @@ PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args);
  */
 PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args);
 
+/**
+ * Backward pass for cartesian_to_internal.
+ * Python: _cartesian_to_internal_backward(coords, indices, distances, angles,
+ *             grad_distances, grad_angles, grad_dihedrals) -> grad_coords
+ */
+PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args);
+
+/**
+ * Backward pass for nerf_reconstruct.
+ * Python: _nerf_reconstruct_backward(coords, indices, distances, angles, dihedrals,
+ *             grad_coords) -> (grad_distances, grad_angles, grad_dihedrals)
+ */
+PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

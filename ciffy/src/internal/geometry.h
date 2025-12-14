@@ -94,4 +94,93 @@ void nerf_place_along_x(const float *ref, float distance, float *result);
 void nerf_place_in_plane(const float *ref1, const float *ref2,
                          float distance, float angle, float *result);
 
+/* ========================================================================= */
+/* Backward (gradient) functions for automatic differentiation              */
+/* ========================================================================= */
+
+/**
+ * Backward pass for compute_distance.
+ *
+ * Computes gradients of distance with respect to input coordinates.
+ * Given grad_output (upstream gradient), computes:
+ *   grad_a = grad_output * (a - b) / distance
+ *   grad_b = grad_output * (b - a) / distance
+ *
+ * @param a First point (3 floats).
+ * @param b Second point (3 floats).
+ * @param distance Forward pass result (for efficiency).
+ * @param grad_output Upstream gradient (scalar).
+ * @param grad_a Output gradient for a (3 floats).
+ * @param grad_b Output gradient for b (3 floats).
+ */
+void compute_distance_backward(
+    const float *a, const float *b,
+    float distance, float grad_output,
+    float *grad_a, float *grad_b);
+
+/**
+ * Backward pass for compute_angle.
+ *
+ * Computes gradients of angle with respect to input coordinates.
+ *
+ * @param a First point (3 floats).
+ * @param b Vertex point (3 floats).
+ * @param c Third point (3 floats).
+ * @param angle Forward pass result (for efficiency).
+ * @param grad_output Upstream gradient (scalar).
+ * @param grad_a Output gradient for a (3 floats).
+ * @param grad_b Output gradient for b (3 floats).
+ * @param grad_c Output gradient for c (3 floats).
+ */
+void compute_angle_backward(
+    const float *a, const float *b, const float *c,
+    float angle, float grad_output,
+    float *grad_a, float *grad_b, float *grad_c);
+
+/**
+ * Backward pass for compute_dihedral.
+ *
+ * Computes gradients of dihedral angle with respect to input coordinates.
+ *
+ * @param a First point (3 floats).
+ * @param b Second point (3 floats).
+ * @param c Third point (3 floats).
+ * @param d Fourth point (3 floats).
+ * @param grad_output Upstream gradient (scalar).
+ * @param grad_a Output gradient for a (3 floats).
+ * @param grad_b Output gradient for b (3 floats).
+ * @param grad_c Output gradient for c (3 floats).
+ * @param grad_d Output gradient for d (3 floats).
+ */
+void compute_dihedral_backward(
+    const float *a, const float *b, const float *c, const float *d,
+    float grad_output,
+    float *grad_a, float *grad_b, float *grad_c, float *grad_d);
+
+/**
+ * Backward pass for nerf_place_atom.
+ *
+ * Computes gradients with respect to reference positions and internal coords.
+ *
+ * @param a Dihedral reference position (3 floats).
+ * @param b Angle reference position (3 floats).
+ * @param c Distance reference position (3 floats).
+ * @param distance Bond length.
+ * @param angle Bond angle in radians.
+ * @param dihedral Dihedral angle in radians.
+ * @param grad_result Upstream gradient for result position (3 floats).
+ * @param grad_a Output gradient for a (3 floats).
+ * @param grad_b Output gradient for b (3 floats).
+ * @param grad_c Output gradient for c (3 floats).
+ * @param grad_distance Output gradient for distance (scalar pointer).
+ * @param grad_angle Output gradient for angle (scalar pointer).
+ * @param grad_dihedral Output gradient for dihedral (scalar pointer).
+ */
+void nerf_place_atom_backward(
+    const float *a, const float *b, const float *c,
+    float distance, float angle, float dihedral,
+    const float *grad_result,
+    float *grad_a, float *grad_b, float *grad_c,
+    float *grad_distance, float *grad_angle, float *grad_dihedral);
+
 #endif /* CIFFY_INTERNAL_GEOMETRY_H */

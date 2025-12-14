@@ -5,6 +5,7 @@
 
 #include "batch.h"
 #include "geometry.h"
+#include <math.h>
 
 
 void batch_cartesian_to_internal(
@@ -145,6 +146,226 @@ void batch_nerf_reconstruct(
                 const float *p2 = &coords[angl_ref * 3];
                 const float *p3 = &coords[dist_ref * 3];
                 nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+            }
+        }
+    }
+}
+
+
+/* ========================================================================= */
+/* Backward (gradient) functions                                             */
+/* ========================================================================= */
+
+
+void batch_cartesian_to_internal_backward(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles,
+    const float *grad_distances, const float *grad_angles, const float *grad_dihedrals,
+    float *grad_coords
+) {
+    /* Temporary gradient storage */
+    float grad_atom[3], grad_ref1[3], grad_ref2[3], grad_ref3[3];
+
+    for (size_t i = 0; i < n_entries; i++) {
+        int64_t atom_idx = indices[i * 4 + 0];
+        int64_t dist_ref = indices[i * 4 + 1];
+        int64_t angl_ref = indices[i * 4 + 2];
+        int64_t dihe_ref = indices[i * 4 + 3];
+
+        if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) continue;
+
+        const float *atom = &coords[atom_idx * 3];
+
+        /* Distance gradient */
+        if (dist_ref >= 0 && (size_t)dist_ref < n_atoms) {
+            const float *ref1 = &coords[dist_ref * 3];
+            compute_distance_backward(
+                atom, ref1,
+                distances[i], grad_distances[i],
+                grad_atom, grad_ref1
+            );
+            /* Accumulate gradients */
+            grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+            grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+            grad_coords[atom_idx * 3 + 2] += grad_atom[2];
+            grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+            grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+            grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+        }
+
+        /* Angle gradient */
+        if (angl_ref >= 0 && dist_ref >= 0 &&
+            (size_t)angl_ref < n_atoms && (size_t)dist_ref < n_atoms) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            /* Angle at dist_ref between atom and angl_ref */
+            compute_angle_backward(
+                atom, ref1, ref2,
+                angles[i], grad_angles[i],
+                grad_atom, grad_ref1, grad_ref2
+            );
+            grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+            grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+            grad_coords[atom_idx * 3 + 2] += grad_atom[2];
+            grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+            grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+            grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+            grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+            grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+            grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+        }
+
+        /* Dihedral gradient */
+        if (dihe_ref >= 0 && angl_ref >= 0 && dist_ref >= 0 &&
+            (size_t)dihe_ref < n_atoms &&
+            (size_t)angl_ref < n_atoms &&
+            (size_t)dist_ref < n_atoms) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            const float *ref3 = &coords[dihe_ref * 3];
+            /* Dihedral: dihe_ref - angl_ref - dist_ref - atom */
+            compute_dihedral_backward(
+                ref3, ref2, ref1, atom,
+                grad_dihedrals[i],
+                grad_ref3, grad_ref2, grad_ref1, grad_atom
+            );
+            grad_coords[dihe_ref * 3 + 0] += grad_ref3[0];
+            grad_coords[dihe_ref * 3 + 1] += grad_ref3[1];
+            grad_coords[dihe_ref * 3 + 2] += grad_ref3[2];
+            grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+            grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+            grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+            grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+            grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+            grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+            grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+            grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+            grad_coords[atom_idx * 3 + 2] += grad_atom[2];
+        }
+    }
+}
+
+
+void batch_nerf_reconstruct_backward(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    float *grad_coords,
+    float *grad_distances, float *grad_angles, float *grad_dihedrals
+) {
+    /* Temporary gradient storage */
+    float grad_a[3], grad_b[3], grad_c[3];
+
+    /* Process in REVERSE order since later atoms depend on earlier ones */
+    for (size_t i = n_entries; i > 0; i--) {
+        size_t idx = i - 1;
+        int64_t atom_idx = indices[idx * 4 + 0];
+        int64_t dist_ref = indices[idx * 4 + 1];
+        int64_t angl_ref = indices[idx * 4 + 2];
+        int64_t dihe_ref = indices[idx * 4 + 3];
+
+        if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+            grad_distances[idx] = 0.0f;
+            grad_angles[idx] = 0.0f;
+            grad_dihedrals[idx] = 0.0f;
+            continue;
+        }
+
+        const float *grad_result = &grad_coords[atom_idx * 3];
+
+        if (dist_ref < 0) {
+            /* First atom at origin: no gradients to propagate */
+            grad_distances[idx] = 0.0f;
+            grad_angles[idx] = 0.0f;
+            grad_dihedrals[idx] = 0.0f;
+
+        } else if (angl_ref < 0) {
+            /* Second atom: placed along +X from distance reference */
+            /* result = ref + (distance, 0, 0) */
+            /* ∂result/∂distance = (1, 0, 0) */
+            /* ∂result/∂ref = I */
+            grad_distances[idx] = grad_result[0];  /* Only x component */
+            grad_angles[idx] = 0.0f;
+            grad_dihedrals[idx] = 0.0f;
+
+            if ((size_t)dist_ref < n_atoms) {
+                /* Propagate gradient to reference atom */
+                grad_coords[dist_ref * 3 + 0] += grad_result[0];
+                grad_coords[dist_ref * 3 + 1] += grad_result[1];
+                grad_coords[dist_ref * 3 + 2] += grad_result[2];
+            }
+
+        } else if (dihe_ref < 0) {
+            /* Third atom: placed in plane */
+            /* Simplified gradient: mainly through distance and angle */
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+
+            /* Direction from ref1 to ref2 */
+            float ux = ref2[0] - ref1[0];
+            float uy = ref2[1] - ref1[1];
+            float uz = ref2[2] - ref1[2];
+            float u_norm = sqrtf(ux*ux + uy*uy + uz*uz) + 1e-6f;
+            ux /= u_norm; uy /= u_norm; uz /= u_norm;
+
+            float cos_a = cosf(angles[idx]);
+            float sin_a = sinf(angles[idx]);
+
+            /* ∂result/∂distance ≈ (cos_a * u + sin_a * perp) */
+            /* Simplified: dot with gradient */
+            grad_distances[idx] = grad_result[0] * cos_a * ux +
+                                  grad_result[1] * cos_a * uy +
+                                  grad_result[2] * cos_a * uz;
+
+            /* ∂result/∂angle ≈ distance * (-sin_a * u + cos_a * perp) */
+            grad_angles[idx] = distances[idx] * (
+                grad_result[0] * (-sin_a * ux) +
+                grad_result[1] * (-sin_a * uy) +
+                grad_result[2] * (-sin_a * uz)
+            );
+
+            grad_dihedrals[idx] = 0.0f;
+
+            /* Propagate gradient to reference atoms */
+            if ((size_t)dist_ref < n_atoms) {
+                grad_coords[dist_ref * 3 + 0] += grad_result[0];
+                grad_coords[dist_ref * 3 + 1] += grad_result[1];
+                grad_coords[dist_ref * 3 + 2] += grad_result[2];
+            }
+
+        } else {
+            /* Full NERF placement */
+            if ((size_t)dihe_ref < n_atoms &&
+                (size_t)angl_ref < n_atoms &&
+                (size_t)dist_ref < n_atoms) {
+
+                const float *p1 = &coords[dihe_ref * 3];
+                const float *p2 = &coords[angl_ref * 3];
+                const float *p3 = &coords[dist_ref * 3];
+
+                nerf_place_atom_backward(
+                    p1, p2, p3,
+                    distances[idx], angles[idx], dihedrals[idx],
+                    grad_result,
+                    grad_a, grad_b, grad_c,
+                    &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                );
+
+                /* Propagate gradients to reference atoms */
+                grad_coords[dihe_ref * 3 + 0] += grad_a[0];
+                grad_coords[dihe_ref * 3 + 1] += grad_a[1];
+                grad_coords[dihe_ref * 3 + 2] += grad_a[2];
+                grad_coords[angl_ref * 3 + 0] += grad_b[0];
+                grad_coords[angl_ref * 3 + 1] += grad_b[1];
+                grad_coords[angl_ref * 3 + 2] += grad_b[2];
+                grad_coords[dist_ref * 3 + 0] += grad_c[0];
+                grad_coords[dist_ref * 3 + 1] += grad_c[1];
+                grad_coords[dist_ref * 3 + 2] += grad_c[2];
+            } else {
+                grad_distances[idx] = 0.0f;
+                grad_angles[idx] = 0.0f;
+                grad_dihedrals[idx] = 0.0f;
             }
         }
     }

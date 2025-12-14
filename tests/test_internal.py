@@ -681,3 +681,83 @@ class TestAutogradGradients:
         # Gradient should exist and not be all zeros
         assert coords.grad is not None
         assert not torch.all(coords.grad == 0)
+
+
+class TestEndToEndNNPipeline:
+    """End-to-end tests for NN + internal coordinates pipeline."""
+
+    def test_dihedral_optimization_reduces_rmsd(self):
+        """Test gradient descent on dihedrals reduces RMSD to target."""
+        import copy
+        import torch
+        import torch.nn as nn
+        from ciffy import load, rmsd
+
+        # Load target and create template
+        target = load(get_test_cif("1ZEW"))
+        for chain in target.chains():
+            target_chain = chain.torch()
+            break
+
+        template = copy.deepcopy(target_chain)
+
+        # Perturb template dihedrals
+        original_dihedrals = template.dihedrals.clone()
+        perturbed = original_dihedrals + torch.randn_like(original_dihedrals) * 0.3
+        template.dihedrals = perturbed
+
+        initial_rmsd = rmsd(template, target_chain).item()
+
+        # Create learnable parameters
+        class DihedralPredictor(nn.Module):
+            def __init__(self, init):
+                super().__init__()
+                self.dihedrals = nn.Parameter(init.clone())
+
+        model = DihedralPredictor(perturbed)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
+
+        # Train for a few steps
+        for _ in range(10):
+            optimizer.zero_grad()
+            template.dihedrals = model.dihedrals
+            loss = rmsd(template, target_chain)
+            loss.backward()
+            optimizer.step()
+
+        final_rmsd = rmsd(template, target_chain).item()
+
+        # RMSD should decrease significantly
+        assert final_rmsd < initial_rmsd * 0.5, \
+            f"RMSD did not decrease enough: {initial_rmsd:.2f} -> {final_rmsd:.2f}"
+
+    def test_gradient_flow_through_chain_slicing(self):
+        """Test gradients flow through sliced chains."""
+        import copy
+        import torch
+        from ciffy import load, rmsd
+
+        # Load multi-chain structure
+        target = load(get_test_cif("1ZEW")).torch()
+
+        # Get first chain (uses __getitem__ which we just fixed)
+        for chain in target.chains():
+            target_chain = chain
+            break
+
+        template = copy.deepcopy(target_chain)
+
+        # Set dihedrals with gradients
+        dihedrals = template.dihedrals.clone().requires_grad_(True)
+        template.dihedrals = dihedrals
+
+        # Compute RMSD
+        loss = rmsd(template, target_chain)
+
+        # Backward should work
+        loss.backward()
+
+        # Gradients should exist
+        assert dihedrals.grad is not None
+        assert not torch.all(dihedrals.grad == 0)
+

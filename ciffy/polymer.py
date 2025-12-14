@@ -1067,7 +1067,11 @@ class Polymer:
             return self[mask]
 
         mask = key
-        coordinates = self.coordinates[mask]
+
+        # Slice coordinate manager (ensures Cartesian valid, marks internal dirty)
+        sliced_manager = self._coord_manager[mask]
+        coordinates = sliced_manager._coordinates
+
         atoms = self.atoms[mask]
         elements = self.elements[mask]
 
@@ -1095,10 +1099,16 @@ class Polymer:
         # polymer_count atoms survive the mask (direct slice avoids O(N) allocation)
         new_polymer_count = mask[:self.polymer_count].sum().item()
 
-        return Polymer(
+        result = Polymer(
             coordinates, atoms, elements, sequence, sizes,
             self._id, names, strands, lengths, new_polymer_count,
         )
+
+        # Replace default coord manager with sliced one
+        result._coord_manager = sliced_manager
+        sliced_manager._polymer = result
+
+        return result
 
     def by_index(self: Polymer, ix: Array | int) -> Polymer:
         """
@@ -1470,7 +1480,7 @@ class Polymer:
         )
 
         # Replace coordinate manager with converted one
-        result._coord_manager = self._coord_manager.to_numpy()
+        result._coord_manager = self._coord_manager.numpy()
         result._coord_manager._polymer = result
 
         return result
@@ -1505,7 +1515,7 @@ class Polymer:
         )
 
         # Replace coordinate manager with converted one
-        result._coord_manager = self._coord_manager.to_torch()
+        result._coord_manager = self._coord_manager.torch()
         result._coord_manager._polymer = result
 
         return result

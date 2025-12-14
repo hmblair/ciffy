@@ -857,7 +857,7 @@ class CoordinateManager:
     # Backend Conversion
     # ─────────────────────────────────────────────────────────────────────
 
-    def to_numpy(self) -> "CoordinateManager":
+    def numpy(self) -> "CoordinateManager":
         """
         Convert all arrays to NumPy backend.
 
@@ -882,7 +882,7 @@ class CoordinateManager:
 
         # Convert Z-matrix
         if self._zmatrix is not None:
-            new_manager._zmatrix = self._zmatrix.to_numpy()
+            new_manager._zmatrix = self._zmatrix.numpy()
 
         # Convert connected components (CSR format)
         if self._component_offsets is not None:
@@ -906,7 +906,7 @@ class CoordinateManager:
 
         return new_manager
 
-    def to_torch(self) -> "CoordinateManager":
+    def torch(self) -> "CoordinateManager":
         """
         Convert all arrays to PyTorch backend.
 
@@ -931,7 +931,7 @@ class CoordinateManager:
 
         # Convert Z-matrix
         if self._zmatrix is not None:
-            new_manager._zmatrix = self._zmatrix.to_torch()
+            new_manager._zmatrix = self._zmatrix.torch()
 
         # Convert connected components (CSR format)
         if self._component_offsets is not None:
@@ -1013,5 +1013,59 @@ class CoordinateManager:
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
+
+        return new_manager
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Slicing
+    # ─────────────────────────────────────────────────────────────────────
+
+    def __getitem__(self, mask: Array) -> "CoordinateManager":
+        """
+        Slice coordinate manager by boolean atom mask.
+
+        Ensures Cartesian coordinates are valid, slices them, and returns
+        a new CoordinateManager with internal coordinates marked as invalid
+        (to be lazily recomputed when accessed).
+
+        Args:
+            mask: (N,) boolean mask where True means keep the atom.
+
+        Returns:
+            New CoordinateManager for the sliced atoms.
+
+        Note:
+            Gradients flow through the Cartesian coordinate slicing.
+            Internal coordinates are recomputed from the sliced Cartesian
+            coordinates when accessed.
+        """
+        # Ensure Cartesian is valid
+        if not self._cartesian_valid:
+            self._recompute_cartesian()
+
+        # Slice Cartesian coordinates
+        sliced_coords = self._coordinates[mask]
+
+        # Create new manager without calling __init__
+        new_manager = CoordinateManager.__new__(CoordinateManager)
+        new_manager._coordinates = sliced_coords
+        new_manager._cartesian_valid = True
+        new_manager._n_atoms = len(sliced_coords)
+        new_manager._polymer = None  # Must be set by caller
+
+        # Internal representation starts invalid (lazy recomputation)
+        new_manager._distances = None
+        new_manager._angles = None
+        new_manager._dihedrals = None
+        new_manager._zmatrix = None
+        new_manager._internal_valid = False
+
+        # CSR structures start empty (rebuilt on demand)
+        new_manager._component_offsets = None
+        new_manager._component_atoms = None
+        new_manager._component_centroids = None
+        new_manager._component_reference_coords = None
+        new_manager._dihedral_offsets = None
+        new_manager._dihedral_indices = None
 
         return new_manager

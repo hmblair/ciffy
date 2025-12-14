@@ -163,11 +163,11 @@ class ZMatrix:
 
             placed.add(atom_idx)
 
-    def to_numpy(self) -> "ZMatrix":
+    def numpy(self) -> "ZMatrix":
         """Convert indices to NumPy array."""
         return ZMatrix(to_numpy(self._indices))
 
-    def to_torch(self) -> "ZMatrix":
+    def torch(self) -> "ZMatrix":
         """Convert indices to PyTorch tensor."""
         return ZMatrix(to_torch(self._indices))
 

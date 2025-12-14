@@ -12,7 +12,7 @@ Files likely affected:
 
 Full NN + Internal Test
 
-Goal: End-to-end test: sequence → embedding → dihedral prediction → structure → RMSD → gradient flow.
+Goal: End-to-end test: load .cif → embedding (PolymerEmbedding) → dihedral prediction → structure → RMSD → gradient flow.
 
 Files likely affected:
 

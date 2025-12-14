@@ -21,12 +21,14 @@ try:
     from .._c import _edges_to_csr as _edges_to_csr_c
     from .._c import _build_zmatrix_from_csr as _build_zmatrix_from_csr_c
     from .._c import _build_zmatrix_parallel as _build_zmatrix_parallel_c
+    from .._c import _find_connected_components as _find_connected_components_c
     _HAS_C_EXTENSION = True
 except ImportError:
     _HAS_C_EXTENSION = False
     _edges_to_csr_c = None
     _build_zmatrix_from_csr_c = None
     _build_zmatrix_parallel_c = None
+    _find_connected_components_c = None
 
 
 # =============================================================================
@@ -404,6 +406,23 @@ def find_connected_components(offsets: np.ndarray, neighbors: np.ndarray, n_atom
     Returns:
         List of components, where each component is a list of atom indices.
     """
+    # Try C extension first
+    if _HAS_C_EXTENSION and _find_connected_components_c is not None:
+        try:
+            roots, sizes, n_components = _find_connected_components_c(
+                np.ascontiguousarray(offsets, dtype=np.int64),
+                np.ascontiguousarray(neighbors, dtype=np.int64),
+                n_atoms
+            )
+            # Convert to list of component atom lists
+            # C returns (roots, sizes), we need to rebuild full component lists
+            # But for Z-matrix building, we only need roots and sizes
+            # Return a simplified format that _build_zmatrix_indices can use
+            return [(int(roots[i]), int(sizes[i])) for i in range(n_components)]
+        except Exception:
+            pass  # Fall through to Python
+
+    # Python fallback
     visited = np.zeros(n_atoms, dtype=bool)
     components = []
 
@@ -625,16 +644,26 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
         return np.zeros((0, 4), dtype=np.int64)
 
     # Prepare component info for Z-matrix construction
+    # Components can be either:
+    # - (root, size) tuples from C extension
+    # - list of atom indices from Python fallback
     component_starts = []
     component_sizes = []
     roots = []
 
     for component in components:
-        # Use the minimum atom index as root (simple, deterministic)
-        root = min(component)
-        component_starts.append(root)  # Not used by C, but kept for consistency
-        component_sizes.append(len(component))
-        roots.append(root)
+        if isinstance(component, tuple):
+            # C extension format: (root, size)
+            root, size = component
+            component_starts.append(root)
+            component_sizes.append(size)
+            roots.append(root)
+        else:
+            # Python format: list of atom indices
+            root = min(component)
+            component_starts.append(root)
+            component_sizes.append(len(component))
+            roots.append(root)
 
     # Try C fast-path
     if _HAS_C_EXTENSION and _build_zmatrix_parallel_c is not None:
@@ -679,17 +708,15 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
             pass
 
     # Python fallback - process each connected component
+    # Use already-computed roots and sizes (works for both C and Python formats)
     all_entries = []
 
-    for component in components:
-        root = min(component)
-
+    for root, comp_size in zip(roots, component_sizes):
         # BFS from root (no atom mask needed - component is already connected)
         order, parent = build_spanning_tree(offsets_np, neighbors_np, root, atom_mask=None)
 
-        # Filter to atoms actually in this component
-        component_set = set(component)
-        order_list = [a for a in order.tolist() if a in component_set]
+        # Take only the first comp_size entries (the component we care about)
+        order_list = order.tolist()[:comp_size]
 
         parent_dict = {i: int(parent[i]) for i in range(len(parent)) if parent[i] >= 0}
         parent_dict[root] = -1

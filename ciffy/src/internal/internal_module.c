@@ -879,3 +879,96 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
 
     return result;
 }
+
+
+/**
+ * Find connected components in CSR graph.
+ *
+ * Python signature:
+ *   _find_connected_components(offsets, neighbors, n_atoms) -> (roots, sizes, n_components)
+ *
+ * Args:
+ *   offsets: (n_atoms+1,) int64 array of CSR offsets.
+ *   neighbors: (E,) int64 array of neighbor indices.
+ *   n_atoms: Total number of atoms (int).
+ *
+ * Returns:
+ *   Tuple of (roots, sizes, n_components):
+ *     roots: (n_components,) int64 array of root atom per component.
+ *     sizes: (n_components,) int64 array of component sizes.
+ *     n_components: int number of components found.
+ */
+PyObject *py_find_connected_components(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_offsets, *py_neighbors;
+    int n_atoms;
+
+    if (!PyArg_ParseTuple(args, "OOi", &py_offsets, &py_neighbors, &n_atoms)) {
+        return NULL;
+    }
+
+    /* Validate arrays */
+    PyArrayObject *offsets_arr = require_array_1d(py_offsets, NPY_INT64, "offsets");
+    if (offsets_arr == NULL) return NULL;
+
+    PyArrayObject *neighbors_arr = require_array_1d(py_neighbors, NPY_INT64, "neighbors");
+    if (neighbors_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        return NULL;
+    }
+
+    const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
+    const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
+
+    /* Allocate output arrays (worst case: n_atoms components) */
+    npy_intp dims[1] = {n_atoms};
+    PyObject *py_roots = PyArray_SimpleNew(1, dims, NPY_INT64);
+    PyObject *py_sizes = PyArray_SimpleNew(1, dims, NPY_INT64);
+
+    if (py_roots == NULL || py_sizes == NULL) {
+        Py_XDECREF(py_roots);
+        Py_XDECREF(py_sizes);
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *roots = (int64_t *)PyArray_DATA((PyArrayObject *)py_roots);
+    int64_t *sizes = (int64_t *)PyArray_DATA((PyArrayObject *)py_sizes);
+
+    /* Find connected components */
+    int64_t n_components = find_connected_components_c(
+        offsets, neighbors, n_atoms, roots, sizes
+    );
+
+    Py_DECREF(offsets_arr);
+    Py_DECREF(neighbors_arr);
+
+    if (n_components < 0) {
+        Py_DECREF(py_roots);
+        Py_DECREF(py_sizes);
+        return PyErr_NoMemory();
+    }
+
+    /* Resize arrays to actual size */
+    if (n_components < n_atoms) {
+        npy_intp new_dims[1] = {n_components};
+        PyArray_Dims new_shape = {new_dims, 1};
+
+        PyObject *resized_roots = PyArray_Resize((PyArrayObject *)py_roots, &new_shape, 0, NPY_CORDER);
+        if (resized_roots == NULL) PyErr_Clear();
+
+        PyObject *resized_sizes = PyArray_Resize((PyArrayObject *)py_sizes, &new_shape, 0, NPY_CORDER);
+        if (resized_sizes == NULL) PyErr_Clear();
+    }
+
+    /* Build result tuple */
+    PyObject *py_n_components = PyLong_FromLongLong(n_components);
+    PyObject *tuple = PyTuple_Pack(3, py_roots, py_sizes, py_n_components);
+    Py_DECREF(py_roots);
+    Py_DECREF(py_sizes);
+    Py_DECREF(py_n_components);
+
+    return tuple;
+}

@@ -58,4 +58,10 @@ PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args);
  */
 PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args);
 
+/**
+ * Find connected components in CSR graph.
+ * Python: _find_connected_components(offsets, neighbors, n_atoms) -> (roots, sizes, n_components)
+ */
+PyObject *py_find_connected_components(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

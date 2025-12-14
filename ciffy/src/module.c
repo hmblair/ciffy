@@ -812,6 +812,14 @@ static PyMethodDef methods[] = {
      "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n\n"
      "Returns:\n"
      "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
+    {"_find_connected_components", py_find_connected_components, METH_VARARGS,
+     "Find connected components in CSR graph.\n\n"
+     "Args:\n"
+     "    offsets (ndarray): (n_atoms+1,) int64 CSR offsets.\n"
+     "    neighbors (ndarray): (E,) int64 neighbor indices.\n"
+     "    n_atoms (int): Total number of atoms.\n\n"
+     "Returns:\n"
+     "    tuple: (roots, sizes, n_components).\n"},
     {NULL, NULL, 0, NULL}
 };
 

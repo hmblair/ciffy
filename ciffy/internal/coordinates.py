@@ -72,6 +72,14 @@ def _empty_array(dtype, backend_like: Array) -> Array:
     return np.array([], dtype=dtype)
 
 
+def _concat(arrays: list, backend_like: Array) -> Array:
+    """Concatenate arrays matching backend of backend_like."""
+    if is_torch(backend_like):
+        import torch
+        return torch.cat(arrays)
+    return np.concatenate(arrays)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CoordinateManager Class
 # ─────────────────────────────────────────────────────────────────────────────
@@ -523,56 +531,24 @@ class CoordinateManager:
 
             if orphan_atoms and self._component_offsets is not None:
                 # Add each orphan atom as a single-atom connected component
-                # Need to extend CSR arrays
-                new_atoms = []
-                new_centroids = []
+                # Use vectorized operations to avoid slow per-atom tensor creation
+                n_orphans = len(orphan_atoms)
+                old_end = int(self._component_offsets[-1])
 
-                for atom_idx in orphan_atoms:
-                    new_atoms.append(atom_idx)
-                    if is_torch(coords):
-                        new_centroids.append(coords[atom_idx].clone())
-                    else:
-                        new_centroids.append(coords[atom_idx].copy())
+                # Vectorized: create all indices and centroids at once
+                orphan_indices = _array(orphan_atoms, np.int64, coords)
+                orphan_centroids = coords[orphan_indices]  # Single indexing op
+                new_offsets = _array(list(range(old_end + 1, old_end + n_orphans + 1)), np.int64, coords)
 
-                if new_atoms:
-                    # Extend CSR format
-                    if is_torch(coords):
-                        import torch
-                        # Extend offsets
-                        old_end = int(self._component_offsets[-1])
-                        new_offsets = [old_end + i + 1 for i in range(len(new_atoms))]
-                        self._component_offsets = torch.cat([
-                            self._component_offsets,
-                            torch.tensor(new_offsets, dtype=torch.int64, device=coords.device)
-                        ])
-                        # Extend atoms
-                        self._component_atoms = torch.cat([
-                            self._component_atoms,
-                            torch.tensor(new_atoms, dtype=torch.int64, device=coords.device)
-                        ])
-                        # Extend centroids
-                        self._component_centroids = torch.cat([
-                            self._component_centroids,
-                            torch.stack(new_centroids)
-                        ])
-                    else:
-                        # Extend offsets
-                        old_end = int(self._component_offsets[-1])
-                        new_offsets = [old_end + i + 1 for i in range(len(new_atoms))]
-                        self._component_offsets = np.concatenate([
-                            self._component_offsets,
-                            np.array(new_offsets, dtype=np.int64)
-                        ])
-                        # Extend atoms
-                        self._component_atoms = np.concatenate([
-                            self._component_atoms,
-                            np.array(new_atoms, dtype=np.int64)
-                        ])
-                        # Extend centroids
-                        self._component_centroids = np.concatenate([
-                            self._component_centroids,
-                            np.array(new_centroids)
-                        ])
+                # Extend CSR arrays
+                self._component_offsets = _concat([self._component_offsets, new_offsets], coords)
+                self._component_atoms = _concat([self._component_atoms, orphan_indices], coords)
+                self._component_centroids = _concat([self._component_centroids, orphan_centroids], coords)
+
+                # Orphan atoms are single-atom components, always "contiguous"
+                self._component_contiguous.extend([True] * n_orphans)
+                # No reference coords needed for single-atom components
+                self._component_reference_coords.extend([None] * n_orphans)
 
         zmatrix_indices = self._zmatrix.indices
         n_zmatrix = len(zmatrix_indices)

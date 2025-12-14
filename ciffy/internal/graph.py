@@ -392,6 +392,53 @@ def edges_to_csr_neighbors(edges: Array, n_atoms: int) -> tuple[Array, Array]:
     return offsets, neighbors
 
 
+def find_connected_components(offsets: np.ndarray, neighbors: np.ndarray, n_atoms: int) -> list[list[int]]:
+    """
+    Find all connected components in a CSR-format graph.
+
+    Args:
+        offsets: (N+1,) CSR offsets array
+        neighbors: (E,) CSR neighbor indices
+        n_atoms: Total number of atoms
+
+    Returns:
+        List of components, where each component is a list of atom indices.
+    """
+    visited = np.zeros(n_atoms, dtype=bool)
+    components = []
+
+    for start in range(n_atoms):
+        if visited[start]:
+            continue
+
+        # Check if this atom has any neighbors
+        n_neighbors = offsets[start + 1] - offsets[start]
+        if n_neighbors == 0:
+            # Isolated atom - skip (will be handled as orphan)
+            visited[start] = True
+            continue
+
+        # BFS to find component
+        component = []
+        queue = [start]
+        visited[start] = True
+
+        while queue:
+            node = queue.pop(0)
+            component.append(node)
+
+            # Get neighbors from CSR
+            for j in range(offsets[node], offsets[node + 1]):
+                neighbor = neighbors[j]
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+
+        components.append(component)
+
+    return components
+
+
 # =============================================================================
 # SPANNING TREE CONSTRUCTION
 # =============================================================================
@@ -536,6 +583,7 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
     Build Z-matrix as (M, 4) int64 array.
 
     Internal function used by ZMatrix.from_polymer().
+    Processes all connected components in the bond graph, not just one per chain.
     Uses C extension when available for ~10-20x speedup.
 
     Args:
@@ -544,146 +592,111 @@ def _build_zmatrix_indices(polymer: "Polymer") -> np.ndarray:
     Returns:
         (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
     """
-    from ..types import Scale
-
     # Build array-based graph
     edges, n_atoms = build_bond_graph(polymer)
 
-    # Get residue sizes
-    res_sizes = polymer.sizes(Scale.RESIDUE)
+    if len(edges) == 0:
+        return np.zeros((0, 4), dtype=np.int64)
 
-    # Try C fast-path for entire Z-matrix construction
+    # Convert to CSR format
     if _HAS_C_EXTENSION and _edges_to_csr_c is not None:
         try:
-            # Convert to CSR once for all chains
             offsets, neighbors = _edges_to_csr_c(
                 np.ascontiguousarray(edges, dtype=np.int64),
                 n_atoms
             )
-
-            # Collect chain info for parallel processing
-            chain_starts = []
-            chain_sizes_list = []
-            roots = []
-
-            res_offset = 0
-            atom_offset = 0
-
-            for chain_len in polymer.lengths:
-                chain_len_val = int(chain_len)
-
-                if chain_len_val == 0:
-                    continue
-
-                # Calculate atom count for this chain
-                chain_atom_count = sum(
-                    int(res_sizes[res_offset + i])
-                    for i in range(chain_len_val)
-                )
-
-                if chain_atom_count == 0:
-                    res_offset += chain_len_val
-                    continue
-
-                # Select root atom
-                root = select_root_atom(polymer, atom_offset, chain_atom_count, res_offset)
-
-                chain_starts.append(atom_offset)
-                chain_sizes_list.append(chain_atom_count)
-                roots.append(root)
-
-                res_offset += chain_len_val
-                atom_offset += chain_atom_count
-
-            if len(chain_starts) == 0:
-                return np.zeros((0, 4), dtype=np.int64)
-
-            # Use parallel C function if available (OpenMP)
-            if _build_zmatrix_parallel_c is not None:
-                zmatrix, counts = _build_zmatrix_parallel_c(
-                    offsets,
-                    neighbors,
-                    n_atoms,
-                    np.array(chain_starts, dtype=np.int64),
-                    np.array(chain_sizes_list, dtype=np.int64),
-                    np.array(roots, dtype=np.int64)
-                )
-                # Trim to actual entries (some chains may have fewer entries than atoms)
-                total_entries = int(counts.sum())
-                if total_entries < len(zmatrix):
-                    # Need to compact the results
-                    result = np.zeros((total_entries, 4), dtype=np.int64)
-                    src_offset = 0
-                    dst_offset = 0
-                    for i, (size, count) in enumerate(zip(chain_sizes_list, counts)):
-                        count = int(count)
-                        result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
-                        src_offset += size
-                        dst_offset += count
-                    return result
-                return zmatrix[:total_entries]
-
-            # Fallback to sequential C (if parallel not available)
-            all_entries = []
-            for chain_start, chain_size, root in zip(chain_starts, chain_sizes_list, roots):
-                chain_zmatrix = _build_zmatrix_from_csr_c(
-                    offsets, neighbors, n_atoms,
-                    chain_start, chain_size, root
-                )
-                all_entries.append(chain_zmatrix)
-
-            return np.vstack(all_entries)
-
         except Exception:
-            # Fall through to Python implementation
+            offsets, neighbors = edges_to_csr_neighbors(edges, n_atoms)
+    else:
+        offsets, neighbors = edges_to_csr_neighbors(edges, n_atoms)
+
+    # Ensure numpy arrays for component finding
+    if is_torch(offsets):
+        offsets_np = offsets.cpu().numpy()
+        neighbors_np = neighbors.cpu().numpy()
+    else:
+        offsets_np = np.asarray(offsets)
+        neighbors_np = np.asarray(neighbors)
+
+    # Find all connected components in the bond graph
+    components = find_connected_components(offsets_np, neighbors_np, n_atoms)
+
+    if len(components) == 0:
+        return np.zeros((0, 4), dtype=np.int64)
+
+    # Prepare component info for Z-matrix construction
+    component_starts = []
+    component_sizes = []
+    roots = []
+
+    for component in components:
+        # Use the minimum atom index as root (simple, deterministic)
+        root = min(component)
+        component_starts.append(root)  # Not used by C, but kept for consistency
+        component_sizes.append(len(component))
+        roots.append(root)
+
+    # Try C fast-path
+    if _HAS_C_EXTENSION and _build_zmatrix_parallel_c is not None:
+        try:
+            # Use parallel C function
+            zmatrix, counts = _build_zmatrix_parallel_c(
+                offsets_np,
+                neighbors_np,
+                n_atoms,
+                np.array(component_starts, dtype=np.int64),
+                np.array(component_sizes, dtype=np.int64),
+                np.array(roots, dtype=np.int64)
+            )
+            # Trim to actual entries
+            total_entries = int(counts.sum())
+            if total_entries < len(zmatrix):
+                result = np.zeros((total_entries, 4), dtype=np.int64)
+                src_offset = 0
+                dst_offset = 0
+                for size, count in zip(component_sizes, counts):
+                    count = int(count)
+                    result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
+                    src_offset += size
+                    dst_offset += count
+                return result
+            return zmatrix[:total_entries]
+        except Exception:
             pass
 
-    # Python fallback
-    offsets, neighbors = edges_to_csr_neighbors(edges, n_atoms)
+    # Try sequential C fallback
+    if _HAS_C_EXTENSION and _build_zmatrix_from_csr_c is not None:
+        try:
+            all_entries = []
+            for comp_start, comp_size, root in zip(component_starts, component_sizes, roots):
+                comp_zmatrix = _build_zmatrix_from_csr_c(
+                    offsets_np, neighbors_np, n_atoms,
+                    comp_start, comp_size, root
+                )
+                all_entries.append(comp_zmatrix)
+            return np.vstack(all_entries)
+        except Exception:
+            pass
 
+    # Python fallback - process each connected component
     all_entries = []
 
-    # Process each chain
-    res_offset = 0
-    atom_offset = 0
+    for component in components:
+        root = min(component)
 
-    for chain_len in polymer.lengths:
-        chain_len_val = int(chain_len)
+        # BFS from root (no atom mask needed - component is already connected)
+        order, parent = build_spanning_tree(offsets_np, neighbors_np, root, atom_mask=None)
 
-        if chain_len_val == 0:
-            continue
+        # Filter to atoms actually in this component
+        component_set = set(component)
+        order_list = [a for a in order.tolist() if a in component_set]
 
-        # Calculate atom count for this chain
-        chain_atom_count = sum(
-            int(res_sizes[res_offset + i])
-            for i in range(chain_len_val)
-        )
-
-        if chain_atom_count == 0:
-            res_offset += chain_len_val
-            continue
-
-        # Build atom mask for this chain
-        atom_mask = np.zeros(n_atoms, dtype=bool)
-        atom_mask[atom_offset:atom_offset + chain_atom_count] = True
-
-        # Select root atom
-        root = select_root_atom(polymer, atom_offset, chain_atom_count, res_offset)
-
-        # BFS with array graph
-        order, parent = build_spanning_tree(offsets, neighbors, root, atom_mask)
-
-        # Convert to list for Z-matrix building
-        order_list = order.tolist() if hasattr(order, 'tolist') else list(order)
         parent_dict = {i: int(parent[i]) for i in range(len(parent)) if parent[i] >= 0}
-        parent_dict[root] = -1  # Ensure root has parent -1
+        parent_dict[root] = -1
 
         # Build Z-matrix entries
-        chain_entries = _build_chain_zmatrix(order_list, parent_dict)
-        all_entries.extend(chain_entries)
-
-        res_offset += chain_len_val
-        atom_offset += chain_atom_count
+        component_entries = _build_chain_zmatrix(order_list, parent_dict)
+        all_entries.extend(component_entries)
 
     # Convert to (M, 4) array
     if len(all_entries) == 0:

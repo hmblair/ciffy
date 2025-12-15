@@ -489,11 +489,12 @@ PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args) {
 
     int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
 
-    /* Build Z-matrix */
+    /* Build Z-matrix (without dihedral-aware mode) */
     int64_t n_entries = build_zmatrix_from_csr(
         offsets, neighbors, n_atoms,
         chain_start, chain_size, root,
-        zmatrix
+        NULL, NULL, NULL, 0, NULL, 0,  /* Dihedral-aware params disabled */
+        zmatrix, NULL
     );
 
     Py_DECREF(offsets_arr);
@@ -523,7 +524,8 @@ PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args) {
  * Build Z-matrix for all chains in parallel using OpenMP.
  *
  * Python signature:
- *   _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots) -> (zmatrix, counts)
+ *   _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots,
+ *                           atoms=None, sequence=None, res_sizes=None) -> (zmatrix, dihedral_types, counts)
  *
  * Args:
  *   offsets: (n_atoms+1,) int64 array of CSR offsets.
@@ -532,25 +534,31 @@ PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args) {
  *   chain_starts: (n_chains,) int64 array of first atom index per chain.
  *   chain_sizes: (n_chains,) int64 array of atoms per chain.
  *   roots: (n_chains,) int64 array of root atom index per chain.
+ *   atoms: (n_atoms,) int32 array of atom types (optional, for dihedral-aware mode).
+ *   sequence: (n_residues,) int32 array of residue types (optional).
+ *   res_sizes: (n_residues,) int32 array of atoms per residue (optional).
  *
  * Returns:
- *   Tuple of (zmatrix, counts):
+ *   Tuple of (zmatrix, dihedral_types, counts):
  *     zmatrix: (total_atoms, 4) int64 Z-matrix entries.
+ *     dihedral_types: (total_atoms,) int8 dihedral type per entry (-1 if not named dihedral).
  *     counts: (n_chains,) int64 entries written per chain.
  */
 PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
     (void)self;
 
     PyObject *py_offsets, *py_neighbors, *py_chain_starts, *py_chain_sizes, *py_roots;
+    PyObject *py_atoms = Py_None, *py_sequence = Py_None, *py_res_sizes = Py_None;
     int n_atoms;
 
-    if (!PyArg_ParseTuple(args, "OOiOOO",
+    if (!PyArg_ParseTuple(args, "OOiOOO|OOO",
                           &py_offsets, &py_neighbors, &n_atoms,
-                          &py_chain_starts, &py_chain_sizes, &py_roots)) {
+                          &py_chain_starts, &py_chain_sizes, &py_roots,
+                          &py_atoms, &py_sequence, &py_res_sizes)) {
         return NULL;
     }
 
-    /* Validate arrays */
+    /* Validate required arrays */
     PyArrayObject *offsets_arr = require_array_1d(py_offsets, NPY_INT64, "offsets");
     if (offsets_arr == NULL) return NULL;
 
@@ -600,6 +608,49 @@ PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    /* Handle optional dihedral-aware parameters */
+    PyArrayObject *atoms_arr = NULL;
+    PyArrayObject *sequence_arr = NULL;
+    PyArrayObject *res_sizes_arr = NULL;
+    int dihedral_aware = 0;
+
+    if (py_atoms != Py_None && py_sequence != Py_None && py_res_sizes != Py_None) {
+        atoms_arr = require_array_1d(py_atoms, NPY_INT32, "atoms");
+        if (atoms_arr == NULL) {
+            Py_DECREF(offsets_arr);
+            Py_DECREF(neighbors_arr);
+            Py_DECREF(chain_starts_arr);
+            Py_DECREF(chain_sizes_arr);
+            Py_DECREF(roots_arr);
+            return NULL;
+        }
+
+        sequence_arr = require_array_1d(py_sequence, NPY_INT32, "sequence");
+        if (sequence_arr == NULL) {
+            Py_DECREF(offsets_arr);
+            Py_DECREF(neighbors_arr);
+            Py_DECREF(chain_starts_arr);
+            Py_DECREF(chain_sizes_arr);
+            Py_DECREF(roots_arr);
+            Py_DECREF(atoms_arr);
+            return NULL;
+        }
+
+        res_sizes_arr = require_array_1d(py_res_sizes, NPY_INT32, "res_sizes");
+        if (res_sizes_arr == NULL) {
+            Py_DECREF(offsets_arr);
+            Py_DECREF(neighbors_arr);
+            Py_DECREF(chain_starts_arr);
+            Py_DECREF(chain_sizes_arr);
+            Py_DECREF(roots_arr);
+            Py_DECREF(atoms_arr);
+            Py_DECREF(sequence_arr);
+            return NULL;
+        }
+
+        dihedral_aware = 1;
+    }
+
     /* Get data pointers */
     const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
     const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
@@ -607,55 +658,121 @@ PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
     const int64_t *chain_sizes = (const int64_t *)PyArray_DATA(chain_sizes_arr);
     const int64_t *roots = (const int64_t *)PyArray_DATA(roots_arr);
 
+    const int32_t *atoms = dihedral_aware ? (const int32_t *)PyArray_DATA(atoms_arr) : NULL;
+    const int32_t *sequence = dihedral_aware ? (const int32_t *)PyArray_DATA(sequence_arr) : NULL;
+    const int32_t *res_sizes = dihedral_aware ? (const int32_t *)PyArray_DATA(res_sizes_arr) : NULL;
+    npy_intp n_residues = dihedral_aware ? PyArray_DIM(sequence_arr, 0) : 0;
+
     /* Compute total output size */
     int64_t total_size = 0;
     for (npy_intp i = 0; i < n_chains; i++) {
         total_size += chain_sizes[i];
     }
 
+    /* Allocate working arrays for dihedral-aware mode */
+    int64_t *residue_starts = NULL;
+    int64_t *chain_res_starts = NULL;
+
+    if (dihedral_aware) {
+        /* Compute residue_starts (cumulative sum of res_sizes) */
+        residue_starts = (int64_t *)malloc((size_t)(n_residues + 1) * sizeof(int64_t));
+        chain_res_starts = (int64_t *)malloc((size_t)(n_chains + 1) * sizeof(int64_t));
+
+        if (!residue_starts || !chain_res_starts) {
+            free(residue_starts);
+            free(chain_res_starts);
+            Py_DECREF(offsets_arr);
+            Py_DECREF(neighbors_arr);
+            Py_DECREF(chain_starts_arr);
+            Py_DECREF(chain_sizes_arr);
+            Py_DECREF(roots_arr);
+            Py_XDECREF(atoms_arr);
+            Py_XDECREF(sequence_arr);
+            Py_XDECREF(res_sizes_arr);
+            return PyErr_NoMemory();
+        }
+
+        residue_starts[0] = 0;
+        for (npy_intp r = 0; r < n_residues; r++) {
+            residue_starts[r + 1] = residue_starts[r] + res_sizes[r];
+        }
+
+        /* Compute chain_res_starts from chain_sizes and residue_starts */
+        /* Each chain's residue count is derived from (chain_atom_end - chain_atom_start) */
+        /* For now, use residue indices by counting residues in each chain */
+        chain_res_starts[0] = 0;
+        npy_intp res_idx = 0;
+        for (npy_intp c = 0; c < n_chains; c++) {
+            int64_t chain_end = chain_starts[c] + chain_sizes[c];
+            while (res_idx < n_residues && residue_starts[res_idx + 1] <= chain_end) {
+                res_idx++;
+            }
+            chain_res_starts[c + 1] = res_idx;
+        }
+    }
+
     /* Allocate output arrays */
     npy_intp zmat_dims[2] = {total_size, 4};
+    npy_intp dih_dims[1] = {total_size};
     npy_intp counts_dims[1] = {n_chains};
 
     PyObject *py_zmatrix = PyArray_SimpleNew(2, zmat_dims, NPY_INT64);
+    PyObject *py_dihedral_types = PyArray_SimpleNew(1, dih_dims, NPY_INT8);
     PyObject *py_counts = PyArray_SimpleNew(1, counts_dims, NPY_INT64);
 
-    if (py_zmatrix == NULL || py_counts == NULL) {
+    if (py_zmatrix == NULL || py_dihedral_types == NULL || py_counts == NULL) {
         Py_XDECREF(py_zmatrix);
+        Py_XDECREF(py_dihedral_types);
         Py_XDECREF(py_counts);
+        free(residue_starts);
+        free(chain_res_starts);
         Py_DECREF(offsets_arr);
         Py_DECREF(neighbors_arr);
         Py_DECREF(chain_starts_arr);
         Py_DECREF(chain_sizes_arr);
         Py_DECREF(roots_arr);
+        Py_XDECREF(atoms_arr);
+        Py_XDECREF(sequence_arr);
+        Py_XDECREF(res_sizes_arr);
         return PyErr_NoMemory();
     }
 
     int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
+    int8_t *dihedral_types = (int8_t *)PyArray_DATA((PyArrayObject *)py_dihedral_types);
     int64_t *counts = (int64_t *)PyArray_DATA((PyArrayObject *)py_counts);
 
     /* Build Z-matrices in parallel */
     int64_t result = build_zmatrix_parallel(
         offsets, neighbors, n_atoms,
         chain_starts, chain_sizes, roots,
-        n_chains, zmatrix, counts
+        n_chains,
+        atoms, sequence, residue_starts, n_residues, chain_res_starts,
+        zmatrix, dihedral_types, counts
     );
 
+    /* Cleanup */
+    free(residue_starts);
+    free(chain_res_starts);
     Py_DECREF(offsets_arr);
     Py_DECREF(neighbors_arr);
     Py_DECREF(chain_starts_arr);
     Py_DECREF(chain_sizes_arr);
     Py_DECREF(roots_arr);
+    Py_XDECREF(atoms_arr);
+    Py_XDECREF(sequence_arr);
+    Py_XDECREF(res_sizes_arr);
 
     if (result < 0) {
         Py_DECREF(py_zmatrix);
+        Py_DECREF(py_dihedral_types);
         Py_DECREF(py_counts);
         return PyErr_NoMemory();
     }
 
     /* Build result tuple */
-    PyObject *tuple = PyTuple_Pack(2, py_zmatrix, py_counts);
+    PyObject *tuple = PyTuple_Pack(3, py_zmatrix, py_dihedral_types, py_counts);
     Py_DECREF(py_zmatrix);
+    Py_DECREF(py_dihedral_types);
     Py_DECREF(py_counts);
 
     return tuple;

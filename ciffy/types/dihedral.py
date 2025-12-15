@@ -18,6 +18,12 @@ class DihedralType(IntEnum):
         PSI: N(i) - CA(i) - C(i) - N(i+1)
         OMEGA: CA(i) - C(i) - N(i+1) - CA(i+1)
 
+    Protein sidechain dihedrals:
+        CHI1: N - CA - CB - XG (varies by residue)
+        CHI2: CA - CB - CG - XD (varies by residue)
+        CHI3: CB - CG - CD - XE (varies by residue)
+        CHI4: CG - CD - XE - XZ (LYS, ARG only)
+
     Nucleic acid backbone dihedrals:
         ALPHA: O3'(i-1) - P(i) - O5'(i) - C5'(i)
         BETA: P(i) - O5'(i) - C5'(i) - C4'(i)
@@ -54,6 +60,12 @@ class DihedralType(IntEnum):
     CHI_PURINE = 9
     CHI_PYRIMIDINE = 10
 
+    # Protein sidechain dihedrals
+    CHI1 = 11
+    CHI2 = 12
+    CHI3 = 13
+    CHI4 = 14
+
 
 # Reverse mapping from integer index to DihedralType
 INDEX_TO_DIHEDRAL_TYPE: dict[int, DihedralType] = {dt.value: dt for dt in DihedralType}
@@ -72,6 +84,9 @@ RNA_BACKBONE: tuple[DihedralType, ...] = (
     DihedralType.DELTA,
     DihedralType.EPSILON,
     DihedralType.ZETA,
+)
+
+RNA_GLYCOSIDIC: tuple[DihedralType, ...] = (
     DihedralType.CHI_PURINE,
     DihedralType.CHI_PYRIMIDINE,
 )

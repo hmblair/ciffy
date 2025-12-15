@@ -29,184 +29,6 @@ from .zmatrix import ZMatrix
 
 
 # =============================================================================
-# DIHEDRAL TYPE ANNOTATION
-# =============================================================================
-
-
-def annotate_dihedral_types(
-    zmatrix_indices: np.ndarray,
-    atoms: np.ndarray,
-    sequence: np.ndarray,
-    residue_starts: np.ndarray,
-    chain_boundaries: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Post-process Z-matrix to annotate named dihedral types.
-
-    For atoms that "own" a named dihedral (PHI, PSI, ALPHA, etc.), this function:
-    1. Updates the Z-matrix entry to use the correct reference atoms
-    2. Records the dihedral type in a parallel array
-
-    Args:
-        zmatrix_indices: (M, 4) int64 - existing Z-matrix [atom, dist, ang, dih]
-        atoms: (N,) int32 - atom enum values for all atoms
-        sequence: (R,) int32 - residue enum values
-        residue_starts: (R+1,) int64 - cumulative atom offsets per residue
-        chain_boundaries: (C,) int64 - residue indices where chains start
-
-    Returns:
-        updated_zmatrix: (M, 4) int64 - Z-matrix with updated references
-        dihedral_types: (M,) int8 - dihedral type for each entry (-1 if unnamed)
-    """
-    from ..biochemistry import ATOM_DIHEDRAL_TYPE, ATOM_DIHEDRAL_REFS, Residue
-
-    n_entries = len(zmatrix_indices)
-    n_residues = len(sequence)
-    n_atoms = len(atoms)
-
-    # Handle empty arrays
-    if len(ATOM_DIHEDRAL_TYPE) == 0:
-        return zmatrix_indices.copy(), np.full(n_entries, -1, dtype=np.int8)
-
-    # Build atom_idx -> zmatrix_position mapping (vectorized)
-    # -1 for atoms not in the Z-matrix
-    atom_to_zidx = np.full(n_atoms, -1, dtype=np.int64)
-    atom_to_zidx[zmatrix_indices[:, 0].astype(np.int64)] = np.arange(n_entries)
-
-    # Build atom_idx -> residue_idx mapping (vectorized with np.repeat)
-    residue_sizes = np.diff(residue_starts)
-    atom_to_res = np.repeat(np.arange(n_residues, dtype=np.int64), residue_sizes)
-
-    # Chain boundaries as set for O(1) lookup (faster than array slicing in loop)
-    chain_start_residues = set(int(b) for b in chain_boundaries)
-
-    # Cache: residue_type -> list of canonical atom types in order
-    canonical_atoms_cache: dict[int, list[int]] = {}
-
-    def get_canonical_atom_types(res_type: int) -> list[int]:
-        """Get canonical atom types for a residue type."""
-        if res_type not in canonical_atoms_cache:
-            try:
-                res = Residue(res_type)
-                canonical_atoms_cache[res_type] = [atom.value for atom in res.atoms]
-            except ValueError:
-                canonical_atoms_cache[res_type] = []
-        return canonical_atoms_cache[res_type]
-
-    def find_atom_by_type(target_res: int, expected_type: int) -> int:
-        """Find global atom index by type within a residue. Returns -1 if not found."""
-        start = int(residue_starts[target_res])
-        end = int(residue_starts[target_res + 1])
-        # Simple loop faster than np.where for small residues (10-30 atoms)
-        for i in range(start, end):
-            if int(atoms[i]) == expected_type:
-                return i
-        return -1
-
-    # Initialize outputs
-    updated_zmatrix = zmatrix_indices.copy()
-    dihedral_types = np.full(n_entries, -1, dtype=np.int8)
-
-    # Process each Z-matrix entry
-    for z_idx in range(n_entries):
-        atom_idx = int(zmatrix_indices[z_idx, 0])
-        atom_type = int(atoms[atom_idx])
-
-        # Check bounds for atom_type lookup
-        if atom_type < 0 or atom_type >= len(ATOM_DIHEDRAL_TYPE):
-            continue
-
-        # Check if this atom owns a named dihedral
-        dtype_idx = int(ATOM_DIHEDRAL_TYPE[atom_type])
-        if dtype_idx < 0:
-            continue  # Not a dihedral owner
-
-        # Get residue index for this atom
-        res_idx = int(atom_to_res[atom_idx])
-        res_type = int(sequence[res_idx])
-
-        # Get canonical atom types for the owner's residue type
-        canonical_atoms = get_canonical_atom_types(res_type)
-        if not canonical_atoms:
-            continue
-
-        # Get reference pattern: [dih_ref, ang_ref, dist_ref] as (offset, canonical_local_idx)
-        refs = ATOM_DIHEDRAL_REFS[atom_type]  # (3, 2) array
-
-        # Resolve references to global atom indices
-        valid = True
-        resolved_refs = []
-
-        for ref_idx in range(3):
-            offset = int(refs[ref_idx, 0])
-            canonical_local_idx = int(refs[ref_idx, 1])
-
-            target_res = res_idx + offset
-
-            # Check residue bounds
-            if target_res < 0 or target_res >= n_residues:
-                valid = False
-                break
-
-            # Check chain boundary (don't span chains)
-            if offset != 0:
-                min_res = min(res_idx, target_res)
-                max_res = max(res_idx, target_res)
-                # Check if any residue in range (min_res, max_res] is a chain start
-                for boundary_res in chain_start_residues:
-                    if min_res < boundary_res <= max_res:
-                        valid = False
-                        break
-                if not valid:
-                    break
-
-            # Get the expected atom TYPE from canonical ordering
-            # For offset != 0, we need the canonical atoms of the TARGET residue
-            if offset != 0:
-                target_res_type = int(sequence[target_res])
-                target_canonical = get_canonical_atom_types(target_res_type)
-            else:
-                target_canonical = canonical_atoms
-
-            if canonical_local_idx >= len(target_canonical):
-                valid = False
-                break
-
-            expected_atom_type = target_canonical[canonical_local_idx]
-
-            # Find atom of this type in the target residue
-            global_idx = find_atom_by_type(target_res, expected_atom_type)
-
-            if global_idx < 0:
-                valid = False
-                break
-
-            # Verify atom exists in Z-matrix using array lookup
-            ref_z_idx = atom_to_zidx[global_idx]
-            if ref_z_idx < 0:
-                valid = False
-                break
-
-            # Verify referenced atom appears BEFORE current atom in Z-matrix
-            # (required for Z-matrix validity - references must point to earlier entries)
-            if ref_z_idx >= z_idx:
-                valid = False
-                break
-
-            resolved_refs.append(global_idx)
-
-        if valid and len(resolved_refs) == 3:
-            # Update Z-matrix entry with correct references
-            # refs[0] = dih_ref, refs[1] = ang_ref, refs[2] = dist_ref
-            updated_zmatrix[z_idx, 1] = resolved_refs[2]  # dist_ref
-            updated_zmatrix[z_idx, 2] = resolved_refs[1]  # ang_ref
-            updated_zmatrix[z_idx, 3] = resolved_refs[0]  # dih_ref
-            dihedral_types[z_idx] = dtype_idx
-
-    return updated_zmatrix, dihedral_types
-
-
-# =============================================================================
 # BOND GRAPH CONSTRUCTION
 # =============================================================================
 
@@ -368,25 +190,29 @@ def select_root_atom(
 # =============================================================================
 
 
-def _build_zmatrix_indices_from_topology(topology: "TopologyInfo") -> np.ndarray:
+def _build_zmatrix_indices_from_topology(
+    topology: "TopologyInfo",
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
 
     Internal function used by ZMatrix.from_topology().
     Processes all connected components in the bond graph, not just one per chain.
-    Uses C extension when available for ~10-20x speedup.
+    Uses C extension with dihedral-aware reference selection for ~10-20x speedup.
 
     Args:
         topology: TopologyInfo containing structural metadata.
 
     Returns:
-        (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
+        Tuple of:
+            indices: (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
+            dihedral_types: (M,) int8 array of dihedral types (-1 if not named)
     """
     # Build array-based graph
     edges, n_atoms = build_bond_graph_from_topology(topology)
 
     if len(edges) == 0:
-        return np.zeros((0, 4), dtype=np.int64)
+        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
 
     # Convert to CSR format
     offsets, neighbors = edges_to_csr(edges, n_atoms)
@@ -395,7 +221,7 @@ def _build_zmatrix_indices_from_topology(topology: "TopologyInfo") -> np.ndarray
     components = find_connected_components(offsets, neighbors, n_atoms)
 
     if len(components) == 0:
-        return np.zeros((0, 4), dtype=np.int64)
+        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
 
     # Prepare component info for Z-matrix construction
     # Components can be either:
@@ -419,7 +245,7 @@ def _build_zmatrix_indices_from_topology(topology: "TopologyInfo") -> np.ndarray
             component_sizes.append(len(component))
             roots.append(root)
 
-    # Build Z-matrix using wrapper
+    # Build Z-matrix with dihedral-aware reference selection
     return build_zmatrix_from_components(
         np.asarray(offsets, dtype=np.int64),
         np.asarray(neighbors, dtype=np.int64),
@@ -427,6 +253,9 @@ def _build_zmatrix_indices_from_topology(topology: "TopologyInfo") -> np.ndarray
         np.array(component_starts, dtype=np.int64),
         np.array(component_sizes, dtype=np.int64),
         np.array(roots, dtype=np.int64),
+        atoms=np.ascontiguousarray(topology.atoms, dtype=np.int32),
+        sequence=np.ascontiguousarray(topology.sequence, dtype=np.int32),
+        res_sizes=np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),
     )
 
 
@@ -442,9 +271,16 @@ def build_zmatrix_from_components(
     component_starts: np.ndarray,
     component_sizes: np.ndarray,
     roots: np.ndarray,
-) -> np.ndarray:
+    atoms: np.ndarray | None = None,
+    sequence: np.ndarray | None = None,
+    res_sizes: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Build Z-matrix from CSR graph for multiple connected components.
+
+    When atoms, sequence, and res_sizes are provided, uses dihedral-aware
+    reference selection to ensure named dihedrals (PHI, PSI, etc.) use
+    the correct reference atoms.
 
     Args:
         offsets: (N+1,) CSR offsets array
@@ -453,28 +289,36 @@ def build_zmatrix_from_components(
         component_starts: Start indices for each component
         component_sizes: Number of atoms in each component
         roots: Root atom for each component
+        atoms: (N,) int32 atom types (optional, for dihedral-aware mode)
+        sequence: (R,) int32 residue types (optional)
+        res_sizes: (R,) int32 atoms per residue (optional)
 
     Returns:
-        (M, 4) Z-matrix array [atom_idx, dist_ref, ang_ref, dih_ref]
+        Tuple of:
+            zmatrix: (M, 4) Z-matrix array [atom_idx, dist_ref, ang_ref, dih_ref]
+            dihedral_types: (M,) int8 dihedral type per entry (-1 if not named)
     """
-    # Use parallel C implementation
-    zmatrix, counts = _build_zmatrix_parallel_c(
+    # Use parallel C implementation with optional dihedral-aware mode
+    zmatrix, dihedral_types, counts = _build_zmatrix_parallel_c(
         offsets, neighbors, n_atoms,
-        component_starts, component_sizes, roots
+        component_starts, component_sizes, roots,
+        atoms, sequence, res_sizes
     )
     # Trim to actual entries
     total_entries = int(counts.sum())
     if total_entries < len(zmatrix):
         result = np.zeros((total_entries, 4), dtype=np.int64)
+        result_dtypes = np.full(total_entries, -1, dtype=np.int8)
         src_offset = 0
         dst_offset = 0
         for size, count in zip(component_sizes, counts):
             count = int(count)
             result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
+            result_dtypes[dst_offset:dst_offset + count] = dihedral_types[src_offset:src_offset + count]
             src_offset += size
             dst_offset += count
-        return result
-    return zmatrix[:total_entries]
+        return result, result_dtypes
+    return zmatrix[:total_entries], dihedral_types[:total_entries]
 
 
 

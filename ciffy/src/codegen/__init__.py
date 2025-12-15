@@ -91,7 +91,7 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
     print(f"Assigned {current_idx - 1} unique atoms, {len(atom_index)} total entries")
 
     # Compute arrays needed for multiple generators
-    atom_dihedral_type, _ = compute_atom_dihedral_ownership(all_residues, atom_index)
+    atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(all_residues, atom_index)
     atom_canonical_refs, atom_has_canonical_refs = compute_canonical_zmatrix_refs(
         all_residues, atom_index
     )
@@ -108,6 +108,7 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
         atom_canonical_refs,
         atom_has_canonical_refs,
         atom_dihedral_type,
+        atom_dihedral_refs,
         residue_backbone_atoms,
     )
     generate_python_molecule(types_dir)

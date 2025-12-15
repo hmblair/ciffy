@@ -291,6 +291,153 @@ class TestNamedDihedrals:
         result = polymer.dihedral(DihedralType.PHI)
         assert result is not None  # Should not crash
 
+    def test_protein_dihedrals_match_biopython(self):
+        """Test protein backbone dihedrals match Bio.PDB values.
+
+        Compares PHI and PSI angles against Bio.PDB.internal_coords.
+        Note: ciffy uses opposite sign convention from Bio.PDB.
+        """
+        pytest.importorskip("Bio")
+        from Bio.PDB import MMCIFParser
+        from ciffy import load, DihedralType
+
+        # Load with Bio.PDB
+        parser = MMCIFParser(QUIET=True)
+        bio_struct = parser.get_structure("8CAM", get_test_cif("8CAM"))
+        bio_chain = list(bio_struct.get_models())[0]["0"]  # First protein chain
+        bio_chain.atom_to_internal_coordinates()
+
+        # Extract Bio.PDB dihedrals (degrees -> radians)
+        bio_phi, bio_psi = [], []
+        for res in bio_chain.get_residues():
+            if hasattr(res, "internal_coord") and res.internal_coord:
+                ic = res.internal_coord
+                phi = ic.get_angle("phi")
+                psi = ic.get_angle("psi")
+                bio_phi.append(np.deg2rad(phi) if phi else np.nan)
+                bio_psi.append(np.deg2rad(psi) if psi else np.nan)
+        bio_phi = np.array(bio_phi)
+        bio_psi = np.array(bio_psi)
+
+        # Load with ciffy - get first protein chain
+        ciffy_polymer = load(get_test_cif("8CAM")).poly().by_index(0)
+        ciffy_phi = ciffy_polymer.dihedral(DihedralType.PHI)
+        ciffy_psi = ciffy_polymer.dihedral(DihedralType.PSI)
+
+        # Bio.PDB includes NaN for missing dihedrals, ciffy omits them
+        # Bio.PDB: first phi is NaN (no preceding residue)
+        # Bio.PDB: last psi is NaN (no following residue)
+        bio_phi_valid = bio_phi[1:]  # Skip first NaN
+        bio_psi_valid = bio_psi[:-1]  # Skip last NaN
+
+        # Compare with sign flip (convention difference)
+        # ciffy_dihedral = -bio_dihedral
+        n_phi = min(len(bio_phi_valid), len(ciffy_phi))
+        n_psi = min(len(bio_psi_valid), len(ciffy_psi))
+
+        phi_diff = np.abs(bio_phi_valid[:n_phi] + ciffy_phi[:n_phi])
+        psi_diff = np.abs(bio_psi_valid[:n_psi] + ciffy_psi[:n_psi])
+
+        # Handle wrap-around at ±π
+        phi_diff = np.minimum(phi_diff, 2 * np.pi - phi_diff)
+        psi_diff = np.minimum(psi_diff, 2 * np.pi - psi_diff)
+
+        # Should match within numerical precision
+        assert np.nanmax(phi_diff) < 1e-5, f"PHI max diff: {np.nanmax(phi_diff)}"
+        assert np.nanmax(psi_diff) < 1e-5, f"PSI max diff: {np.nanmax(psi_diff)}"
+
+    def test_sidechain_chi1_match_biopython(self):
+        """Test sidechain CHI1 dihedrals match Bio.PDB values.
+
+        Compares CHI1 angles against Bio.PDB.internal_coords by mapping
+        chi1 Z-matrix entries to their owning residues.
+        Note: ciffy uses opposite sign convention from Bio.PDB.
+        """
+        pytest.importorskip("Bio")
+        from Bio.PDB import MMCIFParser
+        from ciffy import load, DihedralType
+        from ciffy.biochemistry import Residue
+        from ciffy.types import Scale
+
+        # Load with Bio.PDB
+        parser = MMCIFParser(QUIET=True)
+        bio_struct = parser.get_structure("8CAM", get_test_cif("8CAM"))
+        bio_chain = list(bio_struct.get_models())[0]["0"]
+        bio_chain.atom_to_internal_coordinates()
+
+        # Extract Bio.PDB CHI1 indexed by position
+        bio_chi1_by_idx = {}
+        for idx, res in enumerate(bio_chain.get_residues()):
+            if hasattr(res, "internal_coord") and res.internal_coord:
+                ic = res.internal_coord
+                chi1_deg = ic.get_angle("chi1")
+                if chi1_deg is not None:
+                    bio_chi1_by_idx[idx] = (res.get_resname(), np.deg2rad(chi1_deg))
+
+        # Load with ciffy
+        ciffy_polymer = load(get_test_cif("8CAM")).poly().by_index(0)
+        ciffy_chi1 = ciffy_polymer.dihedral(DihedralType.CHI1)
+
+        # Map chi1 values to residue indices using Z-matrix
+        cm = ciffy_polymer._coord_manager
+        zmat = cm.zmatrix
+        dihedral_types = zmat.dihedral_types
+        chi1_zmat_indices = np.where(dihedral_types == DihedralType.CHI1.value)[0]
+
+        # Build residue offset array
+        res_sizes = ciffy_polymer.sizes(Scale.RESIDUE)
+        res_offsets = np.concatenate([[0], np.cumsum(res_sizes)[:-1]])
+
+        # Get ciffy sequence for alignment
+        ciffy_seq = [Residue(int(r)).name for r in ciffy_polymer.sequence]
+        bio_seq = [res.get_resname() for res in bio_chain.get_residues()]
+
+        # Find offset: ciffy may have extra N-terminal residues
+        offset = 0
+        for start in range(min(10, len(ciffy_seq))):
+            if ciffy_seq[start : start + 5] == bio_seq[:5]:
+                offset = start
+                break
+
+        # Compare chi1 values
+        matched = 0
+        total_compared = 0
+        max_diff = 0.0
+
+        for chi1_idx, zmat_idx in enumerate(chi1_zmat_indices):
+            # Find which ciffy residue owns this chi1
+            atom_idx = int(zmat.atom_indices[zmat_idx])
+            ciffy_res_idx = int(np.searchsorted(res_offsets, atom_idx, side="right") - 1)
+
+            # Map to Bio.PDB index
+            bio_res_idx = ciffy_res_idx - offset
+            if bio_res_idx < 0 or bio_res_idx not in bio_chi1_by_idx:
+                continue
+
+            bio_name, bio_val = bio_chi1_by_idx[bio_res_idx]
+            ciffy_name = ciffy_seq[ciffy_res_idx]
+            ciffy_val = ciffy_chi1[chi1_idx]
+
+            # Skip if residue names don't match
+            if bio_name != ciffy_name:
+                continue
+
+            total_compared += 1
+
+            # Sign flip: ciffy = -bio
+            diff = abs(bio_val + ciffy_val)
+            if diff > np.pi:
+                diff = 2 * np.pi - diff
+
+            max_diff = max(max_diff, diff)
+            if diff < 1e-4:
+                matched += 1
+
+        # Should have many matching residues
+        assert total_compared >= 30, f"Only compared {total_compared} residues"
+        assert matched >= 30, f"Only {matched}/{total_compared} CHI1 values matched"
+        assert max_diff < 1e-4, f"CHI1 max diff: {max_diff:.6f} rad"
+
 
 class TestSetMethods:
     """Tests for setting internal coordinates."""
@@ -1121,3 +1268,177 @@ class TestRingPreservation:
                         atol=1e-5,
                         err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
                     )
+
+    @pytest.mark.xfail(reason="Ring deformation during gradient-based backbone optimization - architectural limitation")
+    def test_ring_torsion_during_backbone_optimization(self):
+        """Test that rings remain planar during gradient-based backbone optimization.
+
+        This test optimizes backbone dihedrals using gradient descent with a simple
+        energy function and measures ring dihedral angles throughout. Currently fails
+        because the Z-matrix structure causes ring atoms to move inconsistently when
+        backbone dihedrals change.
+
+        The root cause is that ring atoms reference a mix of backbone and ring atoms
+        in the Z-matrix. When backbone atoms move, ring atoms that reference them
+        move differently than ring atoms that reference other ring atoms, breaking
+        ring planarity.
+        """
+        import torch
+        from ciffy import load, DihedralType
+
+        def compute_dihedral_angle(p1, p2, p3, p4):
+            """Compute dihedral angle in degrees from 4 points."""
+            b1 = p2 - p1
+            b2 = p3 - p2
+            b3 = p4 - p3
+            n1 = torch.linalg.cross(b1, b2)
+            n2 = torch.linalg.cross(b2, b3)
+            n1 = n1 / (torch.linalg.norm(n1) + 1e-10)
+            n2 = n2 / (torch.linalg.norm(n2) + 1e-10)
+            m1 = torch.linalg.cross(n1, b2 / (torch.linalg.norm(b2) + 1e-10))
+            x = torch.dot(n1, n2)
+            y = torch.dot(m1, n2)
+            return torch.atan2(y, x) * 180 / np.pi
+
+        def get_ring_dihedrals_for_residue(coords, atoms, res_start, res_end, res_type, is_purine):
+            """Get ring dihedral angles for a single residue."""
+            from ciffy.biochemistry import Residue
+
+            residue = Residue(res_type)
+            atom_enum = residue.atoms
+
+            # Map atom types to global indices
+            atom_idx = {}
+            for i in range(res_start, res_end):
+                atom_type = atoms[i]
+                for name in dir(atom_enum):
+                    if name.startswith('_'):
+                        continue
+                    try:
+                        member = getattr(atom_enum, name)
+                        if hasattr(member, 'value') and member.value == atom_type:
+                            atom_idx[name] = i
+                            break
+                    except:
+                        pass
+
+            # Define ring dihedral patterns
+            if is_purine:
+                patterns = [
+                    ["C8", "N9", "C4", "C5"],
+                    ["N9", "C4", "C5", "N7"],
+                    ["C4", "C5", "N7", "C8"],
+                    ["C4", "C5", "C6", "N1"],
+                ]
+            else:
+                patterns = [
+                    ["C6", "N1", "C2", "N3"],
+                    ["N1", "C2", "N3", "C4"],
+                    ["C2", "N3", "C4", "C5"],
+                ]
+
+            dihedrals = []
+            for atom_names in patterns:
+                try:
+                    indices = [atom_idx[n] for n in atom_names]
+                    angle = compute_dihedral_angle(
+                        coords[indices[0]], coords[indices[1]],
+                        coords[indices[2]], coords[indices[3]]
+                    )
+                    dihedrals.append(angle.item())
+                except KeyError:
+                    pass
+            return dihedrals
+
+        def get_all_ring_dihedrals(polymer, coords):
+            """Get all ring dihedrals for RNA."""
+            from ciffy.biochemistry import Residue
+
+            atoms = polymer._coord_manager._topology.atoms
+            sequence = polymer._coord_manager._topology.sequence
+            res_sizes = polymer._coord_manager._topology.residue_sizes
+
+            res_starts = np.zeros(len(res_sizes) + 1, dtype=np.int64)
+            res_starts[1:] = np.cumsum(res_sizes)
+
+            purine_types = {Residue.A.value, Residue.G.value}
+            pyrimidine_types = {Residue.C.value, Residue.U.value}
+
+            all_dihedrals = []
+            for res_idx in range(len(sequence)):
+                res_type = sequence[res_idx]
+                start, end = int(res_starts[res_idx]), int(res_starts[res_idx + 1])
+
+                if res_type in purine_types:
+                    dihedrals = get_ring_dihedrals_for_residue(
+                        coords, atoms, start, end, res_type, is_purine=True)
+                    all_dihedrals.extend(dihedrals)
+                elif res_type in pyrimidine_types:
+                    dihedrals = get_ring_dihedrals_for_residue(
+                        coords, atoms, start, end, res_type, is_purine=False)
+                    all_dihedrals.extend(dihedrals)
+            return all_dihedrals
+
+        # Load RNA structure
+        rna = load(get_test_cif("9GCM")).by_index(0).torch()
+
+        # Get initial ring dihedrals
+        coords_initial = rna.coordinates.clone()
+        ring_dihedrals_initial = get_all_ring_dihedrals(rna, coords_initial)
+
+        # Setup backbone optimization
+        cm = rna._coord_manager
+        zm = cm.zmatrix
+        dihedral_types = zm.dihedral_types
+
+        # Include CHI (glycosidic) dihedrals - these connect base to sugar
+        # and cause ring deformation when optimized
+        backbone_types = [
+            DihedralType.ALPHA, DihedralType.BETA, DihedralType.GAMMA,
+            DihedralType.DELTA, DihedralType.EPSILON, DihedralType.ZETA,
+            DihedralType.CHI_PURINE, DihedralType.CHI_PYRIMIDINE,
+        ]
+        backbone_mask = torch.zeros(len(dihedral_types), dtype=torch.bool)
+        for dt in backbone_types:
+            backbone_mask |= torch.from_numpy(dihedral_types == dt.value)
+
+        dihedrals = cm.dihedrals.clone()
+        dihedrals.requires_grad_(True)
+
+        # Run optimization steps
+        n_steps = 20
+        lr = 0.01
+        max_deviation = 0.0
+
+        for step in range(n_steps):
+            cm._dihedrals = dihedrals
+            cm._invalidate_cartesian()
+            coords = cm.coordinates
+
+            # Simple energy: sum of squared coordinates
+            E = (coords ** 2).sum()
+
+            # Measure ring deviation
+            ring_dihedrals_current = get_all_ring_dihedrals(rna, coords.detach())
+            for init, curr in zip(ring_dihedrals_initial, ring_dihedrals_current):
+                diff = abs(init - curr)
+                if diff > 180:
+                    diff = 360 - diff
+                max_deviation = max(max_deviation, diff)
+
+            # Update backbone dihedrals
+            E.backward()
+            with torch.no_grad():
+                grad = dihedrals.grad
+                if grad is not None:
+                    update = torch.zeros_like(dihedrals)
+                    update[backbone_mask] = grad[backbone_mask]
+                    dihedrals -= lr * update
+                    dihedrals.grad.zero_()
+
+        # Rings should remain planar (< 5 degree deviation)
+        assert max_deviation < 5.0, (
+            f"Ring deformation detected: max deviation {max_deviation:.1f}° >= 5°. "
+            "This is a known architectural limitation where ring atoms reference "
+            "a mix of backbone and ring atoms in the Z-matrix."
+        )

@@ -29,6 +29,52 @@ class ResidueDefinition:
             self.class_name = to_class_name(self.name)
 
 
+# =============================================================================
+# SIDECHAIN DIHEDRAL DEFINITIONS
+# =============================================================================
+# Chi definitions for each amino acid residue.
+# Format: chi_name -> (atom1, atom2, atom3, atom4)
+# All atoms are in the same residue (offset 0).
+
+SIDECHAIN_CHI_DEFS: dict[str, dict[str, tuple[str, str, str, str]]] = {
+    # CHI1: N-CA-CB-XG
+    "ARG": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "NE"), "chi4": ("CG", "CD", "NE", "CZ")},
+    "ASN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
+    "ASP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
+    "CYS": {"chi1": ("N", "CA", "CB", "SG")},
+    "GLN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "OE1")},
+    "GLU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "OE1")},
+    "HIS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "ND1")},
+    "ILE": {"chi1": ("N", "CA", "CB", "CG1"), "chi2": ("CA", "CB", "CG1", "CD1")},
+    "LEU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "LYS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},
+    "MET": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SD"),
+            "chi3": ("CB", "CG", "SD", "CE")},
+    "PHE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "PRO": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},
+    "SER": {"chi1": ("N", "CA", "CB", "OG")},
+    "THR": {"chi1": ("N", "CA", "CB", "OG1")},
+    "TRP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "TYR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "VAL": {"chi1": ("N", "CA", "CB", "CG1")},
+    # Modified amino acids
+    "MSE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SE"),
+            "chi3": ("CB", "CG", "SE", "CE")},  # Selenomethionine (like MET)
+    "SEP": {"chi1": ("N", "CA", "CB", "OG")},  # Phosphoserine (like SER)
+    "TPO": {"chi1": ("N", "CA", "CB", "OG1")},  # Phosphothreonine (like THR)
+    "PTR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},  # Phosphotyrosine (like TYR)
+    "CSO": {"chi1": ("N", "CA", "CB", "SG")},  # S-hydroxycysteine (like CYS)
+    "OCS": {"chi1": ("N", "CA", "CB", "SG")},  # Cysteinesulfonic acid (like CYS)
+    "HYP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},  # Hydroxyproline (like PRO)
+    "MLY": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},  # N-dimethyl-lysine (like LYS)
+}
+
+
 def compute_dihedral_patterns(res: ResidueDefinition) -> dict[int, list[tuple[int, int]]]:
     """
     Compute dihedral angle patterns for a residue.
@@ -71,6 +117,12 @@ def compute_dihedral_patterns(res: ResidueDefinition) -> dict[int, list[tuple[in
             # Original was: CA(i) - C(i) - N(i+1) - CA(i+1) with owner at +1
             "omega": (("CA", -1), ("C", -1), ("N", 0), ("CA", 0)),
         }
+        # Add sidechain chi dihedrals if this residue has them
+        # All sidechain dihedrals are intra-residue (offset 0)
+        if res.name in SIDECHAIN_CHI_DEFS:
+            for chi_name, atoms in SIDECHAIN_CHI_DEFS[res.name].items():
+                # Convert (a1, a2, a3, a4) to ((a1, 0), (a2, 0), (a3, 0), (a4, 0))
+                dihedral_defs[chi_name] = tuple((atom, 0) for atom in atoms)
     elif res.molecule_type in (Molecule.RNA, Molecule.DNA, Molecule.HYBRID):
         dihedral_defs = {
             # alpha: O3'(i-1) - P(i) - O5'(i) - C5'(i) - owner C5' is at offset 0

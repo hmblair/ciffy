@@ -66,8 +66,8 @@ class ZMatrix:
 
         Processes each chain independently with its own spanning tree.
         Returns entries in BFS order so references always point to
-        earlier (already placed) atoms. Post-processes to annotate
-        named dihedral types and update references for dihedral owners.
+        earlier (already placed) atoms. The C extension performs
+        dihedral-aware reference selection in a single pass.
 
         Args:
             topology: TopologyInfo containing structural metadata.
@@ -75,28 +75,13 @@ class ZMatrix:
         Returns:
             ZMatrix with entries in placement order and dihedral type annotations.
         """
-        from .graph import _build_zmatrix_indices_from_topology, annotate_dihedral_types
+        from .graph import _build_zmatrix_indices_from_topology
 
-        # Build Z-matrix using BFS
-        indices = _build_zmatrix_indices_from_topology(topology)
+        # Build Z-matrix with dihedral-aware refs in single C pass
+        indices, dihedral_types = _build_zmatrix_indices_from_topology(topology)
 
         if len(indices) == 0:
             return cls(indices, np.array([], dtype=np.int8))
-
-        # Compute residue start offsets
-        residue_starts = np.concatenate([[0], np.cumsum(topology.residue_sizes)])
-
-        # Get chain boundaries (residue indices where new chains start)
-        chain_boundaries = np.concatenate([[0], np.cumsum(topology.chain_lengths)[:-1]])
-
-        # Post-process to annotate dihedral types and update references
-        indices, dihedral_types = annotate_dihedral_types(
-            indices,
-            topology.atoms,
-            topology.sequence,
-            residue_starts,
-            chain_boundaries,
-        )
 
         return cls(indices, dihedral_types)
 

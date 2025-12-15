@@ -5,10 +5,10 @@ Provides definitions for standard backbone dihedrals (phi, psi, omega for
 proteins; alpha-zeta and chi for nucleic acids) and functions to identify
 which Z-matrix entries correspond to these dihedrals.
 
-Note: The primary dihedral lookup mechanism now uses the `dihedral_types`
-array built by `annotate_dihedral_types()` in graph.py, which uses
-precomputed data from the codegen system. The functions in this module
-are kept for reference and backward compatibility.
+Note: The primary dihedral lookup mechanism uses the `dihedral_types`
+array returned by the C extension during Z-matrix construction. The C code
+uses precomputed lookup tables from the codegen system for optimal performance.
+The functions in this module are kept for reference and backward compatibility.
 """
 
 from __future__ import annotations
@@ -71,8 +71,8 @@ def compute_dihedral_indices(
 
     .. deprecated::
         This function is deprecated. The primary mechanism now uses the
-        `dihedral_types` array built by `annotate_dihedral_types()` in graph.py,
-        which is faster and more reliable.
+        `dihedral_types` array returned by the C extension during Z-matrix
+        construction, which is faster and more reliable.
 
     Uses the precomputed dihedral_patterns from Residue definitions instead of
     searching through all Z-matrix entries. Returns integer-keyed dict for

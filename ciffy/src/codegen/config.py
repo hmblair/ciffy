@@ -14,12 +14,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Add package root to path so we can import from ciffy.types during build
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent.parent
-if str(_PACKAGE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PACKAGE_ROOT))
-
-from ciffy.types.dihedral import DihedralType
+# Import DihedralType directly to avoid triggering ciffy.__init__ during codegen
+# This is necessary because ciffy.__init__ requires the C extension
+import importlib.util
+_DIHEDRAL_MODULE_PATH = Path(__file__).parent.parent.parent / "types" / "dihedral.py"
+_spec = importlib.util.spec_from_file_location("dihedral", _DIHEDRAL_MODULE_PATH)
+_dihedral_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_dihedral_module)
+DihedralType = _dihedral_module.DihedralType
 
 # URL for the PDB Chemical Component Dictionary
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"

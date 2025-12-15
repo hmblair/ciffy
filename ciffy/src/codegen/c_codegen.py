@@ -427,6 +427,7 @@ def generate_canonical_refs_header(
     atom_canonical_refs: np.ndarray,
     atom_has_canonical_refs: np.ndarray,
     atom_dihedral_type: np.ndarray,
+    atom_dihedral_refs: np.ndarray,
     residue_backbone_atoms: np.ndarray,
 ) -> None:
     """
@@ -437,7 +438,10 @@ def generate_canonical_refs_header(
     - ATOM_CANONICAL_REFS: Pre-defined reference atoms for each atom type
     - ATOM_HAS_CANONICAL_REFS: Whether each atom type has canonical refs
     - ATOM_DIHEDRAL_TYPE: Which dihedral (if any) each atom owns
+    - ATOM_DIHEDRAL_REFS: Reference atoms for dihedral owners (offset, local_idx)
     - RESIDUE_BACKBONE_ATOMS: Backbone atom types for each residue type
+    - RESIDUE_CANONICAL_ATOMS: Canonical atom ordering per residue type
+    - RESIDUE_ATOM_COUNTS: Number of atoms per residue type
 
     Args:
         internal_dir: Output directory for header file.
@@ -446,6 +450,7 @@ def generate_canonical_refs_header(
         atom_canonical_refs: (num_atoms, 6) array from compute_canonical_zmatrix_refs.
         atom_has_canonical_refs: (num_atoms,) bool array.
         atom_dihedral_type: (num_atoms,) int8 array from compute_atom_dihedral_ownership.
+        atom_dihedral_refs: (num_atoms, 3, 2) int8 array from compute_atom_dihedral_ownership.
         residue_backbone_atoms: (num_residues, num_backbone_names) int16 array.
     """
     num_atoms = len(atom_canonical_refs)
@@ -544,6 +549,84 @@ def generate_canonical_refs_header(
         vals = residue_backbone_atoms[res_idx]
         vals_str = ', '.join(str(int(v)) for v in vals)
         lines.append(f'    [{res_idx}] = {{{vals_str}}},  /* {res.name} */')
+
+    lines.extend([
+        '};',
+        '',
+    ])
+
+    # Generate ATOM_DIHEDRAL_REFS
+    # Shape: (num_atoms, 3, 2) -> flatten to (num_atoms, 6)
+    # Each row: [dih_offset, dih_local_idx, ang_offset, ang_local_idx, dist_offset, dist_local_idx]
+    lines.extend([
+        '/**',
+        ' * Dihedral reference atoms for dihedral owners.',
+        ' * Each row: [dih_offset, dih_idx, ang_offset, ang_idx, dist_offset, dist_idx]',
+        ' * where offset is residue offset (-1/0/+1) and idx is local atom index.',
+        ' * Only meaningful where ATOM_DIHEDRAL_TYPE[atom] >= 0.',
+        ' */',
+        f'static const int8_t ATOM_DIHEDRAL_REFS[NUM_ATOM_TYPES][6] = {{',
+    ])
+
+    for i in range(num_atoms):
+        refs = atom_dihedral_refs[i]  # Shape (3, 2)
+        # Flatten: [dih, ang, dist] each with [offset, idx]
+        flat = [refs[0, 0], refs[0, 1], refs[1, 0], refs[1, 1], refs[2, 0], refs[2, 1]]
+        vals = ', '.join(str(int(v)) for v in flat)
+        lines.append(f'    [{i}] = {{{vals}}},')
+
+    lines.extend([
+        '};',
+        '',
+    ])
+
+    # Compute canonical atom ordering per residue
+    # Build (residue_type, local_idx) -> global_atom_type mapping
+    max_atoms_per_res = max(len(res.atoms) for res in all_residues) if all_residues else 0
+    residue_canonical_atoms = np.zeros((num_residues, max_atoms_per_res), dtype=np.int16)
+    residue_atom_counts = np.zeros(num_residues, dtype=np.int16)  # int16 for residues with >127 atoms
+
+    for res_idx, res in enumerate(all_residues):
+        primary_cif = res.cif_names[0]
+        residue_atom_counts[res_idx] = len(res.atoms)
+        for local_idx, atom_name in enumerate(res.atoms):
+            key = (primary_cif, atom_name)
+            if key in atom_index:
+                residue_canonical_atoms[res_idx, local_idx] = atom_index[key]
+
+    lines.extend([
+        '/**',
+        ' * Canonical atom ordering per residue type.',
+        ' * Maps (residue_type, local_idx) -> global atom type.',
+        ' * Used to resolve dihedral references by local index.',
+        ' */',
+        f'#define MAX_ATOMS_PER_RESIDUE {max_atoms_per_res}',
+        '',
+        f'static const int16_t RESIDUE_CANONICAL_ATOMS[NUM_RESIDUE_TYPES][MAX_ATOMS_PER_RESIDUE] = {{',
+    ])
+
+    for res_idx, res in enumerate(all_residues):
+        vals = residue_canonical_atoms[res_idx]
+        # Only output non-zero values up to atom count
+        count = int(residue_atom_counts[res_idx])
+        vals_str = ', '.join(str(int(v)) for v in vals[:count])
+        if count < max_atoms_per_res:
+            # Pad with zeros for remaining slots
+            vals_str += ', ' + ', '.join(['0'] * (max_atoms_per_res - count))
+        lines.append(f'    [{res_idx}] = {{{vals_str}}},  /* {res.name} */')
+
+    lines.extend([
+        '};',
+        '',
+        '/* Number of atoms per residue type */',
+        f'static const int16_t RESIDUE_ATOM_COUNTS[NUM_RESIDUE_TYPES] = {{',
+    ])
+
+    # Output counts (16 per line for compactness)
+    for i in range(0, num_residues, 16):
+        chunk = residue_atom_counts[i:i+16]
+        vals = ', '.join(str(int(v)) for v in chunk)
+        lines.append(f'    {vals},')
 
     lines.extend([
         '};',

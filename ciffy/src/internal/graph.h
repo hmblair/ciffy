@@ -57,14 +57,25 @@ int64_t estimate_max_edges(
 /**
  * Build Z-matrix from edge list for a single chain (with pre-built CSR).
  *
- * @param offsets     (n_atoms+1,) CSR offsets
- * @param neighbors   (n_edges,) CSR neighbor indices
- * @param n_atoms     Total number of atoms
- * @param chain_start First atom index for this chain
- * @param chain_size  Number of atoms in this chain
- * @param root        Root atom index for BFS
- * @param out_zmatrix Output: (chain_size, 4) int64 Z-matrix entries
- * @return            Number of entries written, or -1 on error
+ * When dihedral-aware mode is enabled (atoms, sequence, residue_starts,
+ * chain_res_starts all non-NULL), the function will attempt to use
+ * dihedral-specific references for atoms that own named dihedrals.
+ *
+ * @param offsets          (n_atoms+1,) CSR offsets
+ * @param neighbors        (n_edges,) CSR neighbor indices
+ * @param n_atoms          Total number of atoms
+ * @param chain_start      First atom index for this chain
+ * @param chain_size       Number of atoms in this chain
+ * @param root             Root atom index for BFS
+ * @param atoms            (n_atoms,) int32 atom types (NULL to disable dihedral-aware)
+ * @param sequence         (n_residues,) int32 residue types
+ * @param residue_starts   (n_residues+1,) int64 cumsum of residue sizes
+ * @param n_residues       Total number of residues
+ * @param chain_res_starts (n_chains,) int64 residue start indices per chain
+ * @param n_chains         Number of chains
+ * @param out_zmatrix      Output: (chain_size, 4) int64 Z-matrix entries
+ * @param out_dihedral_types Output: (chain_size,) int8 dihedral type or -1 (can be NULL)
+ * @return                 Number of entries written, or -1 on error
  */
 int64_t build_zmatrix_from_csr(
     const int64_t *offsets,
@@ -73,7 +84,14 @@ int64_t build_zmatrix_from_csr(
     int64_t chain_start,
     int64_t chain_size,
     int64_t root,
-    int64_t *out_zmatrix
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int64_t *residue_starts,
+    int64_t n_residues,
+    const int64_t *chain_res_starts,
+    int64_t n_chains,
+    int64_t *out_zmatrix,
+    int8_t *out_dihedral_types
 );
 
 /**
@@ -98,16 +116,26 @@ int edges_to_csr(
 /**
  * Build Z-matrix for all chains in parallel using OpenMP.
  *
- * @param offsets       (n_atoms+1,) CSR offsets
- * @param neighbors     (n_edges,) CSR neighbor indices
- * @param n_atoms       Total number of atoms
- * @param chain_starts  (n_chains,) int64 first atom index per chain
- * @param chain_sizes   (n_chains,) int64 number of atoms per chain
- * @param roots         (n_chains,) int64 root atom index per chain
- * @param n_chains      Number of chains
- * @param out_zmatrix   Output: (total_atoms, 4) int64 Z-matrix (caller allocates)
- * @param out_counts    Output: (n_chains,) int64 entries written per chain
- * @return              Total entries written, or -1 on error
+ * When dihedral-aware mode is enabled (atoms, sequence, residue_starts,
+ * chain_res_starts all non-NULL), uses dihedral-specific references
+ * for atoms that own named dihedrals.
+ *
+ * @param offsets          (n_atoms+1,) CSR offsets
+ * @param neighbors        (n_edges,) CSR neighbor indices
+ * @param n_atoms          Total number of atoms
+ * @param chain_starts     (n_chains,) int64 first atom index per chain
+ * @param chain_sizes      (n_chains,) int64 number of atoms per chain
+ * @param roots            (n_chains,) int64 root atom index per chain
+ * @param n_chains         Number of chains
+ * @param atoms            (n_atoms,) int32 atom types (NULL to disable)
+ * @param sequence         (n_residues,) int32 residue types
+ * @param residue_starts   (n_residues+1,) int64 cumsum of residue sizes
+ * @param n_residues       Total number of residues
+ * @param chain_res_starts (n_chains,) int64 residue start indices per chain
+ * @param out_zmatrix      Output: (total_atoms, 4) int64 Z-matrix
+ * @param out_dihedral_types Output: (total_atoms,) int8 dihedral types (can be NULL)
+ * @param out_counts       Output: (n_chains,) int64 entries per chain
+ * @return                 Total entries written, or -1 on error
  */
 int64_t build_zmatrix_parallel(
     const int64_t *offsets,
@@ -117,7 +145,13 @@ int64_t build_zmatrix_parallel(
     const int64_t *chain_sizes,
     const int64_t *roots,
     int64_t n_chains,
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int64_t *residue_starts,
+    int64_t n_residues,
+    const int64_t *chain_res_starts,
     int64_t *out_zmatrix,
+    int8_t *out_dihedral_types,
     int64_t *out_counts
 );
 

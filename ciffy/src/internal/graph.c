@@ -308,6 +308,206 @@ static int64_t find_placed_neighbor(
     return -1;
 }
 
+
+/* ========================================================================== */
+/* DIHEDRAL-AWARE REFERENCE RESOLUTION                                        */
+/* ========================================================================== */
+
+/**
+ * Binary search to find which residue an atom belongs to.
+ *
+ * @param atom_idx      Global atom index
+ * @param residue_starts Cumulative residue sizes (n_residues + 1)
+ * @param n_residues    Number of residues
+ * @return Residue index, or -1 if not found
+ */
+static int64_t find_residue_for_atom(
+    int64_t atom_idx,
+    const int64_t *residue_starts,
+    int64_t n_residues
+) {
+    int64_t lo = 0, hi = n_residues;
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        if (residue_starts[mid + 1] <= atom_idx) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo < n_residues && residue_starts[lo] <= atom_idx && atom_idx < residue_starts[lo + 1]) {
+        return lo;
+    }
+    return -1;
+}
+
+/**
+ * Check if crossing from res_idx to target_res crosses a chain boundary.
+ *
+ * @param res_idx            Current residue index
+ * @param target_res         Target residue index
+ * @param chain_res_starts   Residue indices where each chain starts
+ * @param n_chains           Number of chains
+ * @return 1 if crosses boundary, 0 otherwise
+ */
+static int crosses_chain_boundary(
+    int64_t res_idx,
+    int64_t target_res,
+    const int64_t *chain_res_starts,
+    int64_t n_chains
+) {
+    if (res_idx == target_res) return 0;
+
+    int64_t min_res = (res_idx < target_res) ? res_idx : target_res;
+    int64_t max_res = (res_idx > target_res) ? res_idx : target_res;
+
+    /* Check if any chain boundary falls in (min_res, max_res] */
+    for (int64_t c = 1; c < n_chains; c++) {
+        int64_t boundary = chain_res_starts[c];
+        if (boundary > min_res && boundary <= max_res) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Find atom of specified type within a residue.
+ *
+ * @param target_res     Residue index
+ * @param expected_type  Expected atom type (global index)
+ * @param atoms          Atom types array
+ * @param residue_starts Cumulative residue sizes
+ * @return Global atom index, or -1 if not found
+ */
+static int64_t find_atom_of_type_in_residue(
+    int64_t target_res,
+    int16_t expected_type,
+    const int32_t *atoms,
+    const int64_t *residue_starts
+) {
+    int64_t start = residue_starts[target_res];
+    int64_t end = residue_starts[target_res + 1];
+
+    for (int64_t i = start; i < end; i++) {
+        if (atoms[i] == expected_type) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Try to resolve dihedral-specific references for an atom.
+ *
+ * If the atom owns a named dihedral, looks up the reference pattern and
+ * tries to resolve each reference atom. Returns success if all three
+ * references can be resolved and are already placed.
+ *
+ * @param atom_idx          Global atom index being placed
+ * @param atoms             Atom types array (global)
+ * @param sequence          Residue types array
+ * @param residue_starts    Cumulative residue sizes
+ * @param n_residues        Number of residues
+ * @param chain_res_starts  Residue indices where chains start
+ * @param n_chains          Number of chains
+ * @param placed            Boolean array: is atom placed? (indexed by global atom idx)
+ * @param out_dist          Output: distance reference atom
+ * @param out_ang           Output: angle reference atom
+ * @param out_dih           Output: dihedral reference atom
+ * @param out_dtype         Output: dihedral type index
+ * @return 1 if successful, 0 if cannot resolve
+ */
+static int resolve_dihedral_refs(
+    int64_t atom_idx,
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int64_t *residue_starts,
+    int64_t n_residues,
+    const int64_t *chain_res_starts,
+    int64_t n_chains,
+    const int8_t *placed,
+    int64_t *out_dist,
+    int64_t *out_ang,
+    int64_t *out_dih,
+    int8_t *out_dtype
+) {
+    int32_t atom_type = atoms[atom_idx];
+
+    /* Check bounds */
+    if (atom_type < 0 || atom_type >= NUM_ATOM_TYPES) {
+        return 0;
+    }
+
+    /* Check if this atom owns a named dihedral */
+    int8_t dihedral_type = ATOM_DIHEDRAL_TYPE[atom_type];
+    if (dihedral_type < 0) {
+        return 0;  /* Not a dihedral owner */
+    }
+
+    /* Get reference pattern: [dih_off, dih_idx, ang_off, ang_idx, dist_off, dist_idx] */
+    const int8_t *refs = ATOM_DIHEDRAL_REFS[atom_type];
+
+    /* Find which residue this atom belongs to */
+    int64_t res_idx = find_residue_for_atom(atom_idx, residue_starts, n_residues);
+    if (res_idx < 0) {
+        return 0;
+    }
+
+    /* Resolve each reference: dih (i=0), ang (i=1), dist (i=2) */
+    int64_t resolved[3];  /* [dih_ref, ang_ref, dist_ref] */
+
+    for (int i = 0; i < 3; i++) {
+        int8_t offset = refs[i * 2];
+        int8_t local_idx = refs[i * 2 + 1];
+
+        int64_t target_res = res_idx + offset;
+
+        /* Check residue bounds */
+        if (target_res < 0 || target_res >= n_residues) {
+            return 0;
+        }
+
+        /* Check chain boundary */
+        if (offset != 0 && crosses_chain_boundary(res_idx, target_res, chain_res_starts, n_chains)) {
+            return 0;
+        }
+
+        /* Look up expected atom type from canonical ordering */
+        int32_t target_res_type = sequence[target_res];
+        if (target_res_type < 0 || target_res_type >= NUM_RESIDUE_TYPES) {
+            return 0;
+        }
+        if (local_idx >= RESIDUE_ATOM_COUNTS[target_res_type]) {
+            return 0;
+        }
+        int16_t expected_atom_type = RESIDUE_CANONICAL_ATOMS[target_res_type][local_idx];
+
+        /* Find atom of this type in target residue */
+        int64_t ref_atom = find_atom_of_type_in_residue(
+            target_res, expected_atom_type, atoms, residue_starts);
+        if (ref_atom < 0) {
+            return 0;
+        }
+
+        /* Check that reference is already placed */
+        if (!placed[ref_atom]) {
+            return 0;
+        }
+
+        resolved[i] = ref_atom;
+    }
+
+    /* Success - all references resolved */
+    *out_dih = resolved[0];
+    *out_ang = resolved[1];
+    *out_dist = resolved[2];
+    *out_dtype = dihedral_type;
+
+    return 1;
+}
+
+
 int edges_to_csr(
     const int64_t *edges,
     int64_t n_edges,
@@ -363,7 +563,16 @@ int64_t build_zmatrix_from_csr(
     int64_t chain_start,
     int64_t chain_size,
     int64_t root,
-    int64_t *out_zmatrix
+    /* New params for dihedral-aware selection (can all be NULL to disable) */
+    const int32_t *atoms,            /* Atom types array */
+    const int32_t *sequence,         /* Residue types array */
+    const int64_t *residue_starts,   /* Cumsum of residue sizes */
+    int64_t n_residues,
+    const int64_t *chain_res_starts, /* Residue indices where chains start */
+    int64_t n_chains,
+    /* Outputs */
+    int64_t *out_zmatrix,
+    int8_t *out_dihedral_types       /* Dihedral type per entry (can be NULL) */
 ) {
     if (chain_size == 0) return 0;
 
@@ -379,8 +588,13 @@ int64_t build_zmatrix_from_csr(
         out_zmatrix[1] = -1;
         out_zmatrix[2] = -1;
         out_zmatrix[3] = -1;
+        if (out_dihedral_types) out_dihedral_types[0] = -1;
         return 1;
     }
+
+    /* Check if dihedral-aware mode is enabled */
+    int dihedral_aware = (atoms != NULL && sequence != NULL &&
+                          residue_starts != NULL && chain_res_starts != NULL);
 
     /*
      * Allocate working arrays sized to chain_size, not n_atoms.
@@ -393,12 +607,27 @@ int64_t build_zmatrix_from_csr(
     int64_t *order = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
     int64_t *queue = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
 
+    /* Placed array for dihedral resolution (indexed by GLOBAL atom index) */
+    int8_t *placed = NULL;
+    if (dihedral_aware) {
+        placed = (int8_t *)calloc((size_t)n_atoms, sizeof(int8_t));
+        if (!placed) {
+            free(parent);
+            free(grandparent);
+            free(visited);
+            free(order);
+            free(queue);
+            return -1;
+        }
+    }
+
     if (!parent || !grandparent || !visited || !order || !queue) {
         free(parent);
         free(grandparent);
         free(visited);
         free(order);
         free(queue);
+        free(placed);
         return -1;
     }
 
@@ -453,6 +682,7 @@ int64_t build_zmatrix_from_csr(
         int64_t atom_local = atom - chain_start;
         int64_t p = parent[atom_local];  /* Parent is stored as global index */
         int64_t *entry = &out_zmatrix[i * 4];
+        int8_t dihedral_type = -1;  /* Default: no named dihedral */
 
         if (i == 0) {
             /* First atom: no references */
@@ -483,29 +713,65 @@ int64_t build_zmatrix_from_csr(
             entry[3] = -1;
         }
         else {
-            /* Full Z-matrix entry */
-            int64_t p_local = p - chain_start;
-            int64_t gp = parent[p_local];
-            if (gp == -1) {
-                gp = find_child_of(order, i, parent, chain_start, p, atom);
+            /* Full Z-matrix entry - try dihedral-aware refs first */
+            int used_dihedral_refs = 0;
+
+            if (dihedral_aware) {
+                int64_t dih_dist, dih_ang, dih_dih;
+                int8_t dtype;
+
+                if (resolve_dihedral_refs(
+                        atom, atoms, sequence, residue_starts, n_residues,
+                        chain_res_starts, n_chains, placed,
+                        &dih_dist, &dih_ang, &dih_dih, &dtype)) {
+                    /* Successfully resolved dihedral-specific references */
+                    entry[0] = atom;
+                    entry[1] = dih_dist;
+                    entry[2] = dih_ang;
+                    entry[3] = dih_dih;
+                    dihedral_type = dtype;
+                    used_dihedral_refs = 1;
+
+                    /* Still track grandparent for BFS consistency */
+                    grandparent[atom_local] = dih_ang;
+                }
             }
 
-            /* Find great-grandparent for dihedral */
-            int64_t gp_local = (gp >= chain_start) ? gp - chain_start : -1;
-            int64_t ggp = (gp_local >= 0) ? grandparent[p_local] : -1;
-            if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
-                ggp = (gp_local >= 0) ? parent[gp_local] : -1;
-            }
-            if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
-                ggp = find_placed_neighbor(order, i, parent, chain_start, gp, atom, p, gp);
-            }
+            if (!used_dihedral_refs) {
+                /* Fall back to default BFS references */
+                int64_t p_local = p - chain_start;
+                int64_t gp = parent[p_local];
+                if (gp == -1) {
+                    gp = find_child_of(order, i, parent, chain_start, p, atom);
+                }
 
-            grandparent[atom_local] = gp;
+                /* Find great-grandparent for dihedral */
+                int64_t gp_local = (gp >= chain_start) ? gp - chain_start : -1;
+                int64_t ggp = (gp_local >= 0) ? grandparent[p_local] : -1;
+                if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
+                    ggp = (gp_local >= 0) ? parent[gp_local] : -1;
+                }
+                if (ggp == atom || ggp == p || ggp == gp || ggp == -1) {
+                    ggp = find_placed_neighbor(order, i, parent, chain_start, gp, atom, p, gp);
+                }
 
-            entry[0] = atom;
-            entry[1] = p;
-            entry[2] = gp;
-            entry[3] = ggp;
+                grandparent[atom_local] = gp;
+
+                entry[0] = atom;
+                entry[1] = p;
+                entry[2] = gp;
+                entry[3] = ggp;
+            }
+        }
+
+        /* Mark this atom as placed (for dihedral resolution of later atoms) */
+        if (placed) {
+            placed[atom] = 1;
+        }
+
+        /* Store dihedral type if output array provided */
+        if (out_dihedral_types) {
+            out_dihedral_types[i] = dihedral_type;
         }
     }
 
@@ -515,6 +781,7 @@ int64_t build_zmatrix_from_csr(
     free(visited);
     free(order);
     free(queue);
+    free(placed);
 
     return order_len;
 }
@@ -528,7 +795,15 @@ int64_t build_zmatrix_parallel(
     const int64_t *chain_sizes,
     const int64_t *roots,
     int64_t n_chains,
+    /* New params for dihedral-aware selection (can all be NULL to disable) */
+    const int32_t *atoms,            /* Atom types array */
+    const int32_t *sequence,         /* Residue types array */
+    const int64_t *residue_starts,   /* Cumsum of residue sizes */
+    int64_t n_residues,
+    const int64_t *chain_res_starts, /* Residue indices where chains start */
+    /* Outputs */
     int64_t *out_zmatrix,
+    int8_t *out_dihedral_types,      /* Dihedral type per entry (can be NULL) */
     int64_t *out_counts
 ) {
     if (n_chains == 0) return 0;
@@ -560,14 +835,18 @@ int64_t build_zmatrix_parallel(
             continue;
         }
 
-        /* Output location for this chain's Z-matrix */
+        /* Output location for this chain's Z-matrix and dihedral types */
         int64_t *chain_output = &out_zmatrix[output_offsets[c] * 4];
+        int8_t *chain_dtypes = out_dihedral_types ?
+            &out_dihedral_types[output_offsets[c]] : NULL;
 
         /* Build Z-matrix for this chain */
         int64_t count = build_zmatrix_from_csr(
             offsets, neighbors, n_atoms,
             chain_start, chain_size, root,
-            chain_output
+            atoms, sequence, residue_starts, n_residues,
+            chain_res_starts, n_chains,
+            chain_output, chain_dtypes
         );
 
         if (count < 0) {
@@ -738,7 +1017,7 @@ static int64_t find_first_bonded_lower(
  * @param n_chains        Number of chains
  * @return                1 if different chains, 0 if same chain
  */
-static int crosses_chain_boundary(
+static int residues_in_different_chains(
     int64_t res1,
     int64_t res2,
     const int64_t *chain_starts,
@@ -790,7 +1069,7 @@ static int64_t resolve_canonical_ref(
 
     /* Check chain boundary for inter-residue refs */
     if (ref_offset != 0) {
-        if (crosses_chain_boundary(res_idx, target_res, chain_starts, n_chains)) {
+        if (residues_in_different_chains(res_idx, target_res, chain_starts, n_chains)) {
             return -1;
         }
     }

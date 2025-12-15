@@ -31,18 +31,20 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add package root to path for direct script execution
-_PACKAGE_ROOT = Path(__file__).parent.parent.parent.parent
-if str(_PACKAGE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PACKAGE_ROOT))
+# Add ciffy directory to path to allow importing src.codegen without triggering ciffy/__init__.py
+_CODEGEN_DIR = Path(__file__).parent
+_CIFFY_DIR = _CODEGEN_DIR.parent.parent  # ciffy/src/codegen -> ciffy
+if str(_CIFFY_DIR) not in sys.path:
+    sys.path.insert(0, str(_CIFFY_DIR))
 
 
 def main() -> None:
     """CLI entry point for code generation."""
-    # Import here to avoid circular imports and to allow imports after path setup
-    from ciffy.src.codegen import generate_all
-    from ciffy.src.codegen.c_codegen import find_gperf, run_gperf
-    from ciffy.src.codegen.cli import get_ccd_path
+    # Import src.codegen directly (not ciffy.src.codegen) to avoid triggering
+    # ciffy/__init__.py which requires the C extension that hasn't been built yet
+    from src.codegen import generate_all
+    from src.codegen.c_codegen import find_gperf, run_gperf
+    from src.codegen.cli import get_ccd_path
 
     parser = argparse.ArgumentParser(
         description="Generate hash tables from PDB Chemical Component Dictionary"

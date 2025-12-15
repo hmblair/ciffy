@@ -76,10 +76,6 @@ def generate_hash_tables(force=False):
     Args:
         force: If True, regenerate even if files exist (for sdist builds)
     """
-    generate_script = os.path.join(
-        os.path.dirname(__file__),
-        'ciffy', 'src', 'codegen', 'generate.py'
-    )
     hash_dir = os.path.join(os.path.dirname(__file__), 'ciffy', 'src', 'hash')
     biochem_dir = os.path.join(os.path.dirname(__file__), 'ciffy', 'biochemistry')
 
@@ -109,8 +105,9 @@ def generate_hash_tables(force=False):
                 missing.append(f'biochemistry/{f}')
         return missing
 
-    if not os.path.exists(generate_script):
-        print("Warning: generate.py not found, skipping hash generation")
+    codegen_dir = os.path.join(os.path.dirname(__file__), 'codegen')
+    if not os.path.exists(codegen_dir):
+        print("Warning: codegen package not found, skipping hash generation")
         return
 
     # Check if generated files already exist (users installing from PyPI)
@@ -172,9 +169,11 @@ def generate_hash_tables(force=False):
     env = os.environ.copy()
     env["PYTHONPATH"] = os.path.dirname(__file__)
 
+    # Run as module to support relative imports
     result = subprocess.run(
-        [sys.executable, generate_script] + args,
+        [sys.executable, "-m", "codegen.generate"] + args,
         env=env,
+        cwd=os.path.dirname(__file__),
         capture_output=True,
         text=True
     )

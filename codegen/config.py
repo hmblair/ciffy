@@ -17,7 +17,7 @@ from pathlib import Path
 # Import DihedralType directly to avoid triggering ciffy.__init__ during codegen
 # This is necessary because ciffy.__init__ requires the C extension
 import importlib.util
-_DIHEDRAL_MODULE_PATH = Path(__file__).parent.parent.parent / "types" / "dihedral.py"
+_DIHEDRAL_MODULE_PATH = Path(__file__).parent.parent / "ciffy" / "types" / "dihedral.py"
 _spec = importlib.util.spec_from_file_location("dihedral", _DIHEDRAL_MODULE_PATH)
 _dihedral_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_dihedral_module)

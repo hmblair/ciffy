@@ -3,14 +3,13 @@
 Auto-generate hash lookup tables and Python enums from the PDB Chemical Component Dictionary.
 
 Reads the CCD file directly and generates:
-  - hash/*.gperf (forward lookups)
-  - hash/*.c (gperf output)
-  - hash/reverse.h (reverse lookups for CIF writing)
-  - biochemistry/_generated_atoms.py (Python atom enums)
-  - biochemistry/_generated_residues.py (Python Residue enum + mappings)
+  - ciffy/src/hash/*.gperf (forward lookups)
+  - ciffy/src/hash/*.c (gperf output)
+  - ciffy/src/hash/reverse.h (reverse lookups for CIF writing)
+  - ciffy/biochemistry/_generated_*.py (Python enums)
 
 Usage:
-  python generate.py [ccd_path] [--gperf-path /path/to/gperf] [--skip-gperf]
+  python -m codegen.generate [ccd_path] [--gperf-path /path/to/gperf] [--skip-gperf]
 
 If ccd_path is not provided, the CCD will be auto-downloaded to ~/.cache/ciffy/.
 This script is called automatically during build via setup.py.
@@ -28,24 +27,16 @@ Note: The actual implementation is in the codegen submodules:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-# Add ciffy directory to path to allow importing src.codegen without triggering ciffy/__init__.py
-_CODEGEN_DIR = Path(__file__).parent
-_CIFFY_DIR = _CODEGEN_DIR.parent.parent  # ciffy/src/codegen -> ciffy
-if str(_CIFFY_DIR) not in sys.path:
-    sys.path.insert(0, str(_CIFFY_DIR))
+# Codegen is now at project root - no sys.path manipulation needed
+from . import generate_all
+from .c_codegen import find_gperf, run_gperf
+from .cli import get_ccd_path
 
 
 def main() -> None:
     """CLI entry point for code generation."""
-    # Import src.codegen directly (not ciffy.src.codegen) to avoid triggering
-    # ciffy/__init__.py which requires the C extension that hasn't been built yet
-    from src.codegen import generate_all
-    from src.codegen.c_codegen import find_gperf, run_gperf
-    from src.codegen.cli import get_ccd_path
-
     parser = argparse.ArgumentParser(
         description="Generate hash tables from PDB Chemical Component Dictionary"
     )

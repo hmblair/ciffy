@@ -53,12 +53,13 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
                 )
             seen_cif[cif_name] = res.name
 
-    # Output directories
-    script_dir = Path(__file__).parent
-    hash_dir = script_dir.parent / "hash"
-    internal_dir = script_dir.parent / "internal"
-    biochem_dir = script_dir.parent.parent / "biochemistry"
-    types_dir = script_dir.parent.parent / "types"
+    # Output directories (codegen is at project root, outputs go into ciffy package)
+    project_root = Path(__file__).parent.parent
+    ciffy_dir = project_root / "ciffy"
+    hash_dir = ciffy_dir / "src" / "hash"
+    internal_dir = ciffy_dir / "src" / "internal"
+    biochem_dir = ciffy_dir / "biochemistry"
+    types_dir = ciffy_dir / "types"
     hash_dir.mkdir(exist_ok=True)
     internal_dir.mkdir(exist_ok=True)
 

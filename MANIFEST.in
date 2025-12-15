@@ -1,10 +1,9 @@
 include README.md
 include ciffy/src/*.c
 include ciffy/src/*.h
-include ciffy/src/codegen/*.py
-include ciffy/src/codegen/*.h
 include ciffy/src/hash/*.c
 include ciffy/src/hash/*.h
+include codegen/*.py
 
 # Tests and test data
 include tests/*.py

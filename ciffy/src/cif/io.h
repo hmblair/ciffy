@@ -16,7 +16,7 @@
 
 #include "../error.h"
 #include "../common.h"
-#include "../codegen/lookup.h"
+#include "../hash/lookup.h"
 #include "../hash/reverse.h"
 
 /** Sentinel value indicating attribute index not found */

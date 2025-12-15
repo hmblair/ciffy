@@ -26,7 +26,7 @@ def _gperf_header(lookup_name: str, hash_name: str, prefix: str) -> str:
 %define constants-prefix {prefix}
 %struct-type
 %{{
-#include "../codegen/lookup.h"
+#include "lookup.h"
 %}}
 struct _LOOKUP;
 %%

@@ -7,7 +7,7 @@ import ciffy
 from ciffy import Scale, tm_score, lddt
 
 from tests.utils import (
-    get_test_cif as get_cif,
+    get_test_cif,
     TORCH_AVAILABLE,
     skip_if_no_torch,
     random_coordinates,
@@ -26,7 +26,7 @@ class TestTMScore:
         """TM-score of structure with itself should be 1.0."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.RESIDUE)
 
         assert abs(score - 1.0) < 1e-6
@@ -36,7 +36,7 @@ class TestTMScore:
         """TM-score should be between 0 and 1."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.RESIDUE)
 
         assert 0.0 <= score <= 1.0
@@ -46,15 +46,15 @@ class TestTMScore:
         """Test TM-score at atom scale."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.ATOM)
 
         assert abs(score - 1.0) < 1e-6
 
     def test_tm_score_size_mismatch(self):
         """TM-score should raise error for mismatched sizes."""
-        p1 = ciffy.load(get_cif("3SKW"), backend="numpy")
-        p2 = ciffy.load(get_cif("9GCM"), backend="numpy")
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
+        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy")
 
         with pytest.raises(ValueError, match="sizes must match"):
             tm_score(p1, p2, scale=Scale.RESIDUE)
@@ -72,7 +72,7 @@ class TestLDDT:
         """lDDT of structure with itself should be 1.0."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p)
 
         assert abs(global_score - 1.0) < 1e-6
@@ -82,7 +82,7 @@ class TestLDDT:
         """lDDT should be between 0 and 1."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p)
 
         assert 0.0 <= global_score <= 1.0
@@ -92,7 +92,7 @@ class TestLDDT:
         """lDDT should return per-residue scores with correct shape."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p)
 
         expected_shape = (p.size(Scale.RESIDUE),)
@@ -103,7 +103,7 @@ class TestLDDT:
         """Per-residue lDDT with itself should be mostly 1.0."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p)
 
         if backend == "torch":
@@ -115,7 +115,7 @@ class TestLDDT:
 
     def test_lddt_custom_thresholds(self):
         """Test lDDT with custom thresholds."""
-        p = ciffy.load(get_cif("3SKW"), backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
 
         # Custom thresholds
         global_score, _ = lddt(p, p, thresholds=(0.5, 1.0))
@@ -123,7 +123,7 @@ class TestLDDT:
 
     def test_lddt_custom_cutoff(self):
         """Test lDDT with custom cutoff."""
-        p = ciffy.load(get_cif("3SKW"), backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
 
         # Very small cutoff should still work
         global_score, _ = lddt(p, p, cutoff=5.0)
@@ -131,8 +131,8 @@ class TestLDDT:
 
     def test_lddt_size_mismatch(self):
         """lDDT should raise error for mismatched sizes."""
-        p1 = ciffy.load(get_cif("3SKW"), backend="numpy")
-        p2 = ciffy.load(get_cif("9GCM"), backend="numpy")
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
+        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy")
 
         with pytest.raises(ValueError, match="sizes must match"):
             lddt(p1, p2)
@@ -197,7 +197,7 @@ class TestTMScoreEdgeCases:
         """TM-score at residue scale on larger structure."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.RESIDUE)
 
         assert 0.0 <= score <= 1.0
@@ -235,7 +235,7 @@ class TestLDDTEdgeCases:
         """lDDT with single threshold."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p, thresholds=(1.0,))
 
         assert 0.0 <= global_score <= 1.0
@@ -245,7 +245,7 @@ class TestLDDTEdgeCases:
         """lDDT with many thresholds."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         thresholds = tuple(i * 0.1 for i in range(1, 21))  # 0.1 to 2.0
         global_score, per_res = lddt(p, p, thresholds=thresholds)
 
@@ -286,7 +286,7 @@ class TestLDDTEdgeCases:
         """lDDT with very large cutoff (all pairs included)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p, cutoff=1000.0)
 
         # Self comparison should be 1.0

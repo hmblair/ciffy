@@ -9,7 +9,7 @@ import ciffy
 from ciffy import Scale
 
 from tests.utils import (
-    get_test_cif as get_cif,
+    get_test_cif,
     TORCH_AVAILABLE,
     skip_if_no_torch,
     DATA_DIR,
@@ -28,7 +28,7 @@ class TestKNN:
         """Test that knn returns correct shape."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 5
         neighbors = p.knn(k=k, scale=Scale.ATOM)
 
@@ -39,7 +39,7 @@ class TestKNN:
         """Test KNN at residue scale."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 3
         neighbors = p.knn(k=k, scale=Scale.RESIDUE)
 
@@ -50,7 +50,7 @@ class TestKNN:
         """Test that knn excludes self (no point is its own neighbor)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_cif("3SKW"), backend=backend)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         neighbors = p.knn(k=3, scale=Scale.ATOM)
 
         # Check that no atom is its own neighbor
@@ -63,7 +63,7 @@ class TestKNN:
 
     def test_knn_k_too_large(self):
         """Test that knn raises error when k >= n."""
-        p = ciffy.load(get_cif("3SKW"), backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         with pytest.raises(ValueError, match="k=.* must be less than"):
             p.knn(k=p.size(), scale=Scale.ATOM)
 
@@ -140,7 +140,7 @@ class TestPolymerEmbedding:
             element_dim=16,
         )
 
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
         features = embed(p)
 
         assert features.shape == (p.size(), embed.output_dim)
@@ -155,7 +155,7 @@ class TestPolymerEmbedding:
             residue_dim=64,
         )
 
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
         features = embed(p)
 
         assert features.shape == (p.size(Scale.RESIDUE), 64)
@@ -186,7 +186,7 @@ class TestPolymerEmbedding:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=32)
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         loss = features.sum()
@@ -262,7 +262,7 @@ class TestPolymerDatasetEdgeCases:
         mixed_dir.mkdir()
 
         # Add a CIF file
-        shutil.copy(get_cif("3SKW"), mixed_dir / "3SKW.cif")
+        shutil.copy(get_test_cif("3SKW"), mixed_dir / "3SKW.cif")
 
         # Add non-CIF files
         (mixed_dir / "readme.txt").write_text("test")
@@ -282,7 +282,7 @@ class TestPolymerEmbeddingEdgeCases:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=1)
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         assert features.shape == (p.size(), 1)
@@ -292,7 +292,7 @@ class TestPolymerEmbeddingEdgeCases:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=1024)
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         assert features.shape == (p.size(), 1024)
@@ -302,7 +302,7 @@ class TestPolymerEmbeddingEdgeCases:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, residue_dim=64)
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         # Should expand residue embeddings to atom level
@@ -313,7 +313,7 @@ class TestPolymerEmbeddingEdgeCases:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, element_dim=32)
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         assert features.shape == (p.size(), 32)
@@ -328,7 +328,7 @@ class TestPolymerEmbeddingEdgeCases:
             residue_dim=32,
             element_dim=16,
         )
-        p = ciffy.load(get_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         features = embed(p)
         assert features.shape == (p.size(), 64 + 32 + 16)

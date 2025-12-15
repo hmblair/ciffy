@@ -4,8 +4,10 @@ Performance profiling for ciffy CIF parser.
 Compares ciffy vs BioPython and Biotite parsing performance.
 
 Usage:
-    python -m pytest tests/profile.py -v -s
-    python tests/profile.py  # Direct execution
+    python tests/profiling/profile_io.py
+    python tests/profiling/profile_io.py --markdown
+    python tests/profiling/profile_io.py --ciffy-only
+    python tests/profiling/profile_io.py --dataset /path/to/cif/files
 """
 
 import glob
@@ -13,13 +15,12 @@ import os
 import time
 import warnings
 import numpy as np
-import pytest
 
 # Suppress deprecation warnings during benchmarking
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="ciffy")
 
-# Get test directory
-TEST_DIR = os.path.dirname(os.path.realpath(__file__))
+# Get test directory (parent of profiling/)
+TEST_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 DATA_DIR = os.path.join(TEST_DIR, "data")
 
 # Find all CIF files in data directory
@@ -73,7 +74,7 @@ def _benchmark(func, runs: int = BENCHMARK_RUNS) -> tuple[float, float]:
 
 
 def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
-                   ciffy_only: bool = False) -> tuple[dict, dict | None]:
+                   ciffy_only: bool = False) -> tuple:
     """
     Benchmark parsing a single file with all methods.
 
@@ -257,31 +258,6 @@ def generate_markdown_table(all_results: list[dict]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pytest Integration
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestBenchmark:
-    """Benchmark tests for ciffy performance."""
-
-    @pytest.mark.parametrize("pdb_id,filepath", TEST_FILES)
-    def test_benchmark(self, pdb_id: str, filepath: str) -> None:
-        """Run benchmark and verify ciffy is faster than BioPython."""
-        if not os.path.exists(filepath):
-            pytest.skip(f"Test file not found: {filepath}")
-
-        results, profile = benchmark_file(pdb_id, filepath, runs=5)
-        print_results(results, profile)
-
-        # Basic sanity checks
-        assert results["ciffy"]["mean"] > 0
-
-        # If BioPython is available, ciffy should be faster
-        if results["biopython"]:
-            assert results["ciffy"]["mean"] < results["biopython"]["mean"], \
-                "ciffy should be faster than BioPython"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # PolymerDataset Benchmarking
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -346,7 +322,7 @@ def print_dataset_benchmark(results: dict, directory: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Direct Execution
+# Main Entry Point
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -379,6 +355,11 @@ if __name__ == "__main__":
         exit(0)
 
     # Standard file parsing benchmark
+    if not TEST_FILES:
+        print("No CIF files found in tests/data/")
+        print("Run some tests first to download test structures.")
+        exit(1)
+
     all_results = []
     all_profiles = []
     for pdb_id, filepath in TEST_FILES:

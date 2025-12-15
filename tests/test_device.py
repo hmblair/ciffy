@@ -9,33 +9,11 @@ for scatter operations and reductions.
 import pytest
 import numpy as np
 
-
-# Check device availability
-def cuda_available():
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
-
-
-def mps_available():
-    try:
-        import torch
-        return torch.backends.mps.is_available()
-    except (ImportError, AttributeError):
-        return False
-
-
-# Skip markers
-requires_cuda = pytest.mark.skipif(
-    not cuda_available(),
-    reason="CUDA not available"
-)
-
-requires_mps = pytest.mark.skipif(
-    not mps_available(),
-    reason="MPS not available"
+from tests.utils import (
+    GPU_DEVICES,
+    skip_if_no_device,
+    requires_cuda,
+    requires_mps,
 )
 
 
@@ -43,179 +21,109 @@ class TestDeviceOperations:
     """Test operations on different devices.
 
     Uses parametrized any_polymer_torch fixture to run on all test PDBs.
+    Tests are parameterized over GPU_DEVICES to eliminate CUDA/MPS duplication.
     """
 
-    @requires_cuda
-    def test_to_cuda(self, any_polymer_torch):
-        """Test moving polymer to CUDA device."""
-        p_cuda = any_polymer_torch.to("cuda")
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_to_device(self, any_polymer_torch, device):
+        """Test moving polymer to GPU device."""
+        skip_if_no_device(device)
+        p_gpu = any_polymer_torch.to(device)
 
-        assert p_cuda.coordinates.device.type == "cuda"
-        assert p_cuda.atoms.device.type == "cuda"
-        assert p_cuda.elements.device.type == "cuda"
-        assert p_cuda.sequence.device.type == "cuda"
+        assert p_gpu.coordinates.device.type == device
+        assert p_gpu.atoms.device.type == device
+        assert p_gpu.elements.device.type == device
+        assert p_gpu.sequence.device.type == device
 
-    @requires_mps
-    def test_to_mps(self, any_polymer_torch):
-        """Test moving polymer to MPS device."""
-        p_mps = any_polymer_torch.to("mps")
-
-        assert p_mps.coordinates.device.type == "mps"
-        assert p_mps.atoms.device.type == "mps"
-        assert p_mps.elements.device.type == "mps"
-        assert p_mps.sequence.device.type == "mps"
-
-    @requires_cuda
-    def test_reduce_on_cuda(self, any_polymer_torch):
-        """Test reduction operations on CUDA."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_reduce_on_device(self, any_polymer_torch, device):
+        """Test reduction operations on GPU."""
+        skip_if_no_device(device)
         from ciffy import Scale
 
-        p_cuda = any_polymer_torch.to("cuda")
+        p_gpu = any_polymer_torch.to(device)
 
         # Test reduce (per-atom to per-chain)
-        means = p_cuda.reduce(p_cuda.coordinates, Scale.CHAIN)
-        assert means.device.type == "cuda"
-        assert means.shape[0] == p_cuda.size(Scale.CHAIN)
+        means = p_gpu.reduce(p_gpu.coordinates, Scale.CHAIN)
+        assert means.device.type == device
+        assert means.shape[0] == p_gpu.size(Scale.CHAIN)
 
-    @requires_mps
-    def test_reduce_on_mps(self, any_polymer_torch):
-        """Test reduction operations on MPS."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_center_on_device(self, any_polymer_torch, device):
+        """Test centering on GPU (uses reduce internally)."""
+        skip_if_no_device(device)
         from ciffy import Scale
 
-        p_mps = any_polymer_torch.to("mps")
+        p_gpu = any_polymer_torch.to(device)
+        centered, _ = p_gpu.center(Scale.MOLECULE)
 
-        # Test reduce (per-atom to per-chain)
-        means = p_mps.reduce(p_mps.coordinates, Scale.CHAIN)
-        assert means.device.type == "mps"
-        assert means.shape[0] == p_mps.size(Scale.CHAIN)
+        assert centered.coordinates.device.type == device
 
-    @requires_cuda
-    def test_center_on_cuda(self, any_polymer_torch):
-        """Test centering on CUDA (uses reduce internally)."""
-        from ciffy import Scale
-
-        p_cuda = any_polymer_torch.to("cuda")
-        centered, _ = p_cuda.center(Scale.MOLECULE)
-
-        assert centered.coordinates.device.type == "cuda"
-
-    @requires_mps
-    def test_center_on_mps(self, any_polymer_torch):
-        """Test centering on MPS (uses reduce internally)."""
-        from ciffy import Scale
-
-        p_mps = any_polymer_torch.to("mps")
-        centered, _ = p_mps.center(Scale.MOLECULE)
-
-        assert centered.coordinates.device.type == "mps"
-
-    @requires_cuda
-    def test_expand_on_cuda(self, any_polymer_torch):
-        """Test expand on CUDA."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_expand_on_device(self, any_polymer_torch, device):
+        """Test expand on GPU."""
+        skip_if_no_device(device)
         from ciffy import Scale
         import torch
 
-        p_cuda = any_polymer_torch.to("cuda")
+        p_gpu = any_polymer_torch.to(device)
 
         # Create per-chain features and expand to per-atom
-        chain_features = torch.randn(p_cuda.size(Scale.CHAIN), 16, device="cuda")
-        expanded = p_cuda.expand(chain_features, Scale.CHAIN)
+        chain_features = torch.randn(p_gpu.size(Scale.CHAIN), 16, device=device)
+        expanded = p_gpu.expand(chain_features, Scale.CHAIN)
 
-        assert expanded.device.type == "cuda"
-        assert expanded.shape[0] == p_cuda.size()
+        assert expanded.device.type == device
+        assert expanded.shape[0] == p_gpu.size()
 
-    @requires_mps
-    def test_expand_on_mps(self, any_polymer_torch):
-        """Test expand on MPS."""
-        from ciffy import Scale
-        import torch
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_rmsd_on_device(self, any_polymer_torch, device):
+        """Test RMSD calculation on GPU devices.
 
-        p_mps = any_polymer_torch.to("mps")
-
-        # Create per-chain features and expand to per-atom
-        chain_features = torch.randn(p_mps.size(Scale.CHAIN), 16, device="mps")
-        expanded = p_mps.expand(chain_features, Scale.CHAIN)
-
-        assert expanded.device.type == "mps"
-        assert expanded.shape[0] == p_mps.size()
-
-    @requires_cuda
-    def test_rmsd_on_cuda(self, any_polymer_torch):
-        """Test RMSD calculation on CUDA."""
+        Note: MPS doesn't support SVD operations, so RMSD (which uses Kabsch
+        alignment with SVD) will fail on MPS.
+        """
+        skip_if_no_device(device)
         import ciffy
 
         # Use .poly() to exclude ligands/water.
-        # Known issue: Single-atom molecules (ions, water) cause degenerate
-        # covariance matrices in Kabsch alignment, leading to numerical errors.
-        p_cuda = any_polymer_torch.poly().to("cuda")
+        p_gpu = any_polymer_torch.poly().to(device)
 
-        # Calculate RMSD against self (should be 0)
-        rmsd = ciffy.rmsd(p_cuda, p_cuda, ciffy.MOLECULE)
+        if device == "mps":
+            # MPS doesn't support SVD, so RMSD will fail
+            with pytest.raises(NotImplementedError, match="MPS device"):
+                ciffy.rmsd(p_gpu, p_gpu, ciffy.MOLECULE)
+        else:
+            # CUDA: Calculate RMSD against self (should be ~0)
+            rmsd = ciffy.rmsd(p_gpu, p_gpu, ciffy.MOLECULE)
 
-        # Result should be on CUDA and close to 0
-        # CUDA SVD (cuSOLVER) has lower precision than CPU, especially for
-        # large covariance matrices. Tolerance scales with structure size.
-        # The error scales roughly with sqrt(n_atoms) * 2e-4 for float32.
-        assert rmsd.device.type == "cuda"
-        n_atoms = p_cuda.coordinates.shape[0]
-        tolerance = max(1e-2, (n_atoms ** 0.5) * 2e-4)
-        assert rmsd.item() < tolerance, f"RMSD {rmsd.item():.6f} >= {tolerance:.6f} for {n_atoms} atoms"
-
-    @requires_mps
-    def test_rmsd_on_mps(self, any_polymer_torch):
-        """Test RMSD calculation on MPS.
-
-        Note: MPS doesn't support SVD operations, so RMSD (which uses Kabsch
-        alignment with SVD) will fail. This test verifies the limitation is
-        handled gracefully.
-        """
-        import ciffy
-        import torch
-
-        p_mps = any_polymer_torch.to("mps")
-
-        # MPS doesn't support SVD, so RMSD will fail
-        # Use PYTORCH_ENABLE_MPS_FALLBACK=1 env var to enable CPU fallback
-        with pytest.raises(NotImplementedError, match="MPS device"):
-            ciffy.rmsd(p_mps, p_mps, ciffy.MOLECULE)
+            # Result should be on device and close to 0
+            # CUDA SVD (cuSOLVER) has lower precision than CPU
+            assert rmsd.device.type == device
+            n_atoms = p_gpu.coordinates.shape[0]
+            tolerance = max(1e-2, (n_atoms ** 0.5) * 2e-4)
+            assert rmsd.item() < tolerance, f"RMSD {rmsd.item():.6f} >= {tolerance:.6f} for {n_atoms} atoms"
 
 
 class TestMixedDeviceHandling:
     """Test that operations handle mixed-device scenarios gracefully."""
 
-    @requires_cuda
-    def test_scatter_with_cpu_index_cuda_features(self):
-        """Test scatter operations handle CPU index with CUDA features."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_scatter_with_cpu_index(self, device):
+        """Test scatter operations handle CPU index with GPU features."""
+        skip_if_no_device(device)
         import torch
         from ciffy.backend.torch_ops import scatter_sum, scatter_mean
 
-        # Create features on CUDA, index on CPU
-        features = torch.randn(10, 3, device="cuda")
+        # Create features on GPU, index on CPU
+        features = torch.randn(10, 3, device=device)
         index = torch.tensor([0, 0, 1, 1, 1, 2, 2, 2, 2, 2])  # CPU
 
-        # This should work (index automatically moved to CUDA)
+        # This should work (index automatically moved to GPU)
         result = scatter_sum(features, index, dim_size=3)
-        assert result.device.type == "cuda"
+        assert result.device.type == device
 
         result = scatter_mean(features, index, dim_size=3)
-        assert result.device.type == "cuda"
-
-    @requires_mps
-    def test_scatter_with_cpu_index_mps_features(self):
-        """Test scatter operations handle CPU index with MPS features."""
-        import torch
-        from ciffy.backend.torch_ops import scatter_sum, scatter_mean
-
-        # Create features on MPS, index on CPU
-        features = torch.randn(10, 3, device="mps")
-        index = torch.tensor([0, 0, 1, 1, 1, 2, 2, 2, 2, 2])  # CPU
-
-        # This should work (index automatically moved to MPS)
-        result = scatter_sum(features, index, dim_size=3)
-        assert result.device.type == "mps"
-
-        result = scatter_mean(features, index, dim_size=3)
-        assert result.device.type == "mps"
+        assert result.device.type == device
 
     @requires_cuda
     def test_reduce_with_mismatched_sizes_device(self, any_polymer_torch):
@@ -245,27 +153,16 @@ class TestMixedDeviceHandling:
         )
         assert index.device.type == "cpu"
 
-    @requires_cuda
-    def test_with_coordinates_rejects_cross_device_cuda(self, any_polymer_torch):
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_with_coordinates_rejects_cross_device(self, any_polymer_torch, device):
         """Test with_coordinates rejects GPU coords on CPU polymer."""
+        skip_if_no_device(device)
         import torch
-        import pytest
 
         # CPU polymer should reject GPU coordinates
-        gpu_coords = any_polymer_torch.coordinates.to("cuda")
+        gpu_coords = any_polymer_torch.coordinates.to(device)
         with pytest.raises(ValueError, match="device"):
             any_polymer_torch.with_coordinates(gpu_coords)
-
-    @requires_mps
-    def test_with_coordinates_rejects_cross_device_mps(self, any_polymer_torch):
-        """Test with_coordinates rejects MPS coords on CPU polymer."""
-        import torch
-        import pytest
-
-        # CPU polymer should reject MPS coordinates
-        mps_coords = any_polymer_torch.coordinates.to("mps")
-        with pytest.raises(ValueError, match="device"):
-            any_polymer_torch.with_coordinates(mps_coords)
 
 
 class TestDifferentiability:
@@ -458,58 +355,40 @@ class TestDifferentiability:
 class TestScatterOperations:
     """Test scatter operations directly."""
 
-    @requires_cuda
-    def test_scatter_sum_cuda(self):
-        """Test scatter_sum on CUDA."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_scatter_sum(self, device):
+        """Test scatter_sum on GPU devices."""
+        skip_if_no_device(device)
         import torch
         from ciffy.backend.torch_ops import scatter_sum
 
-        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device="cuda")
-        index = torch.tensor([0, 0, 1], device="cuda")
+        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device=device)
+        index = torch.tensor([0, 0, 1], device=device)
 
         result = scatter_sum(features, index, dim_size=2)
 
-        expected = torch.tensor([[4., 6.], [5., 6.]], device="cuda")
-        assert torch.allclose(result, expected)
+        expected = torch.tensor([[4., 6.], [5., 6.]], device=device)
+        # MPS requires CPU comparison due to precision differences
+        if device == "mps":
+            assert torch.allclose(result.cpu(), expected.cpu())
+        else:
+            assert torch.allclose(result, expected)
 
-    @requires_cuda
-    def test_scatter_mean_cuda(self):
-        """Test scatter_mean on CUDA."""
+    @pytest.mark.parametrize("device", GPU_DEVICES)
+    def test_scatter_mean(self, device):
+        """Test scatter_mean on GPU devices."""
+        skip_if_no_device(device)
         import torch
         from ciffy.backend.torch_ops import scatter_mean
 
-        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device="cuda")
-        index = torch.tensor([0, 0, 1], device="cuda")
+        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device=device)
+        index = torch.tensor([0, 0, 1], device=device)
 
         result = scatter_mean(features, index, dim_size=2)
 
-        expected = torch.tensor([[2., 3.], [5., 6.]], device="cuda")
-        assert torch.allclose(result, expected)
-
-    @requires_mps
-    def test_scatter_sum_mps(self):
-        """Test scatter_sum on MPS."""
-        import torch
-        from ciffy.backend.torch_ops import scatter_sum
-
-        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device="mps")
-        index = torch.tensor([0, 0, 1], device="mps")
-
-        result = scatter_sum(features, index, dim_size=2)
-
-        expected = torch.tensor([[4., 6.], [5., 6.]], device="mps")
-        assert torch.allclose(result.cpu(), expected.cpu())
-
-    @requires_mps
-    def test_scatter_mean_mps(self):
-        """Test scatter_mean on MPS."""
-        import torch
-        from ciffy.backend.torch_ops import scatter_mean
-
-        features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device="mps")
-        index = torch.tensor([0, 0, 1], device="mps")
-
-        result = scatter_mean(features, index, dim_size=2)
-
-        expected = torch.tensor([[2., 3.], [5., 6.]], device="mps")
-        assert torch.allclose(result.cpu(), expected.cpu())
+        expected = torch.tensor([[2., 3.], [5., 6.]], device=device)
+        # MPS requires CPU comparison due to precision differences
+        if device == "mps":
+            assert torch.allclose(result.cpu(), expected.cpu())
+        else:
+            assert torch.allclose(result, expected)

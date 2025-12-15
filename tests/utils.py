@@ -151,3 +151,73 @@ def set_random_coordinates(polymer, scale: float = 10.0) -> None:
     """
     coords = random_coordinates(polymer.size(), polymer.backend, scale)
     polymer.coordinates = coords
+
+
+# =============================================================================
+# Device configuration (centralized for all test files)
+# =============================================================================
+
+def cuda_available() -> bool:
+    """Check if PyTorch CUDA is available."""
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+def mps_available() -> bool:
+    """Check if PyTorch MPS is available."""
+    try:
+        import torch
+        return torch.backends.mps.is_available()
+    except (ImportError, AttributeError):
+        return False
+
+
+def cuda_extension_available() -> bool:
+    """Check if ciffy CUDA extension is built."""
+    try:
+        from ciffy.backend.cuda_ops import HAS_CUDA_EXTENSION
+        return HAS_CUDA_EXTENSION
+    except ImportError:
+        return False
+
+
+# Available devices for parametrized tests
+DEVICES = ["cpu"]
+if cuda_available():
+    DEVICES.append("cuda")
+if mps_available():
+    DEVICES.append("mps")
+
+# GPU devices only (for tests that require acceleration)
+GPU_DEVICES = [d for d in DEVICES if d != "cpu"]
+
+# Skip markers (centralized)
+requires_cuda = pytest.mark.skipif(
+    not cuda_available(), reason="CUDA not available"
+)
+requires_mps = pytest.mark.skipif(
+    not mps_available(), reason="MPS not available"
+)
+requires_cuda_extension = pytest.mark.skipif(
+    not cuda_extension_available(), reason="CUDA extension not built"
+)
+requires_gpu = pytest.mark.skipif(
+    len(GPU_DEVICES) == 0, reason="No GPU available"
+)
+
+
+def skip_if_no_device(device: str) -> None:
+    """Skip test if specified device is not available.
+
+    Use at the start of parametrized test methods:
+        def test_something(self, device):
+            skip_if_no_device(device)
+            ...
+    """
+    if device == "cuda" and not cuda_available():
+        pytest.skip("CUDA not available")
+    elif device == "mps" and not mps_available():
+        pytest.skip("MPS not available")

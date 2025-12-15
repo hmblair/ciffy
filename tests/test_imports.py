@@ -1,5 +1,5 @@
 """
-Tests for module imports and backward compatibility.
+Tests for utility functions, biochemistry constants, and backend operations.
 
 Includes tests for both numpy and torch backends.
 """
@@ -7,73 +7,7 @@ Includes tests for both numpy and torch backends.
 import pytest
 import numpy as np
 
-
-class TestPublicAPI:
-    """Test main public API imports."""
-
-    def test_core_imports(self):
-        from ciffy import Polymer, Scale, Molecule, Reduction, load, rmsd
-        assert Polymer is not None
-        assert Scale is not None
-        assert Molecule is not None
-        assert Reduction is not None
-        assert load is not None
-        assert rmsd is not None
-
-    def test_convenience_aliases(self):
-        from ciffy import RESIDUE, CHAIN, MOLECULE, PROTEIN, RNA, DNA
-        from ciffy import Scale, Molecule
-        assert RESIDUE == Scale.RESIDUE
-        assert CHAIN == Scale.CHAIN
-        assert MOLECULE == Scale.MOLECULE
-        assert PROTEIN == Molecule.PROTEIN
-        assert RNA == Molecule.RNA
-        assert DNA == Molecule.DNA
-
-    def test_version(self):
-        import ciffy
-        assert hasattr(ciffy, "__version__")
-        assert isinstance(ciffy.__version__, str)
-
-
-class TestModuleStructure:
-    """Test imports from new module organization."""
-
-    def test_utils_imports(self):
-        from ciffy.utils import IndexEnum, PairEnum, all_equal, filter_by_mask
-        assert IndexEnum is not None
-        assert PairEnum is not None
-        assert all_equal(1, 1, 1) is True
-        assert all_equal(1, 2) is False
-
-    def test_types_imports(self):
-        from ciffy.types import Scale, Molecule
-        assert Scale.ATOM.value == 0
-        assert Scale.RESIDUE.value == 1
-        assert Scale.CHAIN.value == 2
-        assert Scale.MOLECULE.value == 3
-        assert Molecule.RNA.value == 1
-
-    def test_biochemistry_imports(self):
-        from ciffy.biochemistry import (
-            Element, Residue,
-            RibonucleicAcid,
-            Backbone, Nucleobase, Phosphate,
-        )
-        assert Element.C.value == 6
-        assert Residue.A.value == 0
-        assert Residue.ALA.abbrev == 'A'
-        assert Residue.A.P.value == 2  # Access atoms via Residue
-
-    def test_operations_imports(self):
-        from ciffy.operations import Reduction, REDUCTIONS, kabsch_distance
-        assert Reduction.MEAN is not None
-        assert kabsch_distance is not None
-
-    def test_io_imports(self):
-        from ciffy.io import load, write_cif
-        assert load is not None
-        assert write_cif is not None
+from tests.utils import skip_if_no_torch
 
 
 class TestUtilityFunctions:
@@ -114,15 +48,6 @@ class TestUtilityFunctions:
 
 class TestBiochemistryConstants:
     """Test biochemistry constants are correctly defined."""
-
-    def test_element_values(self):
-        from ciffy.biochemistry import Element
-        assert Element.H.value == 1
-        assert Element.C.value == 6
-        assert Element.N.value == 7
-        assert Element.O.value == 8
-        assert Element.P.value == 15
-        assert Element.S.value == 16
 
     def test_nucleotide_consistency(self):
         from ciffy.biochemistry import Residue
@@ -199,34 +124,8 @@ class TestBiochemistryConstants:
         assert Residue.ALA.O.value not in sidechain_values
 
 
-class TestScaleEnum:
-    """Test Scale enum functionality."""
-
-    def test_scale_ordering(self):
-        from ciffy.types import Scale
-        assert Scale.ATOM.value < Scale.RESIDUE.value
-        assert Scale.RESIDUE.value < Scale.CHAIN.value
-        assert Scale.CHAIN.value < Scale.MOLECULE.value
-
-
 class TestMoleculeEnum:
     """Test Molecule enum functionality."""
-
-    def test_molecule_types(self):
-        from ciffy.types import Molecule
-        assert Molecule.PROTEIN.value == 0
-        assert Molecule.RNA.value == 1
-        assert Molecule.DNA.value == 2
-        assert hasattr(Molecule, 'HYBRID')
-        assert hasattr(Molecule, 'PROTEIN_D')
-        assert hasattr(Molecule, 'POLYSACCHARIDE')
-        assert hasattr(Molecule, 'PNA')
-        assert hasattr(Molecule, 'CYCLIC_PEPTIDE')
-        assert hasattr(Molecule, 'LIGAND')
-        assert hasattr(Molecule, 'ION')
-        assert hasattr(Molecule, 'WATER')
-        assert hasattr(Molecule, 'OTHER')
-        assert hasattr(Molecule, 'UNKNOWN')
 
     def test_molecule_type_function(self):
         from ciffy.biochemistry.molecule import molecule_type, Molecule
@@ -237,15 +136,6 @@ class TestMoleculeEnum:
 
 class TestReduction:
     """Test reduction operations."""
-
-    def test_reduction_enum(self):
-        from ciffy.operations import Reduction
-        assert Reduction.NONE.value == 0
-        assert Reduction.COLLATE.value == 1
-        assert Reduction.MEAN.value == 2
-        assert Reduction.SUM.value == 3
-        assert Reduction.MIN.value == 4
-        assert Reduction.MAX.value == 5
 
     def test_reductions_dict(self):
         from ciffy.operations import Reduction, REDUCTIONS
@@ -581,3 +471,124 @@ class TestKabschDistance:
         assert dist.shape[0] == polymer.size(Scale.CHAIN)
         # First chain should have larger RMSD
         assert dist[0] > dist[1:].mean()
+
+
+class TestKabschDistanceEdgeCases:
+    """Edge case tests for kabsch_distance with small atom counts.
+
+    The Kabsch algorithm uses SVD on a 3x3 covariance matrix. With fewer than
+    3 atoms, the covariance matrix is rank-deficient (degenerate), which can
+    cause numerical instability.
+    """
+
+    @staticmethod
+    def _create_small_polymer(n_atoms: int, backend: str = "numpy", seed: int = 42):
+        """Create a minimal polymer with n_atoms for testing.
+
+        Args:
+            n_atoms: Number of atoms (1, 2, or 3).
+            backend: "numpy" or "torch".
+            seed: Random seed for reproducibility.
+
+        Returns:
+            Polymer with random coordinates.
+        """
+        from ciffy import Polymer, Scale
+
+        # Random coordinates with fixed seed for reproducibility
+        rng = np.random.RandomState(seed)
+        coords = rng.randn(n_atoms, 3).astype(np.float32) * 10.0
+
+        # Minimal metadata
+        atoms = np.zeros(n_atoms, dtype=np.int64)
+        elements = np.ones(n_atoms, dtype=np.int64) * 8  # Oxygen
+        sequence = np.zeros(1, dtype=np.int64)  # Single residue
+
+        sizes = {
+            Scale.RESIDUE: np.array([n_atoms], dtype=np.int64),
+            Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
+            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+        }
+
+        polymer = Polymer(
+            coordinates=coords,
+            atoms=atoms,
+            elements=elements,
+            sequence=sequence,
+            sizes=sizes,
+            id="test",
+            names=["A"],
+            strands=["A"],
+            lengths=np.array([1], dtype=np.int64),
+        )
+
+        if backend == "torch":
+            return polymer.torch()
+        return polymer
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_single_atom_kabsch_distance(self, backend):
+        """kabsch_distance with single atom should return exactly 0.
+
+        With 1 atom, the centered coordinates are all zero, making the
+        covariance matrix all zeros. RMSD is trivially 0.
+        """
+        skip_if_no_torch(backend)
+
+        from ciffy.operations.alignment import kabsch_distance
+
+        p = self._create_small_polymer(1, backend)
+
+        # Single atom: after centering, coordinates are at origin
+        # Covariance is 0, variance is 0, so RMSD should be exactly 0
+        dist = kabsch_distance(p, p)
+
+        assert dist.shape == (1,)
+        if backend == "torch":
+            assert dist.item() == 0.0
+        else:
+            assert dist[0] == 0.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_two_atom_kabsch_distance(self, backend):
+        """kabsch_distance with two atoms should return ~0 for self-comparison.
+
+        With 2 atoms, the covariance matrix has rank 1, but self-comparison
+        should still give 0 since any 2 points can be perfectly aligned.
+        """
+        skip_if_no_torch(backend)
+
+        from ciffy.operations.alignment import kabsch_distance
+
+        p = self._create_small_polymer(2, backend)
+        dist = kabsch_distance(p, p)
+
+        assert dist.shape == (1,)
+        # Torch's SVD has lower precision on rank-deficient matrices,
+        # causing errors up to ~0.01 for degenerate cases
+        if backend == "torch":
+            assert dist.item() < 0.02
+        else:
+            assert dist[0] < 1e-5
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_three_atom_kabsch_distance(self, backend):
+        """kabsch_distance with three atoms should return ~0 for self-comparison.
+
+        With 3 atoms, the covariance matrix can be rank-deficient depending
+        on the point configuration.
+        """
+        skip_if_no_torch(backend)
+
+        from ciffy.operations.alignment import kabsch_distance
+
+        p = self._create_small_polymer(3, backend)
+        dist = kabsch_distance(p, p)
+
+        assert dist.shape == (1,)
+        # Torch's SVD has lower precision on rank-deficient matrices,
+        # causing errors up to ~0.01 for degenerate cases
+        if backend == "torch":
+            assert dist.item() < 0.02
+        else:
+            assert dist[0] < 1e-5

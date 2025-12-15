@@ -64,4 +64,11 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args);
  */
 PyObject *py_find_connected_components(PyObject *self, PyObject *args);
 
+/**
+ * Build canonical Z-matrix in a single pass.
+ * Python: _build_canonical_zmatrix(atoms, sequence, res_sizes, chain_lengths,
+ *             bond_offsets, bond_neighbors) -> (zmatrix, dihedral_types)
+ */
+PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

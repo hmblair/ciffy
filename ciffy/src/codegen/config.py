@@ -111,6 +111,57 @@ DIHEDRAL_TYPE_INDEX: dict[str, int] = {
 
 
 # =============================================================================
+# BACKBONE NAME IDS - For inter-residue reference resolution in C
+# =============================================================================
+# These are canonical identifiers for backbone atoms that can be referenced
+# across residue boundaries. Used in the C Z-matrix builder to resolve
+# inter-residue refs without knowing specific atom types.
+
+BACKBONE_NAMES: dict[str, int] = {
+    # Protein backbone
+    "N": 0,
+    "CA": 1,
+    "C": 2,
+    "O": 3,
+    # Nucleic acid backbone
+    "P": 4,
+    "OP1": 5,
+    "OP2": 6,
+    "O5'": 7,
+    "C5'": 8,
+    "C4'": 9,
+    "O4'": 10,
+    "C3'": 11,
+    "O3'": 12,
+    "C2'": 13,
+    "C1'": 14,
+    "O2'": 15,  # RNA only
+}
+
+# Python name -> CIF name for backbone atoms
+BACKBONE_PYTHON_TO_CIF: dict[str, str] = {
+    "N": "N",
+    "CA": "CA",
+    "C": "C",
+    "O": "O",
+    "P": "P",
+    "OP1": "OP1",
+    "OP2": "OP2",
+    "O5p": "O5'",
+    "C5p": "C5'",
+    "C4p": "C4'",
+    "O4p": "O4'",
+    "C3p": "C3'",
+    "O3p": "O3'",
+    "C2p": "C2'",
+    "C1p": "C1'",
+    "O2p": "O2'",
+}
+
+NUM_BACKBONE_NAMES: int = len(BACKBONE_NAMES)
+
+
+# =============================================================================
 # MOLECULE TYPE DEFINITIONS
 # =============================================================================
 # Order determines integer values. This is the single source of truth.

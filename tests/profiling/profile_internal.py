@@ -92,12 +92,12 @@ def benchmark_internal_coords(filepath: str, backend: str = "numpy",
     zmatrix = polymer._coord_manager.zmatrix
     results["zmatrix_size"] = len(zmatrix)
 
-    # Count orphan atoms
+    # Count orphan atoms (single-atom components)
     mgr = polymer._coord_manager
-    n_components = len(mgr._component_offsets) - 1
+    n_components = mgr._components.n_components
     orphan_count = sum(
         1 for i in range(n_components)
-        if int(mgr._component_offsets[i + 1]) - int(mgr._component_offsets[i]) == 1
+        if mgr._components.get_component_size(i) == 1
     )
     results["orphan_atoms"] = orphan_count
 

@@ -820,6 +820,20 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (roots, sizes, n_components).\n"},
+    {"_build_canonical_zmatrix", py_build_canonical_zmatrix, METH_VARARGS,
+     "Build canonical Z-matrix in a single pass.\n\n"
+     "Processes atoms in natural order using pre-defined canonical references.\n"
+     "Captures named dihedrals (phi, psi, alpha, beta, etc.).\n\n"
+     "Args:\n"
+     "    atoms (ndarray): (N,) int32 atom type values.\n"
+     "    sequence (ndarray): (R,) int32 residue type indices.\n"
+     "    res_sizes (ndarray): (R,) int32 atoms per residue.\n"
+     "    chain_lengths (ndarray): (C,) int32 residues per chain.\n"
+     "    bond_offsets (ndarray): (N+1,) int64 CSR offsets for fallback.\n"
+     "    bond_neighbors (ndarray): (E,) int64 CSR neighbor indices.\n\n"
+     "Returns:\n"
+     "    tuple: (zmatrix, dihedral_types) where zmatrix is (N, 4) int64\n"
+     "    and dihedral_types is (N,) int8 (-1 if not a named dihedral).\n"},
     {NULL, NULL, 0, NULL}
 };
 

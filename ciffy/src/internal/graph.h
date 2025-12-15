@@ -143,4 +143,44 @@ int64_t find_connected_components_c(
     int64_t *out_sizes
 );
 
+
+/**
+ * Build canonical Z-matrix in a single pass.
+ *
+ * Processes atoms in natural order (0, 1, 2, ..., n_atoms-1). For each atom,
+ * uses pre-defined canonical references from ATOM_CANONICAL_REFS if available,
+ * otherwise falls back to bond-graph-based reference selection.
+ *
+ * Key features:
+ * - zmatrix[i] corresponds directly to atoms[i] (no reordering)
+ * - Captures named dihedrals (phi, psi, alpha, beta, etc.) via ATOM_DIHEDRAL_TYPE
+ * - Single pass with no Python post-processing needed
+ *
+ * @param atoms          (n_atoms,) int32 atom type values
+ * @param sequence       (n_residues,) int32 residue type indices
+ * @param res_sizes      (n_residues,) int32 atoms per residue
+ * @param chain_lengths  (n_chains,) int32 residues per chain
+ * @param n_atoms        Total number of atoms
+ * @param n_residues     Total number of residues
+ * @param n_chains       Number of chains
+ * @param bond_offsets   (n_atoms+1,) int64 CSR offsets for bond graph
+ * @param bond_neighbors (n_edges,) int64 CSR neighbor indices
+ * @param out_zmatrix    Output: (n_atoms, 4) int64 [atom_idx, dist_ref, ang_ref, dih_ref]
+ * @param out_dihedral_types Output: (n_atoms,) int8 dihedral type index or -1
+ * @return               Number of atoms processed, or -1 on error
+ */
+int64_t build_canonical_zmatrix_c(
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int32_t *res_sizes,
+    const int32_t *chain_lengths,
+    int64_t n_atoms,
+    int64_t n_residues,
+    int64_t n_chains,
+    const int64_t *bond_offsets,
+    const int64_t *bond_neighbors,
+    int64_t *out_zmatrix,
+    int8_t *out_dihedral_types
+);
+
 #endif /* _CIFFY_GRAPH_H */

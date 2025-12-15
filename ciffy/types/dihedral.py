@@ -67,3 +67,21 @@ DIHEDRAL_TYPE_TO_INDEX: dict[DihedralType, int] = {
 INDEX_TO_DIHEDRAL_TYPE: dict[int, DihedralType] = {
     v: k for k, v in DIHEDRAL_TYPE_TO_INDEX.items()
 }
+
+# Convenience tuples for common dihedral groups
+PROTEIN_BACKBONE: tuple[DihedralType, ...] = (
+    DihedralType.PHI,
+    DihedralType.PSI,
+    DihedralType.OMEGA,
+)
+
+RNA_BACKBONE: tuple[DihedralType, ...] = (
+    DihedralType.ALPHA,
+    DihedralType.BETA,
+    DihedralType.GAMMA,
+    DihedralType.DELTA,
+    DihedralType.EPSILON,
+    DihedralType.ZETA,
+    DihedralType.CHI_PURINE,
+    DihedralType.CHI_PYRIMIDINE,
+)

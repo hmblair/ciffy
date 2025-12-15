@@ -10,6 +10,7 @@
 
 #include "graph.h"
 #include "bond_patterns.h"
+#include "canonical_refs.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -663,4 +664,293 @@ int64_t find_connected_components_c(
     free(queue);
 
     return n_components;
+}
+
+
+/* ========================================================================== */
+/* CANONICAL Z-MATRIX CONSTRUCTION                                            */
+/* ========================================================================== */
+
+/**
+ * Find atom by type within a residue.
+ *
+ * @param atoms        (n_atoms,) int32 atom type values
+ * @param res_start    First atom index of the residue
+ * @param res_end      One past last atom index of the residue
+ * @param atom_type    Atom type to find
+ * @return             Global atom index, or -1 if not found
+ */
+static int64_t find_atom_by_type(
+    const int32_t *atoms,
+    int64_t res_start,
+    int64_t res_end,
+    int32_t atom_type
+) {
+    for (int64_t i = res_start; i < res_end; i++) {
+        if (atoms[i] == atom_type) return i;
+    }
+    return -1;
+}
+
+/**
+ * Find first bonded neighbor with lower index than current atom.
+ *
+ * @param atom_idx       Current atom's global index
+ * @param bond_offsets   CSR offsets for bond graph
+ * @param bond_neighbors CSR neighbor indices
+ * @param excludes       Array of atoms to exclude (can be NULL)
+ * @param n_excludes     Number of excludes
+ * @return               Global atom index of neighbor, or -1 if not found
+ */
+static int64_t find_first_bonded_lower(
+    int64_t atom_idx,
+    const int64_t *bond_offsets,
+    const int64_t *bond_neighbors,
+    const int64_t *excludes,
+    int n_excludes
+) {
+    int64_t start = bond_offsets[atom_idx];
+    int64_t end = bond_offsets[atom_idx + 1];
+
+    for (int64_t i = start; i < end; i++) {
+        int64_t neighbor = bond_neighbors[i];
+        if (neighbor >= atom_idx) continue;  /* Must be earlier */
+
+        /* Check excludes */
+        int excluded = 0;
+        for (int e = 0; e < n_excludes; e++) {
+            if (neighbor == excludes[e]) {
+                excluded = 1;
+                break;
+            }
+        }
+        if (!excluded) return neighbor;
+    }
+    return -1;
+}
+
+/**
+ * Check if two residue indices are in different chains.
+ *
+ * @param res1            First residue index
+ * @param res2            Second residue index
+ * @param chain_starts    Array of residue indices where each chain starts
+ * @param n_chains        Number of chains
+ * @return                1 if different chains, 0 if same chain
+ */
+static int crosses_chain_boundary(
+    int64_t res1,
+    int64_t res2,
+    const int64_t *chain_starts,
+    int64_t n_chains
+) {
+    /* Find which chain each residue belongs to */
+    int64_t chain1 = -1, chain2 = -1;
+
+    for (int64_t c = 0; c < n_chains; c++) {
+        int64_t start = chain_starts[c];
+        int64_t end = (c < n_chains - 1) ? chain_starts[c + 1] : INT64_MAX;
+
+        if (res1 >= start && res1 < end) chain1 = c;
+        if (res2 >= start && res2 < end) chain2 = c;
+    }
+
+    return chain1 != chain2;
+}
+
+/**
+ * Resolve a canonical reference.
+ *
+ * @param ref_value       Value from ATOM_CANONICAL_REFS (atom type or backbone ID)
+ * @param ref_offset      Residue offset (-1, 0, or +1)
+ * @param res_idx         Current residue index
+ * @param atoms           (n_atoms,) int32 atom type values
+ * @param sequence        (n_residues,) int32 residue type indices
+ * @param residue_starts  (n_residues+1,) int64 cumulative atom starts
+ * @param n_residues      Total number of residues
+ * @param chain_starts    (n_chains,) int64 residue start index per chain
+ * @param n_chains        Number of chains
+ * @return                Global atom index, or -1 if cannot resolve
+ */
+static int64_t resolve_canonical_ref(
+    int16_t ref_value,
+    int8_t ref_offset,
+    int64_t res_idx,
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int64_t *residue_starts,
+    int64_t n_residues,
+    const int64_t *chain_starts,
+    int64_t n_chains
+) {
+    if (ref_value < 0) return -1;  /* No reference */
+
+    int64_t target_res = res_idx + ref_offset;
+    if (target_res < 0 || target_res >= n_residues) return -1;
+
+    /* Check chain boundary for inter-residue refs */
+    if (ref_offset != 0) {
+        if (crosses_chain_boundary(res_idx, target_res, chain_starts, n_chains)) {
+            return -1;
+        }
+    }
+
+    /* Resolve atom type */
+    int32_t target_atom_type;
+    if (ref_offset == 0) {
+        /* Intra-residue: ref_value IS the atom type */
+        target_atom_type = ref_value;
+    } else {
+        /* Inter-residue: ref_value is backbone name ID */
+        int32_t target_res_type = sequence[target_res];
+        if (target_res_type < 0 || target_res_type >= NUM_RESIDUE_TYPES) {
+            return -1;
+        }
+        target_atom_type = RESIDUE_BACKBONE_ATOMS[target_res_type][ref_value];
+        if (target_atom_type < 0) return -1;
+    }
+
+    /* Find atom in target residue */
+    int64_t target_start = residue_starts[target_res];
+    int64_t target_end = residue_starts[target_res + 1];
+
+    return find_atom_by_type(atoms, target_start, target_end, target_atom_type);
+}
+
+
+int64_t build_canonical_zmatrix_c(
+    const int32_t *atoms,
+    const int32_t *sequence,
+    const int32_t *res_sizes,
+    const int32_t *chain_lengths,
+    int64_t n_atoms,
+    int64_t n_residues,
+    int64_t n_chains,
+    const int64_t *bond_offsets,
+    const int64_t *bond_neighbors,
+    int64_t *out_zmatrix,
+    int8_t *out_dihedral_types
+) {
+    if (n_atoms == 0) return 0;
+
+    /* Allocate working arrays */
+    int64_t *residue_starts = (int64_t *)malloc((size_t)(n_residues + 1) * sizeof(int64_t));
+    int64_t *chain_res_starts = (int64_t *)malloc((size_t)(n_chains + 1) * sizeof(int64_t));
+
+    if (!residue_starts || !chain_res_starts) {
+        free(residue_starts);
+        free(chain_res_starts);
+        return -1;
+    }
+
+    /* Compute residue start indices (cumulative sum of res_sizes) */
+    residue_starts[0] = 0;
+    for (int64_t r = 0; r < n_residues; r++) {
+        residue_starts[r + 1] = residue_starts[r] + res_sizes[r];
+    }
+
+    /* Compute chain start residue indices (cumulative sum of chain_lengths) */
+    chain_res_starts[0] = 0;
+    for (int64_t c = 0; c < n_chains; c++) {
+        chain_res_starts[c + 1] = chain_res_starts[c] + chain_lengths[c];
+    }
+
+    /* Process atoms in natural order */
+    int64_t current_res = 0;
+
+    for (int64_t atom_idx = 0; atom_idx < n_atoms; atom_idx++) {
+        /* Find which residue this atom belongs to */
+        while (current_res < n_residues - 1 &&
+               atom_idx >= residue_starts[current_res + 1]) {
+            current_res++;
+        }
+
+        int32_t atom_type = atoms[atom_idx];
+
+        /* Initialize output */
+        int64_t *entry = &out_zmatrix[atom_idx * 4];
+        entry[0] = atom_idx;
+        entry[1] = -1;
+        entry[2] = -1;
+        entry[3] = -1;
+        out_dihedral_types[atom_idx] = -1;
+
+        /* Try canonical refs if available */
+        if (atom_type > 0 && atom_type < NUM_ATOM_TYPES &&
+            ATOM_HAS_CANONICAL_REFS[atom_type]) {
+
+            const int16_t *refs = ATOM_CANONICAL_REFS[atom_type];
+            int16_t dist_ref = refs[0];
+            int16_t ang_ref = refs[1];
+            int16_t dih_ref = refs[2];
+            int8_t dist_off = (int8_t)refs[3];
+            int8_t ang_off = (int8_t)refs[4];
+            int8_t dih_off = (int8_t)refs[5];
+
+            /* Resolve references */
+            int64_t dist_atom = resolve_canonical_ref(
+                dist_ref, dist_off, current_res,
+                atoms, sequence, residue_starts, n_residues,
+                chain_res_starts, n_chains
+            );
+            int64_t ang_atom = resolve_canonical_ref(
+                ang_ref, ang_off, current_res,
+                atoms, sequence, residue_starts, n_residues,
+                chain_res_starts, n_chains
+            );
+            int64_t dih_atom = resolve_canonical_ref(
+                dih_ref, dih_off, current_res,
+                atoms, sequence, residue_starts, n_residues,
+                chain_res_starts, n_chains
+            );
+
+            /* IMPORTANT: Refs must point to earlier atoms (lower indices). */
+            /* This is a Z-matrix invariant. If a canonical ref points to a */
+            /* higher-indexed atom, we must invalidate it so fallback is used. */
+            if (dist_atom >= atom_idx) dist_atom = -1;
+            if (ang_atom >= atom_idx) ang_atom = -1;
+            if (dih_atom >= atom_idx) dih_atom = -1;
+
+            /* Store resolved refs */
+            entry[1] = dist_atom;
+            entry[2] = ang_atom;
+            entry[3] = dih_atom;
+
+            /* Assign dihedral type only if all refs are valid */
+            if (dist_atom >= 0 && ang_atom >= 0 && dih_atom >= 0) {
+                out_dihedral_types[atom_idx] = ATOM_DIHEDRAL_TYPE[atom_type];
+            }
+        }
+
+        /* Fall back to bond graph if canonical refs are missing or failed */
+        if (bond_offsets != NULL && bond_neighbors != NULL) {
+            /* Fill in missing distance ref */
+            if (entry[1] < 0) {
+                entry[1] = find_first_bonded_lower(
+                    atom_idx, bond_offsets, bond_neighbors, NULL, 0
+                );
+            }
+
+            /* Fill in missing angle ref (only if we have a valid dist_ref) */
+            if (entry[1] >= 0 && entry[2] < 0) {
+                int64_t excludes1[1] = {atom_idx};
+                entry[2] = find_first_bonded_lower(
+                    entry[1], bond_offsets, bond_neighbors, excludes1, 1
+                );
+            }
+
+            /* Fill in missing dihedral ref (only if we have valid dist and angle refs) */
+            if (entry[1] >= 0 && entry[2] >= 0 && entry[3] < 0) {
+                int64_t excludes2[2] = {atom_idx, entry[1]};
+                entry[3] = find_first_bonded_lower(
+                    entry[2], bond_offsets, bond_neighbors, excludes2, 2
+                );
+            }
+        }
+    }
+
+    free(residue_starts);
+    free(chain_res_starts);
+
+    return n_atoms;
 }

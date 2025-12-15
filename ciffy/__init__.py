@@ -12,9 +12,17 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0.dev0"  # Fallback for editable installs without scm
 
+# Verify C extension is available (required for all operations)
+try:
+    from . import _c
+except ImportError as e:
+    raise ImportError(
+        "ciffy requires the C extension. Reinstall with: pip install ciffy --force-reinstall"
+    ) from e
+
 # Core types
 from .polymer import Polymer
-from .types import Scale, Molecule, DihedralType
+from .types import Scale, Molecule, DihedralType, PROTEIN_BACKBONE, RNA_BACKBONE
 
 # Operations
 from .operations.reduction import Reduction
@@ -71,6 +79,8 @@ __all__ = [
     "Scale",
     "Molecule",
     "DihedralType",
+    "PROTEIN_BACKBONE",
+    "RNA_BACKBONE",
     "Reduction",
     # Functions
     "load",

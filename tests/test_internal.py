@@ -352,14 +352,13 @@ class TestOrphanAtoms:
         _ = polymer.dihedrals
 
         # Should have single-atom components (waters, ions)
-        # Access CSR format components
+        # Access ConnectedComponents object
         mgr = polymer._coord_manager
-        n_components = len(mgr._component_offsets) - 1
+        components = mgr._components
+        n_components = components.n_components
         single_atom_count = 0
         for i in range(n_components):
-            start = int(mgr._component_offsets[i])
-            end = int(mgr._component_offsets[i + 1])
-            if end - start == 1:
+            if components.get_component_size(i) == 1:
                 single_atom_count += 1
 
         assert single_atom_count > 0
@@ -375,16 +374,15 @@ class TestOrphanAtoms:
         dihedrals = polymer.dihedrals.copy()
         polymer.dihedrals = dihedrals
 
-        # Find single-atom components using CSR format
+        # Find single-atom components using ConnectedComponents
         mgr = polymer._coord_manager
-        n_components = len(mgr._component_offsets) - 1
+        components = mgr._components
+        n_components = components.n_components
 
         for i in range(n_components):
-            start = int(mgr._component_offsets[i])
-            end = int(mgr._component_offsets[i + 1])
-            if end - start == 1:
+            if components.get_component_size(i) == 1:
                 # This is a single-atom component
-                atom_idx = int(mgr._component_atoms[start])
+                atom_idx = int(components.get_component_atoms(i)[0])
                 orig_coord = orig_coords[atom_idx]
                 rec_coord = polymer.coordinates[atom_idx]
                 assert np.allclose(orig_coord, rec_coord), \
@@ -401,12 +399,11 @@ class TestOrphanAtoms:
 
         # Should have no single-atom components
         mgr = polymer._coord_manager
-        n_components = len(mgr._component_offsets) - 1
+        components = mgr._components
+        n_components = components.n_components
         single_atom_count = 0
         for i in range(n_components):
-            start = int(mgr._component_offsets[i])
-            end = int(mgr._component_offsets[i + 1])
-            if end - start == 1:
+            if components.get_component_size(i) == 1:
                 single_atom_count += 1
 
         assert single_atom_count == 0
@@ -920,3 +917,207 @@ class TestErrorHandling:
         # Verify validation method exists
         assert hasattr(polymer._coord_manager, '_validate_coordinates')
 
+
+class TestRingPreservation:
+    """Tests for ring geometry preservation during backbone manipulation.
+
+    The canonical Z-matrix construction uses ring-internal dihedrals that
+    preserve ring geometry when only backbone dihedrals are modified.
+    """
+
+    def _measure_ring_distances(self, polymer, ring_atom_names, residue_idx=0):
+        """Measure all pairwise distances between ring atoms.
+
+        Args:
+            polymer: Polymer structure
+            ring_atom_names: List of ring atom names (e.g., ["N1", "C2", "N3", ...])
+            residue_idx: Which residue to measure
+
+        Returns:
+            dict mapping atom pair tuples to distances
+        """
+        from ciffy import Scale
+        from ciffy.biochemistry import Residue
+
+        coords = polymer.coordinates
+        atoms = polymer.atoms
+
+        # Get residue boundaries
+        res_sizes = polymer.sizes(Scale.RESIDUE)
+        residue_starts = np.concatenate([[0], np.cumsum(res_sizes.numpy() if hasattr(res_sizes, 'numpy') else res_sizes)])
+        start = int(residue_starts[residue_idx])
+        end = int(residue_starts[residue_idx + 1])
+
+        # Get residue type
+        res_type = int(polymer.sequence[residue_idx])
+        res = Residue(res_type)
+
+        # Map atom names to local indices
+        atom_name_to_local = {}
+        for local_idx, atom in enumerate(res.atoms):
+            py_name = atom.name.replace("'", "p").replace('"', "pp")
+            atom_name_to_local[py_name] = local_idx
+
+        # Get global indices for ring atoms
+        ring_global_indices = {}
+        for name in ring_atom_names:
+            local_idx = atom_name_to_local.get(name)
+            if local_idx is not None:
+                ring_global_indices[name] = start + local_idx
+
+        # Measure all pairwise distances
+        distances = {}
+        for i, name1 in enumerate(ring_atom_names):
+            for name2 in ring_atom_names[i + 1:]:
+                idx1 = ring_global_indices.get(name1)
+                idx2 = ring_global_indices.get(name2)
+                if idx1 is not None and idx2 is not None:
+                    dist = np.linalg.norm(coords[idx1] - coords[idx2])
+                    distances[(name1, name2)] = float(dist)
+
+        return distances
+
+    def test_pyrimidine_ring_preserved_on_backbone_rotation(self):
+        """Test pyrimidine ring geometry preserved when backbone changes."""
+        from ciffy import from_sequence, DihedralType
+
+        # Create uracil (pyrimidine)
+        polymer = from_sequence("u")
+
+        # Pyrimidine ring: N1, C2, N3, C4, C5, C6
+        ring_atoms = ["N1", "C2", "N3", "C4", "C5", "C6"]
+
+        # Get initial ring distances
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms)
+
+        # Rotate backbone by changing ALPHA dihedral
+        alpha = polymer.dihedral(DihedralType.ALPHA)
+        if len(alpha) > 0 and not np.isnan(alpha[0]):
+            new_alpha = alpha.copy()
+            new_alpha[0] = alpha[0] + 1.0  # Rotate by ~57 degrees
+            polymer.set_dihedral(DihedralType.ALPHA, new_alpha)
+
+            # Get ring distances after backbone rotation
+            final_distances = self._measure_ring_distances(polymer, ring_atoms)
+
+            # Ring distances should be unchanged
+            for pair, initial_dist in initial_distances.items():
+                final_dist = final_distances.get(pair)
+                if final_dist is not None:
+                    np.testing.assert_allclose(
+                        initial_dist,
+                        final_dist,
+                        atol=1e-5,
+                        err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
+                    )
+
+    def test_purine_ring_preserved_on_backbone_rotation(self):
+        """Test purine ring geometry preserved when backbone changes."""
+        from ciffy import from_sequence, DihedralType
+
+        # Create adenine (purine)
+        polymer = from_sequence("a")
+
+        # Purine rings: 5-membered (N9, C8, N7, C5, C4) + 6-membered (C4, C5, C6, N1, C2, N3)
+        ring_atoms = ["N9", "C8", "N7", "C5", "C4", "C6", "N1", "C2", "N3"]
+
+        # Get initial ring distances
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms)
+
+        # Rotate backbone by changing ALPHA dihedral
+        alpha = polymer.dihedral(DihedralType.ALPHA)
+        if len(alpha) > 0 and not np.isnan(alpha[0]):
+            new_alpha = alpha.copy()
+            new_alpha[0] = alpha[0] + 1.0  # Rotate by ~57 degrees
+            polymer.set_dihedral(DihedralType.ALPHA, new_alpha)
+
+            # Get ring distances after backbone rotation
+            final_distances = self._measure_ring_distances(polymer, ring_atoms)
+
+            # Ring distances should be unchanged
+            for pair, initial_dist in initial_distances.items():
+                final_dist = final_distances.get(pair)
+                if final_dist is not None:
+                    np.testing.assert_allclose(
+                        initial_dist,
+                        final_dist,
+                        atol=1e-5,
+                        err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
+                    )
+
+    def test_multi_residue_backbone_rotation_preserves_rings(self):
+        """Test backbone rotations in multi-residue structures preserve rings.
+
+        When rotating ALPHA (O3'(i-1)-P-O5'-C5'), the downstream nucleotide
+        should rotate as a rigid body, preserving all internal distances.
+        """
+        from ciffy import from_sequence, DihedralType
+
+        # Create 4-mer to test multiple backbone rotations
+        # Sequence: A(0), C(1), G(2), U(3)
+        polymer = from_sequence("acgu")
+
+        # Pyrimidine ring atoms for U at position 3
+        ring_atoms = ["N1", "C2", "N3", "C4", "C5", "C6"]
+
+        # Get initial ring distances for residue 3 (U, a pyrimidine)
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms, residue_idx=3)
+
+        # Rotate ALPHA dihedral for residue 3 (index 3)
+        alpha = polymer.dihedral(DihedralType.ALPHA)
+        if len(alpha) > 3 and not np.isnan(alpha[3]):
+            new_alpha = alpha.copy()
+            new_alpha[3] = alpha[3] + 0.5
+            polymer.set_dihedral(DihedralType.ALPHA, new_alpha)
+
+        # Ring distances should be unchanged
+        final_distances = self._measure_ring_distances(polymer, ring_atoms, residue_idx=3)
+
+        for pair, initial_dist in initial_distances.items():
+            final_dist = final_distances.get(pair)
+            if final_dist is not None:
+                np.testing.assert_allclose(
+                    initial_dist,
+                    final_dist,
+                    atol=1e-5,
+                    err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
+                )
+
+    def test_base_ring_preserved_on_alpha_rotation(self):
+        """Test base ring geometry is preserved when ALPHA (phosphate) rotates.
+
+        ALPHA = O3'(i-1)-P-O5'-C5' is upstream of the sugar, so rotating it
+        should move the entire nucleotide as a rigid body without affecting
+        internal distances. Unlike GAMMA (which is within the sugar ring),
+        ALPHA is in the phosphate backbone and doesn't break ring constraints.
+        """
+        from ciffy import from_sequence, DihedralType
+
+        # Create di-nucleotide (need 2 residues for ALPHA to exist)
+        polymer = from_sequence("cc")
+
+        # Pyrimidine ring atoms
+        ring_atoms = ["N1", "C2", "N3", "C4", "C5", "C6"]
+
+        # Get initial ring distances for second residue
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms, residue_idx=1)
+
+        # Rotate ALPHA (affects residue 1's position relative to residue 0)
+        alpha = polymer.dihedral(DihedralType.ALPHA)
+        if len(alpha) > 1 and not np.isnan(alpha[1]):
+            new_alpha = alpha.copy()
+            new_alpha[1] = alpha[1] + 0.8  # Rotate second residue's ALPHA
+            polymer.set_dihedral(DihedralType.ALPHA, new_alpha)
+
+            # Ring distances should be unchanged (rigid body rotation)
+            final_distances = self._measure_ring_distances(polymer, ring_atoms, residue_idx=1)
+
+            for pair, initial_dist in initial_distances.items():
+                final_dist = final_distances.get(pair)
+                if final_dist is not None:
+                    np.testing.assert_allclose(
+                        initial_dist,
+                        final_dist,
+                        atol=1e-5,
+                        err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
+                    )

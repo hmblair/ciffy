@@ -280,9 +280,13 @@ class Polymer:
         self._molecule_types = molecule_types
         self.descriptions = descriptions
 
+        # Create topology info for coordinate manager
+        from .internal.topology import TopologyInfo
+        self._topology = TopologyInfo.from_polymer(self)
+
         # Initialize coordinate manager with Cartesian coordinates
         from .internal.coordinates import CoordinateManager
-        self._coord_manager = CoordinateManager(coordinates, self)
+        self._coord_manager = CoordinateManager(coordinates, self._topology)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Array Properties (with backend/device validation)
@@ -440,36 +444,47 @@ class Polymer:
         """
         return self._coord_manager.zmatrix
 
-    def dihedral(self, dtype: "DihedralType") -> Array:
+    def dihedral(
+        self,
+        dtype: "DihedralType | list[DihedralType] | tuple[DihedralType, ...]",
+    ) -> Array:
         """
         Get specific named dihedral angles.
 
-        Returns the dihedral values for atoms that "own" this dihedral type
-        in the Z-matrix representation. Uses the same mechanism as set_dihedral()
-        for symmetric get/set behavior.
+        Returns the dihedral values for atoms that "own" the specified dihedral
+        type(s) in the Z-matrix representation. Uses the same mechanism as
+        set_dihedral() for symmetric get/set behavior.
 
         Args:
-            dtype: Type of dihedral to retrieve (e.g., DihedralType.PHI).
+            dtype: Type(s) of dihedral to retrieve. Can be a single DihedralType
+                or a list/tuple of DihedralTypes. For multiple types, values are
+                concatenated in the order specified.
 
         Returns:
             Array of dihedral values in radians. Length depends on number of
-            atoms that own this dihedral type (typically n_residues - 1 for
-            backbone dihedrals that span residue boundaries).
+            atoms that own the specified dihedral type(s).
 
         Example:
             >>> from ciffy import DihedralType
             >>> phi = polymer.dihedral(DihedralType.PHI)
-            >>> psi = polymer.dihedral(DihedralType.PSI)
+            >>> # Get multiple types at once
+            >>> backbone = polymer.dihedral([DihedralType.PHI, DihedralType.PSI])
         """
         return self._coord_manager.get_dihedral(dtype)
 
-    def set_dihedral(self, dtype: "DihedralType", values: Array) -> None:
+    def set_dihedral(
+        self,
+        dtype: "DihedralType | list[DihedralType] | tuple[DihedralType, ...]",
+        values: Array,
+    ) -> None:
         """
         Set specific named dihedral angles.
 
         Args:
-            dtype: Type of dihedral to set (e.g., DihedralType.PHI).
-            values: New dihedral values in radians.
+            dtype: Type(s) of dihedral to set. Can be a single DihedralType
+                or a list/tuple of DihedralTypes.
+            values: New dihedral values in radians. For multiple types, values
+                should be concatenated in the same order as the dtype list.
 
         Raises:
             ValueError: If the specified dihedral type is not found.
@@ -478,10 +493,10 @@ class Polymer:
             >>> from ciffy import DihedralType
             >>> import numpy as np
             >>> # Set all phi angles to -60 degrees
-            >>> n_res = polymer.size(Scale.RESIDUE)
-            >>> polymer.set_dihedral(DihedralType.PHI, np.full(n_res-1, -np.pi/3))
+            >>> polymer.set_dihedral(DihedralType.PHI, np.full(n_phi, -np.pi/3))
+            >>> # Set multiple types at once
+            >>> polymer.set_dihedral([DihedralType.PHI, DihedralType.PSI], backbone_values)
         """
-        from .types import DihedralType
         self._coord_manager.set_dihedral(dtype, values)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -832,9 +847,9 @@ class Polymer:
         coordinates = self.coordinates - expanded
 
         centered = copy(self)
-        # Create a new coordinate manager for the copy
+        # Create a new coordinate manager for the copy (reuse topology from copy)
         from .internal.coordinates import CoordinateManager
-        centered._coord_manager = CoordinateManager(coordinates, centered)
+        centered._coord_manager = CoordinateManager(coordinates, centered._topology)
 
         return centered, means
 
@@ -1106,9 +1121,9 @@ class Polymer:
             self._id, names, strands, lengths, new_polymer_count,
         )
 
-        # Replace default coord manager with sliced one
+        # Replace default coord manager with sliced one and set topology
         result._coord_manager = sliced_manager
-        sliced_manager._polymer = result
+        sliced_manager._topology = result._topology
 
         return result
 
@@ -1483,7 +1498,7 @@ class Polymer:
 
         # Replace coordinate manager with converted one
         result._coord_manager = self._coord_manager.numpy()
-        result._coord_manager._polymer = result
+        result._coord_manager._topology = result._topology
 
         return result
 
@@ -1518,7 +1533,7 @@ class Polymer:
 
         # Replace coordinate manager with converted one
         result._coord_manager = self._coord_manager.torch()
-        result._coord_manager._polymer = result
+        result._coord_manager._topology = result._topology
 
         return result
 
@@ -1581,7 +1596,7 @@ class Polymer:
         if device is not None or dtype is not None:
             from .internal.coordinates import CoordinateManager
             # Create new coordinate manager with updated coordinates
-            result._coord_manager = CoordinateManager(coords, result)
+            result._coord_manager = CoordinateManager(coords, result._topology)
 
             # If internal coordinates were computed, convert them too
             if self._coord_manager._internal_valid:
@@ -1664,7 +1679,7 @@ class Polymer:
         check_compatible(self.coordinates, coordinates, "coordinates")
 
         result = copy(self)
-        # Create a new coordinate manager for the copy (to avoid sharing state)
+        # Create a new coordinate manager for the copy (to avoid sharing state, reuse topology)
         from .internal.coordinates import CoordinateManager
-        result._coord_manager = CoordinateManager(coordinates, result)
+        result._coord_manager = CoordinateManager(coordinates, result._topology)
         return result

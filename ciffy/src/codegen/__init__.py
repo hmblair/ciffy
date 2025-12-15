@@ -21,6 +21,12 @@ from .c_codegen import (
     generate_gperf_files,
     generate_reverse_header,
     generate_bond_patterns_header,
+    generate_canonical_refs_header,
+)
+from .residue import (
+    compute_canonical_zmatrix_refs,
+    compute_atom_dihedral_ownership,
+    compute_residue_backbone_atoms,
 )
 from .python_codegen import (
     generate_python_molecule,
@@ -28,6 +34,7 @@ from .python_codegen import (
     generate_python_atoms,
     generate_python_residues,
     generate_dihedral_arrays,
+    generate_zmatrix_arrays,
 )
 
 
@@ -83,15 +90,32 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
 
     print(f"Assigned {current_idx - 1} unique atoms, {len(atom_index)} total entries")
 
+    # Compute arrays needed for multiple generators
+    atom_dihedral_type, _ = compute_atom_dihedral_ownership(all_residues, atom_index)
+    atom_canonical_refs, atom_has_canonical_refs = compute_canonical_zmatrix_refs(
+        all_residues, atom_index
+    )
+    residue_backbone_atoms = compute_residue_backbone_atoms(all_residues, atom_index)
+
     # Generate all files
     generate_gperf_files(hash_dir, atom_index, cif_to_residue, residue_index, all_residues)
     generate_reverse_header(hash_dir, atom_index, residue_to_cif)
     generate_bond_patterns_header(internal_dir, all_residues, atom_index)
+    generate_canonical_refs_header(
+        internal_dir,
+        all_residues,
+        atom_index,
+        atom_canonical_refs,
+        atom_has_canonical_refs,
+        atom_dihedral_type,
+        residue_backbone_atoms,
+    )
     generate_python_molecule(types_dir)
     generate_python_elements(biochem_dir)
     generate_python_atoms(biochem_dir, atom_index, all_residues)
     generate_python_residues(biochem_dir, all_residues)
     generate_dihedral_arrays(biochem_dir, all_residues, atom_index)
+    generate_zmatrix_arrays(biochem_dir, all_residues, atom_index)
 
     return hash_dir, atom_index
 

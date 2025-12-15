@@ -2,15 +2,16 @@
 Dihedral angle type enumeration for biomolecules.
 """
 
-from enum import Enum
+from enum import IntEnum
 
 
-class DihedralType(Enum):
+class DihedralType(IntEnum):
     """
     Named dihedral angle types for proteins and nucleic acids.
 
     Dihedral angles describe rotations around bonds and are fundamental
-    to describing the conformation of biomolecules.
+    to describing the conformation of biomolecules. Values are integers
+    that can be used directly as array indices.
 
     Protein backbone dihedrals:
         PHI: C(i-1) - N(i) - CA(i) - C(i)
@@ -28,45 +29,34 @@ class DihedralType(Enum):
     Glycosidic dihedrals:
         CHI_PURINE: O4' - C1' - N9 - C4 (adenine, guanine)
         CHI_PYRIMIDINE: O4' - C1' - N1 - C2 (cytosine, uracil, thymine)
+
+    Example:
+        >>> DihedralType.PHI.value  # Returns 0, usable as array index
+        0
+        >>> DihedralType.ALPHA.value  # Returns 3
+        3
     """
 
     # Protein backbone
-    PHI = "phi"
-    PSI = "psi"
-    OMEGA = "omega"
+    PHI = 0
+    PSI = 1
+    OMEGA = 2
 
     # Nucleic acid backbone
-    ALPHA = "alpha"
-    BETA = "beta"
-    GAMMA = "gamma"
-    DELTA = "delta"
-    EPSILON = "epsilon"
-    ZETA = "zeta"
+    ALPHA = 3
+    BETA = 4
+    GAMMA = 5
+    DELTA = 6
+    EPSILON = 7
+    ZETA = 8
 
     # Glycosidic dihedrals
-    CHI_PURINE = "chi_purine"
-    CHI_PYRIMIDINE = "chi_pyrimidine"
+    CHI_PURINE = 9
+    CHI_PYRIMIDINE = 10
 
 
-# Mapping from DihedralType to integer index for array-based storage
-# This order is the single source of truth - codegen and internal modules use this
-DIHEDRAL_TYPE_TO_INDEX: dict[DihedralType, int] = {
-    DihedralType.PHI: 0,
-    DihedralType.PSI: 1,
-    DihedralType.OMEGA: 2,
-    DihedralType.ALPHA: 3,
-    DihedralType.BETA: 4,
-    DihedralType.GAMMA: 5,
-    DihedralType.DELTA: 6,
-    DihedralType.EPSILON: 7,
-    DihedralType.ZETA: 8,
-    DihedralType.CHI_PURINE: 9,
-    DihedralType.CHI_PYRIMIDINE: 10,
-}
-
-INDEX_TO_DIHEDRAL_TYPE: dict[int, DihedralType] = {
-    v: k for k, v in DIHEDRAL_TYPE_TO_INDEX.items()
-}
+# Reverse mapping from integer index to DihedralType
+INDEX_TO_DIHEDRAL_TYPE: dict[int, DihedralType] = {dt.value: dt for dt in DihedralType}
 
 # Convenience tuples for common dihedral groups
 PROTEIN_BACKBONE: tuple[DihedralType, ...] = (

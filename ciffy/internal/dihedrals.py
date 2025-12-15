@@ -19,7 +19,7 @@ import numpy as np
 
 from ..backend import Array, is_torch
 from ..types import Molecule, Scale, DihedralType
-from ..types.dihedral import DIHEDRAL_TYPE_TO_INDEX, INDEX_TO_DIHEDRAL_TYPE
+from ..types.dihedral import INDEX_TO_DIHEDRAL_TYPE
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -224,20 +224,13 @@ def compute_named_dihedral(
         (N_residues,) array of dihedral angles in radians, with NaN for invalid.
     """
     from ..biochemistry import Residue
-    from ..types.dihedral import DIHEDRAL_TYPE_TO_INDEX
 
     coords = polymer.coordinates
     res_sizes = polymer.sizes(Scale.RESIDUE)
     n_residues = len(res_sizes)
 
-    # Get dihedral type index
-    type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
-    if type_idx is None:
-        # Unknown dihedral type
-        if is_torch(coords):
-            import torch
-            return torch.full((n_residues,), float('nan'), dtype=coords.dtype, device=coords.device)
-        return np.full(n_residues, np.nan, dtype=coords.dtype)
+    # Get dihedral type index - DihedralType is IntEnum, use .value directly
+    type_idx = dtype.value
 
     # Build cumulative atom offsets
     atom_offsets = [0]

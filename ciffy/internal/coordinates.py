@@ -420,17 +420,14 @@ class CoordinateManager:
             self._zmatrix = ZMatrix.from_topology(self._topology)
 
             # Detect orphan atoms (atoms not in Z-matrix - no bonds)
-            # Add them as single-atom connected components
+            # Add them as single-atom connected components using vectorized boolean mask
             zmatrix_indices = self._zmatrix.indices
+            in_zmatrix = np.zeros(n_atoms, dtype=bool)
             if len(zmatrix_indices) > 0:
-                zmatrix_atoms = set(int(idx) for idx in zmatrix_indices[:, 0])
-            else:
-                zmatrix_atoms = set()
+                in_zmatrix[zmatrix_indices[:, 0].astype(np.int64)] = True
+            orphan_indices = np.where(~in_zmatrix)[0].astype(np.int64)
 
-            orphan_atoms = [i for i in range(n_atoms) if i not in zmatrix_atoms]
-
-            if orphan_atoms and self._components is not None:
-                orphan_indices = np.array(orphan_atoms, dtype=np.int64)
+            if len(orphan_indices) > 0 and self._components is not None:
                 self._components = self._components.add_orphan_atoms(
                     orphan_indices, coords
                 )
@@ -605,8 +602,6 @@ class CoordinateManager:
             >>> phi = manager.get_dihedral(DihedralType.PHI)
             >>> backbone = manager.get_dihedral([DihedralType.PHI, DihedralType.PSI])
         """
-        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
-
         # Ensure internal coordinates are computed
         if not self._internal_valid:
             self._recompute_internal()
@@ -616,21 +611,15 @@ class CoordinateManager:
         if dihedral_types is None:
             return _empty_array(self._dihedrals.dtype, self._dihedrals)
 
-        # Handle single type
+        # Handle single type - DihedralType is IntEnum, use .value directly
         if isinstance(dtype, DihedralType):
-            type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
-            if type_idx is None:
-                return _empty_array(self._dihedrals.dtype, self._dihedrals)
-            mask = dihedral_types == type_idx
+            mask = dihedral_types == dtype.value
             return self._dihedrals[mask]
 
         # Handle multiple types - concatenate in order
         arrays = []
         for dt in dtype:
-            type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dt)
-            if type_idx is None:
-                continue
-            mask = dihedral_types == type_idx
+            mask = dihedral_types == dt.value
             values = self._dihedrals[mask]
             if len(values) > 0:
                 arrays.append(values)
@@ -664,8 +653,6 @@ class CoordinateManager:
             >>> # Set multiple types at once
             >>> manager.set_dihedral([DihedralType.PHI, DihedralType.PSI], backbone_values)
         """
-        from .dihedrals import DIHEDRAL_TYPE_TO_INDEX
-
         # Ensure internal coordinates are computed
         if not self._internal_valid:
             self._recompute_internal()
@@ -682,13 +669,9 @@ class CoordinateManager:
         else:
             new_dihedrals = self._dihedrals.copy()
 
-        # Handle single type
+        # Handle single type - DihedralType is IntEnum, use .value directly
         if isinstance(dtype, DihedralType):
-            type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dtype)
-            if type_idx is None:
-                raise ValueError(f"Unknown dihedral type: {dtype}")
-
-            mask = dihedral_types == type_idx
+            mask = dihedral_types == dtype.value
 
             if is_torch(mask):
                 has_dihedrals = mask.any().item()
@@ -708,11 +691,7 @@ class CoordinateManager:
         # Handle multiple types - split values and assign each
         offset = 0
         for dt in dtype:
-            type_idx = DIHEDRAL_TYPE_TO_INDEX.get(dt)
-            if type_idx is None:
-                continue
-
-            mask = dihedral_types == type_idx
+            mask = dihedral_types == dt.value
 
             if is_torch(mask):
                 count = int(mask.sum().item())

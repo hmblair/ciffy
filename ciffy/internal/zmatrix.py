@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..polymer import Polymer
     from .topology import TopologyInfo
 
 from ..backend import Array, is_torch, to_numpy, to_torch
@@ -41,7 +40,7 @@ class ZMatrix:
     Entries are in BFS order, so references always point to earlier atoms.
 
     Example:
-        >>> zmatrix = ZMatrix.from_polymer(polymer)
+        >>> zmatrix = ZMatrix.from_topology(topology)
         >>> print(len(zmatrix))  # Number of atoms in Z-matrix
         >>> print(zmatrix.atom_indices)  # Column 0
         >>> print(zmatrix[0])  # First row as array
@@ -59,30 +58,6 @@ class ZMatrix:
         """
         self._indices = indices
         self._dihedral_types = dihedral_types
-
-    @classmethod
-    def from_polymer(cls, polymer: "Polymer") -> "ZMatrix":
-        """
-        Build Z-matrix from polymer using canonical references.
-
-        Uses biochemically-correct canonical references from codegen for
-        all atoms that have them defined (backbone, base atoms). Falls back
-        to BFS-based references for other atoms (sidechains).
-
-        This ensures:
-        1. Named dihedrals (PHI, PSI, ALPHA, CHI, etc.) are captured
-        2. Ring dihedrals preserve ring geometry
-        3. Deterministic, biochemically-meaningful Z-matrix
-
-        Args:
-            polymer: Polymer structure.
-
-        Returns:
-            ZMatrix with entries in placement order and dihedral type annotations.
-        """
-        from .graph import build_canonical_zmatrix
-        indices, dihedral_types = build_canonical_zmatrix(polymer)
-        return cls(indices, dihedral_types)
 
     @classmethod
     def from_topology(cls, topology: "TopologyInfo") -> "ZMatrix":
@@ -165,7 +140,7 @@ class ZMatrix:
 
     def validate(self) -> None:
         """
-        Validate Z-matrix structure.
+        Validate Z-matrix structure using vectorized operations.
 
         Checks that:
         - All reference atoms are either -1 or point to earlier atoms
@@ -174,42 +149,72 @@ class ZMatrix:
         Raises:
             ValueError: If validation fails.
         """
-        placed = set()
-        for i in range(len(self._indices)):
-            atom_idx = int(self._indices[i, 0])
-            dist_ref = int(self._indices[i, 1])
-            ang_ref = int(self._indices[i, 2])
-            dih_ref = int(self._indices[i, 3])
+        n_entries = len(self._indices)
+        if n_entries == 0:
+            return
 
-            # Check distance reference
-            if dist_ref >= 0 and dist_ref not in placed:
-                raise ValueError(
-                    f"Entry {i}: distance_ref {dist_ref} not yet placed"
-                )
+        # Extract columns
+        atom_indices = self._indices[:, 0].astype(np.int64)
+        dist_refs = self._indices[:, 1].astype(np.int64)
+        ang_refs = self._indices[:, 2].astype(np.int64)
+        dih_refs = self._indices[:, 3].astype(np.int64)
 
-            # Check angle reference
-            if ang_ref >= 0 and ang_ref not in placed:
-                raise ValueError(
-                    f"Entry {i}: angle_ref {ang_ref} not yet placed"
-                )
+        # Build entry_order: atom_idx -> entry position where it was placed
+        # Atoms not in Z-matrix get n_entries (meaning "not placed")
+        max_atom = int(atom_indices.max()) + 1
+        entry_order = np.full(max_atom, n_entries, dtype=np.int64)
+        entry_order[atom_indices] = np.arange(n_entries)
 
-            # Check dihedral reference
-            if dih_ref >= 0 and dih_ref not in placed:
-                raise ValueError(
-                    f"Entry {i}: dihedral_ref {dih_ref} not yet placed"
-                )
+        # Entry positions for comparison
+        entry_positions = np.arange(n_entries, dtype=np.int64)
 
-            # Check progression: can't have angle without distance, etc.
-            if ang_ref >= 0 and dist_ref < 0:
-                raise ValueError(
-                    f"Entry {i}: has angle_ref but no distance_ref"
-                )
-            if dih_ref >= 0 and ang_ref < 0:
-                raise ValueError(
-                    f"Entry {i}: has dihedral_ref but no angle_ref"
-                )
+        # Check distance references: ref must be placed before current entry
+        valid_dist = dist_refs >= 0
+        dist_ref_entries = np.where(
+            valid_dist & (dist_refs < max_atom),
+            entry_order[np.clip(dist_refs, 0, max_atom - 1)],
+            -1  # Invalid refs default to -1 (always < entry position)
+        )
+        dist_violations = valid_dist & (dist_ref_entries >= entry_positions)
+        if np.any(dist_violations):
+            first = int(np.argmax(dist_violations))
+            raise ValueError(f"Entry {first}: distance_ref {dist_refs[first]} not yet placed")
 
-            placed.add(atom_idx)
+        # Check angle references
+        valid_ang = ang_refs >= 0
+        ang_ref_entries = np.where(
+            valid_ang & (ang_refs < max_atom),
+            entry_order[np.clip(ang_refs, 0, max_atom - 1)],
+            -1
+        )
+        ang_violations = valid_ang & (ang_ref_entries >= entry_positions)
+        if np.any(ang_violations):
+            first = int(np.argmax(ang_violations))
+            raise ValueError(f"Entry {first}: angle_ref {ang_refs[first]} not yet placed")
+
+        # Check dihedral references
+        valid_dih = dih_refs >= 0
+        dih_ref_entries = np.where(
+            valid_dih & (dih_refs < max_atom),
+            entry_order[np.clip(dih_refs, 0, max_atom - 1)],
+            -1
+        )
+        dih_violations = valid_dih & (dih_ref_entries >= entry_positions)
+        if np.any(dih_violations):
+            first = int(np.argmax(dih_violations))
+            raise ValueError(f"Entry {first}: dihedral_ref {dih_refs[first]} not yet placed")
+
+        # Check progression: can't have angle without distance
+        invalid_progression_ang = valid_ang & (dist_refs < 0)
+        if np.any(invalid_progression_ang):
+            first = int(np.argmax(invalid_progression_ang))
+            raise ValueError(f"Entry {first}: has angle_ref but no distance_ref")
+
+        # Check progression: can't have dihedral without angle
+        invalid_progression_dih = valid_dih & (ang_refs < 0)
+        if np.any(invalid_progression_dih):
+            first = int(np.argmax(invalid_progression_dih))
+            raise ValueError(f"Entry {first}: has dihedral_ref but no angle_ref")
 
     def numpy(self) -> "ZMatrix":
         """Convert indices to NumPy array."""

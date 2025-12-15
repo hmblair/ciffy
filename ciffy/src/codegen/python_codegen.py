@@ -449,9 +449,9 @@ def generate_dihedral_arrays(
         '',
         '',
         '# Atom enum value -> dihedral type index (-1 = not a dihedral owner)',
-        '# Type indices match DIHEDRAL_TYPE_TO_INDEX in ciffy.types.dihedral:',
-        '#   0=PHI, 1=PSI, 2=OMEGA, 3=ALPHA, 4=BETA, 5=GAMMA,',
-        '#   6=DELTA, 7=EPSILON, 8=ZETA, 9=CHI_PURINE, 10=CHI_PYRIMIDINE',
+        '# Type indices match DihedralType IntEnum values in ciffy.types.dihedral:',
+        '#   PHI=0, PSI=1, OMEGA=2, ALPHA=3, BETA=4, GAMMA=5,',
+        '#   DELTA=6, EPSILON=7, ZETA=8, CHI_PURINE=9, CHI_PYRIMIDINE=10',
         f'ATOM_DIHEDRAL_TYPE = np.array([',
     ]
 

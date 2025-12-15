@@ -19,7 +19,7 @@ _PACKAGE_ROOT = Path(__file__).parent.parent.parent.parent
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from ciffy.types.dihedral import DIHEDRAL_TYPE_TO_INDEX
+from ciffy.types.dihedral import DihedralType
 
 # URL for the PDB Chemical Component Dictionary
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
@@ -104,9 +104,10 @@ RESIDUE_WHITELIST: set[str] | None = {
     "CS",   # Cesium ion
 }
 
-# Dihedral type index mapping - derived from ciffy.types.dihedral (single source of truth)
+# Dihedral type index mapping - derived from DihedralType IntEnum (single source of truth)
+# Maps lowercase name strings ("phi", "psi", etc.) to integer indices
 DIHEDRAL_TYPE_INDEX: dict[str, int] = {
-    dtype.value: idx for dtype, idx in DIHEDRAL_TYPE_TO_INDEX.items()
+    dt.name.lower(): dt.value for dt in DihedralType
 }
 
 

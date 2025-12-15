@@ -1613,15 +1613,8 @@ class Polymer:
                 result._coord_manager._distances = convert_tensor(self._coord_manager._distances)
                 result._coord_manager._angles = convert_tensor(self._coord_manager._angles)
                 result._coord_manager._dihedrals = convert_tensor(self._coord_manager._dihedrals)
-                result._coord_manager._orphan_coords = convert_tensor(self._coord_manager._orphan_coords)
                 result._coord_manager._internal_valid = True
                 result._coord_manager._zmatrix = self._coord_manager._zmatrix
-                result._coord_manager._orphan_atoms = self._coord_manager._orphan_atoms
-                if self._coord_manager._dihedral_indices is not None:
-                    result._coord_manager._dihedral_indices = {
-                        k: v.to(device) if device is not None else v
-                        for k, v in self._coord_manager._dihedral_indices.items()
-                    }
 
         return result
 

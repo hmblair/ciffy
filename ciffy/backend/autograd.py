@@ -68,6 +68,7 @@ __all__ = [
     "NerfReconstructFunction",
     "HAS_TORCH",
     "HAS_C_EXTENSION",
+    "HAS_CUDA_EXTENSION",
 ]
 
 try:
@@ -89,6 +90,20 @@ try:
     HAS_C_EXTENSION = True
 except ImportError:
     HAS_C_EXTENSION = False
+
+# Import CUDA extension functions
+try:
+    from .cuda_ops import (
+        HAS_CUDA_EXTENSION,
+        is_cuda_available,
+        cuda_cartesian_to_internal,
+        cuda_cartesian_to_internal_backward,
+        cuda_nerf_reconstruct,
+        cuda_nerf_reconstruct_backward,
+    )
+except ImportError:
+    HAS_CUDA_EXTENSION = False
+    is_cuda_available = lambda x: False
 
 
 class CartesianToInternalFunction(Function):
@@ -116,20 +131,28 @@ class CartesianToInternalFunction(Function):
         Returns:
             Tuple of (distances, angles, dihedrals), each (M,) float32.
         """
-        # Convert to numpy for C extension
-        coords_np = coords.detach().cpu().numpy().astype(np.float32)
-        indices_np = indices.detach().cpu().numpy().astype(np.int64)
+        # Check if we can use CUDA path
+        use_cuda = is_cuda_available(coords)
+        ctx.use_cuda = use_cuda
 
-        # Call C extension
-        distances_np, angles_np, dihedrals_np = _cartesian_to_internal(
-            coords_np, indices_np
-        )
+        if use_cuda:
+            # GPU path: stay on device
+            distances, angles, dihedrals = cuda_cartesian_to_internal(coords, indices)
+        else:
+            # CPU path: convert to numpy for C extension
+            coords_np = coords.detach().cpu().numpy().astype(np.float32)
+            indices_np = indices.detach().cpu().numpy().astype(np.int64)
 
-        # Convert back to tensors
-        device = coords.device
-        distances = torch.from_numpy(distances_np).to(device)
-        angles = torch.from_numpy(angles_np).to(device)
-        dihedrals = torch.from_numpy(dihedrals_np).to(device)
+            # Call C extension
+            distances_np, angles_np, dihedrals_np = _cartesian_to_internal(
+                coords_np, indices_np
+            )
+
+            # Convert back to tensors
+            device = coords.device
+            distances = torch.from_numpy(distances_np).to(device)
+            angles = torch.from_numpy(angles_np).to(device)
+            dihedrals = torch.from_numpy(dihedrals_np).to(device)
 
         # Save for backward
         ctx.save_for_backward(coords, indices, distances, angles)
@@ -157,23 +180,33 @@ class CartesianToInternalFunction(Function):
         """
         coords, indices, distances, angles = ctx.saved_tensors
 
-        # Convert to numpy
-        coords_np = coords.detach().cpu().numpy().astype(np.float32)
-        indices_np = indices.detach().cpu().numpy().astype(np.int64)
-        distances_np = distances.detach().cpu().numpy().astype(np.float32)
-        angles_np = angles.detach().cpu().numpy().astype(np.float32)
-        grad_distances_np = grad_distances.detach().cpu().numpy().astype(np.float32)
-        grad_angles_np = grad_angles.detach().cpu().numpy().astype(np.float32)
-        grad_dihedrals_np = grad_dihedrals.detach().cpu().numpy().astype(np.float32)
+        if ctx.use_cuda:
+            # GPU path: stay on device
+            # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
+            grad_coords = cuda_cartesian_to_internal_backward(
+                coords, indices, distances, angles,
+                grad_distances.contiguous(),
+                grad_angles.contiguous(),
+                grad_dihedrals.contiguous()
+            )
+        else:
+            # CPU path: convert to numpy
+            coords_np = coords.detach().cpu().numpy().astype(np.float32)
+            indices_np = indices.detach().cpu().numpy().astype(np.int64)
+            distances_np = distances.detach().cpu().numpy().astype(np.float32)
+            angles_np = angles.detach().cpu().numpy().astype(np.float32)
+            grad_distances_np = grad_distances.detach().cpu().numpy().astype(np.float32)
+            grad_angles_np = grad_angles.detach().cpu().numpy().astype(np.float32)
+            grad_dihedrals_np = grad_dihedrals.detach().cpu().numpy().astype(np.float32)
 
-        # Call C backward
-        grad_coords_np = _cartesian_to_internal_backward(
-            coords_np, indices_np, distances_np, angles_np,
-            grad_distances_np, grad_angles_np, grad_dihedrals_np
-        )
+            # Call C backward
+            grad_coords_np = _cartesian_to_internal_backward(
+                coords_np, indices_np, distances_np, angles_np,
+                grad_distances_np, grad_angles_np, grad_dihedrals_np
+            )
 
-        # Convert back to tensor
-        grad_coords = torch.from_numpy(grad_coords_np).to(coords.device)
+            # Convert back to tensor
+            grad_coords = torch.from_numpy(grad_coords_np).to(coords.device)
 
         return grad_coords, None
 
@@ -209,20 +242,30 @@ class NerfReconstructFunction(Function):
         Returns:
             coords: (N, 3) float32 tensor of Cartesian coordinates.
         """
-        # Convert to numpy
-        indices_np = indices.detach().cpu().numpy().astype(np.int64)
-        distances_np = distances.detach().cpu().numpy().astype(np.float32)
-        angles_np = angles.detach().cpu().numpy().astype(np.float32)
-        dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
+        # Check if we can use CUDA path
+        use_cuda = is_cuda_available(distances)
+        ctx.use_cuda = use_cuda
 
-        # Call C extension
-        coords_np = _nerf_reconstruct(
-            indices_np, distances_np, angles_np, dihedrals_np, n_atoms
-        )
+        if use_cuda:
+            # GPU path: stay on device
+            # Allocate output tensor on same device
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=distances.device)
+            cuda_nerf_reconstruct(coords, indices, distances, angles, dihedrals)
+        else:
+            # CPU path: convert to numpy
+            indices_np = indices.detach().cpu().numpy().astype(np.int64)
+            distances_np = distances.detach().cpu().numpy().astype(np.float32)
+            angles_np = angles.detach().cpu().numpy().astype(np.float32)
+            dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
 
-        # Convert back to tensor
-        device = distances.device
-        coords = torch.from_numpy(coords_np).to(device)
+            # Call C extension
+            coords_np = _nerf_reconstruct(
+                indices_np, distances_np, angles_np, dihedrals_np, n_atoms
+            )
+
+            # Convert back to tensor
+            device = distances.device
+            coords = torch.from_numpy(coords_np).to(device)
 
         # Save for backward
         ctx.save_for_backward(coords, indices, distances, angles, dihedrals)
@@ -248,25 +291,32 @@ class NerfReconstructFunction(Function):
         """
         coords, indices, distances, angles, dihedrals = ctx.saved_tensors
 
-        # Convert to numpy
-        coords_np = coords.detach().cpu().numpy().astype(np.float32)
-        indices_np = indices.detach().cpu().numpy().astype(np.int64)
-        distances_np = distances.detach().cpu().numpy().astype(np.float32)
-        angles_np = angles.detach().cpu().numpy().astype(np.float32)
-        dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
-        grad_coords_np = grad_coords.detach().cpu().numpy().astype(np.float32).copy()
+        if ctx.use_cuda:
+            # GPU path: stay on device
+            # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
+            _, grad_distances, grad_angles, grad_dihedrals = cuda_nerf_reconstruct_backward(
+                coords, indices, distances, angles, dihedrals, grad_coords.contiguous()
+            )
+        else:
+            # CPU path: convert to numpy
+            coords_np = coords.detach().cpu().numpy().astype(np.float32)
+            indices_np = indices.detach().cpu().numpy().astype(np.int64)
+            distances_np = distances.detach().cpu().numpy().astype(np.float32)
+            angles_np = angles.detach().cpu().numpy().astype(np.float32)
+            dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
+            grad_coords_np = grad_coords.detach().cpu().numpy().astype(np.float32).copy()
 
-        # Call C backward
-        grad_distances_np, grad_angles_np, grad_dihedrals_np = _nerf_reconstruct_backward(
-            coords_np, indices_np, distances_np, angles_np, dihedrals_np,
-            grad_coords_np
-        )
+            # Call C backward
+            grad_distances_np, grad_angles_np, grad_dihedrals_np = _nerf_reconstruct_backward(
+                coords_np, indices_np, distances_np, angles_np, dihedrals_np,
+                grad_coords_np
+            )
 
-        # Convert back to tensors
-        device = distances.device
-        grad_distances = torch.from_numpy(grad_distances_np).to(device)
-        grad_angles = torch.from_numpy(grad_angles_np).to(device)
-        grad_dihedrals = torch.from_numpy(grad_dihedrals_np).to(device)
+            # Convert back to tensors
+            device = distances.device
+            grad_distances = torch.from_numpy(grad_distances_np).to(device)
+            grad_angles = torch.from_numpy(grad_angles_np).to(device)
+            grad_dihedrals = torch.from_numpy(grad_dihedrals_np).to(device)
 
         return None, grad_distances, grad_angles, grad_dihedrals, None
 

@@ -4,6 +4,10 @@ Setup script for ciffy C extension.
 Metadata is defined in pyproject.toml. This file only handles:
 1. C extension compilation
 2. Hash table generation before build (downloads CCD if needed)
+
+For CUDA support, see setup_cuda.py which must be run separately:
+    pip install -e .                              # builds C extension
+    python setup_cuda.py build_ext --inplace      # builds CUDA extension
 """
 
 from setuptools import setup, Extension
@@ -15,6 +19,7 @@ import subprocess
 import shutil
 import gzip
 import numpy
+
 
 # URL for the PDB Chemical Component Dictionary
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
@@ -149,6 +154,66 @@ class GenerateAndSdist(sdist):
         super().run()
 
 
+# ============================================================================
+# Compiler configuration
+# ============================================================================
+
+def check_openmp_available():
+    """
+    Check if OpenMP is available by trying to compile a simple test program.
+
+    Returns:
+        Tuple of (compile_args, link_args) or (None, None) if not available
+    """
+    import tempfile
+
+    if sys.platform == 'darwin':
+        # macOS: need libomp from Homebrew
+        compile_args = ['-Xpreprocessor', '-fopenmp']
+        link_args = ['-lomp']
+
+        # Find libomp
+        for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
+            if os.path.exists(libomp_path):
+                link_args.append(f'-L{libomp_path}')
+                include_path = libomp_path.replace('/lib', '/include')
+                if os.path.exists(include_path):
+                    compile_args.append(f'-I{include_path}')
+                break
+        else:
+            # libomp not found
+            return None, None
+    else:
+        # Linux/Windows
+        compile_args = ['-fopenmp']
+        link_args = ['-fopenmp']
+
+    # Try to compile a test program
+    test_code = '#include <omp.h>\nint main() { return omp_get_num_threads(); }'
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
+            f.write(test_code)
+            test_file = f.name
+
+        import sysconfig
+        cc = os.environ.get('CC', sysconfig.get_config_var('CC') or 'cc')
+        # Handle cases where CC might be "cc -pthread" etc.
+        cc = cc.split()[0]
+
+        result = subprocess.run(
+            [cc] + compile_args + [test_file, '-o', '/dev/null'] + link_args,
+            capture_output=True,
+            timeout=30
+        )
+        os.unlink(test_file)
+        if result.returncode == 0:
+            return compile_args, link_args
+    except Exception:
+        pass
+
+    return None, None
+
+
 # Build compile args
 extra_compile_args = ['-O3']
 extra_link_args = []
@@ -160,42 +225,70 @@ if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):
 
 # Enable OpenMP unless CIFFY_NO_OPENMP is set
 if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
-    if sys.platform == 'darwin':
-        # macOS: use clang's OpenMP (requires libomp: brew install libomp)
-        extra_compile_args.extend(['-Xpreprocessor', '-fopenmp'])
-        extra_link_args.append('-lomp')
+    omp_compile, omp_link = check_openmp_available()
+    if omp_compile and omp_link:
+        extra_compile_args.extend(omp_compile)
+        extra_link_args.extend(omp_link)
+        print("OpenMP enabled for parallel Z-matrix construction")
     else:
-        # Linux/Windows: standard OpenMP flags
-        extra_compile_args.append('-fopenmp')
-        extra_link_args.append('-fopenmp')
-    print("OpenMP enabled for parallel Z-matrix construction")
+        print("OpenMP not available (install libomp on macOS: brew install libomp)")
+        print("Building without OpenMP - Z-matrix construction will be single-threaded")
+else:
+    print("OpenMP disabled via CIFFY_NO_OPENMP")
 
+# ============================================================================
 # C extension module
+# ============================================================================
+
+c_sources = [
+    'ciffy/src/module.c',
+    'ciffy/src/pyutils.c',
+    # CIF I/O module
+    'ciffy/src/cif/io.c',
+    'ciffy/src/cif/parser.c',
+    'ciffy/src/cif/writer.c',
+    'ciffy/src/cif/registry.c',
+    # Internal coordinates C extension
+    'ciffy/src/internal/geometry.c',
+    'ciffy/src/internal/batch.c',
+    'ciffy/src/internal/graph.c',
+    'ciffy/src/internal/internal_module.c',
+]
+
+# Validate source files exist
+missing_sources = [src for src in c_sources if not os.path.exists(src)]
+if missing_sources:
+    print(f"ERROR: Missing source files: {missing_sources}")
+    print("Make sure you're building from the ciffy root directory.")
+    sys.exit(1)
+
 ext_module = Extension(
     name="ciffy._c",
-    sources=[
-        'ciffy/src/module.c',
-        'ciffy/src/pyutils.c',
-        # CIF I/O module
-        'ciffy/src/cif/io.c',
-        'ciffy/src/cif/parser.c',
-        'ciffy/src/cif/writer.c',
-        'ciffy/src/cif/registry.c',
-        # Internal coordinates C extension
-        'ciffy/src/internal/geometry.c',
-        'ciffy/src/internal/batch.c',
-        'ciffy/src/internal/graph.c',
-        'ciffy/src/internal/internal_module.c',
-    ],
+    sources=c_sources,
     include_dirs=[numpy.get_include(), 'ciffy/src'],
     extra_compile_args=extra_compile_args,
     extra_link_args=extra_link_args,
+    language='c',  # Explicitly specify C (not C++)
 )
 
+# ============================================================================
+# Build extensions list
+# ============================================================================
+
+# The C extension is always built with standard setuptools
+ext_modules = [ext_module]
+cmdclass = {
+    'build_ext': GenerateAndBuildExt,
+    'sdist': GenerateAndSdist,
+}
+
+# CUDA extension is built separately via setup_cuda.py
+# This avoids conflicts between setuptools C compiler and PyTorch's BuildExtension
+# Users with CUDA should run:
+#   pip install -e .                              # builds C extension
+#   python setup_cuda.py build_ext --inplace      # builds CUDA extension
+
 setup(
-    ext_modules=[ext_module],
-    cmdclass={
-        'build_ext': GenerateAndBuildExt,
-        'sdist': GenerateAndSdist,
-    },
+    ext_modules=ext_modules,
+    cmdclass=cmdclass,
 )

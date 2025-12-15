@@ -14,10 +14,10 @@
 #ifndef CIFFY_PRIMITIVES_H
 #define CIFFY_PRIMITIVES_H
 
-#include <math.h>
+#include "cuda_compat.h"
 
-/* Small epsilon for numerical stability */
-#define PRIM_EPS 1e-6f
+/* Small epsilon for numerical stability (alias for backwards compatibility) */
+#define PRIM_EPS CIFFY_EPS
 
 /* ========================================================================= */
 /* Forward primitives                                                        */
@@ -26,7 +26,7 @@
 /**
  * Vector subtraction: out = a - b
  */
-static inline void vec_sub(const float *a, const float *b, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_sub(const float *a, const float *b, float *out) {
     out[0] = a[0] - b[0];
     out[1] = a[1] - b[1];
     out[2] = a[2] - b[2];
@@ -35,7 +35,7 @@ static inline void vec_sub(const float *a, const float *b, float *out) {
 /**
  * Vector addition: out = a + b
  */
-static inline void vec_add(const float *a, const float *b, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_add(const float *a, const float *b, float *out) {
     out[0] = a[0] + b[0];
     out[1] = a[1] + b[1];
     out[2] = a[2] + b[2];
@@ -44,7 +44,7 @@ static inline void vec_add(const float *a, const float *b, float *out) {
 /**
  * Scalar-vector multiply: out = s * v
  */
-static inline void vec_scale(float s, const float *v, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_scale(float s, const float *v, float *out) {
     out[0] = s * v[0];
     out[1] = s * v[1];
     out[2] = s * v[2];
@@ -53,14 +53,14 @@ static inline void vec_scale(float s, const float *v, float *out) {
 /**
  * Dot product: returns a . b
  */
-static inline float vec_dot(const float *a, const float *b) {
+CIFFY_HOST_DEVICE static inline float vec_dot(const float *a, const float *b) {
     return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 }
 
 /**
  * Cross product: out = a x b
  */
-static inline void vec_cross(const float *a, const float *b, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_cross(const float *a, const float *b, float *out) {
     out[0] = a[1]*b[2] - a[2]*b[1];
     out[1] = a[2]*b[0] - a[0]*b[2];
     out[2] = a[0]*b[1] - a[1]*b[0];
@@ -69,15 +69,15 @@ static inline void vec_cross(const float *a, const float *b, float *out) {
 /**
  * Vector norm: returns |v|
  */
-static inline float vec_norm(const float *v) {
-    return sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+CIFFY_HOST_DEVICE static inline float vec_norm(const float *v) {
+    return CIFFY_SQRTF(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
 }
 
 /**
  * Normalize vector: out = v / |v|
  * Returns the norm for use in backward pass.
  */
-static inline float vec_normalize(const float *v, float *out) {
+CIFFY_HOST_DEVICE static inline float vec_normalize(const float *v, float *out) {
     float n = vec_norm(v) + PRIM_EPS;
     out[0] = v[0] / n;
     out[1] = v[1] / n;
@@ -88,7 +88,7 @@ static inline float vec_normalize(const float *v, float *out) {
 /**
  * Copy vector: out = v
  */
-static inline void vec_copy(const float *v, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_copy(const float *v, float *out) {
     out[0] = v[0];
     out[1] = v[1];
     out[2] = v[2];
@@ -97,7 +97,7 @@ static inline void vec_copy(const float *v, float *out) {
 /**
  * Zero vector: out = 0
  */
-static inline void vec_zero(float *out) {
+CIFFY_HOST_DEVICE static inline void vec_zero(float *out) {
     out[0] = 0.0f;
     out[1] = 0.0f;
     out[2] = 0.0f;
@@ -106,7 +106,7 @@ static inline void vec_zero(float *out) {
 /**
  * Accumulate: out += v
  */
-static inline void vec_acc(const float *v, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_acc(const float *v, float *out) {
     out[0] += v[0];
     out[1] += v[1];
     out[2] += v[2];
@@ -115,7 +115,7 @@ static inline void vec_acc(const float *v, float *out) {
 /**
  * Scaled accumulate: out += s * v
  */
-static inline void vec_acc_scaled(float s, const float *v, float *out) {
+CIFFY_HOST_DEVICE static inline void vec_acc_scaled(float s, const float *v, float *out) {
     out[0] += s * v[0];
     out[1] += s * v[1];
     out[2] += s * v[2];
@@ -130,7 +130,7 @@ static inline void vec_acc_scaled(float s, const float *v, float *out) {
  * grad_a += grad_out
  * grad_b -= grad_out
  */
-static inline void vec_sub_backward(
+CIFFY_HOST_DEVICE static inline void vec_sub_backward(
     const float *grad_out,
     float *grad_a, float *grad_b
 ) {
@@ -147,7 +147,7 @@ static inline void vec_sub_backward(
  * grad_a += grad_out
  * grad_b += grad_out
  */
-static inline void vec_add_backward(
+CIFFY_HOST_DEVICE static inline void vec_add_backward(
     const float *grad_out,
     float *grad_a, float *grad_b
 ) {
@@ -164,7 +164,7 @@ static inline void vec_add_backward(
  * grad_s += grad_out . v
  * grad_v += s * grad_out
  */
-static inline void vec_scale_backward(
+CIFFY_HOST_DEVICE static inline void vec_scale_backward(
     float s, const float *v,
     const float *grad_out,
     float *grad_s, float *grad_v
@@ -180,7 +180,7 @@ static inline void vec_scale_backward(
  * grad_a += grad_out * b
  * grad_b += grad_out * a
  */
-static inline void vec_dot_backward(
+CIFFY_HOST_DEVICE static inline void vec_dot_backward(
     const float *a, const float *b,
     float grad_out,
     float *grad_a, float *grad_b
@@ -198,7 +198,7 @@ static inline void vec_dot_backward(
  * grad_a += b x grad_out
  * grad_b += grad_out x a
  */
-static inline void vec_cross_backward(
+CIFFY_HOST_DEVICE static inline void vec_cross_backward(
     const float *a, const float *b,
     const float *grad_out,
     float *grad_a, float *grad_b
@@ -221,7 +221,7 @@ static inline void vec_cross_backward(
  * @param v_hat The normalized vector (output of forward pass)
  * @param norm The norm from forward pass (before adding epsilon)
  */
-static inline void vec_normalize_backward(
+CIFFY_HOST_DEVICE static inline void vec_normalize_backward(
     const float *v_hat, float norm,
     const float *grad_out,
     float *grad_v
@@ -240,7 +240,7 @@ static inline void vec_normalize_backward(
 /**
  * Linear combination: out = s1*v1 + s2*v2 + s3*v3
  */
-static inline void vec_lincomb3(
+CIFFY_HOST_DEVICE static inline void vec_lincomb3(
     float s1, const float *v1,
     float s2, const float *v2,
     float s3, const float *v3,
@@ -254,7 +254,7 @@ static inline void vec_lincomb3(
 /**
  * Backward for vec_lincomb3: out = s1*v1 + s2*v2 + s3*v3
  */
-static inline void vec_lincomb3_backward(
+CIFFY_HOST_DEVICE static inline void vec_lincomb3_backward(
     float s1, const float *v1,
     float s2, const float *v2,
     float s3, const float *v3,

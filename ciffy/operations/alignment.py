@@ -180,6 +180,12 @@ def kabsch_distance(
 
     Returns:
         Array of RMSD values (Angstroms), one per scale unit.
+
+    Note:
+        Single-atom molecules (ions, water) produce degenerate covariance
+        matrices, leading to numerical instability in the SVD. Use .poly()
+        to exclude non-polymer atoms before computing RMSD if your structure
+        contains such molecules.
     """
     from ..types import Scale
 

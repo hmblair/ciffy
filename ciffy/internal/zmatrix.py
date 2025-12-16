@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     from .topology import TopologyInfo
 
 from ..backend import Array, is_torch, to_numpy, to_torch
-
-# C extension (required)
-from .._c import _cartesian_to_internal as _c_cartesian_to_internal
+from ..backend.dispatch import cartesian_to_internal
 
 
 # =============================================================================
@@ -230,74 +228,3 @@ class ZMatrix:
     def __repr__(self) -> str:
         backend = "torch" if is_torch(self._indices) else "numpy"
         return f"ZMatrix({len(self)} entries, {backend})"
-
-
-# =============================================================================
-# CARTESIAN TO INTERNAL CONVERSION
-# =============================================================================
-
-
-def cartesian_to_internal(
-    coords: Array,
-    zmatrix_indices: Array,
-) -> tuple[Array, Array, Array]:
-    """
-    Convert Cartesian coordinates to internal coordinates.
-
-    Uses CUDA kernels when available for GPU tensors, otherwise falls back
-    to CPU C extension. For PyTorch tensors that require gradients, uses
-    autograd functions with backward passes.
-
-    Args:
-        coords: (N, 3) array of Cartesian coordinates.
-        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
-
-    Returns:
-        Tuple of (distances, angles, dihedrals), each (M,) float32.
-    """
-    # For PyTorch tensors, check for CUDA or autograd path
-    if is_torch(coords):
-        import torch
-        from ..backend.cuda_ops import is_cuda_available, cuda_cartesian_to_internal
-
-        # Ensure indices are on same device as coords
-        if not is_torch(zmatrix_indices):
-            indices_tensor = torch.from_numpy(zmatrix_indices).to(coords.device)
-        else:
-            indices_tensor = zmatrix_indices.to(coords.device)
-
-        # Use autograd path for tensors requiring gradients
-        if coords.requires_grad:
-            from ..backend.autograd import cartesian_to_internal as autograd_c2i
-            return autograd_c2i(coords, indices_tensor)
-
-        # Use CUDA kernels for GPU tensors (inference mode)
-        if is_cuda_available(coords):
-            return cuda_cartesian_to_internal(
-                coords.to(torch.float32).contiguous(),
-                indices_tensor.to(torch.int64).contiguous()
-            )
-
-        # CPU PyTorch tensor: use C extension
-        device = coords.device
-        dtype = coords.dtype
-        coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
-        indices_np = indices_tensor.cpu().numpy().astype(np.int64)
-
-        distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(
-            coords_f32, indices_np
-        )
-
-        distances = torch.from_numpy(distances_np).to(device=device, dtype=dtype)
-        angles = torch.from_numpy(angles_np).to(device=device, dtype=dtype)
-        dihedrals = torch.from_numpy(dihedrals_np).to(device=device, dtype=dtype)
-        return distances, angles, dihedrals
-
-    # NumPy path
-    if is_torch(zmatrix_indices):
-        indices_np = zmatrix_indices.cpu().numpy()
-    else:
-        indices_np = np.asarray(zmatrix_indices)
-
-    coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
-    return _c_cartesian_to_internal(coords_f32, indices_np)

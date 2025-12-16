@@ -213,6 +213,10 @@ def train_epoch(
         try:
             polymer = dataset[idx]
 
+            # Strip non-polymer atoms (ligands, water, modified residues marked as HETATM)
+            # This ensures molecule_type is consistent (e.g., RNA without OTHER atoms)
+            polymer = polymer.poly()
+
             # Skip if polymer is too small or wrong type
             if polymer.size(Scale.RESIDUE) < 2:
                 n_skipped += 1
@@ -287,7 +291,7 @@ def generate_samples(
     template = None
     for idx in indices:
         try:
-            polymer = dataset[idx]
+            polymer = dataset[idx].poly()  # Strip non-polymer atoms
             if polymer.size(Scale.RESIDUE) >= 2:
                 template = polymer.to(device)
                 break

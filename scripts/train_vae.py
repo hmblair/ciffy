@@ -58,6 +58,12 @@ except ImportError:
     print("PyTorch is required. Install with: pip install torch")
     sys.exit(1)
 
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+
 import ciffy
 from ciffy import Scale, Molecule
 from ciffy.nn import PolymerVAE, PolymerDataset
@@ -209,16 +215,30 @@ def train_epoch(
     indices = list(range(len(dataset)))
     random.shuffle(indices)
 
-    for idx in indices:
+    # Create progress bar
+    if TQDM_AVAILABLE:
+        pbar = tqdm(indices, desc="Training", leave=False)
+    else:
+        pbar = indices
+
+    for idx in pbar:
         try:
             polymer = dataset[idx]
 
             # Strip non-polymer atoms (ligands, water, modified residues marked as HETATM)
-            # This ensures molecule_type is consistent (e.g., RNA without OTHER atoms)
             polymer = polymer.poly()
 
-            # Skip if polymer is too small or wrong type
+            # Skip if polymer is too small
             if polymer.size(Scale.RESIDUE) < 2:
+                n_skipped += 1
+                continue
+
+            # Skip unsupported molecule types (OTHER, etc.)
+            mol_type_val = polymer.molecule_type[0]
+            if hasattr(mol_type_val, 'item'):
+                mol_type_val = mol_type_val.item()
+            mol_type = Molecule(mol_type_val)
+            if mol_type not in (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.RNA, Molecule.DNA):
                 n_skipped += 1
                 continue
 
@@ -249,10 +269,22 @@ def train_epoch(
             total_kl += losses["kl_loss"].item()
             n_samples += 1
 
+            # Update progress bar
+            if TQDM_AVAILABLE and n_samples > 0:
+                avg_loss = total_loss / n_samples
+                pbar.set_postfix({
+                    "loss": f"{avg_loss:.3f}",
+                    "ok": n_samples,
+                    "skip": n_skipped
+                })
+
         except Exception as e:
             logger.warning(f"Skipping sample {idx}: {e}")
             n_skipped += 1
             continue
+
+    if TQDM_AVAILABLE:
+        pbar.close()
 
     if n_samples == 0:
         return {"loss": float("nan"), "recon_loss": float("nan"), "kl_loss": float("nan")}

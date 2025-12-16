@@ -177,7 +177,7 @@ class TestMultiHeadAttention:
         import torch
         from ciffy.nn.transformer import MultiHeadAttention
 
-        attn = MultiHeadAttention(d_model=64, num_heads=8, use_rope=True)
+        attn = MultiHeadAttention(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64)
 
         out = attn(x)
@@ -188,7 +188,7 @@ class TestMultiHeadAttention:
         import torch
         from ciffy.nn.transformer import MultiHeadAttention
 
-        attn = MultiHeadAttention(d_model=64, num_heads=8, use_rope=True)
+        attn = MultiHeadAttention(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64)
         mask = torch.zeros(2, 10, dtype=torch.bool)
         mask[:, 8:] = True  # Mask last 2 positions
@@ -196,17 +196,6 @@ class TestMultiHeadAttention:
         out = attn(x, mask=mask)
         assert out.shape == x.shape
         assert not torch.isnan(out).any()
-
-    def test_attention_without_rope(self):
-        """Test attention works without RoPE."""
-        import torch
-        from ciffy.nn.transformer import MultiHeadAttention
-
-        attn = MultiHeadAttention(d_model=64, num_heads=8, use_rope=False)
-        x = torch.randn(2, 10, 64)
-
-        out = attn(x)
-        assert out.shape == x.shape
 
 
 # =============================================================================
@@ -224,28 +213,6 @@ class TestTransformerBlock:
         from ciffy.nn.transformer import TransformerBlock
 
         block = TransformerBlock(d_model=64, num_heads=8)
-        x = torch.randn(2, 10, 64)
-
-        out = block(x)
-        assert out.shape == x.shape
-
-    def test_block_with_layernorm(self):
-        """Test block with LayerNorm instead of RMSNorm."""
-        import torch
-        from ciffy.nn.transformer import TransformerBlock
-
-        block = TransformerBlock(d_model=64, num_heads=8, use_rmsnorm=False)
-        x = torch.randn(2, 10, 64)
-
-        out = block(x)
-        assert out.shape == x.shape
-
-    def test_block_with_standard_ffn(self):
-        """Test block with standard FFN instead of SwiGLU."""
-        import torch
-        from ciffy.nn.transformer import TransformerBlock
-
-        block = TransformerBlock(d_model=64, num_heads=8, use_swiglu=False)
         x = torch.randn(2, 10, 64)
 
         out = block(x)
@@ -299,25 +266,6 @@ class TestTransformer:
         out = model(x, mask=mask)
         assert out.shape == x.shape
         assert not torch.isnan(out).any()
-
-    def test_transformer_configs(self):
-        """Test various transformer configurations."""
-        import torch
-        from ciffy.nn.transformer import Transformer
-
-        configs = [
-            {"use_rope": True, "use_swiglu": True, "use_rmsnorm": True},
-            {"use_rope": True, "use_swiglu": False, "use_rmsnorm": True},
-            {"use_rope": False, "use_swiglu": True, "use_rmsnorm": False},
-            {"use_rope": False, "use_swiglu": False, "use_rmsnorm": False},
-        ]
-
-        x = torch.randn(2, 10, 64)
-
-        for config in configs:
-            model = Transformer(d_model=64, num_layers=2, num_heads=8, **config)
-            out = model(x)
-            assert out.shape == x.shape, f"Failed for config: {config}"
 
     def test_transformer_gradients(self):
         """Test transformer gradients flow through all layers."""
@@ -408,7 +356,7 @@ class TestTransformerReusability:
             def __init__(self, d_model, num_heads):
                 super().__init__()
                 self.norm1 = RMSNorm(d_model)
-                self.attn = MultiHeadAttention(d_model, num_heads, use_rope=True)
+                self.attn = MultiHeadAttention(d_model, num_heads)
                 self.norm2 = RMSNorm(d_model)
                 self.ffn = SwiGLU(d_model)
 

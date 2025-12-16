@@ -32,21 +32,12 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         1. Sin/cos encode input dihedrals: (L, D) -> (L, 2*D)
         2. Get residue embeddings from PolymerEmbedding
         3. Concatenate dihedrals + residue embeddings and project to hidden dim
-        4. Modern Transformer encoder (Pre-LN, RoPE, SwiGLU)
+        4. Modern Transformer encoder (Pre-LN, RoPE, SwiGLU, RMSNorm)
         5. Mean pool over sequence -> (hidden_dim,)
         6. Project to latent mean (mu) and log-variance (logvar)
 
-    The encoder handles variable-length sequences through attention masking
-    and produces a fixed-size latent representation regardless of input length.
-
     Uses residue identity information via PolymerEmbedding, allowing the model
     to learn sequence-dependent conformational preferences.
-
-    Uses modern transformer architecture:
-        - Pre-LN for stable training
-        - RoPE for better length generalization
-        - SwiGLU activation
-        - RMSNorm
 
     Args:
         latent_dim: Dimension of latent space z
@@ -56,8 +47,6 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         num_heads: Number of attention heads
         dropout: Dropout probability
         max_seq_len: Maximum sequence length for positional encoding
-        use_rope: Whether to use Rotary Position Embeddings (default True)
-        use_swiglu: Whether to use SwiGLU activation (default True)
 
     Example:
         >>> encoder = DihedralEncoder(latent_dim=64, hidden_dim=256)
@@ -75,8 +64,6 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         num_heads: int = 8,
         dropout: float = 0.1,
         max_seq_len: int = 2048,
-        use_rope: bool = True,
-        use_swiglu: bool = True,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError(
@@ -88,7 +75,6 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.max_seq_len = max_seq_len
-        self.use_rope = use_rope
 
         # Default residue_dim to hidden_dim // 4
         if residue_dim is None:
@@ -108,23 +94,13 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         # Input projection
         self.input_proj = nn.Linear(input_dim, hidden_dim)
 
-        # Learnable positional encoding (only used if not using RoPE)
-        if not use_rope:
-            self.pos_encoding = nn.Embedding(max_seq_len, hidden_dim)
-        else:
-            self.pos_encoding = None
-
         # Modern Transformer encoder
         self.transformer = Transformer(
             d_model=hidden_dim,
             num_layers=num_layers,
             num_heads=num_heads,
             dropout=dropout,
-            use_rope=use_rope,
-            use_swiglu=use_swiglu,
-            use_rmsnorm=True,
             max_seq_len=max_seq_len,
-            bias=False,
         )
 
         # Latent projection (mean and log-variance)
@@ -163,12 +139,6 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
 
         # Project to hidden dim: (L, hidden_dim)
         h = self.input_proj(h)
-
-        # Add positional encoding if not using RoPE
-        if self.pos_encoding is not None:
-            positions = torch.arange(L, device=h.device)
-            pos_emb = self.pos_encoding(positions)  # (L, hidden_dim)
-            h = h + pos_emb
 
         # Add batch dimension for transformer: (1, L, hidden_dim)
         h = h.unsqueeze(0)

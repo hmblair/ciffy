@@ -19,7 +19,6 @@ from .transformer import (
     RMSNorm,
     RotaryPositionEmbedding,
     SwiGLU,
-    StandardFFN,
 )
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder
 
@@ -35,7 +34,6 @@ __all__ = [
     "RMSNorm",
     "RotaryPositionEmbedding",
     "SwiGLU",
-    "StandardFFN",
     # VAE
     "PolymerVAE",
     "DihedralEncoder",

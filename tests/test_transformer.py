@@ -298,6 +298,22 @@ class TestTransformer:
             out = model(x)
             assert out.shape == (2, seq_len, 64)
 
+    def test_transformer_device_transfer(self):
+        """Test transformer can be moved to different devices via .to()."""
+        import torch
+        from ciffy.nn.transformer import Transformer
+
+        model = Transformer(d_model=64, num_layers=2, num_heads=8)
+
+        # Should not raise - this tests that _apply isn't overridden incorrectly
+        model_cpu = model.to("cpu")
+        assert next(model_cpu.parameters()).device == torch.device("cpu")
+
+        # Test forward pass still works after device transfer
+        x = torch.randn(2, 10, 64)
+        out = model_cpu(x)
+        assert out.shape == x.shape
+
 
 # =============================================================================
 # Test Reusability

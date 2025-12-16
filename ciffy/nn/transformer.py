@@ -98,9 +98,10 @@ class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
         cos = self.cos_cached[:seq_len].unsqueeze(0).unsqueeze(0)
         sin = self.sin_cached[:seq_len].unsqueeze(0).unsqueeze(0)
 
-        return self._apply(q, cos, sin), self._apply(k, cos, sin)
+        return self._rotate(q, cos, sin), self._rotate(k, cos, sin)
 
-    def _apply(self, x: "torch.Tensor", cos: "torch.Tensor", sin: "torch.Tensor") -> "torch.Tensor":
+    def _rotate(self, x: "torch.Tensor", cos: "torch.Tensor", sin: "torch.Tensor") -> "torch.Tensor":
+        """Apply rotary embedding to input tensor."""
         x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
         rotated = torch.cat([-x2, x1], dim=-1)
         return x * cos + rotated * sin

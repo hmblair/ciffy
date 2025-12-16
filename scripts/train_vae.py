@@ -114,6 +114,7 @@ class DataConfig:
     max_atoms: Optional[int] = None
     molecule_types: Optional[list[str]] = None
     exclude_ids: Optional[list[str]] = None
+    limit: Optional[int] = None  # Max samples (for overfitting tests)
 
 
 @dataclass
@@ -202,6 +203,7 @@ def create_dataset(config: DataConfig) -> PolymerDataset:
         max_atoms=config.max_atoms,
         molecule_types=molecule_types,
         exclude_ids=config.exclude_ids,
+        limit=config.limit,
         backend="torch",
     )
 

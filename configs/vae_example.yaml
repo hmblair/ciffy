@@ -31,6 +31,7 @@ data:
   # exclude_ids:          # PDB IDs to exclude (optional)
   #   - 1ABC
   #   - 2XYZ
+  # limit: 10             # Max samples (for overfitting tests)
 
 # Training configuration
 training:

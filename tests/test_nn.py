@@ -272,6 +272,27 @@ class TestPolymerDatasetEdgeCases:
         # Should only find the CIF file
         assert len(dataset) >= 1
 
+    def test_dataset_limit(self):
+        """Dataset respects limit parameter."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        # Create dataset without limit
+        full_dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        full_count = len(full_dataset)
+
+        # Skip if dataset too small
+        if full_count < 3:
+            pytest.skip("Need at least 3 chains to test limit")
+
+        # Create dataset with limit
+        limited_dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, limit=2)
+        assert len(limited_dataset) == 2
+
+        # Limit larger than dataset should return all
+        large_limit = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, limit=10000)
+        assert len(large_limit) == full_count
+
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestPolymerEmbeddingEdgeCases:

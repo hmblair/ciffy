@@ -125,6 +125,7 @@ class PolymerDataset(Dataset):
         molecule_types: Molecule | tuple[Molecule, ...] | None = None,
         exclude_ids: list[str] | set[str] | None = None,
         num_workers: int = 0,
+        limit: int | None = None,
     ):
         """
         Initialize dataset by scanning directory for CIF files.
@@ -148,6 +149,8 @@ class PolymerDataset(Dataset):
             num_workers: Number of worker processes for parallel file scanning.
                 0 = single-threaded (default). Higher values speed up scanning
                 of large directories.
+            limit: Maximum number of samples to include. Useful for overfitting
+                tests or quick iteration. None = no limit (use all samples).
 
         Raises:
             ImportError: If PyTorch is not installed.
@@ -174,6 +177,7 @@ class PolymerDataset(Dataset):
         self.max_atoms = max_atoms
         self.backend = backend
         self.num_workers = num_workers
+        self.limit = limit
 
         # Normalize molecule_types to tuple or None
         if molecule_types is None:
@@ -192,6 +196,10 @@ class PolymerDataset(Dataset):
         # Build index: list of (file_path, chain_idx or None)
         self._index: list[tuple[Path, int | None]] = []
         self._build_index(directory)
+
+        # Apply limit after building index
+        if self.limit is not None and len(self._index) > self.limit:
+            self._index = self._index[:self.limit]
 
     def _build_index(self, directory: Path) -> None:
         """Scan directory and build index of valid items."""

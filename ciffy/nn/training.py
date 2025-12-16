@@ -412,15 +412,16 @@ def train_epoch(
                     metrics_accum[key] += value
             n_samples += 1
 
-            # Update progress bar
+            # Update progress bar with all loss metrics
             if show_progress and TQDM_AVAILABLE:
-                pbar.set_postfix(
-                    {
-                        "loss": f"{metrics_accum['loss']/n_samples:.4f}",
-                        "n": n_samples,
-                        "skip": n_skipped,
-                    }
-                )
+                postfix = {}
+                for key in metrics_accum:
+                    if key == "loss" or key.endswith("_loss"):
+                        postfix[key] = f"{metrics_accum[key]/n_samples:.4f}"
+                postfix["n"] = n_samples
+                if n_skipped > 0:
+                    postfix["skip"] = n_skipped
+                pbar.set_postfix(postfix)
 
         except Exception as e:
             logger.debug(f"Skipping sample due to error: {e}")

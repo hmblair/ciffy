@@ -16,6 +16,8 @@ Example config (config.yaml):
       num_heads: 8
       dropout: 0.1
       beta: 1.0
+      beta_schedule: linear  # constant, linear, cosine, cyclical
+      beta_warmup_epochs: 50  # null = half of total epochs
 
     data:
       data_dir: /path/to/cif/files
@@ -70,6 +72,7 @@ from ciffy.nn.training import (
     train_epoch,
     polymer_collate_fn,
     get_worker_init_fn,
+    BetaScheduler,
 )
 
 
@@ -96,6 +99,10 @@ class ModelConfig:
     num_heads: int = 8
     dropout: float = 0.1
     beta: float = 1.0
+    # Beta annealing options
+    beta_schedule: str = "constant"  # constant, linear, cosine, cyclical
+    beta_warmup_epochs: Optional[int] = None  # None = half of total epochs
+    beta_cycles: int = 4  # For cyclical schedule
 
 
 @dataclass
@@ -415,11 +422,28 @@ def main():
     # Create VAE loss function
     loss_fn = create_vae_loss_fn(device)
 
+    # Create beta scheduler for KL annealing
+    warmup_epochs = config.model.beta_warmup_epochs
+    if warmup_epochs is None:
+        warmup_epochs = config.training.epochs // 2  # Default: half of training
+    beta_scheduler = BetaScheduler(
+        schedule=config.model.beta_schedule,
+        target_beta=config.model.beta,
+        warmup_epochs=warmup_epochs,
+        total_epochs=config.training.epochs,
+        n_cycles=config.model.beta_cycles,
+    )
+    logger.info(f"Beta schedule: {beta_scheduler}")
+
     # Training loop
     logger.info("Starting training...")
     best_loss = float("inf")
 
     for epoch in range(start_epoch, config.training.epochs):
+        # Update beta for this epoch (KL annealing)
+        current_beta = beta_scheduler.get_beta(epoch)
+        model.beta = current_beta
+
         # Train epoch using shared training utility
         metrics = train_epoch(
             model=model,
@@ -435,6 +459,7 @@ def main():
             f"Loss: {metrics.get('loss', float('nan')):.4f} | "
             f"Recon: {metrics.get('recon_loss', float('nan')):.4f} | "
             f"KL: {metrics.get('kl_loss', float('nan')):.4f} | "
+            f"Beta: {current_beta:.4f} | "
             f"Samples: {int(metrics.get('n_samples', 0))} | "
             f"Skipped: {int(metrics.get('n_skipped', 0))}"
         )

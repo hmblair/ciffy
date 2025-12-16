@@ -29,6 +29,7 @@ from .training import (
     train_epoch,
     polymer_collate_fn,
     get_worker_init_fn,
+    BetaScheduler,
 )
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder
 
@@ -52,6 +53,7 @@ __all__ = [
     "train_epoch",
     "polymer_collate_fn",
     "get_worker_init_fn",
+    "BetaScheduler",
     # VAE
     "PolymerVAE",
     "DihedralEncoder",

@@ -14,6 +14,10 @@ model:
   num_heads: 8            # Number of attention heads
   dropout: 0.1            # Dropout probability
   beta: 1.0               # KL divergence weight (beta-VAE)
+  # Beta annealing to prevent posterior collapse
+  beta_schedule: linear   # 'constant', 'linear', 'cosine', or 'cyclical'
+  beta_warmup_epochs: 50  # Epochs to reach target beta (null = half of epochs)
+  # beta_cycles: 4        # Number of cycles for 'cyclical' schedule
 
 # Data configuration
 data:

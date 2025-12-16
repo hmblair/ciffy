@@ -500,6 +500,106 @@ def get_worker_init_fn(base_seed: Optional[int] = None) -> Callable[[int], None]
     return worker_init_fn
 
 
+class BetaScheduler:
+    """
+    Scheduler for VAE beta (KL weight) annealing.
+
+    Annealing the KL weight helps prevent posterior collapse in VAEs.
+    Starting with low beta allows the model to learn reconstruction first,
+    then gradually increasing beta encourages use of the latent space.
+
+    Supported schedules:
+        - ``"constant"``: Fixed beta throughout training
+        - ``"linear"``: Linear increase from 0 to target_beta over warmup_epochs
+        - ``"cosine"``: Cosine annealing from 0 to target_beta
+        - ``"cyclical"``: Cycle between 0 and target_beta multiple times
+
+    Example:
+        >>> scheduler = BetaScheduler(
+        ...     schedule="linear",
+        ...     target_beta=1.0,
+        ...     warmup_epochs=50,
+        ...     total_epochs=100,
+        ... )
+        >>> for epoch in range(100):
+        ...     beta = scheduler.get_beta(epoch)
+        ...     model.loss_fn.beta = beta  # Update model's beta
+        ...     train_epoch(...)
+
+    Args:
+        schedule: Annealing schedule type.
+        target_beta: Target beta value (reached after warmup).
+        warmup_epochs: Number of epochs to reach target_beta (for linear/cosine).
+        total_epochs: Total training epochs (required for cyclical).
+        n_cycles: Number of annealing cycles (for cyclical schedule).
+        start_beta: Starting beta value. Default 0.0.
+    """
+
+    def __init__(
+        self,
+        schedule: str = "linear",
+        target_beta: float = 1.0,
+        warmup_epochs: int = 10,
+        total_epochs: int = 100,
+        n_cycles: int = 4,
+        start_beta: float = 0.0,
+    ):
+        valid_schedules = ("constant", "linear", "cosine", "cyclical")
+        if schedule not in valid_schedules:
+            raise ValueError(f"schedule must be one of {valid_schedules}, got '{schedule}'")
+
+        self.schedule = schedule
+        self.target_beta = target_beta
+        self.warmup_epochs = warmup_epochs
+        self.total_epochs = total_epochs
+        self.n_cycles = n_cycles
+        self.start_beta = start_beta
+
+    def get_beta(self, epoch: int) -> float:
+        """
+        Get beta value for the given epoch.
+
+        Args:
+            epoch: Current epoch (0-indexed).
+
+        Returns:
+            Beta value for this epoch.
+        """
+        if self.schedule == "constant":
+            return self.target_beta
+
+        elif self.schedule == "linear":
+            if epoch >= self.warmup_epochs:
+                return self.target_beta
+            progress = epoch / max(self.warmup_epochs, 1)
+            return self.start_beta + (self.target_beta - self.start_beta) * progress
+
+        elif self.schedule == "cosine":
+            if epoch >= self.warmup_epochs:
+                return self.target_beta
+            progress = epoch / max(self.warmup_epochs, 1)
+            # Cosine annealing: starts slow, accelerates in middle, slows at end
+            import math
+            cosine_progress = 0.5 * (1 - math.cos(math.pi * progress))
+            return self.start_beta + (self.target_beta - self.start_beta) * cosine_progress
+
+        elif self.schedule == "cyclical":
+            # Cyclical annealing: repeat linear warmup n_cycles times
+            cycle_length = self.total_epochs / self.n_cycles
+            cycle_epoch = epoch % cycle_length
+            progress = cycle_epoch / max(cycle_length * 0.5, 1)  # Warmup is half the cycle
+            progress = min(progress, 1.0)
+            return self.start_beta + (self.target_beta - self.start_beta) * progress
+
+        return self.target_beta
+
+    def __repr__(self) -> str:
+        return (
+            f"BetaScheduler(schedule='{self.schedule}', "
+            f"target_beta={self.target_beta}, warmup_epochs={self.warmup_epochs})"
+        )
+
+
 __all__ = [
     "set_seed",
     "get_device",
@@ -508,4 +608,5 @@ __all__ = [
     "train_epoch",
     "polymer_collate_fn",
     "get_worker_init_fn",
+    "BetaScheduler",
 ]

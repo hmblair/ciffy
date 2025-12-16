@@ -18,3 +18,7 @@ tests/data/
 
 # Generated documentation (mkdocs output)
 site/
+
+# Model training outputs
+checkpoints/
+samples/

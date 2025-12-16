@@ -365,3 +365,131 @@ class TestWorkerInitFn:
         vals1 = torch.rand(5).tolist()
 
         assert vals0 != vals1
+
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestBetaScheduler:
+    """Tests for BetaScheduler class."""
+
+    def test_constant_schedule(self):
+        """Constant schedule returns target_beta for all epochs."""
+        from ciffy.nn.training import BetaScheduler
+
+        scheduler = BetaScheduler(schedule="constant", target_beta=0.5)
+
+        assert scheduler.get_beta(0) == 0.5
+        assert scheduler.get_beta(50) == 0.5
+        assert scheduler.get_beta(100) == 0.5
+
+    def test_linear_schedule(self):
+        """Linear schedule increases from 0 to target_beta."""
+        from ciffy.nn.training import BetaScheduler
+
+        scheduler = BetaScheduler(
+            schedule="linear",
+            target_beta=1.0,
+            warmup_epochs=10,
+            start_beta=0.0,
+        )
+
+        # Start at 0
+        assert scheduler.get_beta(0) == 0.0
+
+        # Midpoint
+        assert scheduler.get_beta(5) == pytest.approx(0.5, rel=0.01)
+
+        # At warmup end
+        assert scheduler.get_beta(10) == 1.0
+
+        # After warmup, stays at target
+        assert scheduler.get_beta(50) == 1.0
+
+    def test_linear_schedule_with_start_beta(self):
+        """Linear schedule respects start_beta."""
+        from ciffy.nn.training import BetaScheduler
+
+        scheduler = BetaScheduler(
+            schedule="linear",
+            target_beta=1.0,
+            warmup_epochs=10,
+            start_beta=0.5,
+        )
+
+        # Start at 0.5
+        assert scheduler.get_beta(0) == 0.5
+
+        # Midpoint between 0.5 and 1.0
+        assert scheduler.get_beta(5) == pytest.approx(0.75, rel=0.01)
+
+        # At warmup end
+        assert scheduler.get_beta(10) == 1.0
+
+    def test_cosine_schedule(self):
+        """Cosine schedule follows cosine curve."""
+        from ciffy.nn.training import BetaScheduler
+        import math
+
+        scheduler = BetaScheduler(
+            schedule="cosine",
+            target_beta=1.0,
+            warmup_epochs=10,
+            start_beta=0.0,
+        )
+
+        # Start at 0
+        assert scheduler.get_beta(0) == 0.0
+
+        # At warmup end
+        assert scheduler.get_beta(10) == 1.0
+
+        # After warmup, stays at target
+        assert scheduler.get_beta(50) == 1.0
+
+        # Midpoint should be less than linear (cosine starts slow)
+        midpoint = scheduler.get_beta(5)
+        linear_midpoint = 0.5
+        assert midpoint == pytest.approx(0.5, rel=0.01)  # Cosine midpoint is also 0.5
+
+    def test_cyclical_schedule(self):
+        """Cyclical schedule repeats warmup cycles."""
+        from ciffy.nn.training import BetaScheduler
+
+        scheduler = BetaScheduler(
+            schedule="cyclical",
+            target_beta=1.0,
+            total_epochs=100,
+            n_cycles=4,
+            start_beta=0.0,
+        )
+
+        # Each cycle is 25 epochs, warmup is first half (12.5 epochs)
+        # Start of cycle 1
+        assert scheduler.get_beta(0) == 0.0
+
+        # End of warmup in cycle 1 (~12.5 epochs)
+        assert scheduler.get_beta(12) == pytest.approx(1.0, rel=0.1)
+
+        # Start of cycle 2 (epoch 25)
+        assert scheduler.get_beta(25) == pytest.approx(0.0, rel=0.1)
+
+    def test_invalid_schedule(self):
+        """Invalid schedule raises ValueError."""
+        from ciffy.nn.training import BetaScheduler
+
+        with pytest.raises(ValueError, match="schedule must be one of"):
+            BetaScheduler(schedule="invalid")
+
+    def test_repr(self):
+        """repr returns useful string."""
+        from ciffy.nn.training import BetaScheduler
+
+        scheduler = BetaScheduler(
+            schedule="linear",
+            target_beta=1.0,
+            warmup_epochs=50,
+        )
+
+        repr_str = repr(scheduler)
+        assert "linear" in repr_str
+        assert "1.0" in repr_str
+        assert "50" in repr_str

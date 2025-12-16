@@ -2,12 +2,12 @@
 Performance profiling for internal coordinate conversions.
 
 Benchmarks conversion between Cartesian and internal coordinates
-(Z-matrix representation) for both NumPy and PyTorch backends.
+(Z-matrix representation) on CPU and any available GPU.
 
 Usage:
     python tests/profiling/profile_internal.py
     python tests/profiling/profile_internal.py --structure 1ZEW
-    python tests/profiling/profile_internal.py --torch-only
+    python tests/profiling/profile_internal.py --all
 """
 
 import os
@@ -24,6 +24,28 @@ DATA_DIR = os.path.join(TEST_DIR, "data")
 # Default benchmark parameters
 WARMUP_RUNS = 3
 BENCHMARK_RUNS = 10
+
+
+def get_available_devices() -> list[str]:
+    """
+    Get list of available devices for benchmarking.
+
+    Returns:
+        List of device strings (e.g., ['cpu', 'cuda', 'mps']).
+    """
+    devices = ["cpu"]
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            devices.append("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            devices.append("mps")
+    except ImportError:
+        pass
+
+    return devices
 
 
 def _benchmark(func, warmup: int = WARMUP_RUNS, runs: int = BENCHMARK_RUNS) -> dict:
@@ -53,37 +75,52 @@ def _benchmark(func, warmup: int = WARMUP_RUNS, runs: int = BENCHMARK_RUNS) -> d
     }
 
 
-def benchmark_internal_coords(filepath: str, backend: str = "numpy",
-                               runs: int = BENCHMARK_RUNS) -> dict:
+def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> dict:
     """
-    Benchmark internal coordinate conversions for a structure.
+    Benchmark internal coordinate conversions on a specific device.
 
     Args:
         filepath: Path to CIF file.
-        backend: 'numpy' or 'torch'.
+        device: Device string ('cpu', 'cuda', 'mps').
         runs: Number of benchmark runs.
 
     Returns:
         Dict with timing results for each operation.
     """
+    import torch
     import ciffy
 
     # Load structure
-    polymer = ciffy.load(filepath, backend=backend).poly()
+    polymer = ciffy.load(filepath, backend="torch").poly()
+
+    # Move to device
+    if device != "cpu":
+        polymer = polymer.to(device)
 
     results = {
         "file": os.path.basename(filepath),
-        "backend": backend,
+        "device": device,
         "atoms": polymer.size(),
         "residues": polymer.size(ciffy.Scale.RESIDUE),
         "chains": polymer.size(ciffy.Scale.CHAIN),
     }
 
+    def sync():
+        """Synchronize device if needed."""
+        if device == "cuda":
+            torch.cuda.synchronize()
+        elif device == "mps":
+            torch.mps.synchronize()
+
     # Benchmark Cartesian -> Internal (accessing dihedrals triggers computation)
     def to_internal():
-        # Create fresh polymer to reset internal coords
-        p = ciffy.load(filepath, backend=backend).poly()
-        return p.dihedrals
+        sync()
+        p = ciffy.load(filepath, backend="torch").poly()
+        if device != "cpu":
+            p = p.to(device)
+        result = p.dihedrals
+        sync()
+        return result
 
     results["to_internal"] = _benchmark(to_internal, runs=runs)
 
@@ -102,83 +139,29 @@ def benchmark_internal_coords(filepath: str, backend: str = "numpy",
     results["orphan_atoms"] = orphan_count
 
     # Benchmark Internal -> Cartesian (setting dihedrals triggers reconstruction)
-    orig_coords = polymer.coordinates.copy() if backend == "numpy" else polymer.coordinates.clone()
-
     def to_cartesian():
-        # Copy dihedrals and set them back to trigger reconstruction
-        if backend == "numpy":
-            dihedrals = polymer.dihedrals.copy()
-        else:
-            dihedrals = polymer.dihedrals.clone()
+        sync()
+        dihedrals = polymer.dihedrals.clone()
         polymer.dihedrals = dihedrals
-        return polymer.coordinates
+        coords = polymer.coordinates
+        sync()
+        return coords
 
     results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
 
     # Benchmark round-trip
     def round_trip():
-        p = ciffy.load(filepath, backend=backend).poly()
-        if backend == "numpy":
-            dihedrals = p.dihedrals.copy()
-        else:
-            dihedrals = p.dihedrals.clone()
+        sync()
+        p = ciffy.load(filepath, backend="torch").poly()
+        if device != "cpu":
+            p = p.to(device)
+        dihedrals = p.dihedrals.clone()
         p.dihedrals = dihedrals
-        return p.coordinates
+        result = p.coordinates
+        sync()
+        return result
 
     results["round_trip"] = _benchmark(round_trip, runs=runs)
-
-    return results
-
-
-def benchmark_torch_gpu(filepath: str, runs: int = BENCHMARK_RUNS) -> dict | None:
-    """
-    Benchmark internal coordinate conversions on GPU.
-
-    Returns:
-        Dict with timing results, or None if CUDA not available.
-    """
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return None
-    except ImportError:
-        return None
-
-    import ciffy
-
-    # Load and move to GPU
-    polymer = ciffy.load(filepath, backend="torch").poly().to("cuda")
-
-    results = {
-        "file": os.path.basename(filepath),
-        "backend": "torch+cuda",
-        "atoms": polymer.size(),
-        "device": str(polymer.coordinates.device),
-    }
-
-    # Benchmark Cartesian -> Internal on GPU
-    def to_internal():
-        torch.cuda.synchronize()
-        dihedrals = polymer.dihedrals
-        torch.cuda.synchronize()
-        return dihedrals
-
-    # Reset internal coords for fresh benchmark
-    polymer._coord_manager._internal_valid = False
-    polymer._coord_manager._zmatrix = None
-
-    results["to_internal"] = _benchmark(to_internal, runs=runs)
-
-    # Benchmark Internal -> Cartesian on GPU
-    def to_cartesian():
-        torch.cuda.synchronize()
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-        coords = polymer.coordinates
-        torch.cuda.synchronize()
-        return coords
-
-    results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
 
     return results
 
@@ -186,7 +169,7 @@ def benchmark_torch_gpu(filepath: str, runs: int = BENCHMARK_RUNS) -> dict | Non
 def print_results(results: dict) -> None:
     """Pretty-print benchmark results."""
     print(f"\n{'='*70}")
-    print(f"Structure: {results['file']} | Backend: {results['backend']}")
+    print(f"Structure: {results['file']} | Device: {results['device']}")
     print(f"{'='*70}")
     print(f"  Atoms: {results['atoms']:,} | Residues: {results.get('residues', '?'):,} | "
           f"Chains: {results.get('chains', '?')}")
@@ -216,50 +199,53 @@ def print_results(results: dict) -> None:
         print(f"    to_cartesian:  {atoms / to_cart_ms * 1000:,.0f} atoms/sec")
 
 
-def print_comparison(numpy_results: dict, torch_results: dict,
-                     cuda_results: dict | None = None) -> None:
-    """Print comparison between backends."""
+def print_device_comparison(all_results: list[dict]) -> None:
+    """Print comparison between devices."""
+    if len(all_results) < 2:
+        return
+
     print(f"\n{'='*70}")
-    print("Backend Comparison")
+    print("Device Comparison")
     print(f"{'='*70}")
 
-    print(f"\n  {'Operation':<20} {'NumPy':>12} {'PyTorch':>12}", end="")
-    if cuda_results:
-        print(f" {'CUDA':>12}", end="")
-    print()
-    print(f"  {'-'*20} {'-'*12} {'-'*12}", end="")
-    if cuda_results:
-        print(f" {'-'*12}", end="")
-    print()
+    # Header
+    devices = [r["device"] for r in all_results]
+    header = f"  {'Operation':<20}"
+    for device in devices:
+        header += f" {device:>12}"
+    print(header)
 
+    divider = f"  {'-'*20}"
+    for _ in devices:
+        divider += f" {'-'*12}"
+    print(divider)
+
+    # Timing rows
     for op in ["to_internal", "to_cartesian", "round_trip"]:
-        np_ms = numpy_results[op]["mean"] * 1000
-        torch_ms = torch_results[op]["mean"] * 1000
-        print(f"  {op:<20} {np_ms:>10.2f}ms {torch_ms:>10.2f}ms", end="")
-        if cuda_results and op in cuda_results:
-            cuda_ms = cuda_results[op]["mean"] * 1000
-            print(f" {cuda_ms:>10.2f}ms", end="")
+        row = f"  {op:<20}"
+        for r in all_results:
+            if op in r:
+                ms = r[op]["mean"] * 1000
+                row += f" {ms:>10.2f}ms"
+            else:
+                row += f" {'N/A':>12}"
+        print(row)
+
+    # Speedup ratios (relative to CPU)
+    cpu_results = next((r for r in all_results if r["device"] == "cpu"), None)
+    if cpu_results:
         print()
-
-    # Speedup ratios
-    print()
-    print(f"  PyTorch vs NumPy:")
-    for op in ["to_internal", "to_cartesian"]:
-        np_ms = numpy_results[op]["mean"]
-        torch_ms = torch_results[op]["mean"]
-        ratio = np_ms / torch_ms if torch_ms > 0 else 0
-        faster = "faster" if ratio > 1 else "slower"
-        print(f"    {op}: {abs(ratio):.2f}x {faster}")
-
-    if cuda_results:
-        print(f"  CUDA vs NumPy:")
-        for op in ["to_internal", "to_cartesian"]:
-            if op in cuda_results:
-                np_ms = numpy_results[op]["mean"]
-                cuda_ms = cuda_results[op]["mean"]
-                ratio = np_ms / cuda_ms if cuda_ms > 0 else 0
-                faster = "faster" if ratio > 1 else "slower"
-                print(f"    {op}: {abs(ratio):.2f}x {faster}")
+        print("  Speedup vs CPU:")
+        for r in all_results:
+            if r["device"] == "cpu":
+                continue
+            for op in ["to_internal", "to_cartesian"]:
+                if op in r and op in cpu_results:
+                    cpu_ms = cpu_results[op]["mean"]
+                    device_ms = r[op]["mean"]
+                    ratio = cpu_ms / device_ms if device_ms > 0 else 0
+                    faster = "faster" if ratio > 1 else "slower"
+                    print(f"    {r['device']} {op}: {abs(ratio):.2f}x {faster}")
 
 
 def get_test_file(name: str) -> str:
@@ -286,27 +272,19 @@ if __name__ == "__main__":
         help=f"Number of benchmark runs (default: {BENCHMARK_RUNS})"
     )
     parser.add_argument(
-        "--numpy-only", action="store_true",
-        help="Only benchmark NumPy backend"
-    )
-    parser.add_argument(
-        "--torch-only", action="store_true",
-        help="Only benchmark PyTorch backend"
-    )
-    parser.add_argument(
-        "--cuda", action="store_true",
-        help="Include CUDA GPU benchmark"
-    )
-    parser.add_argument(
         "--all", action="store_true",
         help="Benchmark all test structures"
     )
     args = parser.parse_args()
 
+    # Detect available devices
+    devices = get_available_devices()
+
     print("Internal Coordinates Benchmark")
     print("=" * 70)
     print(f"ciffy version: {ciffy.__version__}")
     print(f"Benchmark runs: {args.runs}")
+    print(f"Available devices: {', '.join(devices)}")
 
     # Determine which structures to benchmark
     if args.all:
@@ -325,33 +303,19 @@ if __name__ == "__main__":
             print(f"\nSkipping {structure}: {e}")
             continue
 
-        numpy_results = None
-        torch_results = None
-        cuda_results = None
+        all_results = []
 
-        # NumPy benchmark
-        if not args.torch_only:
-            numpy_results = benchmark_internal_coords(filepath, "numpy", args.runs)
-            print_results(numpy_results)
-
-        # PyTorch benchmark
-        if not args.numpy_only:
+        # Benchmark each device
+        for device in devices:
             try:
-                torch_results = benchmark_internal_coords(filepath, "torch", args.runs)
-                print_results(torch_results)
-            except ImportError:
-                print("\nPyTorch not available, skipping torch benchmark")
+                results = benchmark_device(filepath, device, args.runs)
+                print_results(results)
+                all_results.append(results)
+            except Exception as e:
+                print(f"\nFailed to benchmark on {device}: {e}")
 
-        # CUDA benchmark
-        if args.cuda and not args.numpy_only:
-            cuda_results = benchmark_torch_gpu(filepath, args.runs)
-            if cuda_results:
-                print_results(cuda_results)
-            else:
-                print("\nCUDA not available, skipping GPU benchmark")
-
-        # Print comparison if we have multiple backends
-        if numpy_results and torch_results:
-            print_comparison(numpy_results, torch_results, cuda_results)
+        # Print comparison if we have multiple devices
+        if len(all_results) > 1:
+            print_device_comparison(all_results)
 
     print()

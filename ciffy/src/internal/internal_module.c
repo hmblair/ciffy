@@ -1002,7 +1002,7 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
  * Find connected components in CSR graph.
  *
  * Python signature:
- *   _find_connected_components(offsets, neighbors, n_atoms) -> (roots, sizes, n_components)
+ *   _find_connected_components(offsets, neighbors, n_atoms) -> (atoms, component_offsets, n_components)
  *
  * Args:
  *   offsets: (n_atoms+1,) int64 array of CSR offsets.
@@ -1010,9 +1010,9 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
  *   n_atoms: Total number of atoms (int).
  *
  * Returns:
- *   Tuple of (roots, sizes, n_components):
- *     roots: (n_components,) int64 array of root atom per component.
- *     sizes: (n_components,) int64 array of component sizes.
+ *   Tuple of (atoms, component_offsets, n_components):
+ *     atoms: (n_atoms,) int64 array of atom indices grouped by component.
+ *     component_offsets: (n_components+1,) int64 offsets into atoms array.
  *     n_components: int number of components found.
  */
 PyObject *py_find_connected_components(PyObject *self, PyObject *args) {
@@ -1038,53 +1038,51 @@ PyObject *py_find_connected_components(PyObject *self, PyObject *args) {
     const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
     const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
 
-    /* Allocate output arrays (worst case: n_atoms components) */
-    npy_intp dims[1] = {n_atoms};
-    PyObject *py_roots = PyArray_SimpleNew(1, dims, NPY_INT64);
-    PyObject *py_sizes = PyArray_SimpleNew(1, dims, NPY_INT64);
+    /* Allocate output arrays */
+    npy_intp atoms_dims[1] = {n_atoms};
+    npy_intp offsets_dims[1] = {n_atoms + 1};  /* Max n_atoms components + 1 */
+    PyObject *py_out_atoms = PyArray_SimpleNew(1, atoms_dims, NPY_INT64);
+    PyObject *py_component_offsets = PyArray_SimpleNew(1, offsets_dims, NPY_INT64);
 
-    if (py_roots == NULL || py_sizes == NULL) {
-        Py_XDECREF(py_roots);
-        Py_XDECREF(py_sizes);
+    if (py_out_atoms == NULL || py_component_offsets == NULL) {
+        Py_XDECREF(py_out_atoms);
+        Py_XDECREF(py_component_offsets);
         Py_DECREF(offsets_arr);
         Py_DECREF(neighbors_arr);
         return PyErr_NoMemory();
     }
 
-    int64_t *roots = (int64_t *)PyArray_DATA((PyArrayObject *)py_roots);
-    int64_t *sizes = (int64_t *)PyArray_DATA((PyArrayObject *)py_sizes);
+    int64_t *out_atoms = (int64_t *)PyArray_DATA((PyArrayObject *)py_out_atoms);
+    int64_t *component_offsets = (int64_t *)PyArray_DATA((PyArrayObject *)py_component_offsets);
 
     /* Find connected components */
     int64_t n_components = find_connected_components_c(
-        offsets, neighbors, n_atoms, roots, sizes
+        offsets, neighbors, n_atoms, out_atoms, component_offsets
     );
 
     Py_DECREF(offsets_arr);
     Py_DECREF(neighbors_arr);
 
     if (n_components < 0) {
-        Py_DECREF(py_roots);
-        Py_DECREF(py_sizes);
+        Py_DECREF(py_out_atoms);
+        Py_DECREF(py_component_offsets);
         return PyErr_NoMemory();
     }
 
-    /* Resize arrays to actual size */
-    if (n_components < n_atoms) {
-        npy_intp new_dims[1] = {n_components};
+    /* Resize component_offsets to actual size (n_components + 1) */
+    if (n_components + 1 < n_atoms + 1) {
+        npy_intp new_dims[1] = {n_components + 1};
         PyArray_Dims new_shape = {new_dims, 1};
 
-        PyObject *resized_roots = PyArray_Resize((PyArrayObject *)py_roots, &new_shape, 0, NPY_CORDER);
-        if (resized_roots == NULL) PyErr_Clear();
-
-        PyObject *resized_sizes = PyArray_Resize((PyArrayObject *)py_sizes, &new_shape, 0, NPY_CORDER);
-        if (resized_sizes == NULL) PyErr_Clear();
+        PyObject *resized = PyArray_Resize((PyArrayObject *)py_component_offsets, &new_shape, 0, NPY_CORDER);
+        if (resized == NULL) PyErr_Clear();
     }
 
     /* Build result tuple */
     PyObject *py_n_components = PyLong_FromLongLong(n_components);
-    PyObject *tuple = PyTuple_Pack(3, py_roots, py_sizes, py_n_components);
-    Py_DECREF(py_roots);
-    Py_DECREF(py_sizes);
+    PyObject *tuple = PyTuple_Pack(3, py_out_atoms, py_component_offsets, py_n_components);
+    Py_DECREF(py_out_atoms);
+    Py_DECREF(py_component_offsets);
     Py_DECREF(py_n_components);
 
     return tuple;

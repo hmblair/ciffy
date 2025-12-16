@@ -222,7 +222,7 @@ class ConnectedComponents:
         contiguous: List of bool indicating if component atoms are contiguous.
 
     Example:
-        >>> components = ConnectedComponents.from_coordinates_and_topology(coords, topology)
+        >>> components = ConnectedComponents.from_bond_graph(csr_offsets, csr_neighbors, coords, n_atoms)
         >>> # Access component 0
         >>> start, end = components.offsets[0], components.offsets[1]
         >>> atom_indices = components.atoms[start:end]
@@ -271,57 +271,39 @@ class ConnectedComponents:
                 contiguous=[],
             )
 
-        # Find bonded components (excludes isolated atoms)
-        bonded_components = find_connected_components(csr_offsets, csr_neighbors, n_atoms)
+        # Find all connected components (includes isolated atoms as single-atom components)
+        comp_atoms, comp_offsets, n_components = find_connected_components(
+            csr_offsets, csr_neighbors, n_atoms
+        )
 
-        # Find isolated atoms (no neighbors in CSR)
-        isolated_atoms = []
-        for i in range(n_atoms):
-            if csr_offsets[i + 1] == csr_offsets[i]:
-                isolated_atoms.append(i)
+        if n_components == 0:
+            return cls(
+                offsets=np.array([0], dtype=np.int64),
+                atoms=np.array([], dtype=np.int64),
+                centroids=np.zeros((0, 3), dtype=coords_np.dtype),
+                reference_coords=[],
+                contiguous=[],
+            )
 
-        # Track which atoms are in bonded components
-        in_component = np.zeros(n_atoms, dtype=bool)
-
-        offsets_list = [0]
-        atoms_list = []
+        # Process each component to compute centroids and reference coords
         centroids_list = []
         reference_coords_list = []
         contiguous_list = []
 
-        # Process bonded components via BFS to get actual atom indices
-        visited = np.zeros(n_atoms, dtype=bool)
-        for root, size in bonded_components:
-            # BFS from root to collect all atoms in this component
-            component_atoms = []
-            queue = [root]
-            visited[root] = True
-
-            while queue:
-                node = queue.pop(0)
-                component_atoms.append(node)
-                in_component[node] = True
-
-                # Get neighbors from CSR
-                for i in range(csr_offsets[node], csr_offsets[node + 1]):
-                    neighbor = csr_neighbors[i]
-                    if not visited[neighbor]:
-                        visited[neighbor] = True
-                        queue.append(neighbor)
-
-            component_atoms = np.array(component_atoms, dtype=np.int64)
+        for i in range(n_components):
+            start = comp_offsets[i]
+            end = comp_offsets[i + 1]
+            component_atoms = comp_atoms[start:end]
             component_coords = coords_np[component_atoms]
             centroid = component_coords.mean(axis=0)
 
             # Check if atoms are contiguous in memory
             is_contiguous = (
                 len(component_atoms) > 0 and
-                np.all(np.diff(component_atoms) == 1)
+                (len(component_atoms) == 1 or np.all(np.diff(component_atoms) == 1))
             )
 
-            atoms_list.extend(component_atoms.tolist())
             centroids_list.append(centroid.copy())
-            offsets_list.append(len(atoms_list))
             contiguous_list.append(is_contiguous)
 
             # Store reference coords for multi-atom components
@@ -331,144 +313,12 @@ class ConnectedComponents:
             else:
                 reference_coords_list.append(None)
 
-        # Add isolated atoms as single-atom components
-        for atom_idx in isolated_atoms:
-            atoms_list.append(atom_idx)
-            centroids_list.append(coords_np[atom_idx].copy())
-            offsets_list.append(len(atoms_list))
-            contiguous_list.append(True)
-            reference_coords_list.append(None)
-
         return cls(
-            offsets=np.array(offsets_list, dtype=np.int64),
-            atoms=np.array(atoms_list, dtype=np.int64),
-            centroids=np.array(centroids_list, dtype=coords_np.dtype) if centroids_list else np.zeros((0, 3), dtype=coords_np.dtype),
+            offsets=comp_offsets,
+            atoms=comp_atoms,
+            centroids=np.array(centroids_list, dtype=coords_np.dtype),
             reference_coords=reference_coords_list,
             contiguous=contiguous_list,
-        )
-
-    @classmethod
-    def from_coordinates_and_topology(
-        cls,
-        coordinates: Array,
-        topology: TopologyInfo,
-    ) -> "ConnectedComponents":
-        """
-        Build connected components from coordinates and topology.
-
-        DEPRECATED: Use from_bond_graph instead for accurate component detection.
-        This method treats each chain as a component, which may not reflect
-        actual bond connectivity.
-
-        Args:
-            coordinates: (N, 3) array of Cartesian coordinates.
-            topology: TopologyInfo for the structure.
-
-        Returns:
-            ConnectedComponents with CSR storage and reference data.
-        """
-        coords_np = to_numpy(coordinates)
-        n_chains = topology.n_chains
-
-        if n_chains == 0:
-            return cls(
-                offsets=np.array([0], dtype=np.int64),
-                atoms=np.array([], dtype=np.int64),
-                centroids=np.zeros((0, 3), dtype=coords_np.dtype),
-                reference_coords=[],
-                contiguous=[],
-            )
-
-        offsets_list = [0]
-        atoms_list = []
-        centroids_list = []
-        reference_coords_list = []
-        contiguous_list = []
-
-        for chain_idx in range(n_chains):
-            atom_start, atom_end = topology.get_chain_atom_range(chain_idx)
-            chain_atom_count = atom_end - atom_start
-
-            if chain_atom_count == 0:
-                continue
-
-            # Get atom indices for this chain
-            atom_indices = list(range(atom_start, atom_end))
-
-            # Get coordinates and compute centroid
-            chain_coords = coords_np[atom_start:atom_end]
-            centroid = chain_coords.mean(axis=0)
-            centered_coords = chain_coords - centroid
-
-            atoms_list.extend(atom_indices)
-            centroids_list.append(centroid.copy())
-            offsets_list.append(len(atoms_list))
-            contiguous_list.append(True)  # Chains are always contiguous
-
-            # Store reference coords for multi-atom chains (for orientation)
-            if chain_atom_count > 1:
-                reference_coords_list.append(centered_coords.copy())
-            else:
-                reference_coords_list.append(None)
-
-        return cls(
-            offsets=np.array(offsets_list, dtype=np.int64),
-            atoms=np.array(atoms_list, dtype=np.int64),
-            centroids=np.array(centroids_list, dtype=coords_np.dtype) if centroids_list else np.zeros((0, 3), dtype=coords_np.dtype),
-            reference_coords=reference_coords_list,
-            contiguous=contiguous_list,
-        )
-
-    def add_orphan_atoms(
-        self,
-        orphan_indices: np.ndarray,
-        coordinates: Array,
-    ) -> "ConnectedComponents":
-        """
-        Add orphan atoms (atoms without bonds) as single-atom components.
-
-        Args:
-            orphan_indices: (K,) int64 array of orphan atom indices.
-            coordinates: (N, 3) array of coordinates for centroid lookup.
-
-        Returns:
-            New ConnectedComponents with orphan atoms added.
-        """
-        if len(orphan_indices) == 0:
-            return self
-
-        coords_np = to_numpy(coordinates)
-        orphan_indices_np = to_numpy(orphan_indices).astype(np.int64)
-        n_orphans = len(orphan_indices_np)
-
-        # Get orphan centroids (just their positions)
-        orphan_centroids = coords_np[orphan_indices_np]
-
-        # Extend offsets
-        old_end = int(self.offsets[-1])
-        new_offsets = np.concatenate([
-            self.offsets,
-            np.arange(old_end + 1, old_end + n_orphans + 1, dtype=np.int64)
-        ])
-
-        # Extend atoms
-        new_atoms = np.concatenate([self.atoms, orphan_indices_np])
-
-        # Extend centroids
-        new_centroids = np.concatenate([self.centroids, orphan_centroids])
-
-        # Extend reference_coords (None for single atoms)
-        new_reference_coords = self.reference_coords + [None] * n_orphans
-
-        # Extend contiguous (True for single atoms)
-        new_contiguous = self.contiguous + [True] * n_orphans
-
-        return ConnectedComponents(
-            offsets=new_offsets,
-            atoms=new_atoms,
-            centroids=new_centroids,
-            reference_coords=new_reference_coords,
-            contiguous=new_contiguous,
         )
 
     @property

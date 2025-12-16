@@ -23,52 +23,17 @@ if TYPE_CHECKING:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _copy(arr: Array) -> Array:
-    """Copy array regardless of backend."""
-    return arr.clone() if is_torch(arr) else arr.copy()
-
-
-def _to_torch_dtype(dtype):
-    """Convert numpy dtype to torch dtype."""
-    import torch
-    if dtype == np.int64:
-        return torch.int64
-    elif dtype == np.float32:
-        return torch.float32
-    elif dtype == np.float64:
-        return torch.float64
-    return dtype  # Assume already torch dtype
-
-
-def _zeros(shape: tuple, dtype, backend_like: Array) -> Array:
-    """Create zeros array matching backend of backend_like."""
-    if is_torch(backend_like):
-        import torch
-        return torch.zeros(shape, dtype=_to_torch_dtype(dtype), device=backend_like.device)
-    return np.zeros(shape, dtype=dtype)
-
-
-def _array(data, dtype, backend_like: Array) -> Array:
-    """Create array from data matching backend of backend_like."""
-    if is_torch(backend_like):
-        import torch
-        return torch.tensor(data, dtype=_to_torch_dtype(dtype), device=backend_like.device)
-    return np.array(data, dtype=dtype)
-
-
-def _stack(arrays: list, backend_like: Array) -> Array:
-    """Stack arrays matching backend of backend_like."""
-    if is_torch(backend_like):
-        import torch
-        return torch.stack(arrays)
-    return np.array(arrays)
-
-
 def _empty_array(dtype, backend_like: Array) -> Array:
     """Create empty 1D array matching backend of backend_like."""
     if is_torch(backend_like):
         import torch
-        return torch.tensor([], dtype=_to_torch_dtype(dtype), device=backend_like.device)
+        if dtype == np.float32:
+            torch_dtype = torch.float32
+        elif dtype == np.float64:
+            torch_dtype = torch.float64
+        else:
+            torch_dtype = dtype
+        return torch.tensor([], dtype=torch_dtype, device=backend_like.device)
     return np.array([], dtype=dtype)
 
 
@@ -251,15 +216,18 @@ class CoordinateManager:
         Args:
             value: (N, 3) array of XYZ positions.
         """
+        from .graph import build_bond_graph_csr
         from .topology import ConnectedComponents
 
         check_compatible(self._get_reference_array(), value, "coordinates")
         self._coordinates = value
         self._cartesian_valid = True
 
-        # Update connected components for reconstruction
-        self._components = ConnectedComponents.from_coordinates_and_topology(
-            value, self._topology
+        # Update connected components for reconstruction using bond graph
+        n_atoms = len(value)
+        csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
+        self._components = ConnectedComponents.from_bond_graph(
+            csr_offsets, csr_neighbors, value, n_atoms
         )
 
         self._invalidate_internal()
@@ -414,7 +382,7 @@ class CoordinateManager:
                     "access to bond information needed for Z-matrix construction."
                 )
 
-            # Build bond graph CSR (used for both z-matrix and components)
+            # Build bond graph CSR once (used for both z-matrix and components)
             csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
 
             # Build connected components from bond graph (includes isolated atoms)
@@ -422,8 +390,10 @@ class CoordinateManager:
                 csr_offsets, csr_neighbors, coords, n_atoms
             )
 
-            # Build z-matrix
-            self._zmatrix = ZMatrix.from_topology(self._topology)
+            # Build z-matrix (reuse CSR to avoid redundant computation)
+            self._zmatrix = ZMatrix.from_topology(
+                self._topology, csr_offsets, csr_neighbors
+            )
 
         # Use wrapper function that handles C/Python dispatch
         self._distances, self._angles, self._dihedrals = cartesian_to_internal(
@@ -476,22 +446,16 @@ class CoordinateManager:
 
         n_components = self._components.n_components
 
-        # Build set of atoms in Z-matrix for orphan detection
-        if len(zmatrix_indices) > 0:
-            zmatrix_atoms = set(zmatrix_indices[:, 0].tolist() if hasattr(zmatrix_indices, 'tolist')
-                               else [int(x) for x in zmatrix_indices[:, 0]])
-        else:
-            zmatrix_atoms = set()
-
         # Process each component (chains need rotation+translation, orphans just position)
         for comp_idx in range(n_components):
             component_size = self._components.get_component_size(comp_idx)
             component_atoms = self._components.get_component_atoms(comp_idx)
 
             if component_size == 1:
-                # Single-atom component (orphan) - just restore position
+                # Single-atom component (orphan) - restore position from stored centroid
+                # NERF places root atoms at origin, so we must restore original position
                 atom_idx = int(component_atoms[0])
-                if atom_idx not in zmatrix_atoms and atom_idx < n_atoms:
+                if atom_idx < n_atoms:
                     centroid = self._components.centroids[comp_idx]
                     if is_torch(coords):
                         import torch

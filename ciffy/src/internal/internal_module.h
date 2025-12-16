@@ -60,7 +60,7 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args);
 
 /**
  * Find connected components in CSR graph.
- * Python: _find_connected_components(offsets, neighbors, n_atoms) -> (roots, sizes, n_components)
+ * Python: _find_connected_components(offsets, neighbors, n_atoms) -> (atoms, component_offsets, n_components)
  */
 PyObject *py_find_connected_components(PyObject *self, PyObject *args);
 

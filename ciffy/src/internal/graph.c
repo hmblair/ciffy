@@ -878,12 +878,15 @@ int64_t find_connected_components_c(
     const int64_t *offsets,
     const int64_t *neighbors,
     int64_t n_atoms,
-    int64_t *out_roots,
-    int64_t *out_sizes
+    int64_t *out_atoms,
+    int64_t *out_offsets
 ) {
-    if (n_atoms == 0) return 0;
+    if (n_atoms == 0) {
+        out_offsets[0] = 0;
+        return 0;
+    }
 
-    /* Allocate visited array */
+    /* Allocate visited array and queue */
     int8_t *visited = (int8_t *)calloc((size_t)n_atoms, sizeof(int8_t));
     int64_t *queue = (int64_t *)malloc((size_t)n_atoms * sizeof(int64_t));
 
@@ -894,31 +897,32 @@ int64_t find_connected_components_c(
     }
 
     int64_t n_components = 0;
+    int64_t atoms_written = 0;
+    out_offsets[0] = 0;
 
     for (int64_t start = 0; start < n_atoms; start++) {
         if (visited[start]) continue;
 
         /* Check if atom has any neighbors */
         int64_t n_neighbors = offsets[start + 1] - offsets[start];
+
         if (n_neighbors == 0) {
-            /* Isolated atom - mark visited but don't create component */
+            /* Isolated atom - add as single-atom component */
             visited[start] = 1;
+            out_atoms[atoms_written++] = start;
+            n_components++;
+            out_offsets[n_components] = atoms_written;
             continue;
         }
 
         /* BFS to find component */
         int64_t queue_head = 0, queue_tail = 0;
-        int64_t component_size = 0;
-        int64_t min_atom = start;
 
         queue[queue_tail++] = start;
         visited[start] = 1;
 
         while (queue_head < queue_tail) {
             int64_t node = queue[queue_head++];
-            component_size++;
-
-            if (node < min_atom) min_atom = node;
 
             /* Get neighbors from CSR */
             int64_t edge_start = offsets[node];
@@ -933,10 +937,14 @@ int64_t find_connected_components_c(
             }
         }
 
-        /* Store component info */
-        out_roots[n_components] = min_atom;
-        out_sizes[n_components] = component_size;
+        /* Copy BFS result (queue contents) to output */
+        int64_t component_size = queue_tail;
+        for (int64_t i = 0; i < component_size; i++) {
+            out_atoms[atoms_written++] = queue[i];
+        }
+
         n_components++;
+        out_offsets[n_components] = atoms_written;
     }
 
     free(visited);

@@ -21,7 +21,6 @@ from .._c import _build_bond_graph as _build_bond_graph_c
 from .._c import _edges_to_csr as _edges_to_csr_c
 from .._c import _build_zmatrix_parallel as _build_zmatrix_parallel_c
 from .._c import _find_connected_components as _find_connected_components_c
-from .._c import _build_canonical_zmatrix as _build_canonical_zmatrix_c
 
 
 # ZMatrix class is now in zmatrix.py - re-export for backwards compatibility
@@ -131,7 +130,7 @@ def build_bond_graph_csr(topology: "TopologyInfo") -> tuple[np.ndarray, np.ndarr
 
 def find_connected_components(
     offsets: np.ndarray, neighbors: np.ndarray, n_atoms: int
-) -> list[tuple[int, int]]:
+) -> tuple[np.ndarray, np.ndarray, int]:
     """
     Find all connected components in a CSR-format graph.
 
@@ -141,70 +140,17 @@ def find_connected_components(
         n_atoms: Total number of atoms
 
     Returns:
-        List of (root, size) tuples for each component.
+        Tuple of:
+            atoms: (N,) int64 atom indices grouped by component
+            component_offsets: (n_components+1,) int64 offsets into atoms array
+            n_components: Number of components found
     """
-    roots, sizes, n_components = _find_connected_components_c(
+    atoms, component_offsets, n_components = _find_connected_components_c(
         np.ascontiguousarray(offsets, dtype=np.int64),
         np.ascontiguousarray(neighbors, dtype=np.int64),
         n_atoms
     )
-    return [(int(roots[i]), int(sizes[i])) for i in range(n_components)]
-
-
-# =============================================================================
-# SPANNING TREE CONSTRUCTION
-# =============================================================================
-
-
-def select_root_atom(
-    polymer: "Polymer",
-    chain_start_atom: int,
-    chain_atom_count: int,
-    chain_start_res: int,
-) -> int:
-    """
-    Select appropriate root atom for a chain.
-
-    Uses backbone atoms as roots:
-    - Protein: N of first residue
-    - Nucleic acid: P of first residue (or O5' if no P)
-
-    Args:
-        polymer: Polymer structure.
-        chain_start_atom: Global atom index where this chain starts.
-        chain_atom_count: Number of atoms in this chain.
-        chain_start_res: Residue index where this chain starts.
-
-    Returns:
-        Global atom index for the root.
-    """
-    from ..biochemistry import Residue, ATOM_NAMES
-    from ..types import Molecule
-
-    # Get residue type to determine preferred root atom
-    res_type_idx = int(polymer.sequence[chain_start_res])
-    try:
-        residue = Residue(res_type_idx)
-        mol_type = residue.molecule_type
-    except ValueError:
-        mol_type = None
-
-    # Determine preferred root atom names (Python convention: ' -> p)
-    if mol_type in (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.CYCLIC_PEPTIDE):
-        preferred = ['N', 'CA', 'C']
-    else:
-        # Nucleic acids and others
-        preferred = ['P', 'O5p', 'C5p']
-
-    # Find preferred atom in first residue
-    for local_idx in range(min(chain_atom_count, 20)):  # Check first 20 atoms
-        atom_value = int(polymer.atoms[chain_start_atom + local_idx])
-        atom_name = ATOM_NAMES.get(atom_value, "").replace("'", "p").replace('"', "pp")
-        if atom_name in preferred:
-            return chain_start_atom + local_idx
-
-    # Fallback to first atom
-    return chain_start_atom
+    return atoms, component_offsets, int(n_components)
 
 
 # =============================================================================
@@ -214,6 +160,8 @@ def select_root_atom(
 
 def _build_zmatrix_indices_from_topology(
     topology: "TopologyInfo",
+    csr_offsets: np.ndarray | None = None,
+    csr_neighbors: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
@@ -224,57 +172,45 @@ def _build_zmatrix_indices_from_topology(
 
     Args:
         topology: TopologyInfo containing structural metadata.
+        csr_offsets: Optional pre-built CSR offsets array. If None, built from topology.
+        csr_neighbors: Optional pre-built CSR neighbors array. If None, built from topology.
 
     Returns:
         Tuple of:
             indices: (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 array of dihedral types (-1 if not named)
     """
-    # Build array-based graph
-    edges, n_atoms = build_bond_graph_from_topology(topology)
+    n_atoms = topology.n_atoms
 
-    if len(edges) == 0:
-        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
-
-    # Convert to CSR format
-    offsets, neighbors = edges_to_csr(edges, n_atoms)
+    # Build CSR if not provided
+    if csr_offsets is None or csr_neighbors is None:
+        edges, n_atoms = build_bond_graph_from_topology(topology)
+        if len(edges) == 0:
+            return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
+        offsets, neighbors = edges_to_csr(edges, n_atoms)
+    else:
+        offsets, neighbors = csr_offsets, csr_neighbors
 
     # Find all connected components in the bond graph
-    components = find_connected_components(offsets, neighbors, n_atoms)
+    comp_atoms, comp_offsets, n_components = find_connected_components(offsets, neighbors, n_atoms)
 
-    if len(components) == 0:
+    if n_components == 0:
         return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
 
-    # Prepare component info for Z-matrix construction
-    # Components can be either:
-    # - (root, size) tuples from C extension
-    # - list of atom indices from Python fallback
-    component_starts = []
-    component_sizes = []
-    roots = []
-
-    for component in components:
-        if isinstance(component, tuple):
-            # C extension format: (root, size)
-            root, size = component
-            component_starts.append(root)
-            component_sizes.append(size)
-            roots.append(root)
-        else:
-            # Python format: list of atom indices
-            root = min(component)
-            component_starts.append(root)
-            component_sizes.append(len(component))
-            roots.append(root)
+    # Extract component info for Z-matrix construction
+    # For each component: first atom is root, size is offset diff
+    component_sizes = np.diff(comp_offsets).astype(np.int64)
+    component_starts = comp_atoms[comp_offsets[:-1]].astype(np.int64)  # First atom of each component
+    roots = component_starts.copy()  # Use first atom as root
 
     # Build Z-matrix with dihedral-aware reference selection
     return build_zmatrix_from_components(
         np.asarray(offsets, dtype=np.int64),
         np.asarray(neighbors, dtype=np.int64),
         n_atoms,
-        np.array(component_starts, dtype=np.int64),
-        np.array(component_sizes, dtype=np.int64),
-        np.array(roots, dtype=np.int64),
+        component_starts,
+        component_sizes,
+        roots,
         atoms=np.ascontiguousarray(topology.atoms, dtype=np.int32),
         sequence=np.ascontiguousarray(topology.sequence, dtype=np.int32),
         res_sizes=np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),

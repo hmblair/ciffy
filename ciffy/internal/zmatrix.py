@@ -60,7 +60,12 @@ class ZMatrix:
         self._dihedral_types = dihedral_types
 
     @classmethod
-    def from_topology(cls, topology: "TopologyInfo") -> "ZMatrix":
+    def from_topology(
+        cls,
+        topology: "TopologyInfo",
+        csr_offsets: np.ndarray | None = None,
+        csr_neighbors: np.ndarray | None = None,
+    ) -> "ZMatrix":
         """
         Build Z-matrix from topology info using BFS traversal.
 
@@ -71,6 +76,8 @@ class ZMatrix:
 
         Args:
             topology: TopologyInfo containing structural metadata.
+            csr_offsets: Optional pre-built CSR offsets array. If None, built from topology.
+            csr_neighbors: Optional pre-built CSR neighbors array. If None, built from topology.
 
         Returns:
             ZMatrix with entries in placement order and dihedral type annotations.
@@ -78,7 +85,9 @@ class ZMatrix:
         from .graph import _build_zmatrix_indices_from_topology
 
         # Build Z-matrix with dihedral-aware refs in single C pass
-        indices, dihedral_types = _build_zmatrix_indices_from_topology(topology)
+        indices, dihedral_types = _build_zmatrix_indices_from_topology(
+            topology, csr_offsets, csr_neighbors
+        )
 
         if len(indices) == 0:
             return cls(indices, np.array([], dtype=np.int8))

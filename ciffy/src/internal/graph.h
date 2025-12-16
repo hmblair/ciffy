@@ -159,22 +159,23 @@ int64_t build_zmatrix_parallel(
 /**
  * Find connected components in a CSR-format graph.
  *
- * Returns the root (minimum atom index) and size of each connected component.
- * Isolated atoms (no neighbors) are skipped.
+ * Returns atom indices grouped by component, with offsets for each component.
+ * Includes isolated atoms (no bonds) as single-atom components.
  *
  * @param offsets        (n_atoms+1,) CSR offsets
  * @param neighbors      (n_edges,) CSR neighbor indices
  * @param n_atoms        Total number of atoms
- * @param out_roots      Output: (n_atoms,) int64 root of each component (caller allocates)
- * @param out_sizes      Output: (n_atoms,) int64 size of each component (caller allocates)
+ * @param out_atoms      Output: (n_atoms,) atom indices grouped by component
+ * @param out_offsets    Output: (n_atoms+1,) offsets into out_atoms per component
+ *                       Component i's atoms are out_atoms[out_offsets[i]:out_offsets[i+1]]
  * @return               Number of components found, or -1 on error
  */
 int64_t find_connected_components_c(
     const int64_t *offsets,
     const int64_t *neighbors,
     int64_t n_atoms,
-    int64_t *out_roots,
-    int64_t *out_sizes
+    int64_t *out_atoms,
+    int64_t *out_offsets
 );
 
 

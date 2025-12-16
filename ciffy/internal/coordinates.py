@@ -499,7 +499,11 @@ class CoordinateManager:
                 # Single-atom component (orphan) - just restore position
                 atom_idx = int(component_atoms[0])
                 if atom_idx not in zmatrix_atoms and atom_idx < n_atoms:
-                    coords[atom_idx] = self._components.centroids[comp_idx]
+                    centroid = self._components.centroids[comp_idx]
+                    if is_torch(coords):
+                        import torch
+                        centroid = torch.from_numpy(centroid).to(coords.device)
+                    coords[atom_idx] = centroid
             else:
                 # Multi-atom component (chain) - restore orientation AND position
                 atom_start = int(component_atoms[0])

@@ -272,10 +272,12 @@ def generate_samples(
     perturbation_scale: float = 1.0,
 ) -> None:
     """
-    Generate perturbed samples for visualization.
+    Generate samples for visualization.
 
-    Selects a random structure, encodes it, perturbs the latent vector
-    with noise, and saves the decoded structures.
+    Saves:
+    - Original template structure (from dataset)
+    - Reconstruction through the VAE
+    - Perturbed samples (latent + noise)
     """
     model.eval()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -302,13 +304,17 @@ def generate_samples(
         return
 
     with torch.no_grad():
+        # Save original template (ground truth)
+        template_cpu = template.numpy()
+        template_cpu.write(str(output_dir / f"epoch{epoch:04d}_original.cif"))
+
         # Encode the template
         z_mu, z_logvar = model.encode(template)
 
-        # Save original reconstruction
+        # Save reconstruction (encode then decode with mean latent)
         recon = model.decode(z_mu, template, sample=False)
         recon_cpu = recon.numpy()
-        recon_cpu.write(str(output_dir / f"epoch{epoch:04d}_original.cif"))
+        recon_cpu.write(str(output_dir / f"epoch{epoch:04d}_reconstruction.cif"))
 
         # Generate perturbed samples
         for i in range(n_perturbations):
@@ -321,7 +327,7 @@ def generate_samples(
             perturbed_cpu = perturbed.numpy()
             perturbed_cpu.write(str(output_dir / f"epoch{epoch:04d}_perturb{i+1}.cif"))
 
-    logger.info(f"Saved {n_perturbations + 1} samples to {output_dir}")
+    logger.info(f"Saved {n_perturbations + 2} samples to {output_dir}")
 
 
 # =============================================================================

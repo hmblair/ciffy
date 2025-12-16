@@ -1,10 +1,15 @@
 """
 PyTorch Dataset for loading CIF files.
+
+Provides PolymerDataset for loading and iterating over CIF structures
+with filtering and optional caching support.
 """
 
 from __future__ import annotations
+
+import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -18,6 +23,8 @@ except ImportError:
     Dataset = object  # Placeholder for type hints
 
 from ..types import Scale, Molecule
+
+logger = logging.getLogger(__name__)
 
 
 def _process_file(args: tuple) -> list[tuple[str, int | None]]:
@@ -293,7 +300,7 @@ class PolymerDataset(Dataset):
         """Return number of valid items (structures or chains)."""
         return len(self._index)
 
-    def __getitem__(self, idx: int) -> Polymer:
+    def __getitem__(self, idx: int) -> Optional["Polymer"]:
         """
         Load and return polymer/chain at index.
 
@@ -303,26 +310,36 @@ class PolymerDataset(Dataset):
         Returns:
             Polymer object (full structure or single chain),
             with any configured filtering applied.
+            Returns None if loading fails, allowing DataLoader to
+            skip the sample via a custom collate_fn.
 
         Note:
             At CHAIN scale, molecule_types filtering is done during
             index building, so no filtering is needed here.
             At MOLECULE scale, chain filtering is applied after loading
             to remove non-matching chains from mixed structures.
+
+            Returns None instead of raising on errors to support
+            DataLoader with num_workers > 0 without crashing workers.
         """
         from .. import load
 
-        path, chain_idx = self._index[idx]
-        polymer = load(str(path), backend=self.backend)
+        try:
+            path, chain_idx = self._index[idx]
+            polymer = load(str(path), backend=self.backend)
 
-        if chain_idx is not None:
-            # Chain scale: filtering already done during indexing
-            polymer = polymer.by_index(chain_idx)
-        elif self.molecule_types is not None:
-            # Molecule scale: filter out non-matching chains
-            polymer = self._filter_by_molecule_type(polymer)
+            if chain_idx is not None:
+                # Chain scale: filtering already done during indexing
+                polymer = polymer.by_index(chain_idx)
+            elif self.molecule_types is not None:
+                # Molecule scale: filter out non-matching chains
+                polymer = self._filter_by_molecule_type(polymer)
 
-        return polymer
+            return polymer
+
+        except Exception as e:
+            logger.debug(f"Failed to load item {idx}: {e}")
+            return None
 
     def _filter_by_molecule_type(self, polymer: Polymer) -> Polymer:
         """Filter polymer to only include chains of specified molecule types."""

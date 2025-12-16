@@ -14,8 +14,6 @@ model:
   num_heads: 8            # Number of attention heads
   dropout: 0.1            # Dropout probability
   beta: 1.0               # KL divergence weight (beta-VAE)
-  use_rope: true          # Use Rotary Position Embeddings
-  use_swiglu: true        # Use SwiGLU activation
 
 # Data configuration
 data:
@@ -37,8 +35,9 @@ training:
   weight_decay: 0.0       # AdamW weight decay
   batch_size: 1           # Batch size (VAE processes one at a time)
   seed: 42                # Random seed for reproducibility
-  device: cuda            # Device: 'cuda', 'cpu', or 'mps'
+  device: auto            # Device: 'auto', 'cuda', 'cpu', or 'mps'
   grad_clip: 1.0          # Gradient clipping (null to disable)
+  num_workers: 0          # DataLoader workers (0 for main process only)
 
 # Output configuration
 output:

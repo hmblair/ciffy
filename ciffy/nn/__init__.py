@@ -7,6 +7,7 @@ Modules:
     - dataset: PolymerDataset for loading CIF files
     - embedding: PolymerEmbedding for learnable embeddings
     - transformer: Modern transformer with Pre-LN, RoPE, SwiGLU
+    - training: Reusable training utilities
     - vae: Variational autoencoder for polymer conformations
 """
 
@@ -19,6 +20,15 @@ from .transformer import (
     RMSNorm,
     RotaryPositionEmbedding,
     SwiGLU,
+)
+from .training import (
+    set_seed,
+    get_device,
+    save_checkpoint,
+    load_checkpoint,
+    train_epoch,
+    polymer_collate_fn,
+    get_worker_init_fn,
 )
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder
 
@@ -34,6 +44,14 @@ __all__ = [
     "RMSNorm",
     "RotaryPositionEmbedding",
     "SwiGLU",
+    # Training utilities
+    "set_seed",
+    "get_device",
+    "save_checkpoint",
+    "load_checkpoint",
+    "train_epoch",
+    "polymer_collate_fn",
+    "get_worker_init_fn",
     # VAE
     "PolymerVAE",
     "DihedralEncoder",

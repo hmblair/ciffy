@@ -28,7 +28,8 @@ Example config (config.yaml):
       lr: 1e-4
       batch_size: 1  # VAE processes one polymer at a time
       seed: 42
-      device: cuda  # or 'cpu', 'mps'
+      device: auto  # 'auto', 'cuda', 'mps', or 'cpu'
+      num_workers: 0  # DataLoader workers
 
     output:
       checkpoint_dir: ./checkpoints
@@ -58,15 +59,18 @@ except ImportError:
     print("PyTorch is required. Install with: pip install torch")
     sys.exit(1)
 
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-
 import ciffy
 from ciffy import Scale, Molecule
 from ciffy.nn import PolymerVAE, PolymerDataset
+from ciffy.nn.training import (
+    set_seed,
+    get_device,
+    save_checkpoint,
+    load_checkpoint,
+    train_epoch,
+    polymer_collate_fn,
+    get_worker_init_fn,
+)
 
 
 # Configure logging
@@ -92,8 +96,6 @@ class ModelConfig:
     num_heads: int = 8
     dropout: float = 0.1
     beta: float = 1.0
-    use_rope: bool = True
-    use_swiglu: bool = True
 
 
 @dataclass
@@ -115,8 +117,9 @@ class TrainingConfig:
     weight_decay: float = 0.0
     batch_size: int = 1
     seed: Optional[int] = None
-    device: str = "cuda"
+    device: str = "auto"
     grad_clip: Optional[float] = 1.0
+    num_workers: int = 0
 
 
 @dataclass
@@ -158,7 +161,7 @@ def load_config(path: str) -> Config:
 
 
 # =============================================================================
-# Training
+# Model and Dataset Creation
 # =============================================================================
 
 
@@ -196,106 +199,67 @@ def create_dataset(config: DataConfig) -> PolymerDataset:
     )
 
 
-def train_epoch(
-    model: PolymerVAE,
+def create_dataloader(
     dataset: PolymerDataset,
-    optimizer: optim.Optimizer,
-    device: torch.device,
-    grad_clip: Optional[float] = None,
-) -> dict[str, float]:
-    """Train for one epoch."""
-    model.train()
+    config: TrainingConfig,
+) -> DataLoader:
+    """Create DataLoader with appropriate settings."""
+    return DataLoader(
+        dataset,
+        batch_size=1,  # Always 1 for variable-size molecules
+        shuffle=True,
+        num_workers=config.num_workers,
+        collate_fn=polymer_collate_fn,
+        worker_init_fn=get_worker_init_fn(config.seed),
+        pin_memory=(config.device != "cpu"),
+        persistent_workers=(config.num_workers > 0),
+    )
 
-    total_loss = 0.0
-    total_recon = 0.0
-    total_kl = 0.0
-    n_samples = 0
-    n_skipped = 0
 
-    indices = list(range(len(dataset)))
-    random.shuffle(indices)
+# =============================================================================
+# VAE-Specific Loss Function
+# =============================================================================
 
-    # Create progress bar
-    if TQDM_AVAILABLE:
-        pbar = tqdm(indices, desc="Training", leave=False)
-    else:
-        pbar = indices
 
-    for idx in pbar:
-        try:
-            polymer = dataset[idx]
+def create_vae_loss_fn(device: torch.device):
+    """
+    Create loss function for VAE training.
 
-            # Strip non-polymer atoms (ligands, water, modified residues marked as HETATM)
-            polymer = polymer.poly()
+    Returns a callable that:
+    1. Prepares the polymer (strips non-polymer atoms, validates)
+    2. Moves to device
+    3. Calls model.compute_loss()
+    """
+    # Supported molecule types for dihedral VAE
+    supported_types = (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.RNA, Molecule.DNA)
 
-            # Skip if polymer is too small
-            if polymer.size(Scale.RESIDUE) < 2:
-                n_skipped += 1
-                continue
+    def loss_fn(model: PolymerVAE, polymer: ciffy.Polymer) -> dict[str, torch.Tensor]:
+        # Strip non-polymer atoms (ligands, water, etc.)
+        polymer = polymer.poly()
 
-            # Skip unsupported molecule types (OTHER, etc.)
-            mol_type_val = polymer.molecule_type[0]
-            if hasattr(mol_type_val, 'item'):
-                mol_type_val = mol_type_val.item()
-            mol_type = Molecule(mol_type_val)
-            if mol_type not in (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.RNA, Molecule.DNA):
-                n_skipped += 1
-                continue
+        # Skip too-small polymers
+        if polymer.size(Scale.RESIDUE) < 2:
+            return {"loss": torch.tensor(float("nan"))}
 
-            # Move to device
-            polymer = polymer.to(device)
+        # Skip unsupported molecule types
+        mol_type_val = polymer.molecule_type[0]
+        if hasattr(mol_type_val, "item"):
+            mol_type_val = mol_type_val.item()
+        mol_type = Molecule(mol_type_val)
 
-            # Forward pass
-            optimizer.zero_grad()
-            losses = model.compute_loss(polymer)
+        if mol_type not in supported_types:
+            return {"loss": torch.tensor(float("nan"))}
 
-            # Check for NaN
-            if torch.isnan(losses["loss"]):
-                n_skipped += 1
-                continue
+        # Move to device and compute loss
+        polymer = polymer.to(device)
+        return model.compute_loss(polymer)
 
-            # Backward pass
-            losses["loss"].backward()
+    return loss_fn
 
-            # Gradient clipping
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
-            optimizer.step()
-
-            # Accumulate metrics
-            total_loss += losses["loss"].item()
-            total_recon += losses["recon_loss"].item()
-            total_kl += losses["kl_loss"].item()
-            n_samples += 1
-
-            # Update progress bar
-            if TQDM_AVAILABLE and n_samples > 0:
-                avg_loss = total_loss / n_samples
-                pbar.set_postfix({
-                    "loss": f"{avg_loss:.3f}",
-                    "ok": n_samples,
-                    "skip": n_skipped
-                })
-
-        except Exception as e:
-            logger.warning(f"Skipping sample {idx}: {e}")
-            n_skipped += 1
-            continue
-
-    if TQDM_AVAILABLE:
-        pbar.close()
-
-    if n_samples == 0:
-        return {"loss": float("nan"), "recon_loss": float("nan"), "kl_loss": float("nan")}
-
-    return {
-        "loss": total_loss / n_samples,
-        "recon_loss": total_recon / n_samples,
-        "kl_loss": total_kl / n_samples,
-        "n_samples": n_samples,
-        "n_skipped": n_skipped,
-    }
+# =============================================================================
+# Sample Generation (VAE-specific)
+# =============================================================================
 
 
 def generate_samples(
@@ -323,7 +287,10 @@ def generate_samples(
     template = None
     for idx in indices:
         try:
-            polymer = dataset[idx].poly()  # Strip non-polymer atoms
+            polymer = dataset[idx]
+            if polymer is None:
+                continue
+            polymer = polymer.poly()  # Strip non-polymer atoms
             if polymer.size(Scale.RESIDUE) >= 2:
                 template = polymer.to(device)
                 break
@@ -355,49 +322,6 @@ def generate_samples(
             perturbed_cpu.write(str(output_dir / f"epoch{epoch:04d}_perturb{i+1}.cif"))
 
     logger.info(f"Saved {n_perturbations + 1} samples to {output_dir}")
-
-
-def save_checkpoint(
-    model: PolymerVAE,
-    optimizer: optim.Optimizer,
-    epoch: int,
-    metrics: dict,
-    config: Config,
-    path: Path,
-) -> None:
-    """Save training checkpoint."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    torch.save({
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "metrics": metrics,
-        "config": {
-            "model": vars(config.model),
-            "data": vars(config.data),
-            "training": vars(config.training),
-            "output": vars(config.output),
-        },
-    }, path)
-
-    logger.info(f"Saved checkpoint to {path}")
-
-
-def load_checkpoint(
-    path: Path,
-    model: PolymerVAE,
-    optimizer: Optional[optim.Optimizer] = None,
-) -> int:
-    """Load training checkpoint. Returns the epoch number."""
-    checkpoint = torch.load(path, weights_only=False)
-
-    model.load_state_dict(checkpoint["model_state_dict"])
-    if optimizer is not None:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-
-    logger.info(f"Loaded checkpoint from {path} (epoch {checkpoint['epoch']})")
-    return checkpoint["epoch"]
 
 
 # =============================================================================
@@ -440,24 +364,14 @@ def main():
 
     # Set random seed
     if config.training.seed is not None:
-        random.seed(config.training.seed)
-        torch.manual_seed(config.training.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(config.training.seed)
+        set_seed(config.training.seed)
         logger.info(f"Set random seed to {config.training.seed}")
 
     # Setup device
-    if config.training.device == "cuda" and not torch.cuda.is_available():
-        logger.warning("CUDA not available, falling back to CPU")
-        config.training.device = "cpu"
-    elif config.training.device == "mps" and not torch.backends.mps.is_available():
-        logger.warning("MPS not available, falling back to CPU")
-        config.training.device = "cpu"
-
-    device = torch.device(config.training.device)
+    device = get_device(config.training.device)
     logger.info(f"Using device: {device}")
 
-    # Create dataset
+    # Create dataset and dataloader
     logger.info(f"Loading data from {config.data.data_dir}")
     dataset = create_dataset(config.data)
     logger.info(f"Dataset size: {len(dataset)} structures")
@@ -465,6 +379,8 @@ def main():
     if len(dataset) == 0:
         logger.error("No structures found in dataset!")
         sys.exit(1)
+
+    dataloader = create_dataloader(dataset, config.training)
 
     # Create model
     model = create_model(config.model, device)
@@ -481,7 +397,8 @@ def main():
     # Resume from checkpoint if specified
     start_epoch = 0
     if args.resume:
-        start_epoch = load_checkpoint(Path(args.resume), model, optimizer) + 1
+        ckpt = load_checkpoint(Path(args.resume), model, optimizer)
+        start_epoch = ckpt["epoch"] + 1
 
     # Setup output directories
     checkpoint_dir = Path(config.output.checkpoint_dir)
@@ -489,25 +406,31 @@ def main():
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     sample_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create VAE loss function
+    loss_fn = create_vae_loss_fn(device)
+
     # Training loop
     logger.info("Starting training...")
     best_loss = float("inf")
 
     for epoch in range(start_epoch, config.training.epochs):
-        # Train epoch
+        # Train epoch using shared training utility
         metrics = train_epoch(
-            model, dataset, optimizer, device,
+            model=model,
+            dataloader=dataloader,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
             grad_clip=config.training.grad_clip,
         )
 
         # Log metrics
         logger.info(
             f"Epoch {epoch+1}/{config.training.epochs} | "
-            f"Loss: {metrics['loss']:.4f} | "
-            f"Recon: {metrics['recon_loss']:.4f} | "
-            f"KL: {metrics['kl_loss']:.4f} | "
-            f"Samples: {metrics.get('n_samples', 0)} | "
-            f"Skipped: {metrics.get('n_skipped', 0)}"
+            f"Loss: {metrics.get('loss', float('nan')):.4f} | "
+            f"Recon: {metrics.get('recon_loss', float('nan')):.4f} | "
+            f"KL: {metrics.get('kl_loss', float('nan')):.4f} | "
+            f"Samples: {int(metrics.get('n_samples', 0))} | "
+            f"Skipped: {int(metrics.get('n_skipped', 0))}"
         )
 
         # Generate samples at end of epoch
@@ -520,22 +443,31 @@ def main():
         # Save checkpoint
         if (epoch + 1) % config.output.save_every == 0:
             save_checkpoint(
-                model, optimizer, epoch + 1, metrics, config,
                 checkpoint_dir / f"checkpoint_epoch{epoch+1:04d}.pt",
+                model, optimizer,
+                epoch=epoch + 1,
+                metrics=metrics,
+                config=config,
             )
 
         # Save best model
-        if metrics["loss"] < best_loss:
+        if metrics.get("loss", float("inf")) < best_loss:
             best_loss = metrics["loss"]
             save_checkpoint(
-                model, optimizer, epoch + 1, metrics, config,
                 checkpoint_dir / "checkpoint_best.pt",
+                model, optimizer,
+                epoch=epoch + 1,
+                metrics=metrics,
+                config=config,
             )
 
     # Save final checkpoint
     save_checkpoint(
-        model, optimizer, config.training.epochs, metrics, config,
         checkpoint_dir / "checkpoint_final.pt",
+        model, optimizer,
+        epoch=config.training.epochs,
+        metrics=metrics,
+        config=config,
     )
 
     logger.info("Training complete!")

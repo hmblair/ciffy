@@ -235,6 +235,119 @@ class ConnectedComponents:
     contiguous: list[bool]
 
     @classmethod
+    def from_bond_graph(
+        cls,
+        csr_offsets: np.ndarray,
+        csr_neighbors: np.ndarray,
+        coordinates: Array,
+        n_atoms: int,
+    ) -> "ConnectedComponents":
+        """
+        Build connected components from bond graph in CSR format.
+
+        Finds all connected components including isolated atoms (no bonds).
+        Component centroids and reference coordinates are stored for
+        position/orientation restoration during NERF reconstruction.
+
+        Args:
+            csr_offsets: (N+1,) CSR offsets array for bond graph.
+            csr_neighbors: (E,) CSR neighbor indices.
+            coordinates: (N, 3) array of Cartesian coordinates.
+            n_atoms: Total number of atoms.
+
+        Returns:
+            ConnectedComponents with all components (bonded and isolated).
+        """
+        from .graph import find_connected_components
+
+        coords_np = to_numpy(coordinates)
+
+        if n_atoms == 0:
+            return cls(
+                offsets=np.array([0], dtype=np.int64),
+                atoms=np.array([], dtype=np.int64),
+                centroids=np.zeros((0, 3), dtype=coords_np.dtype),
+                reference_coords=[],
+                contiguous=[],
+            )
+
+        # Find bonded components (excludes isolated atoms)
+        bonded_components = find_connected_components(csr_offsets, csr_neighbors, n_atoms)
+
+        # Find isolated atoms (no neighbors in CSR)
+        isolated_atoms = []
+        for i in range(n_atoms):
+            if csr_offsets[i + 1] == csr_offsets[i]:
+                isolated_atoms.append(i)
+
+        # Track which atoms are in bonded components
+        in_component = np.zeros(n_atoms, dtype=bool)
+
+        offsets_list = [0]
+        atoms_list = []
+        centroids_list = []
+        reference_coords_list = []
+        contiguous_list = []
+
+        # Process bonded components via BFS to get actual atom indices
+        visited = np.zeros(n_atoms, dtype=bool)
+        for root, size in bonded_components:
+            # BFS from root to collect all atoms in this component
+            component_atoms = []
+            queue = [root]
+            visited[root] = True
+
+            while queue:
+                node = queue.pop(0)
+                component_atoms.append(node)
+                in_component[node] = True
+
+                # Get neighbors from CSR
+                for i in range(csr_offsets[node], csr_offsets[node + 1]):
+                    neighbor = csr_neighbors[i]
+                    if not visited[neighbor]:
+                        visited[neighbor] = True
+                        queue.append(neighbor)
+
+            component_atoms = np.array(component_atoms, dtype=np.int64)
+            component_coords = coords_np[component_atoms]
+            centroid = component_coords.mean(axis=0)
+
+            # Check if atoms are contiguous in memory
+            is_contiguous = (
+                len(component_atoms) > 0 and
+                np.all(np.diff(component_atoms) == 1)
+            )
+
+            atoms_list.extend(component_atoms.tolist())
+            centroids_list.append(centroid.copy())
+            offsets_list.append(len(atoms_list))
+            contiguous_list.append(is_contiguous)
+
+            # Store reference coords for multi-atom components
+            if len(component_atoms) > 1:
+                centered_coords = component_coords - centroid
+                reference_coords_list.append(centered_coords.copy())
+            else:
+                reference_coords_list.append(None)
+
+        # Add isolated atoms as single-atom components
+        for atom_idx in isolated_atoms:
+            atoms_list.append(atom_idx)
+            centroids_list.append(coords_np[atom_idx].copy())
+            offsets_list.append(len(atoms_list))
+            contiguous_list.append(True)
+            reference_coords_list.append(None)
+
+        return cls(
+            offsets=np.array(offsets_list, dtype=np.int64),
+            atoms=np.array(atoms_list, dtype=np.int64),
+            centroids=np.array(centroids_list, dtype=coords_np.dtype) if centroids_list else np.zeros((0, 3), dtype=coords_np.dtype),
+            reference_coords=reference_coords_list,
+            contiguous=contiguous_list,
+        )
+
+    @classmethod
     def from_coordinates_and_topology(
         cls,
         coordinates: Array,
@@ -243,9 +356,9 @@ class ConnectedComponents:
         """
         Build connected components from coordinates and topology.
 
-        Each chain is treated as a connected component. Component centroids
-        and reference coordinates are stored for orientation restoration
-        during NERF reconstruction.
+        DEPRECATED: Use from_bond_graph instead for accurate component detection.
+        This method treats each chain as a component, which may not reflect
+        actual bond connectivity.
 
         Args:
             coordinates: (N, 3) array of Cartesian coordinates.

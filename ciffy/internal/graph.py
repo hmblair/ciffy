@@ -107,6 +107,28 @@ def edges_to_csr(edges: np.ndarray, n_atoms: int) -> tuple[np.ndarray, np.ndarra
     )
 
 
+def build_bond_graph_csr(topology: "TopologyInfo") -> tuple[np.ndarray, np.ndarray, int]:
+    """
+    Build CSR bond graph from topology info.
+
+    Convenience function combining build_bond_graph_from_topology and edges_to_csr.
+
+    Args:
+        topology: TopologyInfo containing structural metadata.
+
+    Returns:
+        Tuple of:
+            offsets: (N+1,) int64 CSR offsets array
+            neighbors: (E,) int64 CSR neighbor indices
+            n_atoms: Total number of atoms
+    """
+    edges, n_atoms = build_bond_graph_from_topology(topology)
+    if len(edges) == 0:
+        return np.zeros(n_atoms + 1, dtype=np.int64), np.array([], dtype=np.int64), n_atoms
+    offsets, neighbors = edges_to_csr(edges, n_atoms)
+    return offsets, neighbors, n_atoms
+
+
 def find_connected_components(
     offsets: np.ndarray, neighbors: np.ndarray, n_atoms: int
 ) -> list[tuple[int, int]]:

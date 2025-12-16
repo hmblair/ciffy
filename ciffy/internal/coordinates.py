@@ -146,8 +146,6 @@ class CoordinateManager:
             coordinates: (N, 3) array of Cartesian XYZ positions.
             topology: TopologyInfo containing structural metadata.
         """
-        from .topology import ConnectedComponents
-
         self._topology = topology
 
         # Initialize Cartesian representation as valid
@@ -164,13 +162,9 @@ class CoordinateManager:
 
         self._internal_valid = False
 
-        # Build connected components from initial coordinates
-        if coordinates is not None:
-            self._components = ConnectedComponents.from_coordinates_and_topology(
-                coordinates, topology
-            )
-        else:
-            self._components = None
+        # Connected components are built lazily in _recompute_internal
+        # when the bond graph is computed for z-matrix construction
+        self._components: "ConnectedComponents | None" = None
 
     # ─────────────────────────────────────────────────────────────────────
     # String Representation
@@ -397,10 +391,12 @@ class CoordinateManager:
         """
         Recompute internal coordinates from Cartesian.
 
-        Builds Z-matrix (if not cached) and computes bond lengths, angles,
-        and dihedrals from current Cartesian coordinates.
+        Builds Z-matrix and connected components (if not cached) from the bond
+        graph, then computes bond lengths, angles, and dihedrals from current
+        Cartesian coordinates.
         """
-        from .graph import ZMatrix
+        from .graph import ZMatrix, build_bond_graph_csr
+        from .topology import ConnectedComponents
         from .zmatrix import cartesian_to_internal
 
         if self._coordinates is None:
@@ -409,7 +405,7 @@ class CoordinateManager:
         coords = self._coordinates
         n_atoms = coords.shape[0]
 
-        # Build Z-matrix if not already cached
+        # Build Z-matrix and connected components if not already cached
         if self._zmatrix is None:
             if self._topology is None:
                 raise RuntimeError(
@@ -417,20 +413,17 @@ class CoordinateManager:
                     "This CoordinateManager was created by slicing and doesn't have "
                     "access to bond information needed for Z-matrix construction."
                 )
+
+            # Build bond graph CSR (used for both z-matrix and components)
+            csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
+
+            # Build connected components from bond graph (includes isolated atoms)
+            self._components = ConnectedComponents.from_bond_graph(
+                csr_offsets, csr_neighbors, coords, n_atoms
+            )
+
+            # Build z-matrix
             self._zmatrix = ZMatrix.from_topology(self._topology)
-
-            # Detect orphan atoms (atoms not in Z-matrix - no bonds)
-            # Add them as single-atom connected components using vectorized boolean mask
-            zmatrix_indices = self._zmatrix.indices
-            in_zmatrix = np.zeros(n_atoms, dtype=bool)
-            if len(zmatrix_indices) > 0:
-                in_zmatrix[zmatrix_indices[:, 0].astype(np.int64)] = True
-            orphan_indices = np.where(~in_zmatrix)[0].astype(np.int64)
-
-            if len(orphan_indices) > 0 and self._components is not None:
-                self._components = self._components.add_orphan_atoms(
-                    orphan_indices, coords
-                )
 
         # Use wrapper function that handles C/Python dispatch
         self._distances, self._angles, self._dihedrals = cartesian_to_internal(

@@ -53,13 +53,6 @@
         - dihedral
         - set_dihedral
 
-### InternalPolymer (Deprecated)
-
-!!! warning "Deprecated"
-    `InternalPolymer` is deprecated. Use `Polymer` directly - it now supports both Cartesian and internal coordinates transparently.
-
-::: ciffy.InternalPolymer
-
 ---
 
 ## Operations
@@ -103,6 +96,57 @@
 ### from_sequence
 
 ::: ciffy.from_sequence
+
+---
+
+## Neural Networks (ciffy.nn)
+
+!!! note "Optional Dependency"
+    The `ciffy.nn` module requires PyTorch. Install with `pip install torch`.
+
+### PolymerEmbedding
+
+::: ciffy.nn.PolymerEmbedding
+
+### PolymerDataset
+
+::: ciffy.nn.PolymerDataset
+
+### Transformer
+
+::: ciffy.nn.Transformer
+
+### TransformerBlock
+
+::: ciffy.nn.TransformerBlock
+
+### MultiHeadAttention
+
+::: ciffy.nn.MultiHeadAttention
+
+### RMSNorm
+
+::: ciffy.nn.RMSNorm
+
+### RotaryPositionEmbedding
+
+::: ciffy.nn.RotaryPositionEmbedding
+
+### SwiGLU
+
+::: ciffy.nn.SwiGLU
+
+### PolymerVAE
+
+::: ciffy.nn.PolymerVAE
+
+### DihedralEncoder
+
+::: ciffy.nn.DihedralEncoder
+
+### DihedralDecoder
+
+::: ciffy.nn.DihedralDecoder
 
 ---
 

@@ -500,6 +500,193 @@ class DihedralPredictor(nn.Module):
         return template.coordinates
 ```
 
+## Built-in Neural Network Modules
+
+ciffy provides ready-to-use PyTorch modules in `ciffy.nn`.
+
+### PolymerEmbedding
+
+Learnable embeddings for polymer features:
+
+```python
+from ciffy.nn import PolymerEmbedding
+from ciffy import Scale
+
+# Create embedding layer
+embed = PolymerEmbedding(
+    scale=Scale.ATOM,      # Output per-atom features
+    atom_dim=64,           # Embed atom types
+    residue_dim=32,        # Embed residue types (expanded to atoms)
+    element_dim=16,        # Embed element types
+)
+
+polymer = ciffy.load("structure.cif", backend="torch")
+features = embed(polymer)  # (num_atoms, 112)
+
+# Or at residue scale
+embed_res = PolymerEmbedding(scale=Scale.RESIDUE, residue_dim=64)
+features = embed_res(polymer)  # (num_residues, 64)
+```
+
+### PolymerDataset
+
+PyTorch Dataset for loading CIF files:
+
+```python
+from ciffy.nn import PolymerDataset
+from ciffy import Scale, Molecule
+
+# Load all structures from a directory
+dataset = PolymerDataset(
+    directory="./data/cif",
+    scale=Scale.CHAIN,              # Iterate over chains (more samples)
+    min_atoms=10,                   # Filter by size
+    max_atoms=5000,
+    molecule_types=(Molecule.PROTEIN, Molecule.RNA),  # Filter by type
+    backend="torch",
+)
+
+print(f"Found {len(dataset)} chains")
+
+# Access individual items
+polymer = dataset[0]
+```
+
+### Modern Transformer
+
+A reusable transformer with modern best practices:
+
+```python
+from ciffy.nn import (
+    Transformer,
+    TransformerBlock,
+    MultiHeadAttention,
+    RMSNorm,
+    RotaryPositionEmbedding,
+    SwiGLU,
+)
+
+# Full transformer encoder
+model = Transformer(
+    d_model=256,
+    num_layers=6,
+    num_heads=8,
+    use_rope=True,       # Rotary Position Embeddings
+    use_swiglu=True,     # SwiGLU activation (vs GELU)
+    use_rmsnorm=True,    # RMSNorm (vs LayerNorm)
+)
+
+x = torch.randn(batch, seq_len, 256)
+out = model(x, mask=padding_mask)  # (batch, seq_len, 256)
+```
+
+Architecture features:
+
+- **Pre-LN**: LayerNorm before attention/FFN for stable training
+- **RoPE**: Rotary Position Embeddings for better length generalization
+- **SwiGLU**: Gated activation (used in LLaMA, PaLM)
+- **RMSNorm**: Simpler, faster normalization
+- **Flash Attention**: Used automatically when available (PyTorch 2.0+)
+
+Individual components can be composed:
+
+```python
+# Build custom architectures
+class CustomBlock(nn.Module):
+    def __init__(self, d_model, num_heads):
+        super().__init__()
+        self.norm = RMSNorm(d_model)
+        self.attn = MultiHeadAttention(d_model, num_heads, use_rope=True)
+        self.ffn = SwiGLU(d_model)
+
+    def forward(self, x):
+        x = x + self.attn(self.norm(x))
+        x = x + self.ffn(self.norm(x))
+        return x
+```
+
+## Variational Autoencoder (VAE)
+
+ciffy includes a VAE for polymer conformations that operates on backbone dihedral angles:
+
+```python
+from ciffy.nn import PolymerVAE
+
+# Create VAE
+vae = PolymerVAE(
+    latent_dim=64,      # Latent space dimension
+    hidden_dim=256,     # Transformer hidden dim
+    num_layers=4,       # Transformer layers
+    num_heads=8,        # Attention heads
+    beta=1.0,           # KL weight (beta-VAE)
+)
+
+polymer = ciffy.load("structure.cif", backend="torch")
+
+# Encode to latent space
+z_mu, z_logvar = vae.encode(polymer)
+
+# Decode back to polymer
+reconstructed = vae.decode(z_mu, polymer)
+
+# Sample new conformations
+samples = vae.sample(polymer, n_samples=10, temperature=1.0)
+
+# Interpolate between conformations
+interp = vae.interpolate(polymer1, polymer2, n_steps=10)
+
+# Training
+optimizer = torch.optim.Adam(vae.parameters(), lr=1e-4)
+losses = vae.compute_loss(polymer)
+losses["loss"].backward()  # Contains recon_loss + beta * kl_loss
+optimizer.step()
+```
+
+The VAE:
+
+- Works on backbone dihedrals (φ/ψ/ω for proteins, α/β/γ/δ/ε/ζ/χ for RNA)
+- Uses sin/cos encoding to handle angle periodicity
+- Outputs von Mises distributions (proper circular probability)
+- Supports both proteins and nucleic acids
+
+### Training Script
+
+A complete training script is provided:
+
+```bash
+# Train with config file
+python scripts/train_vae.py configs/vae_example.yaml
+
+# Resume from checkpoint
+python scripts/train_vae.py config.yaml --resume checkpoints/checkpoint_epoch0050.pt
+```
+
+Example config (`configs/vae_example.yaml`):
+
+```yaml
+model:
+  latent_dim: 64
+  hidden_dim: 256
+  num_layers: 4
+
+data:
+  data_dir: ./data/cif
+  scale: chain
+  molecule_types: [protein, rna]
+
+training:
+  epochs: 100
+  lr: 0.0001
+  device: cuda
+
+output:
+  checkpoint_dir: ./checkpoints
+  sample_dir: ./samples
+  n_perturbations: 5  # Latent perturbations saved each epoch
+```
+
+At each epoch, the script saves perturbed samples to visualize how the latent space captures conformational variation.
+
 ## Performance Tips
 
 1. **Load once, reuse**: Parse CIF files once and keep polymers in memory

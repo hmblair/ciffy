@@ -1,0 +1,49 @@
+# Example configuration for Polymer VAE training
+#
+# Usage:
+#   python scripts/train_vae.py configs/vae_example.yaml
+#
+# To override device:
+#   python scripts/train_vae.py configs/vae_example.yaml --device cpu
+
+# Model architecture
+model:
+  latent_dim: 64          # Dimension of latent space
+  hidden_dim: 256         # Transformer hidden dimension
+  num_layers: 4           # Number of transformer layers
+  num_heads: 8            # Number of attention heads
+  dropout: 0.1            # Dropout probability
+  beta: 1.0               # KL divergence weight (beta-VAE)
+  use_rope: true          # Use Rotary Position Embeddings
+  use_swiglu: true        # Use SwiGLU activation
+
+# Data configuration
+data:
+  data_dir: ./data/cif    # Directory containing .cif files
+  scale: chain            # 'chain' or 'molecule' (chain gives more samples)
+  min_atoms: 10           # Minimum atoms per structure (optional)
+  max_atoms: 5000         # Maximum atoms per structure (optional)
+  # molecule_types:       # Filter by type (optional)
+  #   - protein
+  #   - rna
+  # exclude_ids:          # PDB IDs to exclude (optional)
+  #   - 1ABC
+  #   - 2XYZ
+
+# Training configuration
+training:
+  epochs: 100             # Number of training epochs
+  lr: 0.0001              # Learning rate
+  weight_decay: 0.0       # AdamW weight decay
+  batch_size: 1           # Batch size (VAE processes one at a time)
+  seed: 42                # Random seed for reproducibility
+  device: cuda            # Device: 'cuda', 'cpu', or 'mps'
+  grad_clip: 1.0          # Gradient clipping (null to disable)
+
+# Output configuration
+output:
+  checkpoint_dir: ./checkpoints/vae    # Directory for model checkpoints
+  sample_dir: ./samples/vae            # Directory for generated samples
+  save_every: 10                       # Save checkpoint every N epochs
+  n_perturbations: 5                   # Number of latent perturbations per epoch
+  perturbation_scale: 1.0              # Scale of noise added to latent

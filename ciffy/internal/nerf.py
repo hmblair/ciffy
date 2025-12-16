@@ -26,9 +26,9 @@ def nerf_reconstruct(
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
 
-    Uses C extension for optimal performance. For PyTorch tensors that
-    require gradients, uses the Python implementation which is fully
-    differentiable.
+    Uses CUDA kernels when available for GPU tensors, otherwise falls back
+    to CPU C extension. For PyTorch tensors that require gradients, uses
+    autograd functions with backward passes.
 
     The Natural Extension Reference Frame algorithm places each atom
     by constructing a local coordinate system from three previously
@@ -56,37 +56,54 @@ def nerf_reconstruct(
         else:
             n_atoms = 0
 
-    # Use autograd functions for PyTorch tensors that require gradients
+    # For PyTorch tensors, check for CUDA or autograd path
     if is_torch(distances):
+        import torch
+        from ..backend.cuda_ops import is_cuda_available, cuda_nerf_reconstruct
+
+        device = distances.device
+        dtype = distances.dtype
+
+        # Ensure indices are on same device
+        if not is_torch(zmatrix_indices):
+            indices_tensor = torch.from_numpy(zmatrix_indices).to(device)
+        else:
+            indices_tensor = zmatrix_indices.to(device)
+
+        # Use autograd path for tensors requiring gradients
         if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
             from ..backend.autograd import nerf_reconstruct as autograd_nerf
-            import torch
-            indices_tensor = zmatrix_indices if is_torch(zmatrix_indices) else torch.from_numpy(zmatrix_indices).to(distances.device)
             return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms)
 
-    # Use C extension for all other cases
-    # Ensure indices are numpy int64
+        # Use CUDA kernels for GPU tensors (inference mode)
+        if is_cuda_available(distances):
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
+            cuda_nerf_reconstruct(
+                coords,
+                indices_tensor.to(torch.int64).contiguous(),
+                distances.to(torch.float32).contiguous(),
+                angles.to(torch.float32).contiguous(),
+                dihedrals.to(torch.float32).contiguous()
+            )
+            return coords.to(dtype=dtype)
+
+        # CPU PyTorch tensor: use C extension
+        indices_np = indices_tensor.cpu().numpy().astype(np.int64)
+        dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
+        ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
+        dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
+
+        coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
+        return torch.from_numpy(coords_np).to(device=device, dtype=dtype)
+
+    # NumPy path
     if is_torch(zmatrix_indices):
         indices_np = zmatrix_indices.cpu().numpy()
     else:
         indices_np = np.asarray(zmatrix_indices)
 
-    if is_torch(distances):
-        import torch
-        device = distances.device
-        dtype = distances.dtype
-        dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
-        ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
-        dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
-    else:
-        dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
-        ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
-        dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
+    dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
+    ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
+    dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
 
-    # Call C extension
-    coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
-
-    if is_torch(distances):
-        import torch
-        return torch.from_numpy(coords_np).to(device=device, dtype=dtype)
-    return coords_np
+    return _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)

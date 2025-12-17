@@ -1,0 +1,103 @@
+name: Build and Publish ciffy-cuda
+
+on:
+  push:
+    tags:
+      - 'cuda-v*'  # Trigger on cuda version tags (e.g., cuda-v0.1.0)
+
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to PyPI'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  # ============================================================================
+  # BUILD CUDA WHEELS
+  # Build for multiple CUDA versions on Linux (primary platform for CUDA)
+  # ============================================================================
+  build-cuda:
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda: ["11.8", "12.1", "12.4"]
+        python: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for setuptools-scm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.15
+        with:
+          cuda: ${{ matrix.cuda }}
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev"]'
+
+      - name: Install PyTorch with CUDA
+        run: |
+          # Map CUDA version to PyTorch index URL
+          CUDA_SHORT=$(echo ${{ matrix.cuda }} | tr -d '.')
+          if [ "$CUDA_SHORT" = "118" ]; then
+            INDEX_URL="https://download.pytorch.org/whl/cu118"
+          elif [ "$CUDA_SHORT" = "121" ]; then
+            INDEX_URL="https://download.pytorch.org/whl/cu121"
+          else
+            INDEX_URL="https://download.pytorch.org/whl/cu124"
+          fi
+          pip install torch --index-url $INDEX_URL
+          pip install build wheel setuptools
+
+      - name: Install base ciffy package
+        run: pip install -e .
+
+      - name: Build CUDA wheel
+        working-directory: cuda
+        env:
+          CIFFY_CUDA_ARCH: "70,75,80,86,89,90"
+        run: python -m build --wheel
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-cuda${{ matrix.cuda }}-py${{ matrix.python }}
+          path: cuda/dist/*.whl
+
+  # ============================================================================
+  # PUBLISH TO PYPI
+  # Upload wheels using trusted publishing (OIDC)
+  # ============================================================================
+  publish:
+    needs: build-cuda
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/cuda-v') || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+
+    permissions:
+      id-token: write  # Required for trusted publishing
+
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses trusted publishing - no API token needed
+        # Configure at: https://pypi.org/manage/project/ciffy-cuda/settings/publishing/

@@ -9,6 +9,7 @@ Generates:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,33 @@ import numpy as np
 
 from .config import ELEMENTS, IONS, MOLECULE_TYPES, Molecule, BACKBONE_NAMES, NUM_BACKBONE_NAMES
 from .residue import ResidueDefinition
+
+# Minimum gperf version required for %define constants-prefix
+GPERF_MIN_VERSION = (3, 1)
+
+
+def _check_gperf_version(gperf_path: str) -> tuple[int, int] | None:
+    """
+    Check gperf version.
+
+    Returns:
+        Tuple of (major, minor) version, or None if version cannot be determined.
+    """
+    try:
+        result = subprocess.run(
+            [gperf_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            # Parse version from output like "GNU gperf 3.1"
+            match = re.search(r"gperf\s+(\d+)\.(\d+)", result.stdout)
+            if match:
+                return (int(match.group(1)), int(match.group(2)))
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return None
 
 
 def _gperf_header(lookup_name: str, hash_name: str, prefix: str) -> str:
@@ -34,16 +62,46 @@ struct _LOOKUP;
 
 
 def find_gperf() -> str:
-    """Find gperf executable (requires version 3.1+)."""
+    """
+    Find gperf executable and validate version.
+
+    Requires gperf 3.1+ for %define constants-prefix support.
+
+    Returns:
+        Path to valid gperf executable.
+
+    Raises:
+        RuntimeError: If gperf is not found or version is too old.
+    """
     candidates = [
         "/opt/homebrew/bin/gperf",
         "/usr/local/bin/gperf",
         shutil.which("gperf"),
         "/usr/bin/gperf",
     ]
+
+    found_path = None
+    found_version = None
+
     for path in candidates:
         if path and Path(path).exists():
-            return path
+            version = _check_gperf_version(path)
+            if version is not None and version >= GPERF_MIN_VERSION:
+                return path
+            # Track what we found for error message
+            if found_path is None:
+                found_path = path
+                found_version = version
+
+    if found_path is not None:
+        version_str = f"{found_version[0]}.{found_version[1]}" if found_version else "unknown"
+        min_str = f"{GPERF_MIN_VERSION[0]}.{GPERF_MIN_VERSION[1]}"
+        raise RuntimeError(
+            f"gperf version {version_str} found at {found_path}, but version {min_str}+ is required.\n"
+            f"The %define constants-prefix feature requires gperf 3.1 or later.\n"
+            f"Upgrade with: brew install gperf (macOS) or apt install gperf (Linux)"
+        )
+
     raise RuntimeError(
         "gperf not found. Install with: brew install gperf (macOS) "
         "or apt install gperf (Linux)"

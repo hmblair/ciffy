@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel", "torch>=2.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ciffy-cuda"
+dynamic = ["version"]
+description = "CUDA acceleration for ciffy - GPU-accelerated coordinate conversions"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    {name = "Hamish M. Blair"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+dependencies = [
+    "ciffy>=0.1.0",
+    "torch>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hmblair/ciffy"
+Repository = "https://github.com/hmblair/ciffy"
+
+[tool.setuptools]
+packages = ["ciffy_cuda"]
+
+[tool.setuptools_scm]
+root = ".."
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+tag_regex = "^v(?P<version>.*)$"

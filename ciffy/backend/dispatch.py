@@ -24,7 +24,7 @@ Usage
 >>>
 >>> # Works with any array type on any device
 >>> internal = cartesian_to_internal(coords, indices)  # (M, 3) [dist, ang, dih]
->>> coords = nerf_reconstruct(indices, internal, n_atoms)
+>>> coords = nerf_reconstruct(indices, internal)
 """
 
 from __future__ import annotations
@@ -107,7 +107,6 @@ def cartesian_to_internal(
 def nerf_reconstruct(
     indices: Array,
     internal: Array,
-    n_atoms: int,
     component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
@@ -121,10 +120,10 @@ def nerf_reconstruct(
     - Autograd functions when gradients are required
 
     Args:
-        indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+        indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref].
+            The number of atoms is inferred from the first dimension.
         internal: (M, 3) array of internal coordinates.
             Each row: [distance, angle, dihedral].
-        n_atoms: Total number of atoms.
         component_offsets: (n_components+1,) int32 CSR-style offsets for component-parallel NERF.
             Enables parallel NERF by processing each connected component independently.
         anchor_coords: (n_components, 3, 3) anchor positions for each component.
@@ -137,8 +136,8 @@ def nerf_reconstruct(
         (N, 3) array of Cartesian coordinates.
     """
     if is_torch(internal):
-        return _torch_nerf_reconstruct(indices, internal, n_atoms, component_offsets, anchor_coords, component_ids)
-    return _numpy_nerf_reconstruct(indices, internal, n_atoms, component_offsets, anchor_coords, component_ids)
+        return _torch_nerf_reconstruct(indices, internal, component_offsets, anchor_coords, component_ids)
+    return _numpy_nerf_reconstruct(indices, internal, component_offsets, anchor_coords, component_ids)
 
 
 # =============================================================================
@@ -159,7 +158,6 @@ def _numpy_cartesian_to_internal(
 def _numpy_nerf_reconstruct(
     indices: np.ndarray,
     internal: np.ndarray,
-    n_atoms: int,
     component_offsets: np.ndarray | None = None,
     anchor_coords: np.ndarray | None = None,
     component_ids: np.ndarray | None = None,
@@ -176,6 +174,7 @@ def _numpy_nerf_reconstruct(
             "Use CoordinateManager for automatic setup of these parameters."
         )
 
+    n_atoms = len(indices)
     indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
     internal_f32 = np.ascontiguousarray(internal, dtype=np.float32)
     anchor_f32 = np.ascontiguousarray(anchor_coords, dtype=np.float32)
@@ -246,7 +245,6 @@ def _torch_cartesian_to_internal(
 def _torch_nerf_reconstruct(
     indices: "torch.Tensor",
     internal: "torch.Tensor",
-    n_atoms: int,
     component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
@@ -271,6 +269,7 @@ def _torch_nerf_reconstruct(
             "Use CoordinateManager for automatic setup of these parameters."
         )
 
+    n_atoms = len(indices)
     device = internal.device
     dtype = internal.dtype
 
@@ -308,7 +307,7 @@ def _torch_nerf_reconstruct(
     # Autograd path for gradient computation
     if internal.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, internal, n_atoms, comp_off_tensor, anchor_tensor, comp_ids_tensor)
+        return autograd_nerf(indices_tensor, internal, comp_off_tensor, anchor_tensor, comp_ids_tensor)
 
     # CUDA path with anchored component-parallel reconstruction
     if is_cuda_available(internal) and HAS_ANCHORED_NERF:

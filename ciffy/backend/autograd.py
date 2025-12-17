@@ -196,7 +196,6 @@ class NerfReconstructFunction(Function):
         ctx: Any,
         indices: "torch.Tensor",
         internal: "torch.Tensor",
-        n_atoms: int,
         component_offsets: "torch.Tensor | None" = None,
         anchor_coords: "torch.Tensor | None" = None,
         component_ids: "torch.Tensor | None" = None,
@@ -207,9 +206,9 @@ class NerfReconstructFunction(Function):
         Args:
             ctx: Autograd context for saving tensors.
             indices: (M, 4) int64 tensor of Z-matrix indices.
+                The number of atoms is inferred from the first dimension.
             internal: (M, 3) float32 tensor of internal coordinates.
                 Each row: [distance, angle, dihedral].
-            n_atoms: Total number of atoms.
             component_offsets: (n_components+1,) int32 tensor for component-parallel reconstruction.
             anchor_coords: (n_components, 3, 3) float32 tensor of anchor positions.
             component_ids: (M,) int32 tensor mapping entries to components.
@@ -222,6 +221,8 @@ class NerfReconstructFunction(Function):
                 "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
                 "Use CoordinateManager for automatic setup of these parameters."
             )
+
+        n_atoms = len(indices)
 
         # Check if we can use CUDA path
         use_cuda = is_cuda_available(internal)
@@ -277,7 +278,6 @@ class NerfReconstructFunction(Function):
 
         # Save for backward
         ctx.save_for_backward(coords, indices, internal)
-        ctx.n_atoms = n_atoms
         # Save extra context (not tensors we need gradients for)
         # Detach these to avoid keeping grad history - they're frozen references
         ctx.component_offsets = comp_off_tensor.detach()
@@ -290,7 +290,7 @@ class NerfReconstructFunction(Function):
     def backward(
         ctx: Any,
         grad_coords: "torch.Tensor",
-    ) -> tuple[None, "torch.Tensor", None, None, None, None]:
+    ) -> tuple[None, "torch.Tensor", None, None, None]:
         """
         Backward pass for anchored NERF reconstruction.
 
@@ -299,8 +299,8 @@ class NerfReconstructFunction(Function):
             grad_coords: (N, 3) upstream gradients for coordinates.
 
         Returns:
-            Tuple of (None, grad_internal, None, None, None, None).
-            None for indices, n_atoms, level_offsets, anchor_coords, and component_ids
+            Tuple of (None, grad_internal, None, None, None).
+            None for indices, component_offsets, anchor_coords, and component_ids
             (not differentiable).
         """
         coords, indices, internal = ctx.saved_tensors
@@ -330,7 +330,7 @@ class NerfReconstructFunction(Function):
             device = internal.device
             grad_internal = torch.from_numpy(grad_internal_np).to(device)
 
-        return None, grad_internal, None, None, None, None
+        return None, grad_internal, None, None, None
 
 
 def cartesian_to_internal(
@@ -358,7 +358,6 @@ def cartesian_to_internal(
 def nerf_reconstruct(
     indices: "torch.Tensor",
     internal: "torch.Tensor",
-    n_atoms: int,
     component_offsets: "torch.Tensor | None" = None,
     anchor_coords: "torch.Tensor | None" = None,
     component_ids: "torch.Tensor | None" = None,
@@ -368,9 +367,9 @@ def nerf_reconstruct(
 
     Args:
         indices: (M, 4) int64 tensor of Z-matrix indices.
+            The number of atoms is inferred from the first dimension.
         internal: (M, 3) float32 tensor of internal coordinates.
             Each row: [distance, angle, dihedral].
-        n_atoms: Total number of atoms.
         component_offsets: Optional (n_components+1,) int32 tensor for component-parallel NERF.
             When provided, enables parallel reconstruction by processing each
             connected component independently.
@@ -389,6 +388,6 @@ def nerf_reconstruct(
         raise ImportError("C extension is required for this function")
 
     return NerfReconstructFunction.apply(
-        indices, internal, n_atoms,
+        indices, internal,
         component_offsets, anchor_coords, component_ids
     )

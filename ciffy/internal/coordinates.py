@@ -459,8 +459,6 @@ class CoordinateManager:
             internal = internal.detach().clone()
             internal[:, 2] = self._internal[:, 2]  # Preserve grad for dihedrals
 
-        n_atoms = self.size()
-
         # Get anchor coordinates and component IDs for anchored NERF
         # This eliminates the need for post-reconstruction Kabsch rotation
         # Detach anchor_coords to avoid grad history from previous computations
@@ -473,7 +471,6 @@ class CoordinateManager:
         coords = nerf_reconstruct(
             zmatrix_indices,
             internal,
-            n_atoms=n_atoms,
             component_offsets=self._zmatrix.component_offsets,
             anchor_coords=anchor_coords,
             component_ids=component_ids,

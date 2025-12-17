@@ -1133,7 +1133,6 @@ class TestAutogradGradientsGPU:
         from ciffy.backend.autograd import nerf_reconstruct
 
         tol = get_tolerances("cuda")
-        n_atoms = 4
         indices_np = np.array([
             [0, -1, -1, -1],
             [1,  0, -1, -1],
@@ -1150,11 +1149,22 @@ class TestAutogradGradientsGPU:
         ], dtype=torch.float32)
         indices = torch.tensor(indices_np, dtype=torch.int64)
 
+        # Build component parameters for a single-component system
+        n_atoms = len(indices)
+        component_offsets = torch.tensor([0, n_atoms], dtype=torch.int32)
+        component_ids = torch.zeros(n_atoms, dtype=torch.int32)
+        # Anchor coords: first 3 atoms' positions (computed from internal coords)
+        # For simplicity, use placeholder anchors - the test validates CUDA/CPU consistency
+        anchor_coords = torch.zeros(1, 3, 3, dtype=torch.float32)
+
         # CPU reconstruction
-        coords_cpu = nerf_reconstruct(indices, internal, n_atoms)
+        coords_cpu = nerf_reconstruct(indices, internal, component_offsets, anchor_coords, component_ids)
 
         # CUDA reconstruction
-        coords_cuda = nerf_reconstruct(indices.cuda(), internal.cuda(), n_atoms)
+        coords_cuda = nerf_reconstruct(
+            indices.cuda(), internal.cuda(),
+            component_offsets.cuda(), anchor_coords.cuda(), component_ids.cuda()
+        )
 
         assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=tol.allclose_atol)
 
@@ -1208,7 +1218,6 @@ class TestAutogradGradientsGPU:
         from ciffy.backend.autograd import nerf_reconstruct
 
         tol = get_tolerances("cuda")
-        n_atoms = 4
         indices_np = np.array([
             [0, -1, -1, -1],
             [1,  0, -1, -1],
@@ -1224,11 +1233,17 @@ class TestAutogradGradientsGPU:
             [1.5, 1.91, 1.57],
         ], dtype=np.float32)
 
+        # Build component parameters for a single-component system
+        n_atoms = len(indices_np)
+        component_offsets = torch.tensor([0, n_atoms], dtype=torch.int32)
+        component_ids = torch.zeros(n_atoms, dtype=torch.int32)
+        anchor_coords = torch.zeros(1, 3, 3, dtype=torch.float32)
+
         # CPU gradient
         indices = torch.tensor(indices_np)
         internal_cpu = torch.tensor(internal_np, requires_grad=True)
 
-        coords = nerf_reconstruct(indices, internal_cpu, n_atoms)
+        coords = nerf_reconstruct(indices, internal_cpu, component_offsets, anchor_coords, component_ids)
         coords.sum().backward()
 
         grad_internal_cpu = internal_cpu.grad.clone()
@@ -1236,7 +1251,10 @@ class TestAutogradGradientsGPU:
         # CUDA gradient
         internal_cuda = torch.tensor(internal_np, device="cuda", requires_grad=True)
 
-        coords = nerf_reconstruct(indices.cuda(), internal_cuda, n_atoms)
+        coords = nerf_reconstruct(
+            indices.cuda(), internal_cuda,
+            component_offsets.cuda(), anchor_coords.cuda(), component_ids.cuda()
+        )
         coords.sum().backward()
 
         assert torch.allclose(grad_internal_cpu, internal_cuda.grad.cpu(), atol=tol.gradcheck_atol)
@@ -1344,7 +1362,12 @@ class TestInternalCoordsEdgeCasesGPU:
         internal = cartesian_to_internal(coords_cuda, indices_cuda)
         assert internal.shape == (n_atoms, 3)
 
-        coords_recon = nerf_reconstruct(indices_cuda, internal, n_atoms)
+        # Build component parameters for a single-component system
+        component_offsets = torch.tensor([0, n_atoms], dtype=torch.int32, device="cuda")
+        component_ids = torch.zeros(n_atoms, dtype=torch.int32, device="cuda")
+        anchor_coords = torch.zeros(1, 3, 3, dtype=torch.float32, device="cuda")
+
+        coords_recon = nerf_reconstruct(indices_cuda, internal, component_offsets, anchor_coords, component_ids)
         assert coords_recon.shape == (n_atoms, 3)
 
 

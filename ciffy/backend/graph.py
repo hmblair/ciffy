@@ -990,7 +990,6 @@ def build_zmatrix_from_components(
 def nerf_reconstruct(
     zmatrix_indices: Array,
     internal: Array,
-    n_atoms: int | None = None,
     component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
@@ -1008,11 +1007,10 @@ def nerf_reconstruct(
     coordinates (distance, angle, dihedral).
 
     Args:
-        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+        zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref].
+            The number of atoms is inferred from the first dimension.
         internal: (M, 3) array of internal coordinates.
             Each row: [distance, angle, dihedral].
-        n_atoms: Total number of atoms (including orphans). If None,
-            inferred from max Z-matrix index.
         component_offsets: (n_components+1,) int32 CSR-style offsets for component-parallel NERF.
             When provided, enables parallel NERF by processing each connected component
             independently. Can be obtained from ZMatrix.component_offsets.
@@ -1028,16 +1026,7 @@ def nerf_reconstruct(
     # Late import to avoid circular dependency (dispatch imports graph)
     from .dispatch import nerf_reconstruct as _dispatch_nerf_reconstruct
 
-    # Infer n_atoms if not provided
-    if n_atoms is None:
-        n_entries = len(zmatrix_indices)
-        if n_entries > 0:
-            max_idx = int(zmatrix_indices[:, 0].max())
-            n_atoms = max_idx + 1
-        else:
-            n_atoms = 0
-
     return _dispatch_nerf_reconstruct(
-        zmatrix_indices, internal, n_atoms,
+        zmatrix_indices, internal,
         component_offsets, anchor_coords, component_ids
     )

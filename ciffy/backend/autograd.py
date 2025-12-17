@@ -66,10 +66,8 @@ try:
     from .._c import (
         _cartesian_to_internal,
         _cartesian_to_internal_backward,
-        _nerf_reconstruct,
-        _nerf_reconstruct_backward,
-        _nerf_reconstruct_leveled,
-        _nerf_reconstruct_backward_leveled,
+        _nerf_reconstruct_leveled_anchored,
+        _nerf_reconstruct_backward_leveled_anchored,
     )
     HAS_C_EXTENSION = True
 except ImportError:
@@ -79,33 +77,17 @@ except ImportError:
 try:
     from .cuda_ops import (
         HAS_CUDA_EXTENSION,
-        HAS_LEVELED_NERF,
         HAS_ANCHORED_NERF,
         is_cuda_available,
         cuda_cartesian_to_internal,
         cuda_cartesian_to_internal_backward,
-        cuda_nerf_reconstruct,
-        cuda_nerf_reconstruct_backward,
-        cuda_nerf_reconstruct_leveled,
-        cuda_nerf_reconstruct_backward_leveled,
         cuda_nerf_reconstruct_leveled_anchored,
         cuda_nerf_reconstruct_backward_leveled_anchored,
     )
 except ImportError:
     HAS_CUDA_EXTENSION = False
-    HAS_LEVELED_NERF = False
     HAS_ANCHORED_NERF = False
     is_cuda_available = lambda x: False
-
-# Import anchored C extension functions
-try:
-    from .._c import (
-        _nerf_reconstruct_leveled_anchored,
-        _nerf_reconstruct_backward_leveled_anchored,
-    )
-    HAS_C_ANCHORED = True
-except ImportError:
-    HAS_C_ANCHORED = False
 
 
 class CartesianToInternalFunction(Function):
@@ -200,13 +182,13 @@ class CartesianToInternalFunction(Function):
 
 class NerfReconstructFunction(Function):
     """
-    Autograd function for NERF reconstruction.
+    Autograd function for anchored NERF reconstruction.
 
     Forward: internal (M, 3) -> coords (N, 3)
     Backward: grad_coords -> grad_internal
 
-    When level_offsets is provided and leveled CUDA is available, uses
-    level-parallel reconstruction for significantly better performance.
+    Requires level_offsets, anchor_coords, and component_ids for anchored
+    reconstruction which places atoms directly in the reference frame.
     """
 
     @staticmethod
@@ -228,63 +210,58 @@ class NerfReconstructFunction(Function):
             internal: (M, 3) float32 tensor of internal coordinates.
                 Each row: [distance, angle, dihedral].
             n_atoms: Total number of atoms.
-            level_offsets: Optional (n_levels+1,) int32 tensor for level-parallel CUDA.
-            anchor_coords: Optional (n_components, 3, 3) float32 tensor of anchor positions.
-            component_ids: Optional (M,) int32 tensor mapping entries to components.
+            level_offsets: (n_levels+1,) int32 tensor for level-parallel reconstruction.
+            anchor_coords: (n_components, 3, 3) float32 tensor of anchor positions.
+            component_ids: (M,) int32 tensor mapping entries to components.
 
         Returns:
             coords: (N, 3) float32 tensor of Cartesian coordinates.
         """
+        if level_offsets is None or anchor_coords is None or component_ids is None:
+            raise ValueError(
+                "nerf_reconstruct requires level_offsets, anchor_coords, and component_ids. "
+                "Use CoordinateManager for automatic setup of these parameters."
+            )
+
         # Check if we can use CUDA path
         use_cuda = is_cuda_available(internal)
-        use_anchored = (
-            anchor_coords is not None and
-            component_ids is not None and
-            level_offsets is not None
-        )
-        use_leveled = use_cuda and HAS_LEVELED_NERF and level_offsets is not None
         ctx.use_cuda = use_cuda
-        ctx.use_anchored = use_anchored
 
         # Convert level_offsets to tensor if needed
-        level_offsets_tensor = None
-        if level_offsets is not None:
-            if not isinstance(level_offsets, torch.Tensor):
-                level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets))
-            else:
-                level_offsets_tensor = level_offsets
-            level_offsets_tensor = level_offsets_tensor.to(
-                device=internal.device, dtype=torch.int32
-            ).contiguous()
+        if not isinstance(level_offsets, torch.Tensor):
+            level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets))
+        else:
+            level_offsets_tensor = level_offsets
+        level_offsets_tensor = level_offsets_tensor.to(
+            device=internal.device, dtype=torch.int32
+        ).contiguous()
 
-        # Convert anchor_coords and component_ids if provided
-        anchor_tensor = None
-        comp_ids_tensor = None
-        if use_anchored:
-            if not isinstance(anchor_coords, torch.Tensor):
-                anchor_tensor = torch.from_numpy(np.asarray(anchor_coords))
-            else:
-                anchor_tensor = anchor_coords
-            anchor_tensor = anchor_tensor.to(
-                device=internal.device, dtype=torch.float32
-            ).contiguous()
+        # Convert anchor_coords to tensor if needed
+        if not isinstance(anchor_coords, torch.Tensor):
+            anchor_tensor = torch.from_numpy(np.asarray(anchor_coords))
+        else:
+            anchor_tensor = anchor_coords
+        anchor_tensor = anchor_tensor.to(
+            device=internal.device, dtype=torch.float32
+        ).contiguous()
 
-            if not isinstance(component_ids, torch.Tensor):
-                comp_ids_tensor = torch.from_numpy(np.asarray(component_ids))
-            else:
-                comp_ids_tensor = component_ids
-            comp_ids_tensor = comp_ids_tensor.to(
-                device=internal.device, dtype=torch.int32
-            ).contiguous()
+        # Convert component_ids to tensor if needed
+        if not isinstance(component_ids, torch.Tensor):
+            comp_ids_tensor = torch.from_numpy(np.asarray(component_ids))
+        else:
+            comp_ids_tensor = component_ids
+        comp_ids_tensor = comp_ids_tensor.to(
+            device=internal.device, dtype=torch.int32
+        ).contiguous()
 
-        if use_anchored and use_cuda and HAS_ANCHORED_NERF:
+        if use_cuda and HAS_ANCHORED_NERF:
             # GPU path with anchored level-parallel reconstruction
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=internal.device)
             cuda_nerf_reconstruct_leveled_anchored(
                 coords, indices, internal,
                 level_offsets_tensor, anchor_tensor, comp_ids_tensor
             )
-        elif use_anchored and HAS_C_ANCHORED:
+        else:
             # CPU path with anchored reconstruction
             indices_np = indices.detach().cpu().numpy().astype(np.int64)
             internal_np = internal.detach().cpu().numpy().astype(np.float32)
@@ -297,36 +274,15 @@ class NerfReconstructFunction(Function):
                 level_off_np, anchor_np, comp_ids_np
             )
             coords = torch.from_numpy(coords_np).to(internal.device)
-        elif use_leveled:
-            # GPU path with level-parallel reconstruction (non-anchored)
-            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=internal.device)
-            cuda_nerf_reconstruct_leveled(
-                coords, indices, internal, level_offsets_tensor
-            )
-        elif use_cuda:
-            # GPU path: sequential (fallback)
-            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=internal.device)
-            cuda_nerf_reconstruct(coords, indices, internal)
-        else:
-            # CPU path: always use sequential version (leveled has massive OpenMP overhead)
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
-            internal_np = internal.detach().cpu().numpy().astype(np.float32)
-
-            coords_np = _nerf_reconstruct(indices_np, internal_np, n_atoms)
-
-            # Convert back to tensor
-            device = internal.device
-            coords = torch.from_numpy(coords_np).to(device)
 
         # Save for backward
         ctx.save_for_backward(coords, indices, internal)
         ctx.n_atoms = n_atoms
-        ctx.use_leveled = use_leveled
         # Save extra context (not tensors we need gradients for)
         # Detach these to avoid keeping grad history - they're frozen references
-        ctx.level_offsets = level_offsets_tensor.detach() if level_offsets_tensor is not None else None
-        ctx.anchor_coords = anchor_tensor.detach() if anchor_tensor is not None else None
-        ctx.component_ids = comp_ids_tensor.detach() if comp_ids_tensor is not None else None
+        ctx.level_offsets = level_offsets_tensor.detach()
+        ctx.anchor_coords = anchor_tensor.detach()
+        ctx.component_ids = comp_ids_tensor.detach()
 
         return coords
 
@@ -336,7 +292,7 @@ class NerfReconstructFunction(Function):
         grad_coords: "torch.Tensor",
     ) -> tuple[None, "torch.Tensor", None, None, None, None]:
         """
-        Backward pass for NERF reconstruction.
+        Backward pass for anchored NERF reconstruction.
 
         Args:
             ctx: Autograd context with saved tensors.
@@ -349,14 +305,14 @@ class NerfReconstructFunction(Function):
         """
         coords, indices, internal = ctx.saved_tensors
 
-        if ctx.use_anchored and ctx.use_cuda and HAS_ANCHORED_NERF:
+        if ctx.use_cuda and HAS_ANCHORED_NERF:
             # GPU path with anchored level-parallel backward
             grad_internal = cuda_nerf_reconstruct_backward_leveled_anchored(
                 coords, indices, internal,
                 grad_coords.contiguous(), ctx.level_offsets,
                 ctx.anchor_coords, ctx.component_ids
             )
-        elif ctx.use_anchored and HAS_C_ANCHORED:
+        else:
             # CPU path with anchored backward
             coords_np = coords.detach().cpu().numpy().astype(np.float32)
             indices_np = indices.detach().cpu().numpy().astype(np.int64)
@@ -371,33 +327,6 @@ class NerfReconstructFunction(Function):
                 grad_coords_np, level_off_np, anchor_np, comp_ids_np
             )
 
-            device = internal.device
-            grad_internal = torch.from_numpy(grad_internal_np).to(device)
-        elif ctx.use_cuda and ctx.use_leveled and ctx.level_offsets is not None:
-            # GPU path with level-parallel backward (fastest)
-            # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
-            grad_internal = cuda_nerf_reconstruct_backward_leveled(
-                coords, indices, internal,
-                grad_coords.contiguous(), ctx.level_offsets
-            )
-        elif ctx.use_cuda:
-            # GPU path: sequential (fallback)
-            # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
-            grad_internal = cuda_nerf_reconstruct_backward(
-                coords, indices, internal, grad_coords.contiguous()
-            )
-        else:
-            # CPU path: always use sequential version (leveled has massive OpenMP overhead)
-            coords_np = coords.detach().cpu().numpy().astype(np.float32)
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
-            internal_np = internal.detach().cpu().numpy().astype(np.float32)
-            grad_coords_np = grad_coords.detach().cpu().numpy().astype(np.float32).copy()
-
-            grad_internal_np = _nerf_reconstruct_backward(
-                coords_np, indices_np, internal_np, grad_coords_np
-            )
-
-            # Convert back to tensor
             device = internal.device
             grad_internal = torch.from_numpy(grad_internal_np).to(device)
 

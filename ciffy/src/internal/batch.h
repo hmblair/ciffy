@@ -44,27 +44,6 @@ void batch_cartesian_to_internal(
     float *internal
 );
 
-/**
- * Batch NERF reconstruction from internal to Cartesian coordinates.
- *
- * Reconstructs Cartesian coordinates from internal coordinates.
- * MUST be called with entries in placement order (BFS order),
- * as each atom depends on previously placed atoms.
- *
- * @param coords Output Cartesian coordinates, shape (n_atoms, 3).
- *               Pre-allocated and zero-initialized.
- * @param n_atoms Number of atoms.
- * @param indices Z-matrix indices, shape (n_entries, 4).
- * @param n_entries Number of Z-matrix entries.
- * @param internal Internal coordinates, shape (n_entries, 3), row-major.
- *                 Each row: [distance, angle, dihedral].
- */
-void batch_nerf_reconstruct(
-    float *coords, size_t n_atoms,
-    const int64_t *indices, size_t n_entries,
-    const float *internal
-);
-
 /* ========================================================================= */
 /* Backward (gradient) functions for automatic differentiation              */
 /* ========================================================================= */
@@ -91,84 +70,6 @@ void batch_cartesian_to_internal_backward(
     const float *grad_internal,
     float *grad_coords
 );
-
-/**
- * Backward pass for batch_nerf_reconstruct.
- *
- * Computes gradients with respect to internal coordinates.
- * MUST be called with entries in REVERSE placement order.
- *
- * @param coords Forward pass reconstructed coordinates, shape (n_atoms, 3).
- * @param n_atoms Number of atoms.
- * @param indices Z-matrix indices, shape (n_entries, 4).
- * @param n_entries Number of Z-matrix entries.
- * @param internal Internal coordinates, shape (n_entries, 3), row-major.
- *                 Each row: [distance, angle, dihedral].
- * @param grad_coords Upstream gradients for coords, shape (n_atoms, 3).
- *                    Will be modified during backward pass.
- * @param grad_internal Output gradients for internal, shape (n_entries, 3).
- */
-void batch_nerf_reconstruct_backward(
-    const float *coords, size_t n_atoms,
-    const int64_t *indices, size_t n_entries,
-    const float *internal,
-    float *grad_coords,
-    float *grad_internal
-);
-
-/* ========================================================================= */
-/* Level-parallel NERF (OpenMP)                                              */
-/* ========================================================================= */
-
-/**
- * Level-parallel NERF reconstruction.
- *
- * Processes atoms level-by-level where all atoms at the same BFS level
- * can be placed in parallel (they only depend on lower levels).
- * Uses OpenMP for parallelism within each level.
- *
- * @param coords Output coordinates, shape (n_atoms, 3). Pre-allocated.
- * @param n_atoms Number of atoms.
- * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
- * @param n_entries Number of Z-matrix entries.
- * @param internal Internal coordinates, shape (n_entries, 3), row-major.
- *                 Each row: [distance, angle, dihedral].
- * @param level_offsets CSR-style offsets, size (n_levels+1,).
- *                      Level i's entries span [level_offsets[i], level_offsets[i+1]).
- * @param n_levels Number of BFS levels.
- */
-void batch_nerf_reconstruct_leveled(
-    float *coords, size_t n_atoms,
-    const int64_t *indices, size_t n_entries,
-    const float *internal,
-    const int32_t *level_offsets, int n_levels
-);
-
-/**
- * Level-parallel backward pass for NERF reconstruction.
- *
- * Processes levels in REVERSE order. Uses atomic adds for grad_coords
- * to handle concurrent writes from multiple entries referencing the same atom.
- *
- * @param coords Forward pass coordinates, shape (n_atoms, 3).
- * @param n_atoms Number of atoms.
- * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
- * @param n_entries Number of Z-matrix entries.
- * @param internal Internal coordinates, shape (n_entries, 3), row-major.
- * @param grad_coords Upstream gradients for coords, shape (n_atoms, 3). Modified in place.
- * @param grad_internal Output gradients for internal, shape (n_entries, 3).
- * @param level_offsets CSR-style offsets, size (n_levels+1,).
- * @param n_levels Number of BFS levels.
- */
-void batch_nerf_reconstruct_backward_leveled(
-    const float *coords, size_t n_atoms,
-    const int64_t *indices, size_t n_entries,
-    const float *internal,
-    float *grad_coords,
-    float *grad_internal,
-    const int32_t *level_offsets, int n_levels
-);
-
 
 /* ========================================================================= */
 /* Anchored NERF (places atoms in reference frame defined by anchor coords)  */

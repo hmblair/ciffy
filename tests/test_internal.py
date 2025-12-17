@@ -1601,17 +1601,13 @@ class TestAutogradGradientsGPU:
         coords_cpu = torch.tensor(coords_np, dtype=torch.float32)
         indices = torch.tensor(indices_np, dtype=torch.int64)
 
-        # CPU computation
-        d_cpu, a_cpu, dh_cpu = cartesian_to_internal(coords_cpu, indices)
+        # CPU computation - returns (M, 3) array
+        internal_cpu = cartesian_to_internal(coords_cpu, indices)
 
         # CUDA computation
-        d_cuda, a_cuda, dh_cuda = cartesian_to_internal(
-            coords_cpu.cuda(), indices.cuda()
-        )
+        internal_cuda = cartesian_to_internal(coords_cpu.cuda(), indices.cuda())
 
-        assert torch.allclose(d_cpu, d_cuda.cpu(), atol=1e-5)
-        assert torch.allclose(a_cpu, a_cuda.cpu(), atol=1e-5)
-        assert torch.allclose(dh_cpu, dh_cuda.cpu(), atol=1e-5)
+        assert torch.allclose(internal_cpu, internal_cuda.cpu(), atol=1e-5)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1628,18 +1624,20 @@ class TestAutogradGradientsGPU:
             [3,  2,  1,  0],
         ], dtype=np.int64)
 
-        distances = torch.tensor([0.0, 1.5, 1.5, 1.5], dtype=torch.float32)
-        angles = torch.tensor([0.0, 0.0, 1.91, 1.91], dtype=torch.float32)
-        dihedrals = torch.tensor([0.0, 0.0, 0.0, 1.57], dtype=torch.float32)
+        # Internal coordinates as (N, 3) array [distance, angle, dihedral]
+        internal = torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [1.5, 1.91, 0.0],
+            [1.5, 1.91, 1.57],
+        ], dtype=torch.float32)
         indices = torch.tensor(indices_np, dtype=torch.int64)
 
         # CPU reconstruction
-        coords_cpu = nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms)
+        coords_cpu = nerf_reconstruct(indices, internal, n_atoms)
 
         # CUDA reconstruction
-        coords_cuda = nerf_reconstruct(
-            indices.cuda(), distances.cuda(), angles.cuda(), dihedrals.cuda(), n_atoms
-        )
+        coords_cuda = nerf_reconstruct(indices.cuda(), internal.cuda(), n_atoms)
 
         assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-5)
 
@@ -1670,15 +1668,15 @@ class TestAutogradGradientsGPU:
 
         # CPU gradient
         coords_cpu = torch.tensor(coords_np, requires_grad=True)
-        d, a, dh = cartesian_to_internal(coords_cpu, indices)
-        loss = d.sum() + a.sum() + dh.sum()
+        internal = cartesian_to_internal(coords_cpu, indices)
+        loss = internal[:, 0].sum() + internal[:, 1].sum() + internal[:, 2].sum()
         loss.backward()
         grad_cpu = coords_cpu.grad.clone()
 
         # CUDA gradient
         coords_cuda = torch.tensor(coords_np, device="cuda", requires_grad=True)
-        d, a, dh = cartesian_to_internal(coords_cuda, indices.cuda())
-        loss = d.sum() + a.sum() + dh.sum()
+        internal = cartesian_to_internal(coords_cuda, indices.cuda())
+        loss = internal[:, 0].sum() + internal[:, 1].sum() + internal[:, 2].sum()
         loss.backward()
         grad_cuda = coords_cuda.grad.cpu()
 
@@ -1699,36 +1697,30 @@ class TestAutogradGradientsGPU:
             [3,  2,  1,  0],
         ], dtype=np.int64)
 
-        distances_np = np.array([0.0, 1.5, 1.5, 1.5], dtype=np.float32)
-        angles_np = np.array([0.0, 0.0, 1.91, 1.91], dtype=np.float32)
-        dihedrals_np = np.array([0.0, 0.0, 0.0, 1.57], dtype=np.float32)
+        # Internal coordinates as (N, 3) array [distance, angle, dihedral]
+        internal_np = np.array([
+            [0.0, 0.0, 0.0],
+            [1.5, 0.0, 0.0],
+            [1.5, 1.91, 0.0],
+            [1.5, 1.91, 1.57],
+        ], dtype=np.float32)
 
         # CPU gradient
         indices = torch.tensor(indices_np)
-        distances_cpu = torch.tensor(distances_np, requires_grad=True)
-        angles_cpu = torch.tensor(angles_np, requires_grad=True)
-        dihedrals_cpu = torch.tensor(dihedrals_np, requires_grad=True)
+        internal_cpu = torch.tensor(internal_np, requires_grad=True)
 
-        coords = nerf_reconstruct(indices, distances_cpu, angles_cpu, dihedrals_cpu, n_atoms)
+        coords = nerf_reconstruct(indices, internal_cpu, n_atoms)
         coords.sum().backward()
 
-        grad_d_cpu = distances_cpu.grad.clone()
-        grad_a_cpu = angles_cpu.grad.clone()
-        grad_dh_cpu = dihedrals_cpu.grad.clone()
+        grad_internal_cpu = internal_cpu.grad.clone()
 
         # CUDA gradient
-        distances_cuda = torch.tensor(distances_np, device="cuda", requires_grad=True)
-        angles_cuda = torch.tensor(angles_np, device="cuda", requires_grad=True)
-        dihedrals_cuda = torch.tensor(dihedrals_np, device="cuda", requires_grad=True)
+        internal_cuda = torch.tensor(internal_np, device="cuda", requires_grad=True)
 
-        coords = nerf_reconstruct(
-            indices.cuda(), distances_cuda, angles_cuda, dihedrals_cuda, n_atoms
-        )
+        coords = nerf_reconstruct(indices.cuda(), internal_cuda, n_atoms)
         coords.sum().backward()
 
-        assert torch.allclose(grad_d_cpu, distances_cuda.grad.cpu(), atol=1e-4)
-        assert torch.allclose(grad_a_cpu, angles_cuda.grad.cpu(), atol=1e-4)
-        assert torch.allclose(grad_dh_cpu, dihedrals_cuda.grad.cpu(), atol=1e-4)
+        assert torch.allclose(grad_internal_cpu, internal_cuda.grad.cpu(), atol=1e-4)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1755,8 +1747,9 @@ class TestAutogradGradientsGPU:
 
         def wrapper(coords):
             coords32 = coords.float()
-            d, a, dh = cartesian_to_internal(coords32, indices)
-            return d.double(), a.double(), dh.double()
+            internal = cartesian_to_internal(coords32, indices)
+            # Return each column as separate output for gradcheck
+            return internal[:, 0].double(), internal[:, 1].double(), internal[:, 2].double()
 
         coords_check = torch.tensor(
             coords_np, requires_grad=True, dtype=torch.float64, device="cuda"
@@ -1779,11 +1772,9 @@ class TestInternalCoordsEdgeCasesGPU:
         coords = torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32, device="cuda")
         indices = torch.tensor([[0, -1, -1, -1]], dtype=torch.int64, device="cuda")
 
-        d, a, dh = cartesian_to_internal(coords, indices)
+        internal = cartesian_to_internal(coords, indices)
 
-        assert len(d) == 1
-        assert len(a) == 1
-        assert len(dh) == 1
+        assert internal.shape == (1, 3)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1801,10 +1792,10 @@ class TestInternalCoordsEdgeCasesGPU:
             [1,  0, -1, -1]
         ], dtype=torch.int64, device="cuda")
 
-        d, a, dh = cartesian_to_internal(coords, indices)
+        internal = cartesian_to_internal(coords, indices)
 
-        assert len(d) == 2
-        assert d[1].item() == pytest.approx(1.5, abs=1e-5)
+        assert internal.shape == (2, 3)
+        assert internal[1, 0].item() == pytest.approx(1.5, abs=1e-5)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1829,10 +1820,10 @@ class TestInternalCoordsEdgeCasesGPU:
         coords_cuda = torch.tensor(coords_np, device="cuda")
         indices_cuda = torch.tensor(indices_np, device="cuda")
 
-        d, a, dh = cartesian_to_internal(coords_cuda, indices_cuda)
-        assert len(d) == n_atoms
+        internal = cartesian_to_internal(coords_cuda, indices_cuda)
+        assert internal.shape == (n_atoms, 3)
 
-        coords_recon = nerf_reconstruct(indices_cuda, d, a, dh, n_atoms)
+        coords_recon = nerf_reconstruct(indices_cuda, internal, n_atoms)
         assert coords_recon.shape == (n_atoms, 3)
 
 

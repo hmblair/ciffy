@@ -741,16 +741,6 @@ static PyMethodDef methods[] = {
      "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n\n"
      "Returns:\n"
      "    tuple: (distances, angles, dihedrals), each (M,) float64.\n"},
-    {"_nerf_reconstruct", py_nerf_reconstruct, METH_VARARGS,
-     "Reconstruct Cartesian coordinates from internal coordinates.\n\n"
-     "Args:\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
-     "    distances (ndarray): (M,) float64 bond lengths.\n"
-     "    angles (ndarray): (M,) float64 bond angles in radians.\n"
-     "    dihedrals (ndarray): (M,) float64 dihedral angles in radians.\n"
-     "    n_atoms (int): Total number of atoms.\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float64 Cartesian coordinates.\n"},
     {"_build_bond_graph", py_build_bond_graph, METH_VARARGS,
      "Build molecular bond graph from polymer arrays.\n\n"
      "Args:\n"
@@ -790,17 +780,6 @@ static PyMethodDef methods[] = {
      "    grad_dihedrals (ndarray): (M,) float32 upstream gradients.\n\n"
      "Returns:\n"
      "    ndarray: (N, 3) float32 gradients for coordinates.\n"},
-    {"_nerf_reconstruct_backward", py_nerf_reconstruct_backward, METH_VARARGS,
-     "Backward pass for NERF reconstruction.\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
-     "    distances (ndarray): (M,) float32 bond lengths.\n"
-     "    angles (ndarray): (M,) float32 bond angles.\n"
-     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
-     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n\n"
-     "Returns:\n"
-     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
     {"_find_connected_components", py_find_connected_components, METH_VARARGS,
      "Find connected components in CSR graph.\n\n"
      "Args:\n"
@@ -809,32 +788,6 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (roots, sizes, n_components).\n"},
-    {"_nerf_reconstruct_leveled", py_nerf_reconstruct_leveled, METH_VARARGS,
-     "Level-parallel NERF reconstruction using OpenMP.\n\n"
-     "Processes atoms level-by-level where all atoms at the same BFS level\n"
-     "can be placed in parallel. Requires Z-matrix to be sorted by level.\n\n"
-     "Args:\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
-     "    distances (ndarray): (M,) float32 bond lengths.\n"
-     "    angles (ndarray): (M,) float32 bond angles in radians.\n"
-     "    dihedrals (ndarray): (M,) float32 dihedral angles in radians.\n"
-     "    n_atoms (int): Total number of atoms.\n"
-     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float32 Cartesian coordinates.\n"},
-    {"_nerf_reconstruct_backward_leveled", py_nerf_reconstruct_backward_leveled, METH_VARARGS,
-     "Level-parallel backward pass for NERF reconstruction.\n\n"
-     "Processes levels in reverse order. Uses atomic adds for grad_coords.\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
-     "    distances (ndarray): (M,) float32 bond lengths.\n"
-     "    angles (ndarray): (M,) float32 bond angles.\n"
-     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
-     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n"
-     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n\n"
-     "Returns:\n"
-     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
     {"_nerf_reconstruct_leveled_anchored", py_nerf_reconstruct_leveled_anchored, METH_VARARGS,
      "Level-parallel NERF reconstruction with anchor coordinates.\n\n"
      "Places atoms in frame defined by anchor coordinates instead of canonical frame.\n"

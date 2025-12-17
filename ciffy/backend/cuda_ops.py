@@ -21,48 +21,26 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HAS_CUDA_EXTENSION",
-    "HAS_LEVELED_NERF",
     "HAS_ANCHORED_NERF",
     "is_cuda_available",
     "cuda_cartesian_to_internal",
     "cuda_cartesian_to_internal_backward",
-    "cuda_nerf_reconstruct",
-    "cuda_nerf_reconstruct_backward",
-    "cuda_nerf_reconstruct_leveled",
-    "cuda_nerf_reconstruct_backward_leveled",
     "cuda_nerf_reconstruct_leveled_anchored",
     "cuda_nerf_reconstruct_backward_leveled_anchored",
 ]
 
 
-# Try importing CUDA extension
+# Try importing CUDA extension (cartesian_to_internal ops)
 try:
     from .._cuda import (
         cartesian_to_internal as _cuda_cartesian_to_internal,
         cartesian_to_internal_backward as _cuda_cartesian_to_internal_backward,
-        nerf_reconstruct as _cuda_nerf_reconstruct,
-        nerf_reconstruct_backward as _cuda_nerf_reconstruct_backward,
     )
     HAS_CUDA_EXTENSION = True
 except ImportError:
     HAS_CUDA_EXTENSION = False
     _cuda_cartesian_to_internal = None
     _cuda_cartesian_to_internal_backward = None
-    _cuda_nerf_reconstruct = None
-    _cuda_nerf_reconstruct_backward = None
-
-# Try importing leveled NERF (level-parallel kernel)
-# This is separate as it may not be available in all builds
-try:
-    from .._cuda import (
-        nerf_reconstruct_leveled as _cuda_nerf_reconstruct_leveled,
-        nerf_reconstruct_backward_leveled as _cuda_nerf_reconstruct_backward_leveled,
-    )
-    HAS_LEVELED_NERF = True
-except (ImportError, AttributeError):
-    HAS_LEVELED_NERF = False
-    _cuda_nerf_reconstruct_leveled = None
-    _cuda_nerf_reconstruct_backward_leveled = None
 
 # Try importing anchored NERF (places atoms in reference frame from anchors)
 try:
@@ -141,127 +119,6 @@ def cuda_cartesian_to_internal_backward(
 
     return _cuda_cartesian_to_internal_backward(
         coords, indices, internal, grad_internal
-    )
-
-
-def cuda_nerf_reconstruct(
-    coords: "torch.Tensor",
-    indices: "torch.Tensor",
-    internal: "torch.Tensor",
-) -> "torch.Tensor":
-    """
-    GPU: NERF reconstruction.
-
-    Args:
-        coords: (N, 3) float32 CUDA tensor (will be modified in-place).
-        indices: (M, 4) int64 CUDA tensor.
-        internal: (M, 3) float32 CUDA tensor.
-
-    Returns:
-        coords tensor (modified in-place).
-    """
-    if not HAS_CUDA_EXTENSION:
-        raise RuntimeError("CUDA extension not available")
-
-    return _cuda_nerf_reconstruct(coords, indices, internal)
-
-
-def cuda_nerf_reconstruct_backward(
-    coords: "torch.Tensor",
-    indices: "torch.Tensor",
-    internal: "torch.Tensor",
-    grad_coords: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor"]:
-    """
-    GPU: Backward pass for NERF reconstruction.
-
-    Args:
-        coords: (N, 3) float32 CUDA tensor.
-        indices: (M, 4) int64 CUDA tensor.
-        internal: (M, 3) float32 CUDA tensor.
-        grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
-
-    Returns:
-        Tuple of (grad_coords_accum, grad_internal).
-    """
-    if not HAS_CUDA_EXTENSION:
-        raise RuntimeError("CUDA extension not available")
-
-    return _cuda_nerf_reconstruct_backward(
-        coords, indices, internal, grad_coords
-    )
-
-
-def cuda_nerf_reconstruct_leveled(
-    coords: "torch.Tensor",
-    indices: "torch.Tensor",
-    internal: "torch.Tensor",
-    level_offsets: "torch.Tensor",
-) -> "torch.Tensor":
-    """
-    GPU: Level-parallel NERF reconstruction.
-
-    Processes atoms at the same BFS level in parallel, with synchronization
-    between levels. This reduces kernel launches from O(atoms) to O(levels),
-    typically ~1000x fewer launches for proteins (e.g., 64 levels vs 100k atoms).
-
-    Args:
-        coords: (N, 3) float32 CUDA tensor (will be modified in-place).
-        indices: (M, 4) int64 CUDA tensor.
-        internal: (M, 3) float32 CUDA tensor.
-        level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
-            Level i's entries span indices[level_offsets[i]:level_offsets[i+1]].
-
-    Returns:
-        coords tensor (modified in-place).
-
-    Raises:
-        RuntimeError: If leveled NERF CUDA kernel is not available.
-    """
-    if not HAS_LEVELED_NERF:
-        raise RuntimeError(
-            "Leveled NERF CUDA kernel not available. "
-            "Rebuild with CUDA support."
-        )
-
-    return _cuda_nerf_reconstruct_leveled(
-        coords, indices, internal, level_offsets
-    )
-
-
-def cuda_nerf_reconstruct_backward_leveled(
-    coords: "torch.Tensor",
-    indices: "torch.Tensor",
-    internal: "torch.Tensor",
-    grad_coords: "torch.Tensor",
-    level_offsets: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor"]:
-    """
-    GPU: Backward pass for level-parallel NERF reconstruction.
-
-    Processes levels in reverse order for correct gradient flow.
-
-    Args:
-        coords: (N, 3) float32 CUDA tensor.
-        indices: (M, 4) int64 CUDA tensor.
-        internal: (M, 3) float32 CUDA tensor.
-        grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
-        level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
-
-    Returns:
-        Tuple of (grad_coords_accum, grad_internal).
-
-    Raises:
-        RuntimeError: If leveled NERF CUDA kernel is not available.
-    """
-    if not HAS_LEVELED_NERF:
-        raise RuntimeError(
-            "Leveled NERF CUDA kernel not available. "
-            "Rebuild with CUDA support."
-        )
-
-    return _cuda_nerf_reconstruct_backward_leveled(
-        coords, indices, internal, grad_coords, level_offsets
     )
 
 

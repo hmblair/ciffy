@@ -12,12 +12,20 @@ Usage:
 
 import glob
 import os
-import time
+import sys
 import warnings
+
 import numpy as np
 
 # Suppress deprecation warnings during benchmarking
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="ciffy")
+
+# Handle both direct execution and module import
+try:
+    from .timing import Timer, TimingResult, DEFAULT_RUNS
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    from timing import Timer, TimingResult, DEFAULT_RUNS
 
 # Get test directory (parent of profiling/)
 TEST_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -30,7 +38,7 @@ TEST_FILES = [
 ]
 
 # Number of iterations for benchmarking
-BENCHMARK_RUNS = 10
+BENCHMARK_RUNS = DEFAULT_RUNS
 
 
 def _bio_get_coords(iden: str, file: str) -> np.ndarray:
@@ -56,21 +64,6 @@ def _biotite_load(file: str):
     return load_structure(file)
 
 
-def _benchmark(func, runs: int = BENCHMARK_RUNS) -> tuple[float, float]:
-    """
-    Run a function multiple times and return timing statistics.
-
-    Returns:
-        Tuple of (mean_time, std_time) in seconds.
-    """
-    times = []
-    for _ in range(runs):
-        start = time.perf_counter()
-        func()
-        elapsed = time.perf_counter() - start
-        times.append(elapsed)
-
-    return np.mean(times), np.std(times)
 
 
 def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
@@ -112,29 +105,19 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
         except ImportError:
             has_biotite = False
 
-    # Equal warmup for all: 3 runs each to stabilize file cache and JIT
-    for _ in range(3):
-        load_ciffy()
-    if has_biopython:
-        for _ in range(3):
-            load_biopython()
-    if has_biotite:
-        for _ in range(3):
-            load_biotite()
-
-    # Benchmark each (file is now equally cached for all)
-    mean, std = _benchmark(load_ciffy, runs)
-    results["ciffy"] = {"mean": mean, "std": std}
+    # Benchmark each (Timer.benchmark handles warmup internally)
+    result = Timer.benchmark(load_ciffy, runs=runs)
+    results["ciffy"] = result.to_dict()
 
     if has_biopython:
-        mean, std = _benchmark(load_biopython, runs)
-        results["biopython"] = {"mean": mean, "std": std}
+        result = Timer.benchmark(load_biopython, runs=runs)
+        results["biopython"] = result.to_dict()
     else:
         results["biopython"] = None
 
     if has_biotite:
-        mean, std = _benchmark(load_biotite, runs)
-        results["biotite"] = {"mean": mean, "std": std}
+        result = Timer.benchmark(load_biotite, runs=runs)
+        results["biotite"] = result.to_dict()
     else:
         results["biotite"] = None
 
@@ -284,15 +267,14 @@ def benchmark_dataset_scan(directory: str, num_workers_list: list[int],
         num_items = 0
 
         for _ in range(runs):
-            start = time.perf_counter()
-            dataset = PolymerDataset(directory, scale=Scale.CHAIN, num_workers=num_workers)
-            elapsed = time.perf_counter() - start
-            times.append(elapsed)
+            with Timer() as t:
+                dataset = PolymerDataset(directory, scale=Scale.CHAIN, num_workers=num_workers)
+            times.append(t.elapsed)
             num_items = len(dataset)
 
         results[num_workers] = {
-            "mean": np.mean(times),
-            "std": np.std(times),
+            "mean": float(np.mean(times)),
+            "std": float(np.std(times)),
             "items": num_items,
         }
 

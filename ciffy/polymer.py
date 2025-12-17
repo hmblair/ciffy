@@ -1581,6 +1581,42 @@ class Polymer:
         """
         return self.to("cpu")
 
+    def detach(self: Polymer) -> Polymer:
+        """
+        Detach all tensors from their computation graphs (torch backend only).
+
+        This is useful after calling `backward()` on a computation that used
+        this polymer's coordinates or internal coordinates. After backward(),
+        the cached tensors retain grad_fn pointers to freed computation graphs.
+        Calling detach() clears these pointers, allowing the polymer to be
+        reused for new gradient computations.
+
+        Returns:
+            Self, for method chaining.
+
+        Example:
+            >>> # Compute gradients through to_internal
+            >>> coords = polymer.coordinates.clone().requires_grad_(True)
+            >>> polymer.coordinates = coords
+            >>> loss = polymer.dihedrals.sum()
+            >>> loss.backward()
+            >>>
+            >>> # Detach before next computation
+            >>> polymer.detach()
+            >>>
+            >>> # Now safe to compute new gradients through to_cartesian
+            >>> dihedrals = polymer.dihedrals.detach().clone().requires_grad_(True)
+            >>> polymer.dihedrals = dihedrals
+            >>> new_loss = polymer.coordinates.sum()
+            >>> new_loss.backward()
+
+        Note:
+            For NumPy arrays, this is a no-op since NumPy doesn't have
+            computation graphs.
+        """
+        self._coord_manager.detach()
+        return self
+
     # ─────────────────────────────────────────────────────────────────────────
     # I/O
     # ─────────────────────────────────────────────────────────────────────────

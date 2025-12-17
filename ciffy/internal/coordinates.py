@@ -427,10 +427,23 @@ class CoordinateManager:
 
         # NERF reconstruction (places each chain root at origin)
         # Pass level_offsets for parallel CUDA reconstruction when available
+        #
+        # Detach distances/angles if they came from a previous cartesian_to_internal
+        # call with requires_grad. This prevents errors when:
+        # 1. User did to_internal with grad-enabled coords, called backward()
+        # 2. User now does to_cartesian with grad-enabled dihedrals
+        # The old distances/angles graph was freed, so we must detach them.
+        # Gradients for to_cartesian should flow through dihedrals only anyway.
+        distances = self._distances
+        angles = self._angles
+        if is_torch(distances) and distances.requires_grad:
+            distances = distances.detach()
+            angles = angles.detach()
+
         coords = nerf_reconstruct(
             zmatrix_indices,
-            self._distances,
-            self._angles,
+            distances,
+            angles,
             self._dihedrals,
             n_atoms=n_atoms,
             level_offsets=self._zmatrix.level_offsets,
@@ -795,6 +808,57 @@ class CoordinateManager:
         new_manager._n_atoms = self._n_atoms
 
         return new_manager
+
+    def detach(self) -> "CoordinateManager":
+        """
+        Detach all tensors from their computation graphs (PyTorch only).
+
+        This is useful after calling `backward()` on a computation that used
+        this manager's coordinates or internal coordinates. After backward(),
+        the cached tensors retain grad_fn pointers to freed computation graphs.
+        Calling detach() clears these pointers, allowing the manager to be
+        reused for new gradient computations.
+
+        Returns:
+            Self, for method chaining.
+
+        Example:
+            >>> # Compute gradients through to_internal
+            >>> coords = polymer.coordinates.clone().requires_grad_(True)
+            >>> polymer.coordinates = coords
+            >>> loss = polymer.dihedrals.sum()
+            >>> loss.backward()
+            >>>
+            >>> # Detach before next computation
+            >>> polymer.detach()
+            >>>
+            >>> # Now safe to compute new gradients
+            >>> dihedrals = polymer.dihedrals.detach().clone().requires_grad_(True)
+            >>> polymer.dihedrals = dihedrals
+            >>> new_loss = polymer.coordinates.sum()
+            >>> new_loss.backward()
+
+        Note:
+            For NumPy arrays, this is a no-op since NumPy doesn't have
+            computation graphs.
+        """
+        if self._coordinates is not None and is_torch(self._coordinates):
+            if self._coordinates.requires_grad:
+                self._coordinates = self._coordinates.detach()
+
+        if self._distances is not None and is_torch(self._distances):
+            if self._distances.requires_grad:
+                self._distances = self._distances.detach()
+
+        if self._angles is not None and is_torch(self._angles):
+            if self._angles.requires_grad:
+                self._angles = self._angles.detach()
+
+        if self._dihedrals is not None and is_torch(self._dihedrals):
+            if self._dihedrals.requires_grad:
+                self._dihedrals = self._dihedrals.detach()
+
+        return self
 
     # ─────────────────────────────────────────────────────────────────────
     # Slicing

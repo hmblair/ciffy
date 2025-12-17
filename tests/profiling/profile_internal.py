@@ -1,8 +1,8 @@
 """
 Performance profiling for internal coordinate conversions.
 
-Benchmarks conversion between Cartesian and internal coordinates
-(Z-matrix representation) on CPU and any available GPU.
+Benchmarks forward and backward passes for conversion between Cartesian
+and internal coordinates (Z-matrix representation) on CPU and GPU.
 
 Usage:
     python tests/profiling/profile_internal.py
@@ -11,68 +11,227 @@ Usage:
 """
 
 import os
-import time
+import sys
 import warnings
-import numpy as np
+from dataclasses import dataclass
+from typing import Callable
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# Handle both direct execution and module import
+try:
+    from .timing import (
+        Timer,
+        TimingResult,
+        get_sync_fn,
+        get_available_devices,
+        DEFAULT_RUNS,
+    )
+except ImportError:
+    # Add parent directory to path for direct execution
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    from timing import (
+        Timer,
+        TimingResult,
+        get_sync_fn,
+        get_available_devices,
+        DEFAULT_RUNS,
+    )
 
 # Get test data directory
 TEST_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 DATA_DIR = os.path.join(TEST_DIR, "data")
 
 # Default benchmark parameters
-WARMUP_RUNS = 3
-BENCHMARK_RUNS = 10
+BENCHMARK_RUNS = DEFAULT_RUNS
 
 
-def get_available_devices() -> list[str]:
+@dataclass
+class BenchmarkResult:
+    """Results for a single operation (forward + optional backward)."""
+    name: str
+    forward: TimingResult
+    backward: TimingResult | None = None
+
+
+# =============================================================================
+# Benchmark Functions
+# =============================================================================
+
+def benchmark_to_internal(
+    polymer,
+    original_coords,
+    sync: Callable[[], None],
+    runs: int,
+    include_backward: bool = True,
+) -> BenchmarkResult:
     """
-    Get list of available devices for benchmarking.
+    Benchmark Cartesian -> Internal conversion (forward and backward).
+
+    Args:
+        polymer: Polymer object.
+        original_coords: Original coordinates tensor.
+        sync: Device synchronization function.
+        runs: Number of benchmark runs.
+        include_backward: Whether to benchmark backward pass.
 
     Returns:
-        List of device strings (e.g., ['cpu', 'cuda', 'mps']).
+        BenchmarkResult with forward and optionally backward timings.
     """
-    devices = ["cpu"]
+    import torch
 
-    try:
-        import torch
+    # Forward pass benchmark
+    def forward():
+        polymer.coordinates = original_coords.clone()
+        return polymer.dihedrals
 
-        if torch.cuda.is_available():
-            devices.append("cuda")
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            devices.append("mps")
-    except ImportError:
-        pass
+    forward_result = Timer.benchmark(forward, sync=sync, runs=runs)
 
-    return devices
+    # Backward pass benchmark (if requested)
+    backward_result = None
+    if include_backward:
+        # Measure forward+backward together, then subtract forward time
+        # This avoids graph caching issues
+        def forward_backward():
+            coords = original_coords.clone().requires_grad_(True)
+            polymer.coordinates = coords
+            dihedrals = polymer.dihedrals
+            loss = dihedrals.sum()
+            loss.backward()
+            return coords.grad
+
+        fwd_bwd_result = Timer.benchmark(forward_backward, sync=sync, runs=runs)
+
+        # Backward time = total - forward
+        backward_result = TimingResult(
+            mean=max(0, fwd_bwd_result.mean - forward_result.mean),
+            std=(fwd_bwd_result.std**2 + forward_result.std**2)**0.5,
+            min=max(0, fwd_bwd_result.min - forward_result.max),
+            max=fwd_bwd_result.max - forward_result.min,
+            runs=runs,
+        )
+
+    return BenchmarkResult("to_internal", forward_result, backward_result)
 
 
-def _benchmark(func, warmup: int = WARMUP_RUNS, runs: int = BENCHMARK_RUNS) -> dict:
+def benchmark_to_cartesian(
+    polymer,
+    original_coords,
+    sync: Callable[[], None],
+    runs: int,
+    include_backward: bool = True,
+) -> BenchmarkResult:
     """
-    Run a function multiple times and return timing statistics.
+    Benchmark Internal -> Cartesian conversion (forward and backward).
+
+    Args:
+        polymer: Polymer object.
+        original_coords: Original coordinates (to reset state between runs).
+        sync: Device synchronization function.
+        runs: Number of benchmark runs.
+        include_backward: Whether to benchmark backward pass.
 
     Returns:
-        Dict with mean, std, min, max times in seconds.
+        BenchmarkResult with forward and optionally backward timings.
     """
-    # Warmup
-    for _ in range(warmup):
-        func()
+    import torch
 
-    # Benchmark
-    times = []
-    for _ in range(runs):
-        start = time.perf_counter()
-        func()
-        elapsed = time.perf_counter() - start
-        times.append(elapsed)
+    # Get base internal coordinates (all three are needed for reconstruction)
+    # Use .detach() to ensure no orphaned grad_fn from previous computations
+    base_distances = polymer.distances.detach().clone()
+    base_angles = polymer.angles.detach().clone()
+    base_dihedrals = polymer.dihedrals.detach().clone()
 
-    return {
-        "mean": np.mean(times),
-        "std": np.std(times),
-        "min": np.min(times),
-        "max": np.max(times),
-    }
+    # Forward pass benchmark: set internal coords then get cartesian
+    def forward():
+        # Setting dihedrals marks cartesian as dirty; accessing coordinates triggers NERF
+        polymer.dihedrals = base_dihedrals.clone()
+        return polymer.coordinates
+
+    forward_result = Timer.benchmark(forward, sync=sync, runs=runs)
+
+    # Backward pass benchmark (if requested)
+    backward_result = None
+    if include_backward:
+        # Measure forward+backward together, then subtract forward time
+        def forward_backward():
+            # detach() ensures no connection to previous computation graphs
+            dihedrals = base_dihedrals.detach().clone().requires_grad_(True)
+            polymer.dihedrals = dihedrals
+            coords = polymer.coordinates
+            loss = coords.sum()
+            loss.backward()
+            return dihedrals.grad
+
+        fwd_bwd_result = Timer.benchmark(forward_backward, sync=sync, runs=runs)
+
+        # Backward time = total - forward
+        backward_result = TimingResult(
+            mean=max(0, fwd_bwd_result.mean - forward_result.mean),
+            std=(fwd_bwd_result.std**2 + forward_result.std**2)**0.5,
+            min=max(0, fwd_bwd_result.min - forward_result.max),
+            max=fwd_bwd_result.max - forward_result.min,
+            runs=runs,
+        )
+
+    return BenchmarkResult("to_cartesian", forward_result, backward_result)
+
+
+def benchmark_round_trip(
+    polymer,
+    original_coords,
+    sync: Callable[[], None],
+    runs: int,
+    include_backward: bool = True,
+) -> BenchmarkResult:
+    """
+    Benchmark full round-trip: Cartesian -> Internal -> Cartesian.
+
+    Args:
+        polymer: Polymer object.
+        original_coords: Original coordinates tensor.
+        sync: Device synchronization function.
+        runs: Number of benchmark runs.
+        include_backward: Whether to benchmark backward pass.
+
+    Returns:
+        BenchmarkResult with forward and optionally backward timings.
+    """
+    def forward():
+        # Cartesian -> Internal
+        polymer.coordinates = original_coords.clone()
+        dihedrals = polymer.dihedrals.clone()
+        # Internal -> Cartesian
+        polymer.dihedrals = dihedrals
+        return polymer.coordinates
+
+    forward_result = Timer.benchmark(forward, sync=sync, runs=runs)
+
+    # Backward pass benchmark (if requested)
+    backward_result = None
+    if include_backward:
+        def forward_backward():
+            coords = original_coords.detach().clone().requires_grad_(True)
+            polymer.coordinates = coords          # Dirty internal
+            dihedrals = polymer.dihedrals         # Recompute (grad flows from coords)
+            polymer.dihedrals = dihedrals         # Dirty cartesian
+            new_coords = polymer.coordinates      # NERF (grad flows from dihedrals)
+            loss = new_coords.sum()
+            loss.backward()                       # Flows: NERF → cartesian_to_internal
+            return coords.grad
+
+        fwd_bwd_result = Timer.benchmark(forward_backward, sync=sync, runs=runs)
+
+        # Backward time = total - forward
+        backward_result = TimingResult(
+            mean=max(0, fwd_bwd_result.mean - forward_result.mean),
+            std=(fwd_bwd_result.std**2 + forward_result.std**2)**0.5,
+            min=max(0, fwd_bwd_result.min - forward_result.max),
+            max=fwd_bwd_result.max - forward_result.min,
+            runs=runs,
+        )
+
+    return BenchmarkResult("round_trip", forward_result, backward_result)
 
 
 def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> dict:
@@ -105,12 +264,7 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
         "chains": polymer.size(ciffy.Scale.CHAIN),
     }
 
-    def sync():
-        """Synchronize device if needed."""
-        if device == "cuda":
-            torch.cuda.synchronize()
-        elif device == "mps":
-            torch.mps.synchronize()
+    sync = get_sync_fn(device)
 
     # Initialize Z-matrix by triggering first computation
     _ = polymer.dihedrals
@@ -126,54 +280,41 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
     )
     results["orphan_atoms"] = orphan_count
 
-    # Cache original coordinates for dirtying
+    # Cache original coordinates
     original_coords = polymer.coordinates.clone()
 
-    # Benchmark Cartesian -> Internal (dirty coords, then access dihedrals)
-    def to_internal():
-        sync()
-        # Dirty coordinates to force recomputation of internal coords
-        polymer.coordinates = original_coords.clone()
-        result = polymer.dihedrals
-        sync()
-        return result
+    # Run benchmarks
+    results["to_internal"] = benchmark_to_internal(
+        polymer, original_coords, sync, runs, include_backward=True
+    )
 
-    results["to_internal"] = _benchmark(to_internal, runs=runs)
+    # Detach cached tensors after to_internal backward to prevent orphaned grad_fn
+    # from affecting to_cartesian benchmark
+    polymer.detach()
 
-    # Benchmark Internal -> Cartesian (set dihedrals, then access coordinates)
-    def to_cartesian():
-        sync()
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-        coords = polymer.coordinates
-        sync()
-        return coords
+    results["to_cartesian"] = benchmark_to_cartesian(
+        polymer, original_coords, sync, runs, include_backward=True
+    )
 
-    results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
+    # Detach before round_trip benchmark
+    polymer.detach()
 
-    # Benchmark round-trip (dirty coords -> internal -> cartesian)
-    def round_trip():
-        sync()
-        # Dirty coordinates
-        polymer.coordinates = original_coords.clone()
-        # Get internal coords
-        dihedrals = polymer.dihedrals.clone()
-        # Set internal coords to trigger reconstruction
-        polymer.dihedrals = dihedrals
-        result = polymer.coordinates
-        sync()
-        return result
-
-    results["round_trip"] = _benchmark(round_trip, runs=runs)
+    results["round_trip"] = benchmark_round_trip(
+        polymer, original_coords, sync, runs, include_backward=True
+    )
 
     return results
 
 
+# =============================================================================
+# Output Formatting
+# =============================================================================
+
 def print_results(results: dict) -> None:
     """Pretty-print benchmark results."""
-    print(f"\n{'='*70}")
+    print(f"\n{'='*80}")
     print(f"Structure: {results['file']} | Device: {results['device']}")
-    print(f"{'='*70}")
+    print(f"{'='*80}")
     print(f"  Atoms: {results['atoms']:,} | Residues: {results.get('residues', '?'):,} | "
           f"Chains: {results.get('chains', '?')}")
     if 'zmatrix_size' in results:
@@ -182,24 +323,39 @@ def print_results(results: dict) -> None:
     print()
 
     # Print timing table
-    print(f"  {'Operation':<20} {'Mean':>12} {'Std':>12} {'Min':>12} {'Max':>12}")
-    print(f"  {'-'*20} {'-'*12} {'-'*12} {'-'*12} {'-'*12}")
+    print(f"  {'Operation':<16} {'Forward':>14} {'Backward':>14}")
+    print(f"  {'-'*16} {'-'*14} {'-'*14}")
 
-    for op in ["to_internal", "to_cartesian", "round_trip"]:
-        if op in results:
-            t = results[op]
-            print(f"  {op:<20} {t['mean']*1000:>10.2f}ms {t['std']*1000:>10.2f}ms "
-                  f"{t['min']*1000:>10.2f}ms {t['max']*1000:>10.2f}ms")
+    for op_name in ["to_internal", "to_cartesian", "round_trip"]:
+        if op_name not in results:
+            continue
+        bench: BenchmarkResult = results[op_name]
+        fwd_str = f"{bench.forward.mean*1000:>10.2f}ms"
+        if bench.backward:
+            bwd_str = f"{bench.backward.mean*1000:>10.2f}ms"
+        else:
+            bwd_str = f"{'N/A':>12}"
+        print(f"  {bench.name:<16} {fwd_str:>14} {bwd_str:>14}")
 
     # Print throughput
     if "to_internal" in results and results["atoms"] > 0:
         atoms = results["atoms"]
-        to_int_ms = results["to_internal"]["mean"] * 1000
-        to_cart_ms = results["to_cartesian"]["mean"] * 1000
         print()
-        print(f"  Throughput:")
-        print(f"    to_internal:   {atoms / to_int_ms * 1000:,.0f} atoms/sec")
-        print(f"    to_cartesian:  {atoms / to_cart_ms * 1000:,.0f} atoms/sec")
+        print(f"  Throughput (forward):")
+        for op_name in ["to_internal", "to_cartesian"]:
+            if op_name in results:
+                bench: BenchmarkResult = results[op_name]
+                ms = bench.forward.mean * 1000
+                print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
+
+        # Backward throughput
+        print(f"  Throughput (backward):")
+        for op_name in ["to_internal", "to_cartesian"]:
+            if op_name in results:
+                bench: BenchmarkResult = results[op_name]
+                if bench.backward:
+                    ms = bench.backward.mean * 1000
+                    print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
 
 
 def print_device_comparison(all_results: list[dict]) -> None:
@@ -207,29 +363,49 @@ def print_device_comparison(all_results: list[dict]) -> None:
     if len(all_results) < 2:
         return
 
-    print(f"\n{'='*70}")
-    print("Device Comparison")
-    print(f"{'='*70}")
+    print(f"\n{'='*80}")
+    print("Device Comparison (Forward Pass)")
+    print(f"{'='*80}")
+
+    devices = [r["device"] for r in all_results]
 
     # Header
-    devices = [r["device"] for r in all_results]
-    header = f"  {'Operation':<20}"
+    header = f"  {'Operation':<16}"
     for device in devices:
         header += f" {device:>12}"
     print(header)
 
-    divider = f"  {'-'*20}"
+    divider = f"  {'-'*16}"
     for _ in devices:
         divider += f" {'-'*12}"
     print(divider)
 
-    # Timing rows
-    for op in ["to_internal", "to_cartesian", "round_trip"]:
-        row = f"  {op:<20}"
+    # Forward pass rows
+    for op_name in ["to_internal", "to_cartesian", "round_trip"]:
+        row = f"  {op_name:<16}"
         for r in all_results:
-            if op in r:
-                ms = r[op]["mean"] * 1000
+            if op_name in r:
+                bench: BenchmarkResult = r[op_name]
+                ms = bench.forward.mean * 1000
                 row += f" {ms:>10.2f}ms"
+            else:
+                row += f" {'N/A':>12}"
+        print(row)
+
+    # Backward pass comparison
+    print()
+    print("Backward Pass:")
+    print(divider)
+    for op_name in ["to_internal", "to_cartesian", "round_trip"]:
+        row = f"  {op_name:<16}"
+        for r in all_results:
+            if op_name in r:
+                bench: BenchmarkResult = r[op_name]
+                if bench.backward:
+                    ms = bench.backward.mean * 1000
+                    row += f" {ms:>10.2f}ms"
+                else:
+                    row += f" {'N/A':>12}"
             else:
                 row += f" {'N/A':>12}"
         print(row)
@@ -242,13 +418,29 @@ def print_device_comparison(all_results: list[dict]) -> None:
         for r in all_results:
             if r["device"] == "cpu":
                 continue
-            for op in ["to_internal", "to_cartesian"]:
-                if op in r and op in cpu_results:
-                    cpu_ms = cpu_results[op]["mean"]
-                    device_ms = r[op]["mean"]
-                    ratio = cpu_ms / device_ms if device_ms > 0 else 0
-                    faster = "faster" if ratio > 1 else "slower"
-                    print(f"    {r['device']} {op}: {abs(ratio):.2f}x {faster}")
+            print(f"    {r['device']}:")
+            for op_name in ["to_internal", "to_cartesian", "round_trip"]:
+                if op_name not in r or op_name not in cpu_results:
+                    continue
+                cpu_bench: BenchmarkResult = cpu_results[op_name]
+                dev_bench: BenchmarkResult = r[op_name]
+
+                # Forward speedup
+                cpu_fwd = cpu_bench.forward.mean
+                dev_fwd = dev_bench.forward.mean
+                ratio_fwd = cpu_fwd / dev_fwd if dev_fwd > 0 else 0
+                faster_fwd = "faster" if ratio_fwd > 1 else "slower"
+
+                # Backward speedup
+                if cpu_bench.backward and dev_bench.backward:
+                    cpu_bwd = cpu_bench.backward.mean
+                    dev_bwd = dev_bench.backward.mean
+                    ratio_bwd = cpu_bwd / dev_bwd if dev_bwd > 0 else 0
+                    faster_bwd = "faster" if ratio_bwd > 1 else "slower"
+                    print(f"      {op_name}: fwd {abs(ratio_fwd):.2f}x {faster_fwd}, "
+                          f"bwd {abs(ratio_bwd):.2f}x {faster_bwd}")
+                else:
+                    print(f"      {op_name}: fwd {abs(ratio_fwd):.2f}x {faster_fwd}")
 
 
 def get_test_file(name: str) -> str:
@@ -259,12 +451,16 @@ def get_test_file(name: str) -> str:
     return path
 
 
+# =============================================================================
+# Main
+# =============================================================================
+
 if __name__ == "__main__":
     import argparse
     import ciffy
 
     parser = argparse.ArgumentParser(
-        description="Benchmark internal coordinate conversions"
+        description="Benchmark internal coordinate conversions (forward and backward)"
     )
     parser.add_argument(
         "--structure", "-s", type=str, default="9MDS",
@@ -284,7 +480,7 @@ if __name__ == "__main__":
     devices = get_available_devices()
 
     print("Internal Coordinates Benchmark")
-    print("=" * 70)
+    print("=" * 80)
     print(f"ciffy version: {ciffy.__version__}")
     print(f"Benchmark runs: {args.runs}")
     print(f"Available devices: {', '.join(devices)}")
@@ -316,6 +512,8 @@ if __name__ == "__main__":
                 all_results.append(results)
             except Exception as e:
                 print(f"\nFailed to benchmark on {device}: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Print comparison if we have multiple devices
         if len(all_results) > 1:

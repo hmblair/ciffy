@@ -13,7 +13,6 @@ from tests.utils import get_test_cif, BACKENDS
 class TestEmptyPolymer:
     """Test operations on empty (0-atom) polymers."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_empty_polymer_is_empty(self, backend):
         """Empty polymer reports empty() as True."""
         import ciffy
@@ -24,7 +23,6 @@ class TestEmptyPolymer:
         assert empty.empty()
         assert empty.size() == 0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_empty_polymer_sizes(self, backend):
         """Empty polymer has zero counts at all scales."""
         import ciffy
@@ -37,7 +35,6 @@ class TestEmptyPolymer:
         assert empty.size(Scale.RESIDUE) == 0
         assert empty.size(Scale.CHAIN) == 0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_empty_polymer_coordinates_shape(self, backend):
         """Empty polymer has (0, 3) coordinate shape."""
         import ciffy
@@ -47,7 +44,6 @@ class TestEmptyPolymer:
 
         assert empty.coordinates.shape == (0, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_empty_polymer_repr(self, backend):
         """Empty polymer __repr__ doesn't crash."""
         import ciffy
@@ -58,7 +54,6 @@ class TestEmptyPolymer:
         repr_str = repr(empty)
         assert isinstance(repr_str, str)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_empty_polymer_str(self, backend):
         """Empty polymer str() returns empty string."""
         import ciffy
@@ -72,7 +67,6 @@ class TestEmptyPolymer:
 class TestSingleAtomPolymer:
     """Test operations on single-atom polymers."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_atom_not_empty(self, backend):
         """Single atom polymer is not empty."""
         import ciffy
@@ -83,7 +77,6 @@ class TestSingleAtomPolymer:
         assert not single.empty()
         assert single.size() == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_atom_coordinates(self, backend):
         """Single atom polymer has (1, 3) coordinates."""
         import ciffy
@@ -93,7 +86,6 @@ class TestSingleAtomPolymer:
 
         assert single.coordinates.shape == (1, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_atom_pairwise_distances(self, backend):
         """Single atom pairwise_distances returns 1x1 zero matrix."""
         import ciffy
@@ -107,7 +99,6 @@ class TestSingleAtomPolymer:
         dist_val = dists[0, 0].item() if hasattr(dists[0, 0], 'item') else dists[0, 0]
         assert dist_val == 0.0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_atom_knn_fails(self, backend):
         """Single atom knn raises ValueError (need at least 2 points)."""
         import ciffy
@@ -122,7 +113,6 @@ class TestSingleAtomPolymer:
 class TestSingleResiduePolymer:
     """Test operations on single-residue polymers."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_residue_size(self, backend):
         """Single residue polymer has correct residue count."""
         import ciffy
@@ -133,7 +123,6 @@ class TestSingleResiduePolymer:
         assert p.size(Scale.RESIDUE) == 1
         assert p.size(Scale.CHAIN) == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_residue_sequence(self, backend):
         """Single residue polymer has length-1 sequence."""
         import ciffy
@@ -142,7 +131,6 @@ class TestSingleResiduePolymer:
 
         assert len(p.sequence) == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_residue_reduce(self, backend):
         """Reduce to residue scale works on single residue."""
         import ciffy
@@ -153,7 +141,6 @@ class TestSingleResiduePolymer:
 
         assert result.shape == (1, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_residue_str(self, backend):
         """Single residue str() returns single character."""
         import ciffy
@@ -166,7 +153,6 @@ class TestSingleResiduePolymer:
 class TestSingleChainPolymer:
     """Test operations on single-chain polymers."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_chain_by_index(self, backend):
         """by_index(0) returns same structure on single chain."""
         import ciffy
@@ -176,7 +162,6 @@ class TestSingleChainPolymer:
 
         assert chain.size() == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_chain_chains_generator(self, backend):
         """chains() generator yields once for single chain."""
         import ciffy
@@ -186,7 +171,6 @@ class TestSingleChainPolymer:
 
         assert len(chains) == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_single_chain_out_of_bounds(self, backend):
         """by_index(1) raises IndexError on single chain."""
         import ciffy
@@ -200,7 +184,6 @@ class TestSingleChainPolymer:
 class TestPolyHeteroPartition:
     """Test poly() and hetero() partitioning."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_poly_on_all_polymer(self, backend):
         """poly() on all-polymer structure returns same size."""
         import ciffy
@@ -210,7 +193,6 @@ class TestPolyHeteroPartition:
 
         assert poly.size() == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_hetero_on_all_polymer(self, backend):
         """hetero() on all-polymer structure returns empty."""
         import ciffy
@@ -220,7 +202,6 @@ class TestPolyHeteroPartition:
 
         assert hetero.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_poly_hetero_sum(self, backend):
         """poly() + hetero() atom counts sum to total."""
         import ciffy
@@ -232,7 +213,6 @@ class TestPolyHeteroPartition:
 
         assert poly_count + hetero_count == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_poly_matches_polymer_count(self, backend):
         """poly() size matches polymer_count attribute."""
         import ciffy
@@ -245,7 +225,6 @@ class TestPolyHeteroPartition:
 class TestChainsGenerator:
     """Test chains() generator edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_chains_single_chain(self, backend):
         """chains() on single-chain polymer yields once."""
         import ciffy
@@ -256,7 +235,6 @@ class TestChainsGenerator:
         assert len(chains) == 1
         assert chains[0].size() == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_chains_multi_chain(self, backend):
         """chains() yields correct count on multi-chain."""
         import ciffy
@@ -267,7 +245,6 @@ class TestChainsGenerator:
 
         assert len(chains) == p.size(Scale.CHAIN)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_chains_with_filter_rna(self, backend):
         """chains(mol=RNA) yields only RNA chains."""
         import ciffy
@@ -282,7 +259,6 @@ class TestChainsGenerator:
         for chain in rna_chains:
             assert chain.istype(Molecule.RNA)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_chains_filter_no_match(self, backend):
         """chains() with non-matching filter yields nothing."""
         import ciffy
@@ -297,7 +273,6 @@ class TestChainsGenerator:
 class TestResolvedStrip:
     """Test resolved() and strip() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_resolved_all_resolved(self, backend):
         """resolved() on fully resolved structure returns all True."""
         import ciffy
@@ -310,7 +285,6 @@ class TestResolvedStrip:
         all_true = resolved.all() if hasattr(resolved, 'all') else np.all(resolved)
         assert all_true
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_strip_all_resolved(self, backend):
         """strip() on fully resolved structure returns same size."""
         import ciffy
@@ -501,7 +475,6 @@ class TestDeviceProperty:
 class TestIndexMethod:
     """Test the index(scale) method."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_residue_shape(self, backend):
         """index(RESIDUE) returns array with shape (num_atoms,)."""
         import ciffy
@@ -512,7 +485,6 @@ class TestIndexMethod:
 
         assert idx.shape == (p.size(),)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_residue_values(self, backend):
         """index(RESIDUE) returns values in [0, num_residues)."""
         import ciffy
@@ -526,7 +498,6 @@ class TestIndexMethod:
         assert idx_np.min() == 0
         assert idx_np.max() == p.size(Scale.RESIDUE) - 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_residue_unique_count(self, backend):
         """index(RESIDUE) has num_residues unique values."""
         import ciffy
@@ -538,7 +509,6 @@ class TestIndexMethod:
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert len(set(idx_np)) == p.size(Scale.RESIDUE)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_chain_single_chain(self, backend):
         """index(CHAIN) returns all zeros for single chain."""
         import ciffy
@@ -550,7 +520,6 @@ class TestIndexMethod:
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert (idx_np == 0).all()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_chain_multi_chain(self, backend):
         """index(CHAIN) returns correct indices for multi-chain."""
         import ciffy
@@ -564,7 +533,6 @@ class TestIndexMethod:
         assert idx_np.min() == 0
         assert idx_np.max() == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_molecule_all_zeros(self, backend):
         """index(MOLECULE) returns all zeros."""
         import ciffy
@@ -576,7 +544,6 @@ class TestIndexMethod:
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert (idx_np == 0).all()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_dtype(self, backend):
         """index() returns integer dtype."""
         import ciffy
@@ -591,7 +558,6 @@ class TestIndexMethod:
         else:
             assert idx.dtype == np.int64
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_index_consistency_with_sizes(self, backend):
         """index() is consistent with sizes()."""
         import ciffy

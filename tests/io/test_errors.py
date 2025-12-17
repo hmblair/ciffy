@@ -58,7 +58,6 @@ class TestLoadErrors:
         with pytest.raises(OSError):
             ciffy.load(str(tmp_path))
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_invalid_backend(self, backend):
         """load raises ValueError for invalid backend string."""
         import ciffy
@@ -133,7 +132,6 @@ class TestWriteErrors:
 class TestRoundTripEdgeCases:
     """Test round-trip (load -> save -> load) edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_single_residue(self, backend, tmp_path):
         """Round-trip preserves single-residue structure."""
         import ciffy
@@ -155,7 +153,6 @@ class TestRoundTripEdgeCases:
         assert reloaded.size(Scale.RESIDUE) == 1
         assert not reloaded.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_preserves_coordinates(self, backend, tmp_path):
         """Round-trip preserves coordinate values within tolerance."""
         import ciffy
@@ -172,7 +169,6 @@ class TestRoundTripEdgeCases:
 
         assert np.allclose(polymer_coords, reloaded_coords, atol=0.001)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_chain_count(self, backend, tmp_path):
         """Round-trip preserves chain count."""
         import ciffy

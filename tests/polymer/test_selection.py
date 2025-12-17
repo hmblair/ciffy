@@ -13,7 +13,6 @@ from tests.utils import get_test_cif, BACKENDS
 class TestByAtom:
     """Test by_atom() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_atom_nonexistent_index(self, backend):
         """by_atom with non-existent index returns empty polymer."""
         import ciffy
@@ -23,7 +22,6 @@ class TestByAtom:
 
         assert result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_atom_single_match(self, backend):
         """by_atom with valid index returns non-empty polymer."""
         import ciffy
@@ -35,7 +33,6 @@ class TestByAtom:
         result = p.by_atom(first_atom)
         assert not result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_atom_array_input(self, backend):
         """by_atom accepts array of indices."""
         import ciffy
@@ -49,7 +46,6 @@ class TestByAtom:
         assert isinstance(result, ciffy.Polymer)
         assert not result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_atom_negative_index(self, backend):
         """by_atom with negative index (unknown atoms)."""
         import ciffy
@@ -65,7 +61,6 @@ class TestByAtom:
 class TestByResidue:
     """Test by_residue() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_residue_nonexistent_index(self, backend):
         """by_residue with non-existent index returns empty polymer."""
         import ciffy
@@ -75,7 +70,6 @@ class TestByResidue:
 
         assert result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_residue_valid_index(self, backend):
         """by_residue with valid index returns matching residues."""
         import ciffy
@@ -88,7 +82,6 @@ class TestByResidue:
         # Should have atoms from adenosine residue
         assert result.size() < p.size()  # Only 1 of 4 residues
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_residue_array_input(self, backend):
         """by_residue accepts array of residue indices."""
         import ciffy
@@ -101,7 +94,6 @@ class TestByResidue:
         # Should return residues (non-empty result means selection worked)
         assert isinstance(result, ciffy.Polymer)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_residue_all_residues(self, backend):
         """by_residue with all types returns same polymer."""
         import ciffy
@@ -118,7 +110,6 @@ class TestByResidue:
 class TestByType:
     """Test by_type() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_type_no_match(self, backend):
         """by_type returns empty when no chains match."""
         import ciffy
@@ -129,7 +120,6 @@ class TestByType:
 
         assert result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_type_all_match(self, backend):
         """by_type on matching type returns full structure."""
         import ciffy
@@ -144,7 +134,6 @@ class TestByType:
         from ciffy import Scale
         assert result.size(Scale.CHAIN) == p.size(Scale.CHAIN)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_type_mixed_structure(self, backend):
         """by_type on mixed RNA+protein returns subset."""
         import ciffy
@@ -164,7 +153,6 @@ class TestByType:
 class TestByIndex:
     """Test by_index() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_index_first_chain(self, backend):
         """by_index(0) returns first chain."""
         import ciffy
@@ -176,7 +164,6 @@ class TestByIndex:
         assert not chain.empty()
         assert chain.size(Scale.CHAIN) == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_index_last_chain(self, backend):
         """by_index with last valid index works."""
         import ciffy
@@ -189,7 +176,6 @@ class TestByIndex:
         assert not chain.empty()
         assert chain.size(Scale.CHAIN) == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_index_out_of_bounds_positive(self, backend):
         """by_index raises IndexError for out-of-bounds positive index."""
         import ciffy
@@ -201,7 +187,6 @@ class TestByIndex:
         with pytest.raises(IndexError):
             p.by_index(invalid_idx)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_by_index_array_input(self, backend):
         """by_index accepts array of indices."""
         import ciffy
@@ -218,7 +203,6 @@ class TestByIndex:
 class TestMask:
     """Test mask() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_mask_single_index(self, backend):
         """mask with single index creates correct mask."""
         import ciffy
@@ -233,7 +217,6 @@ class TestMask:
 
         assert true_count == atoms_in_first_residue
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_mask_boundary_index(self, backend):
         """mask with last valid index works."""
         import ciffy
@@ -247,7 +230,6 @@ class TestMask:
 
         assert true_count > 0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_mask_chain_to_atom(self, backend):
         """mask from chain scale to atom scale."""
         import ciffy
@@ -269,7 +251,6 @@ class TestMask:
 class TestGetItem:
     """Test __getitem__ edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_slice_first_half(self, backend):
         """__getitem__ with slice [:n//2] returns first half."""
         import ciffy
@@ -280,7 +261,6 @@ class TestGetItem:
 
         assert result.size() == n // 2
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_slice_second_half(self, backend):
         """__getitem__ with slice [n//2:] returns second half."""
         import ciffy
@@ -291,7 +271,6 @@ class TestGetItem:
 
         assert result.size() == n - n // 2
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_slice_with_step(self, backend):
         """__getitem__ with slice [::2] returns every other atom."""
         import ciffy
@@ -303,7 +282,6 @@ class TestGetItem:
         expected_size = (n + 1) // 2
         assert result.size() == expected_size
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_negative_slice(self, backend):
         """__getitem__ with negative slice [-10:]."""
         import ciffy
@@ -315,7 +293,6 @@ class TestGetItem:
         expected_size = min(10, n)
         assert result.size() == expected_size
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_empty_slice(self, backend):
         """__getitem__ with empty slice [5:5] returns empty polymer."""
         import ciffy
@@ -325,7 +302,6 @@ class TestGetItem:
 
         assert result.empty()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_out_of_bounds_slice(self, backend):
         """__getitem__ with out-of-bounds slice is bounded."""
         import ciffy
@@ -337,7 +313,6 @@ class TestGetItem:
         # Python slice semantics: bounded to actual size
         assert result.size() == n
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_boolean_mask_all_true(self, backend):
         """__getitem__ with all-True mask returns same polymer."""
         import ciffy
@@ -354,7 +329,6 @@ class TestGetItem:
         result = p[mask]
         assert result.size() == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_getitem_boolean_mask_all_false(self, backend):
         """__getitem__ with all-False mask returns empty polymer."""
         import ciffy
@@ -374,7 +348,6 @@ class TestGetItem:
 class TestSpecializedSelections:
     """Test specialized selection methods (backbone, nucleobase, etc.)."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_backbone_selection(self, backend):
         """backbone() returns non-empty subset."""
         import ciffy
@@ -385,7 +358,6 @@ class TestSpecializedSelections:
         assert not backbone.empty()
         assert backbone.size() < p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_nucleobase_selection(self, backend):
         """nucleobase() returns non-empty subset for RNA."""
         import ciffy
@@ -397,7 +369,6 @@ class TestSpecializedSelections:
         assert not nucleobase.empty()
         assert nucleobase.size() < p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_phosphate_selection(self, backend):
         """phosphate() returns non-empty subset for RNA."""
         import ciffy
@@ -408,7 +379,6 @@ class TestSpecializedSelections:
         assert not phosphate.empty()
         assert phosphate.size() < p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_sidechain_selection(self, backend):
         """sidechain() returns subset for protein."""
         import ciffy

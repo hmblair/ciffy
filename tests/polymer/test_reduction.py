@@ -13,7 +13,6 @@ from tests.utils import get_test_cif, BACKENDS
 class TestReduce:
     """Test reduce() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_single_residue(self, backend):
         """reduce to residue scale on single-residue polymer."""
         import ciffy
@@ -24,7 +23,6 @@ class TestReduce:
 
         assert result.shape == (1, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_single_chain(self, backend):
         """reduce to chain scale on single-chain polymer."""
         import ciffy
@@ -35,7 +33,6 @@ class TestReduce:
 
         assert result.shape == (1, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_molecule_scale(self, backend):
         """reduce to molecule scale returns single result."""
         import ciffy
@@ -46,7 +43,6 @@ class TestReduce:
 
         assert result.shape == (1, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_sum_vs_mean(self, backend):
         """reduce SUM should be greater than MEAN for multi-atom residues."""
         import ciffy
@@ -65,7 +61,6 @@ class TestReduce:
         # (This is a sanity check, not a strict assertion)
         assert isinstance(mean, type(summed))
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_min_max(self, backend):
         """reduce MIN and MAX return values (and optionally indices)."""
         import ciffy
@@ -89,7 +84,6 @@ class TestReduce:
             assert min_val.shape[0] == p.size(Scale.CHAIN)
             assert max_val.shape[0] == p.size(Scale.CHAIN)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_reduce_excludes_hetero_at_residue_scale(self, backend):
         """reduce to RESIDUE scale excludes non-polymer atoms."""
         import ciffy
@@ -108,7 +102,6 @@ class TestReduce:
 class TestRReduce:
     """Test rreduce() (residue-level reduction) edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_rreduce_single_residue(self, backend):
         """rreduce on single-residue polymer."""
         import ciffy
@@ -121,7 +114,6 @@ class TestRReduce:
         result = p.rreduce(residue_feature, Scale.CHAIN, Reduction.MEAN)
         assert result.shape[0] == 1
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_rreduce_to_chain(self, backend):
         """rreduce per-residue features to chain scale."""
         import ciffy
@@ -144,7 +136,6 @@ class TestRReduce:
         actual_sum = result[0].item() if hasattr(result[0], 'item') else result[0]
         assert actual_sum == expected_sum
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_rreduce_min_max(self, backend):
         """rreduce with MIN and MAX reductions."""
         import ciffy
@@ -168,7 +159,6 @@ class TestRReduce:
 class TestExpand:
     """Test expand() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_expand_chain_to_atom(self, backend):
         """expand chain features to atom scale."""
         import ciffy
@@ -194,7 +184,6 @@ class TestExpand:
         last_row = np.asarray(expanded[-1])
         assert np.allclose(first_row, last_row)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_expand_residue_to_atom(self, backend):
         """expand residue features to atom scale."""
         import ciffy
@@ -214,7 +203,6 @@ class TestExpand:
 
         assert expanded.shape[0] == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_expand_chain_to_residue(self, backend):
         """expand chain features to residue scale."""
         import ciffy
@@ -233,7 +221,6 @@ class TestExpand:
 
         assert expanded.shape[0] == p.size(Scale.RESIDUE)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_expand_invalid_dest_chain(self, backend):
         """expand to CHAIN scale raises ValueError."""
         import ciffy
@@ -254,7 +241,6 @@ class TestExpand:
 class TestCount:
     """Test count() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_count_all_false_mask(self, backend):
         """count with all-False mask returns zeros."""
         import ciffy
@@ -274,7 +260,6 @@ class TestCount:
         all_zero = (counts == 0).all() if hasattr(counts, 'all') else np.all(counts == 0)
         assert all_zero
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_count_all_true_mask(self, backend):
         """count with all-True mask returns atoms per unit."""
         import ciffy
@@ -297,7 +282,6 @@ class TestCount:
 
         assert np.array_equal(counts_np, expected_np)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_count_at_chain_scale(self, backend):
         """count at chain scale."""
         import ciffy
@@ -320,7 +304,6 @@ class TestCount:
         total = counts.sum().item() if hasattr(counts.sum(), 'item') else counts.sum()
         assert total == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_count_partial_mask(self, backend):
         """count with partial mask returns correct counts."""
         import ciffy
@@ -348,7 +331,6 @@ class TestCount:
 class TestPer:
     """Test per() method edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_per_same_scale(self, backend):
         """per(scale, scale) returns ones."""
         import ciffy
@@ -362,7 +344,6 @@ class TestPer:
         assert all_ones
         assert len(result) == p.size(Scale.RESIDUE)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_per_atom_chain(self, backend):
         """per(ATOM, CHAIN) returns atoms per chain."""
         import ciffy
@@ -377,7 +358,6 @@ class TestPer:
         total = result[0].item() if hasattr(result[0], 'item') else result[0]
         assert total == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_per_residue_chain(self, backend):
         """per(RESIDUE, CHAIN) returns lengths."""
         import ciffy
@@ -392,7 +372,6 @@ class TestPer:
 
         assert np.array_equal(result_np, lengths_np)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_per_invalid_combination(self, backend):
         """per with invalid scale combination raises ValueError."""
         import ciffy

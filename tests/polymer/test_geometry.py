@@ -14,7 +14,6 @@ from tests.testing import get_tolerances
 class TestPairwiseDistances:
     """Test pairwise_distances() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_pairwise_single_atom(self, backend):
         """pairwise_distances with 1 atom returns 1x1 zero matrix."""
         import ciffy
@@ -28,7 +27,6 @@ class TestPairwiseDistances:
         val = dists[0, 0].item() if hasattr(dists[0, 0], 'item') else dists[0, 0]
         assert val == 0.0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_pairwise_two_atoms(self, backend):
         """pairwise_distances with 2 atoms returns 2x2 symmetric matrix."""
         import ciffy
@@ -49,7 +47,6 @@ class TestPairwiseDistances:
         tol = get_tolerances()
         assert abs(d01 - d10) < tol.symmetry
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_pairwise_at_residue_scale(self, backend):
         """pairwise_distances at residue scale computes centroid distances."""
         import ciffy
@@ -66,7 +63,6 @@ class TestPairwiseDistances:
             val = dists[i, i].item() if hasattr(dists[i, i], 'item') else dists[i, i]
             assert val == 0.0
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_pairwise_at_chain_scale(self, backend):
         """pairwise_distances at chain scale on multi-chain structure."""
         import ciffy
@@ -83,7 +79,6 @@ class TestPairwiseDistances:
 class TestKNN:
     """Test knn() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_k_equals_n_fails(self, backend):
         """knn raises ValueError when k >= n."""
         import ciffy
@@ -94,7 +89,6 @@ class TestKNN:
         with pytest.raises(ValueError, match="must be less than"):
             p.knn(k=n)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_k_greater_than_n_fails(self, backend):
         """knn raises ValueError when k > n."""
         import ciffy
@@ -105,7 +99,6 @@ class TestKNN:
         with pytest.raises(ValueError, match="must be less than"):
             p.knn(k=n + 10)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_single_atom_fails(self, backend):
         """knn on single atom raises ValueError."""
         import ciffy
@@ -115,7 +108,6 @@ class TestKNN:
         with pytest.raises(ValueError):
             p.knn(k=1)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_k_one(self, backend):
         """knn with k=1 returns single nearest neighbor per point."""
         import ciffy
@@ -127,7 +119,6 @@ class TestKNN:
         assert neighbors.shape[0] == 1
         assert neighbors.shape[1] == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_k_multiple(self, backend):
         """knn with k=5 returns correct shape."""
         import ciffy
@@ -140,7 +131,6 @@ class TestKNN:
         assert neighbors.shape[0] == k
         assert neighbors.shape[1] == p.size()
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_at_residue_scale(self, backend):
         """knn at residue scale returns residue neighbors."""
         import ciffy
@@ -155,7 +145,6 @@ class TestKNN:
         assert neighbors.shape[0] == k
         assert neighbors.shape[1] == n_res
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_knn_neighbors_are_valid_indices(self, backend):
         """knn returns valid atom indices."""
         import ciffy
@@ -174,7 +163,6 @@ class TestKNN:
 class TestCenter:
     """Test center() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_center_molecule_scale(self, backend):
         """center at molecule scale centers entire structure."""
         import ciffy
@@ -192,7 +180,6 @@ class TestCenter:
         tol = get_tolerances()
         assert np.allclose(mean_np, 0, atol=tol.center_origin)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_center_chain_scale(self, backend):
         """center at chain scale centers each chain independently."""
         import ciffy
@@ -205,7 +192,6 @@ class TestCenter:
         assert centroids.shape[0] == p.size(Scale.CHAIN)
         assert centroids.shape[1] == 3
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_center_returns_new_polymer(self, backend):
         """center returns new polymer, doesn't modify original."""
         import ciffy
@@ -219,7 +205,6 @@ class TestCenter:
         # Original should be unchanged
         assert np.allclose(np.asarray(p.coordinates), original_coords)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_center_single_residue(self, backend):
         """center on single-residue polymer."""
         import ciffy
@@ -240,7 +225,6 @@ class TestCenter:
 class TestMoment:
     """Test moment() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_moment_first_order(self, backend):
         """moment(1) returns centroid (same as reduce MEAN)."""
         import ciffy
@@ -256,7 +240,6 @@ class TestMoment:
 
         assert np.allclose(m1_np, mean_np)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_moment_second_order(self, backend):
         """moment(2) returns second moment."""
         import ciffy
@@ -270,7 +253,6 @@ class TestMoment:
         m2_np = np.asarray(m2)
         assert np.all(m2_np >= 0)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_moment_third_order(self, backend):
         """moment(3) returns skewness (can be negative)."""
         import ciffy
@@ -287,7 +269,6 @@ class TestMoment:
 class TestAlign:
     """Test align() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_single_chain(self, backend):
         """align at chain scale on single chain."""
         import ciffy
@@ -313,7 +294,6 @@ class TestAlign:
         tol = get_tolerances()
         assert np.allclose(mean, 0, atol=tol.center_origin)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_returns_rotation_matrix(self, backend):
         """align returns valid rotation matrices."""
         import ciffy
@@ -341,7 +321,6 @@ class TestAlign:
 class TestWithCoordinates:
     """Test with_coordinates() edge cases."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_with_coordinates_creates_copy(self, backend):
         """with_coordinates creates new polymer with new coords."""
         import ciffy
@@ -362,7 +341,6 @@ class TestWithCoordinates:
         # New polymer has new coords
         assert np.allclose(np.asarray(p2.coordinates), np.asarray(new_coords))
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_with_coordinates_preserves_structure(self, backend):
         """with_coordinates preserves other polymer attributes."""
         import ciffy
@@ -388,7 +366,6 @@ class TestWithCoordinates:
 class TestKabschAlignment:
     """Test kabsch_rotation and kabsch_align functions."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_rotation_returns_3x3(self, backend):
         """kabsch_rotation returns a 3x3 rotation matrix."""
         from ciffy.operations.alignment import kabsch_rotation
@@ -405,7 +382,6 @@ class TestKabschAlignment:
 
         assert R.shape == (3, 3)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_rotation_is_orthogonal(self, backend):
         """kabsch_rotation returns orthogonal matrix (R @ R.T = I)."""
         from ciffy.operations.alignment import kabsch_rotation
@@ -426,7 +402,6 @@ class TestKabschAlignment:
         tol = get_tolerances()
         assert np.allclose(RRt, np.eye(3), atol=tol.allclose_atol)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_rotation_det_positive(self, backend):
         """kabsch_rotation returns proper rotation (det = +1)."""
         from ciffy.operations.alignment import kabsch_rotation
@@ -446,7 +421,6 @@ class TestKabschAlignment:
         tol = get_tolerances()
         assert abs(det - 1.0) < tol.rotation_determinant
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_returns_tuple(self, backend):
         """kabsch_align returns (aligned, rotation, translation)."""
         from ciffy.operations.alignment import kabsch_align
@@ -467,7 +441,6 @@ class TestKabschAlignment:
         assert R.shape == (3, 3)
         assert translation.shape == (3,)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_self_zero_rmsd(self, backend):
         """kabsch_align of coords to itself gives zero RMSD."""
         from ciffy.operations.alignment import kabsch_align
@@ -487,7 +460,6 @@ class TestKabschAlignment:
         tol = get_tolerances()
         assert rmsd < tol.allclose_atol
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_rotation_only(self, backend):
         """kabsch_align recovers known rotation."""
         from ciffy.operations.alignment import kabsch_align
@@ -525,7 +497,6 @@ class TestKabschAlignment:
         tol = get_tolerances()
         assert rmsd < tol.alignment_rmsd
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_with_translation(self, backend):
         """kabsch_align handles translation correctly."""
         from ciffy.operations.alignment import kabsch_align
@@ -552,7 +523,6 @@ class TestKabschAlignment:
 class TestAlignFunction:
     """Test ciffy.align() function."""
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_returns_tuple_of_polymers(self, backend):
         """align returns (polymer1, aligned_polymer2)."""
         import ciffy
@@ -565,7 +535,6 @@ class TestAlignFunction:
         assert isinstance(ref, ciffy.Polymer)
         assert isinstance(aligned, ciffy.Polymer)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_reference_unchanged(self, backend):
         """align does not modify the reference polymer."""
         import ciffy
@@ -580,7 +549,6 @@ class TestAlignFunction:
         # Reference should be unchanged
         assert np.allclose(np.asarray(ref.coordinates), original_coords)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_minimizes_rmsd(self, backend):
         """align produces minimal RMSD between structures."""
         import ciffy
@@ -612,7 +580,6 @@ class TestAlignFunction:
         tol = get_tolerances()
         assert raw_rmsd_after < tol.roundtrip_medium
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_self(self, backend):
         """align of structure with itself gives zero RMSD."""
         import ciffy
@@ -626,7 +593,6 @@ class TestAlignFunction:
         tol = get_tolerances()
         assert rmsd < tol.allclose_atol
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_size_mismatch_raises(self, backend):
         """align raises ValueError for different-sized polymers."""
         import ciffy

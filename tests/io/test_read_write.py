@@ -19,7 +19,6 @@ class TestLoad:
     """Test CIF file loading with both numpy and torch backends."""
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_file(self, cif_file, backend):
         from ciffy import load
 
@@ -29,7 +28,6 @@ class TestLoad:
         assert polymer.size() > 0
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_has_coordinates(self, cif_file, backend):
         from ciffy import load
 
@@ -38,7 +36,6 @@ class TestLoad:
         assert polymer.coordinates.shape[1] == 3
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_has_atoms(self, cif_file, backend):
         from ciffy import load
 
@@ -47,7 +44,6 @@ class TestLoad:
         assert polymer.elements.shape[0] == polymer.size()
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_has_chains(self, cif_file, backend):
         from ciffy import load, Scale
 
@@ -57,7 +53,6 @@ class TestLoad:
         assert len(polymer.strands) == polymer.size(Scale.CHAIN)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_has_residues(self, cif_file, backend):
         from ciffy import load, Scale
 
@@ -65,7 +60,6 @@ class TestLoad:
         assert polymer.size(Scale.RESIDUE) > 0
         assert polymer.sequence.shape[0] == polymer.size(Scale.RESIDUE)
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_load_nonexistent_file(self, backend):
         from ciffy import load
 
@@ -165,7 +159,6 @@ class TestLoad:
             polymer.to("cpu")
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_repr(self, cif_file, backend):
         """Test that __repr__ contains accurate information."""
         from ciffy import load, Scale
@@ -199,7 +192,6 @@ class TestLoad:
             assert str(atom_count) in repr_str
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_repr_molecule_types(self, cif_file, backend):
         """Test that molecule types in __repr__ are valid."""
         from ciffy import load, Molecule
@@ -231,7 +223,6 @@ class TestLoad:
                     assert mol_type in valid_types, f"Invalid molecule type: {mol_type}"
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_molecule_type_classification(self, cif_file, backend):
         """Test that molecule_type property correctly classifies chains."""
         from ciffy import load, Molecule, Scale
@@ -261,7 +252,6 @@ class TestCifSave:
     """Test CIF file saving with both backends."""
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_save_cif(self, cif_file, backend):
         """Test basic CIF writing."""
         from ciffy import load
@@ -280,7 +270,6 @@ class TestCifSave:
                 os.unlink(output_path)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_cif_has_header(self, cif_file, backend):
         """Test that saved CIF has proper header."""
         from ciffy import load
@@ -308,7 +297,6 @@ class TestCifSave:
                 os.unlink(output_path)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_cif(self, cif_file, backend):
         """Test load -> save -> load preserves data."""
         from ciffy import load
@@ -341,7 +329,6 @@ class TestCifSave:
                 os.unlink(output_path)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_preserves_sequence(self, cif_file, backend):
         """Test that round-trip preserves residue sequence for polymer residues.
 
@@ -375,7 +362,6 @@ class TestCifSave:
                 os.unlink(output_path)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_preserves_atom_types(self, cif_file, backend):
         """Test that round-trip preserves atom types including backbone atoms.
 
@@ -463,7 +449,6 @@ class TestCifSave:
             empty.write("/tmp/should_not_exist.cif")
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_round_trip_preserves_molecule_type(self, cif_file, backend):
         """Test that round-trip preserves molecule type for all chains.
 
@@ -544,7 +529,6 @@ class TestPolymerCountInvariant:
     """Test that polymer_count == sum(atoms_per_res) invariant holds."""
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_polymer_count_equals_sum_atoms_per_res(self, cif_file, backend):
         """Verify invariant: polymer_count == sum(atoms_per_res).
 
@@ -562,7 +546,6 @@ class TestPolymerCountInvariant:
             f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum} != polymer_count={polymer.polymer_count}"
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_nonpoly_is_nonnegative(self, cif_file, backend):
         """Verify nonpoly count is non-negative."""
         from ciffy import load
@@ -571,7 +554,6 @@ class TestPolymerCountInvariant:
         assert polymer.nonpoly >= 0, f"nonpoly should be >= 0, got {polymer.nonpoly}"
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_polymer_plus_nonpoly_equals_total(self, cif_file, backend):
         """Verify polymer_count + nonpoly == total atoms."""
         from ciffy import load

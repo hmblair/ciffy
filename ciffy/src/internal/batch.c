@@ -90,6 +90,10 @@ void batch_cartesian_to_internal(
     const int64_t *indices, size_t n_entries,
     float *distances, float *angles, float *dihedrals
 ) {
+    /* Embarrassingly parallel: each entry reads independently from coords */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
     for (size_t i = 0; i < n_entries; i++) {
         int64_t atom_idx = indices[i * 4 + 0];
         int64_t dist_ref = indices[i * 4 + 1];
@@ -241,10 +245,14 @@ void batch_cartesian_to_internal_backward(
     const float *grad_distances, const float *grad_angles, const float *grad_dihedrals,
     float *grad_coords
 ) {
-    /* Temporary gradient storage */
-    float grad_atom[3], grad_ref1[3], grad_ref2[3], grad_ref3[3];
-
+    /* Parallel with atomic accumulation since multiple entries reference same atoms */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
     for (size_t i = 0; i < n_entries; i++) {
+        /* Thread-local gradient storage */
+        float grad_atom[3], grad_ref1[3], grad_ref2[3], grad_ref3[3];
+
         int64_t atom_idx = indices[i * 4 + 0];
         int64_t dist_ref = indices[i * 4 + 1];
         int64_t angl_ref = indices[i * 4 + 2];
@@ -262,12 +270,30 @@ void batch_cartesian_to_internal_backward(
                 distances[i], grad_distances[i],
                 grad_atom, grad_ref1
             );
-            /* Accumulate gradients */
+            /* Atomic accumulate gradients for thread safety */
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 2] += grad_atom[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
         }
 
@@ -282,14 +308,41 @@ void batch_cartesian_to_internal_backward(
                 angles[i], grad_angles[i],
                 grad_atom, grad_ref1, grad_ref2
             );
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 2] += grad_atom[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
         }
 
@@ -307,17 +360,53 @@ void batch_cartesian_to_internal_backward(
                 grad_dihedrals[i],
                 grad_ref3, grad_ref2, grad_ref1, grad_atom
             );
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dihe_ref * 3 + 0] += grad_ref3[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dihe_ref * 3 + 1] += grad_ref3[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dihe_ref * 3 + 2] += grad_ref3[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 0] += grad_atom[0];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 1] += grad_atom[1];
+#ifdef _OPENMP
+            #pragma omp atomic
+#endif
             grad_coords[atom_idx * 3 + 2] += grad_atom[2];
         }
     }
@@ -453,18 +542,27 @@ void batch_nerf_reconstruct_leveled(
 ) {
     (void)n_entries;  /* Used implicitly via level_offsets */
 
-    for (int level = 0; level < n_levels; level++) {
-        int start = level_offsets[level];
-        int end = level_offsets[level + 1];
+    /* Single parallel region with barriers between levels.
+     * This avoids the overhead of spawning threads for each level. */
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+#endif
+        for (int level = 0; level < n_levels; level++) {
+            int start = level_offsets[level];
+            int end = level_offsets[level + 1];
 
 #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
+            #pragma omp for schedule(static)
 #endif
-        for (int i = start; i < end; i++) {
-            nerf_place_single_entry(coords, n_atoms, indices, distances, angles, dihedrals, (size_t)i);
+            for (int i = start; i < end; i++) {
+                nerf_place_single_entry(coords, n_atoms, indices, distances, angles, dihedrals, (size_t)i);
+            }
+            /* Implicit barrier at end of omp for ensures level completes before next */
         }
-        /* Implicit barrier after parallel region ensures level completes before next */
+#ifdef _OPENMP
     }
+#endif
 }
 
 
@@ -478,15 +576,20 @@ void batch_nerf_reconstruct_backward_leveled(
 ) {
     (void)n_entries;  /* Used implicitly via level_offsets */
 
-    /* Process levels in REVERSE order since later atoms depend on earlier ones */
-    for (int level = n_levels - 1; level >= 0; level--) {
-        int start = level_offsets[level];
-        int end = level_offsets[level + 1];
+    /* Single parallel region with barriers between levels.
+     * Process levels in REVERSE order since later atoms depend on earlier ones. */
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+#endif
+        for (int level = n_levels - 1; level >= 0; level--) {
+            int start = level_offsets[level];
+            int end = level_offsets[level + 1];
 
 #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
+            #pragma omp for schedule(static)
 #endif
-        for (int i = start; i < end; i++) {
+            for (int i = start; i < end; i++) {
             size_t idx = (size_t)i;
             int64_t atom_idx = indices[idx * 4 + 0];
             int64_t dist_ref = indices[idx * 4 + 1];
@@ -639,7 +742,10 @@ void batch_nerf_reconstruct_backward_leveled(
                     grad_dihedrals[idx] = 0.0f;
                 }
             }
+            }
+            /* Implicit barrier at end of omp for ensures level completes before next */
         }
-        /* Implicit barrier ensures level completes before next */
+#ifdef _OPENMP
     }
+#endif
 }

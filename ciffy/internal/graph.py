@@ -219,6 +219,98 @@ def _build_zmatrix_indices_from_topology(
 
 
 # =============================================================================
+# Z-MATRIX SORTING
+# =============================================================================
+
+
+def _compute_nerf_levels(indices: np.ndarray) -> np.ndarray:
+    """
+    Compute correct NERF dependency levels from Z-matrix indices.
+
+    For parallel NERF reconstruction, an atom's level must be strictly
+    greater than all its reference atoms' levels:
+        nerf_level[i] = max(levels of all reference atoms) + 1
+
+    BFS levels don't satisfy this constraint when angle/dihedral refs
+    point to atoms outside the BFS parent chain.
+
+    Args:
+        indices: (M, 4) Z-matrix indices [atom_idx, dist_ref, ang_ref, dih_ref]
+
+    Returns:
+        (M,) int32 array of NERF-correct levels.
+    """
+    n_entries = len(indices)
+    if n_entries == 0:
+        return np.array([], dtype=np.int32)
+
+    # Build atom_idx -> entry_idx mapping
+    max_atom = int(indices[:, 0].max()) + 1
+    atom_to_entry = np.full(max_atom, -1, dtype=np.int32)
+    for i in range(n_entries):
+        atom_to_entry[indices[i, 0]] = i
+
+    # Compute levels iteratively (entries must be in valid BFS order)
+    levels = np.zeros(n_entries, dtype=np.int32)
+    for i in range(n_entries):
+        dist_ref = indices[i, 1]
+        ang_ref = indices[i, 2]
+        dih_ref = indices[i, 3]
+
+        max_ref_level = -1
+
+        if dist_ref >= 0 and dist_ref < max_atom:
+            ref_entry = atom_to_entry[dist_ref]
+            if ref_entry >= 0:
+                max_ref_level = max(max_ref_level, levels[ref_entry])
+
+        if ang_ref >= 0 and ang_ref < max_atom:
+            ref_entry = atom_to_entry[ang_ref]
+            if ref_entry >= 0:
+                max_ref_level = max(max_ref_level, levels[ref_entry])
+
+        if dih_ref >= 0 and dih_ref < max_atom:
+            ref_entry = atom_to_entry[dih_ref]
+            if ref_entry >= 0:
+                max_ref_level = max(max_ref_level, levels[ref_entry])
+
+        levels[i] = max_ref_level + 1
+
+    return levels
+
+
+def _sort_zmatrix_by_level(
+    indices: np.ndarray,
+    dihedral_types: np.ndarray,
+    levels: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Sort Z-matrix arrays by NERF dependency level for parallel reconstruction.
+
+    First recomputes levels to ensure NERF-correct dependencies (an atom's
+    level must be > all its reference atoms' levels), then sorts by level.
+    Stable sort preserves BFS ordering within each level.
+
+    Args:
+        indices: (M, 4) Z-matrix indices [atom_idx, dist_ref, ang_ref, dih_ref]
+        dihedral_types: (M,) dihedral type annotations (-1 if unnamed)
+        levels: (M,) BFS level per entry (will be recomputed)
+
+    Returns:
+        Sorted (indices, dihedral_types, nerf_levels) tuple.
+    """
+    if len(levels) == 0:
+        return indices, dihedral_types, levels
+
+    # Recompute levels to ensure NERF-correct dependencies
+    nerf_levels = _compute_nerf_levels(indices)
+
+    # Sort by level
+    sort_idx = np.argsort(nerf_levels, kind='stable')
+    return indices[sort_idx], dihedral_types[sort_idx], nerf_levels[sort_idx]
+
+
+# =============================================================================
 # BFS Z-MATRIX CONSTRUCTION
 # =============================================================================
 
@@ -279,8 +371,13 @@ def build_zmatrix_from_components(
             result_levels[dst_offset:dst_offset + count] = levels[src_offset:src_offset + count]
             src_offset += size
             dst_offset += count
-        return result, result_dtypes, result_levels
-    return zmatrix[:total_entries], dihedral_types[:total_entries], levels[:total_entries]
+    else:
+        result = zmatrix[:total_entries]
+        result_dtypes = dihedral_types[:total_entries]
+        result_levels = levels[:total_entries]
+
+    # Sort by level for parallel NERF (one-time cost at construction)
+    return _sort_zmatrix_by_level(result, result_dtypes, result_levels)
 
 
 

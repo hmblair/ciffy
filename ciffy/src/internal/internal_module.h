@@ -71,4 +71,19 @@ PyObject *py_find_connected_components(PyObject *self, PyObject *args);
  */
 PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
 
+/**
+ * Level-parallel NERF reconstruction.
+ * Python: _nerf_reconstruct_leveled(indices, distances, angles, dihedrals,
+ *             n_atoms, level_offsets) -> coords
+ */
+PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args);
+
+/**
+ * Level-parallel backward pass for NERF reconstruction.
+ * Python: _nerf_reconstruct_backward_leveled(coords, indices, distances,
+ *             angles, dihedrals, grad_coords, level_offsets)
+ *             -> (grad_distances, grad_angles, grad_dihedrals)
+ */
+PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

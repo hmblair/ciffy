@@ -111,4 +111,62 @@ void batch_nerf_reconstruct_backward(
     float *grad_distances, float *grad_angles, float *grad_dihedrals
 );
 
+/* ========================================================================= */
+/* Level-parallel NERF (OpenMP)                                              */
+/* ========================================================================= */
+
+/**
+ * Level-parallel NERF reconstruction.
+ *
+ * Processes atoms level-by-level where all atoms at the same BFS level
+ * can be placed in parallel (they only depend on lower levels).
+ * Uses OpenMP for parallelism within each level.
+ *
+ * @param coords Output coordinates, shape (n_atoms, 3). Pre-allocated.
+ * @param n_atoms Number of atoms.
+ * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
+ * @param n_entries Number of Z-matrix entries.
+ * @param distances Bond lengths, size (n_entries,).
+ * @param angles Bond angles in radians, size (n_entries,).
+ * @param dihedrals Dihedral angles in radians, size (n_entries,).
+ * @param level_offsets CSR-style offsets, size (n_levels+1,).
+ *                      Level i's entries span [level_offsets[i], level_offsets[i+1]).
+ * @param n_levels Number of BFS levels.
+ */
+void batch_nerf_reconstruct_leveled(
+    float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    const int32_t *level_offsets, int n_levels
+);
+
+/**
+ * Level-parallel backward pass for NERF reconstruction.
+ *
+ * Processes levels in REVERSE order. Uses atomic adds for grad_coords
+ * to handle concurrent writes from multiple entries referencing the same atom.
+ *
+ * @param coords Forward pass coordinates, shape (n_atoms, 3).
+ * @param n_atoms Number of atoms.
+ * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
+ * @param n_entries Number of Z-matrix entries.
+ * @param distances Bond lengths, size (n_entries,).
+ * @param angles Bond angles, size (n_entries,).
+ * @param dihedrals Dihedral angles, size (n_entries,).
+ * @param grad_coords Upstream gradients for coords, shape (n_atoms, 3). Modified in place.
+ * @param grad_distances Output gradients for distances, size (n_entries,).
+ * @param grad_angles Output gradients for angles, size (n_entries,).
+ * @param grad_dihedrals Output gradients for dihedrals, size (n_entries,).
+ * @param level_offsets CSR-style offsets, size (n_levels+1,).
+ * @param n_levels Number of BFS levels.
+ */
+void batch_nerf_reconstruct_backward_leveled(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    float *grad_coords,
+    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    const int32_t *level_offsets, int n_levels
+);
+
 #endif /* CIFFY_INTERNAL_BATCH_H */

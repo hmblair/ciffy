@@ -1618,6 +1618,43 @@ class Polymer:
 
         return result
 
+    def cuda(self: Polymer) -> Polymer:
+        """
+        Move tensors to CUDA device (torch backend only).
+
+        Shorthand for `polymer.to("cuda")`.
+
+        Returns:
+            New Polymer with tensors on CUDA device.
+
+        Raises:
+            ValueError: If called on NumPy backend.
+            RuntimeError: If CUDA is not available.
+
+        Example:
+            >>> p = load("file.cif", backend="torch")
+            >>> p_gpu = p.cuda()
+        """
+        return self.to("cuda")
+
+    def cpu(self: Polymer) -> Polymer:
+        """
+        Move tensors to CPU (torch backend only).
+
+        Shorthand for `polymer.to("cpu")`.
+
+        Returns:
+            New Polymer with tensors on CPU.
+
+        Raises:
+            ValueError: If called on NumPy backend.
+
+        Example:
+            >>> p_gpu = load("file.cif", backend="torch").cuda()
+            >>> p_cpu = p_gpu.cpu()
+        """
+        return self.to("cpu")
+
     # ─────────────────────────────────────────────────────────────────────────
     # I/O
     # ─────────────────────────────────────────────────────────────────────────

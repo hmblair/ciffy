@@ -7,6 +7,83 @@
 #include "geometry.h"
 #include <math.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+
+/* ========================================================================= */
+/* Helper: single-entry NERF placement (reused by sequential and parallel)  */
+/* ========================================================================= */
+
+
+static inline void nerf_place_single_entry(
+    float *coords, size_t n_atoms,
+    const int64_t *indices,
+    const float *distances, const float *angles, const float *dihedrals,
+    size_t i
+) {
+    int64_t atom_idx = indices[i * 4 + 0];
+    int64_t dist_ref = indices[i * 4 + 1];
+    int64_t angl_ref = indices[i * 4 + 2];
+    int64_t dihe_ref = indices[i * 4 + 3];
+
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+    if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+        return;
+    }
+#endif
+    float *result = &coords[atom_idx * 3];
+
+    if (dist_ref < 0) {
+        /* First atom: place at origin */
+        result[0] = 0.0f;
+        result[1] = 0.0f;
+        result[2] = 0.0f;
+
+    } else if (angl_ref < 0) {
+        /* Second atom: place along +X from distance reference */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dist_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *ref = &coords[dist_ref * 3];
+            nerf_place_along_x(ref, distances[i], result);
+        }
+
+    } else if (dihe_ref < 0) {
+        /* Third atom: place in plane */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dist_ref >= n_atoms || (size_t)angl_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            nerf_place_in_plane(ref1, ref2, distances[i], angles[i], result);
+        }
+
+    } else {
+        /* Full NERF placement */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dihe_ref >= n_atoms ||
+            (size_t)angl_ref >= n_atoms ||
+            (size_t)dist_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *p1 = &coords[dihe_ref * 3];
+            const float *p2 = &coords[angl_ref * 3];
+            const float *p3 = &coords[dist_ref * 3];
+            nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+        }
+    }
+}
+
 
 void batch_cartesian_to_internal(
     const float *coords, size_t n_atoms,
@@ -359,5 +436,210 @@ void batch_nerf_reconstruct_backward(
                 grad_dihedrals[idx] = 0.0f;
             }
         }
+    }
+}
+
+
+/* ========================================================================= */
+/* Level-parallel NERF functions (OpenMP)                                    */
+/* ========================================================================= */
+
+
+void batch_nerf_reconstruct_leveled(
+    float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    const int32_t *level_offsets, int n_levels
+) {
+    (void)n_entries;  /* Used implicitly via level_offsets */
+
+    for (int level = 0; level < n_levels; level++) {
+        int start = level_offsets[level];
+        int end = level_offsets[level + 1];
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+#endif
+        for (int i = start; i < end; i++) {
+            nerf_place_single_entry(coords, n_atoms, indices, distances, angles, dihedrals, (size_t)i);
+        }
+        /* Implicit barrier after parallel region ensures level completes before next */
+    }
+}
+
+
+void batch_nerf_reconstruct_backward_leveled(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    float *grad_coords,
+    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    const int32_t *level_offsets, int n_levels
+) {
+    (void)n_entries;  /* Used implicitly via level_offsets */
+
+    /* Process levels in REVERSE order since later atoms depend on earlier ones */
+    for (int level = n_levels - 1; level >= 0; level--) {
+        int start = level_offsets[level];
+        int end = level_offsets[level + 1];
+
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+#endif
+        for (int i = start; i < end; i++) {
+            size_t idx = (size_t)i;
+            int64_t atom_idx = indices[idx * 4 + 0];
+            int64_t dist_ref = indices[idx * 4 + 1];
+            int64_t angl_ref = indices[idx * 4 + 2];
+            int64_t dihe_ref = indices[idx * 4 + 3];
+
+            if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+                grad_distances[idx] = 0.0f;
+                grad_angles[idx] = 0.0f;
+                grad_dihedrals[idx] = 0.0f;
+                continue;
+            }
+
+            const float *grad_result = &grad_coords[atom_idx * 3];
+
+            if (dist_ref < 0) {
+                /* First atom at origin: no gradients to propagate */
+                grad_distances[idx] = 0.0f;
+                grad_angles[idx] = 0.0f;
+                grad_dihedrals[idx] = 0.0f;
+
+            } else if (angl_ref < 0) {
+                /* Second atom: placed along +X from distance reference */
+                grad_distances[idx] = grad_result[0];
+                grad_angles[idx] = 0.0f;
+                grad_dihedrals[idx] = 0.0f;
+
+                if ((size_t)dist_ref < n_atoms) {
+                    /* Atomic add for thread safety */
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 0] += grad_result[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 1] += grad_result[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 2] += grad_result[2];
+                }
+
+            } else if (dihe_ref < 0) {
+                /* Third atom: placed in plane */
+                if ((size_t)angl_ref < n_atoms && (size_t)dist_ref < n_atoms) {
+                    const float *ref1 = &coords[dist_ref * 3];
+                    const float *ref2 = &coords[angl_ref * 3];
+
+                    float grad_ref1[3], grad_ref2[3];
+                    nerf_place_in_plane_backward(
+                        ref1, ref2,
+                        distances[idx], angles[idx],
+                        grad_result,
+                        grad_ref1, grad_ref2,
+                        &grad_distances[idx], &grad_angles[idx]
+                    );
+                    grad_dihedrals[idx] = 0.0f;
+
+                    /* Atomic adds for thread safety */
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+                } else {
+                    grad_distances[idx] = 0.0f;
+                    grad_angles[idx] = 0.0f;
+                    grad_dihedrals[idx] = 0.0f;
+                }
+
+            } else {
+                /* Full NERF placement */
+                if ((size_t)dihe_ref < n_atoms &&
+                    (size_t)angl_ref < n_atoms &&
+                    (size_t)dist_ref < n_atoms) {
+
+                    const float *p1 = &coords[dihe_ref * 3];
+                    const float *p2 = &coords[angl_ref * 3];
+                    const float *p3 = &coords[dist_ref * 3];
+
+                    float grad_a[3], grad_b[3], grad_c[3];
+                    nerf_place_atom_backward(
+                        p1, p2, p3,
+                        distances[idx], angles[idx], dihedrals[idx],
+                        grad_result,
+                        grad_a, grad_b, grad_c,
+                        &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                    );
+
+                    /* Atomic adds for thread safety */
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dihe_ref * 3 + 0] += grad_a[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dihe_ref * 3 + 1] += grad_a[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dihe_ref * 3 + 2] += grad_a[2];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 0] += grad_b[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 1] += grad_b[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[angl_ref * 3 + 2] += grad_b[2];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 0] += grad_c[0];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 1] += grad_c[1];
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    grad_coords[dist_ref * 3 + 2] += grad_c[2];
+                } else {
+                    grad_distances[idx] = 0.0f;
+                    grad_angles[idx] = 0.0f;
+                    grad_dihedrals[idx] = 0.0f;
+                }
+            }
+        }
+        /* Implicit barrier ensures level completes before next */
     }
 }

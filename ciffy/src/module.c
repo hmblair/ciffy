@@ -834,6 +834,32 @@ static PyMethodDef methods[] = {
      "Returns:\n"
      "    tuple: (zmatrix, dihedral_types) where zmatrix is (N, 4) int64\n"
      "    and dihedral_types is (N,) int8 (-1 if not a named dihedral).\n"},
+    {"_nerf_reconstruct_leveled", py_nerf_reconstruct_leveled, METH_VARARGS,
+     "Level-parallel NERF reconstruction using OpenMP.\n\n"
+     "Processes atoms level-by-level where all atoms at the same BFS level\n"
+     "can be placed in parallel. Requires Z-matrix to be sorted by level.\n\n"
+     "Args:\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
+     "    distances (ndarray): (M,) float32 bond lengths.\n"
+     "    angles (ndarray): (M,) float32 bond angles in radians.\n"
+     "    dihedrals (ndarray): (M,) float32 dihedral angles in radians.\n"
+     "    n_atoms (int): Total number of atoms.\n"
+     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float32 Cartesian coordinates.\n"},
+    {"_nerf_reconstruct_backward_leveled", py_nerf_reconstruct_backward_leveled, METH_VARARGS,
+     "Level-parallel backward pass for NERF reconstruction.\n\n"
+     "Processes levels in reverse order. Uses atomic adds for grad_coords.\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
+     "    distances (ndarray): (M,) float32 bond lengths.\n"
+     "    angles (ndarray): (M,) float32 bond angles.\n"
+     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
+     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n"
+     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n\n"
+     "Returns:\n"
+     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
     {NULL, NULL, 0, NULL}
 };
 

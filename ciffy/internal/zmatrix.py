@@ -136,7 +136,7 @@ class ZMatrix:
         return self._levels
 
     @property
-    def level_offsets(self) -> Array | None:
+    def level_offsets(self) -> Array:
         """
         (n_levels+1,) int32 cumulative count per level for parallel NERF.
 
@@ -148,10 +148,19 @@ class ZMatrix:
         return self._level_offsets
 
     def _compute_level_offsets(self) -> np.ndarray:
-        """Convert per-entry levels to CSR-style offsets."""
+        """
+        Convert per-entry levels to CSR-style offsets.
+
+        Returns (n_levels+1,) int32 array where level i's entries span
+        indices level_offsets[i]:level_offsets[i+1].
+
+        Z-matrix entries are sorted by level at construction time, so
+        bincount gives correct CSR offsets directly.
+        """
         levels = to_numpy(self._levels)
         if len(levels) == 0:
             return np.zeros(1, dtype=np.int32)
+
         n_levels = int(levels.max()) + 1
         counts = np.bincount(levels, minlength=n_levels).astype(np.int32)
         offsets = np.zeros(n_levels + 1, dtype=np.int32)

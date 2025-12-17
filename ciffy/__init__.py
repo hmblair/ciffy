@@ -12,6 +12,18 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0.dev0"  # Fallback for editable installs without scm
 
+# On macOS, import torch BEFORE loading the C extension to avoid OpenMP conflicts.
+# Both ciffy and PyTorch bundle libomp, and loading them in the wrong order causes
+# segfaults due to duplicate OpenMP runtime initialization.
+# By importing torch first (if installed), we ensure its libomp is loaded first,
+# and ciffy's @rpath linking will find and reuse it.
+import sys
+if sys.platform == 'darwin':
+    try:
+        import torch  # noqa: F401 - imported for side effect (loads libomp)
+    except ImportError:
+        pass  # torch not installed, no conflict possible
+
 # Verify C extension is available (required for all operations)
 try:
     from . import _c

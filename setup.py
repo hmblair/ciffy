@@ -205,6 +205,43 @@ class GenerateAndBuildExt(build_ext):
         generate_hash_tables(force=False)
         super().run()
 
+        # On macOS, fix up libomp linkage to use @rpath instead of absolute path
+        # This avoids conflicts when PyTorch (with its own libomp) is also loaded
+        if sys.platform == 'darwin':
+            self._fix_libomp_rpath()
+
+    def _fix_libomp_rpath(self):
+        """Change libomp reference from absolute path to @rpath on macOS."""
+        for ext in self.extensions:
+            ext_path = self.get_ext_fullpath(ext.name)
+            if not os.path.exists(ext_path):
+                continue
+
+            # Check if this extension links against libomp
+            try:
+                result = subprocess.run(
+                    ['otool', '-L', ext_path],
+                    capture_output=True, text=True, timeout=10
+                )
+                if '/libomp.dylib' not in result.stdout:
+                    continue
+
+                # Find the absolute path to libomp
+                for line in result.stdout.split('\n'):
+                    if '/libomp.dylib' in line and '@rpath' not in line:
+                        # Extract the path (first part before ' (')
+                        old_path = line.strip().split(' (')[0]
+                        if old_path:
+                            print(f"Fixing libomp linkage: {old_path} -> @rpath/libomp.dylib")
+                            subprocess.run(
+                                ['install_name_tool', '-change', old_path,
+                                 '@rpath/libomp.dylib', ext_path],
+                                capture_output=True, timeout=10
+                            )
+                            break
+            except Exception as e:
+                print(f"Warning: Could not fix libomp rpath: {e}")
+
 
 class GenerateAndSdist(sdist):
     """Custom sdist that ensures hash tables are generated before packaging."""
@@ -276,8 +313,25 @@ def check_openmp_available():
 
 
 # Build compile args
-extra_compile_args = ['-O3']
+extra_compile_args = []
 extra_link_args = []
+
+# Enable AddressSanitizer if CIFFY_ASAN environment variable is set
+# This helps debug memory errors like use-after-free, buffer overflows, etc.
+if os.environ.get('CIFFY_ASAN', '').lower() in ('1', 'true', 'yes'):
+    asan_compile = ['-fsanitize=address', '-fno-omit-frame-pointer', '-g', '-O1']
+    asan_link = ['-fsanitize=address']
+    extra_compile_args.extend(asan_compile)
+    extra_link_args.extend(asan_link)
+    print("AddressSanitizer enabled: building with -fsanitize=address -O1")
+    if sys.platform == 'darwin':
+        print("  On macOS, run with:")
+        print("    DYLD_INSERT_LIBRARIES=$(clang -print-file-name=libclang_rt.asan_osx_dynamic.dylib) python ...")
+    else:
+        print("  Run with: ASAN_OPTIONS=detect_leaks=1 python ...")
+else:
+    # Default optimization level (only when not using ASan)
+    extra_compile_args.append('-O3')
 
 # Enable profiling if CIFFY_PROFILE environment variable is set
 if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):
@@ -290,6 +344,32 @@ if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
     if omp_compile and omp_link:
         extra_compile_args.extend(omp_compile)
         extra_link_args.extend(omp_link)
+
+        # On macOS, use @rpath linking to avoid conflicts with PyTorch's bundled libomp
+        # This allows the runtime linker to find libomp from either:
+        # 1. PyTorch's lib directory (if torch is imported)
+        # 2. Homebrew's libomp (fallback)
+        if sys.platform == 'darwin':
+            # Add header padding for install_name_tool modifications
+            extra_link_args.append('-Wl,-headerpad_max_install_names')
+
+            # Add rpaths for libomp discovery
+            # PyTorch's lib directory (try to detect)
+            try:
+                import torch
+                torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+                if os.path.exists(torch_lib):
+                    extra_link_args.append(f'-Wl,-rpath,{torch_lib}')
+                    print(f"  Added rpath for PyTorch's libomp: {torch_lib}")
+            except ImportError:
+                pass
+
+            # Homebrew libomp as fallback
+            for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
+                if os.path.exists(libomp_path):
+                    extra_link_args.append(f'-Wl,-rpath,{libomp_path}')
+                    break
+
         print("OpenMP enabled for parallel Z-matrix construction")
     else:
         print("OpenMP not available (install libomp on macOS: brew install libomp)")

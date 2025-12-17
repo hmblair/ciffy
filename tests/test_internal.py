@@ -405,10 +405,7 @@ class TestAutogradGradients:
     def test_cartesian_to_internal_gradcheck(self):
         """Test cartesian_to_internal gradients match numerical differentiation."""
         import torch
-        from ciffy.backend.autograd import cartesian_to_internal, HAS_C_EXTENSION
-
-        if not HAS_C_EXTENSION:
-            pytest.skip("C extension not available")
+        from ciffy.backend.autograd import cartesian_to_internal
 
         tol = get_tolerances()
 

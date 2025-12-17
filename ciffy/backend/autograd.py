@@ -49,7 +49,6 @@ __all__ = [
     "CartesianToInternalFunction",
     "NerfReconstructFunction",
     "HAS_TORCH",
-    "HAS_C_EXTENSION",
     "HAS_CUDA_EXTENSION",
 ]
 
@@ -61,17 +60,13 @@ except ImportError:
     HAS_TORCH = False
     Function = object  # Dummy for type hints
 
-# Import C extension functions
-try:
-    from .._c import (
-        _cartesian_to_internal,
-        _cartesian_to_internal_backward,
-        _nerf_reconstruct_leveled_anchored,
-        _nerf_reconstruct_backward_leveled_anchored,
-    )
-    HAS_C_EXTENSION = True
-except ImportError:
-    HAS_C_EXTENSION = False
+# C extension functions (required)
+from .._c import (
+    _cartesian_to_internal,
+    _cartesian_to_internal_backward,
+    _nerf_reconstruct_leveled_anchored,
+    _nerf_reconstruct_backward_leveled_anchored,
+)
 
 # Import CUDA extension functions
 try:
@@ -349,8 +344,6 @@ def cartesian_to_internal(
     """
     if not HAS_TORCH:
         raise ImportError("PyTorch is required for this function")
-    if not HAS_C_EXTENSION:
-        raise ImportError("C extension is required for this function")
 
     return CartesianToInternalFunction.apply(coords, indices)
 
@@ -384,8 +377,6 @@ def nerf_reconstruct(
     """
     if not HAS_TORCH:
         raise ImportError("PyTorch is required for this function")
-    if not HAS_C_EXTENSION:
-        raise ImportError("C extension is required for this function")
 
     return NerfReconstructFunction.apply(
         indices, internal,

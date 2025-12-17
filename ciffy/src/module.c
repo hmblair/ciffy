@@ -835,6 +835,35 @@ static PyMethodDef methods[] = {
      "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n\n"
      "Returns:\n"
      "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
+    {"_nerf_reconstruct_leveled_anchored", py_nerf_reconstruct_leveled_anchored, METH_VARARGS,
+     "Level-parallel NERF reconstruction with anchor coordinates.\n\n"
+     "Places atoms in frame defined by anchor coordinates instead of canonical frame.\n"
+     "Eliminates need for post-reconstruction Kabsch rotation.\n\n"
+     "Args:\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
+     "    distances (ndarray): (M,) float32 bond lengths.\n"
+     "    angles (ndarray): (M,) float32 bond angles in radians.\n"
+     "    dihedrals (ndarray): (M,) float32 dihedral angles in radians.\n"
+     "    n_atoms (int): Total number of atoms.\n"
+     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n"
+     "    anchor_coords (ndarray): (n_components, 3, 3) float32 anchor positions.\n"
+     "    component_ids (ndarray): (M,) int32 component ID per Z-matrix entry.\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float32 Cartesian coordinates.\n"},
+    {"_nerf_reconstruct_backward_leveled_anchored", py_nerf_reconstruct_backward_leveled_anchored, METH_VARARGS,
+     "Level-parallel backward pass for anchored NERF reconstruction.\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
+     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
+     "    distances (ndarray): (M,) float32 bond lengths.\n"
+     "    angles (ndarray): (M,) float32 bond angles.\n"
+     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
+     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n"
+     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n"
+     "    anchor_coords (ndarray): (n_components, 3, 3) float32 anchor positions.\n"
+     "    component_ids (ndarray): (M,) int32 component ID per Z-matrix entry.\n\n"
+     "Returns:\n"
+     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
     {NULL, NULL, 0, NULL}
 };
 

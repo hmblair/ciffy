@@ -5,6 +5,7 @@
 
 #include "batch.h"
 #include "geometry.h"
+#include "geometry_impl.h"
 #include <math.h>
 
 #ifdef _OPENMP
@@ -534,6 +535,101 @@ void batch_nerf_reconstruct_backward(
 /* ========================================================================= */
 
 
+/* Helper: single-entry NERF placement with anchor support */
+static inline void nerf_place_single_entry_anchored(
+    float *coords, size_t n_atoms,
+    const int64_t *indices,
+    const float *distances, const float *angles, const float *dihedrals,
+    size_t i,
+    const float *anchor_coords, const int32_t *component_ids
+) {
+    int64_t atom_idx = indices[i * 4 + 0];
+    int64_t dist_ref = indices[i * 4 + 1];
+    int64_t angl_ref = indices[i * 4 + 2];
+    int64_t dihe_ref = indices[i * 4 + 3];
+
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+    if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+        return;
+    }
+#endif
+    float *result = &coords[atom_idx * 3];
+
+    /* Get anchors for this component if available */
+    const float *anchor0 = NULL;
+    const float *anchor1 = NULL;
+    const float *anchor2 = NULL;
+    if (anchor_coords != NULL && component_ids != NULL) {
+        int32_t comp_id = component_ids[i];
+        anchor0 = &anchor_coords[comp_id * 9 + 0];
+        anchor1 = &anchor_coords[comp_id * 9 + 3];
+        anchor2 = &anchor_coords[comp_id * 9 + 6];
+    }
+
+    if (dist_ref < 0) {
+        /* First atom: place at anchor0 if available, else origin */
+        if (anchor0 != NULL) {
+            result[0] = anchor0[0];
+            result[1] = anchor0[1];
+            result[2] = anchor0[2];
+        } else {
+            result[0] = 0.0f;
+            result[1] = 0.0f;
+            result[2] = 0.0f;
+        }
+
+    } else if (angl_ref < 0) {
+        /* Second atom: place along anchor direction if available */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dist_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *ref = &coords[dist_ref * 3];
+            if (anchor1 != NULL) {
+                nerf_place_along_direction_impl(ref, anchor1, distances[i], result);
+            } else {
+                nerf_place_along_x_impl(ref, distances[i], result);
+            }
+        }
+
+    } else if (dihe_ref < 0) {
+        /* Third atom: place in anchored plane if available */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dist_ref >= n_atoms || (size_t)angl_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            if (anchor2 != NULL) {
+                nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distances[i], angles[i], result);
+            } else {
+                nerf_place_in_plane_impl(ref1, ref2, distances[i], angles[i], result);
+            }
+        }
+
+    } else {
+        /* Full NERF placement (no anchor needed) */
+#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
+        if ((size_t)dihe_ref >= n_atoms ||
+            (size_t)angl_ref >= n_atoms ||
+            (size_t)dist_ref >= n_atoms) {
+            result[0] = result[1] = result[2] = 0.0f;
+        } else
+#endif
+        {
+            const float *p1 = &coords[dihe_ref * 3];
+            const float *p2 = &coords[angl_ref * 3];
+            const float *p3 = &coords[dist_ref * 3];
+            nerf_place_atom_impl(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+        }
+    }
+}
+
+
 void batch_nerf_reconstruct_leveled(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
@@ -748,4 +844,267 @@ void batch_nerf_reconstruct_backward_leveled(
 #ifdef _OPENMP
     }
 #endif
+}
+
+
+/* ========================================================================= */
+/* Anchored NERF functions                                                   */
+/* ========================================================================= */
+
+
+void batch_nerf_reconstruct_leveled_anchored(
+    float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    const int32_t *level_offsets, int n_levels,
+    const float *anchor_coords, const int32_t *component_ids
+) {
+    (void)n_entries;  /* Used implicitly via level_offsets */
+
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+#endif
+        for (int level = 0; level < n_levels; level++) {
+            int start = level_offsets[level];
+            int end = level_offsets[level + 1];
+
+#ifdef _OPENMP
+            #pragma omp for schedule(static)
+#endif
+            for (int i = start; i < end; i++) {
+                nerf_place_single_entry_anchored(coords, n_atoms, indices,
+                    distances, angles, dihedrals, (size_t)i,
+                    anchor_coords, component_ids);
+            }
+        }
+#ifdef _OPENMP
+    }
+#endif
+}
+
+
+void batch_nerf_reconstruct_backward_leveled_anchored(
+    const float *coords, size_t n_atoms,
+    const int64_t *indices, size_t n_entries,
+    const float *distances, const float *angles, const float *dihedrals,
+    float *grad_coords,
+    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    const int32_t *level_offsets, int n_levels,
+    const float *anchor_coords, const int32_t *component_ids
+) {
+    (void)n_entries;
+
+    /* Get anchors helper */
+    #define GET_ANCHORS(i) \
+        const float *anchor0 = NULL, *anchor1 = NULL, *anchor2 = NULL; \
+        if (anchor_coords != NULL && component_ids != NULL) { \
+            int32_t comp_id = component_ids[i]; \
+            anchor0 = &anchor_coords[comp_id * 9 + 0]; \
+            anchor1 = &anchor_coords[comp_id * 9 + 3]; \
+            anchor2 = &anchor_coords[comp_id * 9 + 6]; \
+        }
+
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+#endif
+        for (int level = n_levels - 1; level >= 0; level--) {
+            int start = level_offsets[level];
+            int end = level_offsets[level + 1];
+
+#ifdef _OPENMP
+            #pragma omp for schedule(static)
+#endif
+            for (int i = start; i < end; i++) {
+                size_t idx = (size_t)i;
+                int64_t atom_idx = indices[idx * 4 + 0];
+                int64_t dist_ref = indices[idx * 4 + 1];
+                int64_t angl_ref = indices[idx * 4 + 2];
+                int64_t dihe_ref = indices[idx * 4 + 3];
+
+                if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
+                    grad_distances[idx] = 0.0f;
+                    grad_angles[idx] = 0.0f;
+                    grad_dihedrals[idx] = 0.0f;
+                    continue;
+                }
+
+                const float *grad_result = &grad_coords[atom_idx * 3];
+                GET_ANCHORS(idx);
+
+                if (dist_ref < 0) {
+                    /* First atom: no gradients to propagate (anchor is frozen) */
+                    grad_distances[idx] = 0.0f;
+                    grad_angles[idx] = 0.0f;
+                    grad_dihedrals[idx] = 0.0f;
+
+                } else if (angl_ref < 0) {
+                    /* Second atom */
+                    if ((size_t)dist_ref < n_atoms) {
+                        if (anchor1 != NULL) {
+                            const float *ref = &coords[dist_ref * 3];
+                            float grad_ref[3];
+                            nerf_place_along_direction_backward_impl(
+                                ref, anchor1, distances[idx],
+                                grad_result, grad_ref, &grad_distances[idx]
+                            );
+                            grad_angles[idx] = 0.0f;
+                            grad_dihedrals[idx] = 0.0f;
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 0] += grad_ref[0];
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 1] += grad_ref[1];
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 2] += grad_ref[2];
+                        } else {
+                            /* Canonical +X case */
+                            grad_distances[idx] = grad_result[0];
+                            grad_angles[idx] = 0.0f;
+                            grad_dihedrals[idx] = 0.0f;
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 0] += grad_result[0];
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 1] += grad_result[1];
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            grad_coords[dist_ref * 3 + 2] += grad_result[2];
+                        }
+                    }
+
+                } else if (dihe_ref < 0) {
+                    /* Third atom */
+                    if ((size_t)angl_ref < n_atoms && (size_t)dist_ref < n_atoms) {
+                        const float *ref1 = &coords[dist_ref * 3];
+                        const float *ref2 = &coords[angl_ref * 3];
+                        float grad_ref1[3], grad_ref2[3];
+
+                        if (anchor2 != NULL) {
+                            nerf_place_in_plane_anchored_backward_impl(
+                                ref1, ref2, anchor2,
+                                distances[idx], angles[idx],
+                                grad_result,
+                                grad_ref1, grad_ref2,
+                                &grad_distances[idx], &grad_angles[idx]
+                            );
+                        } else {
+                            nerf_place_in_plane_backward_impl(
+                                ref1, ref2,
+                                distances[idx], angles[idx],
+                                grad_result,
+                                grad_ref1, grad_ref2,
+                                &grad_distances[idx], &grad_angles[idx]
+                            );
+                        }
+                        grad_dihedrals[idx] = 0.0f;
+
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 1] += grad_ref1[1];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 2] += grad_ref1[2];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 0] += grad_ref2[0];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
+                    } else {
+                        grad_distances[idx] = 0.0f;
+                        grad_angles[idx] = 0.0f;
+                        grad_dihedrals[idx] = 0.0f;
+                    }
+
+                } else {
+                    /* Full NERF (same as non-anchored) */
+                    if ((size_t)dihe_ref < n_atoms &&
+                        (size_t)angl_ref < n_atoms &&
+                        (size_t)dist_ref < n_atoms) {
+
+                        const float *p1 = &coords[dihe_ref * 3];
+                        const float *p2 = &coords[angl_ref * 3];
+                        const float *p3 = &coords[dist_ref * 3];
+
+                        float grad_a[3], grad_b[3], grad_c[3];
+                        nerf_place_atom_backward_impl(
+                            p1, p2, p3,
+                            distances[idx], angles[idx], dihedrals[idx],
+                            grad_result,
+                            grad_a, grad_b, grad_c,
+                            &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                        );
+
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dihe_ref * 3 + 0] += grad_a[0];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dihe_ref * 3 + 1] += grad_a[1];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dihe_ref * 3 + 2] += grad_a[2];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 0] += grad_b[0];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 1] += grad_b[1];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[angl_ref * 3 + 2] += grad_b[2];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 0] += grad_c[0];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 1] += grad_c[1];
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        grad_coords[dist_ref * 3 + 2] += grad_c[2];
+                    } else {
+                        grad_distances[idx] = 0.0f;
+                        grad_angles[idx] = 0.0f;
+                        grad_dihedrals[idx] = 0.0f;
+                    }
+                }
+            }
+        }
+#ifdef _OPENMP
+    }
+#endif
+
+    #undef GET_ANCHORS
 }

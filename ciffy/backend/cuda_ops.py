@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 __all__ = [
     "HAS_CUDA_EXTENSION",
     "HAS_LEVELED_NERF",
+    "HAS_ANCHORED_NERF",
     "is_cuda_available",
     "cuda_cartesian_to_internal",
     "cuda_cartesian_to_internal_backward",
@@ -29,6 +30,8 @@ __all__ = [
     "cuda_nerf_reconstruct_backward",
     "cuda_nerf_reconstruct_leveled",
     "cuda_nerf_reconstruct_backward_leveled",
+    "cuda_nerf_reconstruct_leveled_anchored",
+    "cuda_nerf_reconstruct_backward_leveled_anchored",
 ]
 
 
@@ -60,6 +63,18 @@ except (ImportError, AttributeError):
     HAS_LEVELED_NERF = False
     _cuda_nerf_reconstruct_leveled = None
     _cuda_nerf_reconstruct_backward_leveled = None
+
+# Try importing anchored NERF (places atoms in reference frame from anchors)
+try:
+    from .._cuda import (
+        nerf_reconstruct_leveled_anchored as _cuda_nerf_reconstruct_leveled_anchored,
+        nerf_reconstruct_backward_leveled_anchored as _cuda_nerf_reconstruct_backward_leveled_anchored,
+    )
+    HAS_ANCHORED_NERF = True
+except (ImportError, AttributeError):
+    HAS_ANCHORED_NERF = False
+    _cuda_nerf_reconstruct_leveled_anchored = None
+    _cuda_nerf_reconstruct_backward_leveled_anchored = None
 
 
 def is_cuda_available(tensor: "torch.Tensor") -> bool:
@@ -270,4 +285,93 @@ def cuda_nerf_reconstruct_backward_leveled(
 
     return _cuda_nerf_reconstruct_backward_leveled(
         coords, indices, distances, angles, dihedrals, grad_coords, level_offsets
+    )
+
+
+def cuda_nerf_reconstruct_leveled_anchored(
+    coords: "torch.Tensor",
+    indices: "torch.Tensor",
+    distances: "torch.Tensor",
+    angles: "torch.Tensor",
+    dihedrals: "torch.Tensor",
+    level_offsets: "torch.Tensor",
+    anchor_coords: "torch.Tensor",
+    component_ids: "torch.Tensor",
+) -> "torch.Tensor":
+    """
+    GPU: Level-parallel anchored NERF reconstruction.
+
+    Places atoms directly in the reference frame defined by anchor coordinates,
+    eliminating the need for post-reconstruction Kabsch rotation.
+
+    Args:
+        coords: (N, 3) float32 CUDA tensor (will be modified in-place).
+        indices: (M, 4) int64 CUDA tensor.
+        distances: (M,) float32 CUDA tensor.
+        angles: (M,) float32 CUDA tensor.
+        dihedrals: (M,) float32 CUDA tensor.
+        level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
+        anchor_coords: (n_components, 3, 3) float32 CUDA tensor of anchor positions.
+        component_ids: (M,) int32 CUDA tensor mapping entries to components.
+
+    Returns:
+        coords tensor (modified in-place).
+
+    Raises:
+        RuntimeError: If anchored NERF CUDA kernel is not available.
+    """
+    if not HAS_ANCHORED_NERF:
+        raise RuntimeError(
+            "Anchored NERF CUDA kernel not available. "
+            "Rebuild with CUDA support."
+        )
+
+    return _cuda_nerf_reconstruct_leveled_anchored(
+        coords, indices, distances, angles, dihedrals,
+        level_offsets, anchor_coords, component_ids
+    )
+
+
+def cuda_nerf_reconstruct_backward_leveled_anchored(
+    coords: "torch.Tensor",
+    indices: "torch.Tensor",
+    distances: "torch.Tensor",
+    angles: "torch.Tensor",
+    dihedrals: "torch.Tensor",
+    grad_coords: "torch.Tensor",
+    level_offsets: "torch.Tensor",
+    anchor_coords: "torch.Tensor",
+    component_ids: "torch.Tensor",
+) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+    """
+    GPU: Backward pass for level-parallel anchored NERF reconstruction.
+
+    Note: Gradients do not flow through anchor_coords (they are frozen references).
+
+    Args:
+        coords: (N, 3) float32 CUDA tensor.
+        indices: (M, 4) int64 CUDA tensor.
+        distances: (M,) float32 CUDA tensor.
+        angles: (M,) float32 CUDA tensor.
+        dihedrals: (M,) float32 CUDA tensor.
+        grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
+        level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
+        anchor_coords: (n_components, 3, 3) float32 CUDA tensor of anchor positions.
+        component_ids: (M,) int32 CUDA tensor mapping entries to components.
+
+    Returns:
+        Tuple of (grad_coords_accum, grad_distances, grad_angles, grad_dihedrals).
+
+    Raises:
+        RuntimeError: If anchored NERF CUDA kernel is not available.
+    """
+    if not HAS_ANCHORED_NERF:
+        raise RuntimeError(
+            "Anchored NERF CUDA kernel not available. "
+            "Rebuild with CUDA support."
+        )
+
+    return _cuda_nerf_reconstruct_backward_leveled_anchored(
+        coords, indices, distances, angles, dihedrals,
+        grad_coords, level_offsets, anchor_coords, component_ids
     )

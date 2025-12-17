@@ -73,4 +73,19 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args);
  */
 PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args);
 
+/**
+ * Level-parallel NERF reconstruction with anchor coordinates.
+ * Python: _nerf_reconstruct_leveled_anchored(indices, distances, angles, dihedrals,
+ *             n_atoms, level_offsets, anchor_coords, component_ids) -> coords
+ */
+PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args);
+
+/**
+ * Level-parallel backward pass for anchored NERF reconstruction.
+ * Python: _nerf_reconstruct_backward_leveled_anchored(coords, indices, distances,
+ *             angles, dihedrals, grad_coords, level_offsets, anchor_coords, component_ids)
+ *             -> (grad_distances, grad_angles, grad_dihedrals)
+ */
+PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

@@ -16,7 +16,6 @@ from ..backend.dispatch import (
     TopologyInfo,
     build_bond_graph_csr,
     cartesian_to_internal,
-    kabsch_rotation,
 )
 from ..backend.graph import nerf_reconstruct
 from ..types import DihedralType
@@ -409,7 +408,9 @@ class CoordinateManager:
         Recompute Cartesian coordinates from internal.
 
         Uses NERF (Natural Extension Reference Frame) algorithm to reconstruct
-        3D coordinates from bond lengths, angles, and dihedrals.
+        3D coordinates from bond lengths, angles, and dihedrals. When anchor
+        coordinates are available, atoms are placed directly in the correct
+        reference frame without needing post-reconstruction Kabsch rotation.
         """
         if self._distances is None or self._angles is None or self._dihedrals is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: internal coordinates are None")
@@ -425,9 +426,6 @@ class CoordinateManager:
         # Get atom count (stored from initial coordinates)
         n_atoms = self._n_atoms
 
-        # NERF reconstruction (places each chain root at origin)
-        # Pass level_offsets for parallel CUDA reconstruction when available
-        #
         # Detach distances/angles if they came from a previous cartesian_to_internal
         # call with requires_grad. This prevents errors when:
         # 1. User did to_internal with grad-enabled coords, called backward()
@@ -440,6 +438,12 @@ class CoordinateManager:
             distances = distances.detach()
             angles = angles.detach()
 
+        # Get anchor coordinates and component IDs for anchored NERF
+        # This eliminates the need for post-reconstruction Kabsch rotation
+        anchor_coords = self._components.anchor_coords
+        component_ids = self._zmatrix.component_ids
+
+        # NERF reconstruction with anchored placement
         coords = nerf_reconstruct(
             zmatrix_indices,
             distances,
@@ -447,79 +451,26 @@ class CoordinateManager:
             self._dihedrals,
             n_atoms=n_atoms,
             level_offsets=self._zmatrix.level_offsets,
+            anchor_coords=anchor_coords,
+            component_ids=component_ids,
         )
 
-        # Clone coords for in-place modifications below (preserves autograd graph)
+        # Clone coords for any in-place modifications below (preserves autograd graph)
         if is_torch(coords):
             coords = coords.clone()
         else:
             coords = coords.copy()
 
-        # Restore chain positions AND orientations, plus orphan atoms
-        # NERF places each chain in a canonical frame - we need to rotate back to original
+        # Handle single-atom orphans - they need position restoration
+        # (NERF places root atoms at origin for each component)
         n_components = self._components.n_components
-
-        # Process each component (chains need rotation+translation, orphans just position)
         for comp_idx in range(n_components):
             component_size = self._components.get_component_size(comp_idx)
-            component_atoms = self._components.get_component_atoms(comp_idx)
-
             if component_size == 1:
-                # Single-atom component (orphan) - restore position from stored centroid
-                # NERF places root atoms at origin, so we must restore original position
+                component_atoms = self._components.get_component_atoms(comp_idx)
                 atom_idx = int(component_atoms[0])
                 if atom_idx < n_atoms:
                     coords[atom_idx] = self._components.centroids[comp_idx]
-            else:
-                # Multi-atom component (chain) - restore orientation AND position
-                atom_start = int(component_atoms[0])
-                atom_end = int(component_atoms[-1]) + 1
-
-                # Skip if out of bounds
-                if atom_end > n_atoms:
-                    continue
-
-                # Get reference coordinates for this chain (centered original coords)
-                reference_coords = self._components.reference_coords[comp_idx]
-                if reference_coords is None:
-                    continue
-
-                original_centroid = self._components.centroids[comp_idx]
-
-                # Use pre-computed contiguity flag (avoids per-iteration check)
-                if self._components.contiguous[comp_idx]:
-                    # Contiguous atoms - use slice
-                    component_coords = coords[atom_start:atom_end]
-                    reconstructed_centroid = component_coords.mean(axis=0)
-                    centered_reconstructed = component_coords - reconstructed_centroid
-
-                    # Compute Kabsch rotation: reconstructed → original orientation
-                    R = kabsch_rotation(centered_reconstructed, reference_coords)
-
-                    # Apply rotation then translate to original centroid
-                    aligned = centered_reconstructed @ R.T + original_centroid
-                    coords[atom_start:atom_end] = aligned
-                else:
-                    # Non-contiguous atoms - use indexing
-                    if is_torch(coords):
-                        import torch
-                        atom_indices = torch.from_numpy(component_atoms).to(coords.device)
-                        component_coords = coords[atom_indices.long()]
-                    else:
-                        component_coords = coords[component_atoms]
-
-                    reconstructed_centroid = component_coords.mean(axis=0)
-                    centered_reconstructed = component_coords - reconstructed_centroid
-
-                    # Compute Kabsch rotation: reconstructed → original orientation
-                    R = kabsch_rotation(centered_reconstructed, reference_coords)
-
-                    # Apply rotation then translate to original centroid
-                    aligned = centered_reconstructed @ R.T + original_centroid
-                    if is_torch(coords):
-                        coords[atom_indices.long()] = aligned
-                    else:
-                        coords[component_atoms] = aligned
 
         self._coordinates = coords
         self._cartesian_valid = True

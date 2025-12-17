@@ -573,4 +573,320 @@ void cuda_batch_nerf_reconstruct_backward_leveled(
     }
 }
 
+
+/* ========================================================================= */
+/* Anchored NERF CUDA functions                                              */
+/* ========================================================================= */
+
+
+/**
+ * Kernel: NERF reconstruction for a single level with anchor coordinates.
+ */
+__global__ void kernel_nerf_reconstruct_level_anchored(
+    float *coords,
+    const int64_t *indices,
+    const float *distances,
+    const float *angles,
+    const float *dihedrals,
+    int level_start,
+    int level_end,
+    int n_atoms,
+    const float *anchor_coords,    /* (n_components, 3, 3) flattened */
+    const int32_t *component_ids   /* (n_entries,) */
+) {
+    int i = level_start + blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= level_end) return;
+
+    int64_t atom_idx = indices[i * 4 + 0];
+    int64_t dist_ref = indices[i * 4 + 1];
+    int64_t angl_ref = indices[i * 4 + 2];
+    int64_t dihe_ref = indices[i * 4 + 3];
+
+    if (atom_idx < 0 || atom_idx >= n_atoms) return;
+
+    float *result = &coords[atom_idx * 3];
+
+    /* Get anchors for this component */
+    const float *anchor0 = NULL;
+    const float *anchor1 = NULL;
+    const float *anchor2 = NULL;
+    if (anchor_coords != NULL && component_ids != NULL) {
+        int32_t comp_id = component_ids[i];
+        anchor0 = &anchor_coords[comp_id * 9 + 0];
+        anchor1 = &anchor_coords[comp_id * 9 + 3];
+        anchor2 = &anchor_coords[comp_id * 9 + 6];
+    }
+
+    if (dist_ref < 0) {
+        /* First atom: place at anchor0 if available, else origin */
+        if (anchor0 != NULL) {
+            float3 a0 = ciffy_load_float3_ldg(anchor0);
+            result[0] = a0.x;
+            result[1] = a0.y;
+            result[2] = a0.z;
+        } else {
+            result[0] = 0.0f;
+            result[1] = 0.0f;
+            result[2] = 0.0f;
+        }
+
+    } else if (angl_ref < 0) {
+        /* Second atom: place along anchor direction if available */
+        if (dist_ref < n_atoms) {
+            const float *ref = &coords[dist_ref * 3];
+            if (anchor1 != NULL) {
+                nerf_place_along_direction_impl(ref, anchor1, distances[i], result);
+            } else {
+                nerf_place_along_x_impl(ref, distances[i], result);
+            }
+        }
+
+    } else if (dihe_ref < 0) {
+        /* Third atom: place in anchored plane if available */
+        if (dist_ref < n_atoms && angl_ref < n_atoms) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            if (anchor2 != NULL) {
+                nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distances[i], angles[i], result);
+            } else {
+                nerf_place_in_plane_impl(ref1, ref2, distances[i], angles[i], result);
+            }
+        }
+
+    } else {
+        /* Full NERF placement */
+        if (dihe_ref < n_atoms && angl_ref < n_atoms && dist_ref < n_atoms) {
+            const float *p1 = &coords[dihe_ref * 3];
+            const float *p2 = &coords[angl_ref * 3];
+            const float *p3 = &coords[dist_ref * 3];
+            nerf_place_atom_impl(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+        }
+    }
+}
+
+
+/**
+ * Kernel: Backward pass for anchored NERF reconstruction at a single level.
+ */
+__global__ void kernel_nerf_reconstruct_backward_level_anchored(
+    const float *coords,
+    const int64_t *indices,
+    const float *distances,
+    const float *angles,
+    const float *dihedrals,
+    float *grad_coords,
+    float *grad_distances,
+    float *grad_angles,
+    float *grad_dihedrals,
+    int level_start,
+    int level_end,
+    int n_atoms,
+    const float *anchor_coords,
+    const int32_t *component_ids
+) {
+    int i = level_start + blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= level_end) return;
+
+    int64_t atom_idx = indices[i * 4 + 0];
+    int64_t dist_ref = indices[i * 4 + 1];
+    int64_t angl_ref = indices[i * 4 + 2];
+    int64_t dihe_ref = indices[i * 4 + 3];
+
+    if (atom_idx < 0 || atom_idx >= n_atoms) {
+        grad_distances[i] = 0.0f;
+        grad_angles[i] = 0.0f;
+        grad_dihedrals[i] = 0.0f;
+        return;
+    }
+
+    const float *grad_result = &grad_coords[atom_idx * 3];
+
+    /* Get anchors for this component */
+    const float *anchor1 = NULL;
+    const float *anchor2 = NULL;
+    if (anchor_coords != NULL && component_ids != NULL) {
+        int32_t comp_id = component_ids[i];
+        anchor1 = &anchor_coords[comp_id * 9 + 3];
+        anchor2 = &anchor_coords[comp_id * 9 + 6];
+    }
+
+    if (dist_ref < 0) {
+        /* First atom: no gradients */
+        grad_distances[i] = 0.0f;
+        grad_angles[i] = 0.0f;
+        grad_dihedrals[i] = 0.0f;
+
+    } else if (angl_ref < 0) {
+        /* Second atom */
+        if (dist_ref < n_atoms) {
+            if (anchor1 != NULL) {
+                const float *ref = &coords[dist_ref * 3];
+                float grad_ref[3];
+                nerf_place_along_direction_backward_impl(
+                    ref, anchor1, distances[i],
+                    grad_result, grad_ref, &grad_distances[i]
+                );
+                grad_angles[i] = 0.0f;
+                grad_dihedrals[i] = 0.0f;
+                atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_ref[0]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_ref[1]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_ref[2]);
+            } else {
+                grad_distances[i] = grad_result[0];
+                grad_angles[i] = 0.0f;
+                grad_dihedrals[i] = 0.0f;
+                atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_result[0]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_result[1]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_result[2]);
+            }
+        }
+
+    } else if (dihe_ref < 0) {
+        /* Third atom */
+        if (angl_ref < n_atoms && dist_ref < n_atoms) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[angl_ref * 3];
+            float grad_ref1[3], grad_ref2[3];
+
+            if (anchor2 != NULL) {
+                nerf_place_in_plane_anchored_backward_impl(
+                    ref1, ref2, anchor2,
+                    distances[i], angles[i], grad_result,
+                    grad_ref1, grad_ref2,
+                    &grad_distances[i], &grad_angles[i]
+                );
+            } else {
+                nerf_place_in_plane_backward_impl(
+                    ref1, ref2,
+                    distances[i], angles[i], grad_result,
+                    grad_ref1, grad_ref2,
+                    &grad_distances[i], &grad_angles[i]
+                );
+            }
+            grad_dihedrals[i] = 0.0f;
+
+            atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_ref1[0]);
+            atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_ref1[1]);
+            atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_ref1[2]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 0], grad_ref2[0]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 1], grad_ref2[1]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 2], grad_ref2[2]);
+        } else {
+            grad_distances[i] = 0.0f;
+            grad_angles[i] = 0.0f;
+            grad_dihedrals[i] = 0.0f;
+        }
+
+    } else {
+        /* Full NERF */
+        if (dihe_ref < n_atoms && angl_ref < n_atoms && dist_ref < n_atoms) {
+            const float *p1 = &coords[dihe_ref * 3];
+            const float *p2 = &coords[angl_ref * 3];
+            const float *p3 = &coords[dist_ref * 3];
+            float grad_a[3], grad_b[3], grad_c[3];
+
+            nerf_place_atom_backward_impl(
+                p1, p2, p3, distances[i], angles[i], dihedrals[i], grad_result,
+                grad_a, grad_b, grad_c,
+                &grad_distances[i], &grad_angles[i], &grad_dihedrals[i]
+            );
+
+            atomicAdd(&grad_coords[dihe_ref * 3 + 0], grad_a[0]);
+            atomicAdd(&grad_coords[dihe_ref * 3 + 1], grad_a[1]);
+            atomicAdd(&grad_coords[dihe_ref * 3 + 2], grad_a[2]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 0], grad_b[0]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 1], grad_b[1]);
+            atomicAdd(&grad_coords[angl_ref * 3 + 2], grad_b[2]);
+            atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_c[0]);
+            atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_c[1]);
+            atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_c[2]);
+        } else {
+            grad_distances[i] = 0.0f;
+            grad_angles[i] = 0.0f;
+            grad_dihedrals[i] = 0.0f;
+        }
+    }
+}
+
+
+/**
+ * CUDA implementation of batch_nerf_reconstruct_leveled_anchored.
+ */
+void cuda_batch_nerf_reconstruct_leveled_anchored(
+    float *d_coords,
+    size_t n_atoms,
+    const int64_t *d_indices,
+    size_t n_entries,
+    const float *d_distances,
+    const float *d_angles,
+    const float *d_dihedrals,
+    const int *level_offsets,
+    int n_levels,
+    const float *d_anchor_coords,
+    const int32_t *d_component_ids,
+    cudaStream_t stream
+) {
+    if (n_entries == 0) return;
+
+    int threads = 256;
+
+    for (int level = 0; level < n_levels; level++) {
+        int level_start = level_offsets[level];
+        int level_end = level_offsets[level + 1];
+        int level_size = level_end - level_start;
+
+        if (level_size > 0) {
+            int blocks = (level_size + threads - 1) / threads;
+            kernel_nerf_reconstruct_level_anchored<<<blocks, threads, 0, stream>>>(
+                d_coords, d_indices, d_distances, d_angles, d_dihedrals,
+                level_start, level_end, (int)n_atoms,
+                d_anchor_coords, d_component_ids
+            );
+        }
+    }
+}
+
+
+/**
+ * CUDA implementation of batch_nerf_reconstruct_backward_leveled_anchored.
+ */
+void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
+    const float *d_coords,
+    size_t n_atoms,
+    const int64_t *d_indices,
+    size_t n_entries,
+    const float *d_distances,
+    const float *d_angles,
+    const float *d_dihedrals,
+    float *d_grad_coords,
+    float *d_grad_distances,
+    float *d_grad_angles,
+    float *d_grad_dihedrals,
+    const int *level_offsets,
+    int n_levels,
+    const float *d_anchor_coords,
+    const int32_t *d_component_ids,
+    cudaStream_t stream
+) {
+    if (n_entries == 0) return;
+
+    int threads = 256;
+
+    for (int level = n_levels - 1; level >= 0; level--) {
+        int level_start = level_offsets[level];
+        int level_end = level_offsets[level + 1];
+        int level_size = level_end - level_start;
+
+        if (level_size > 0) {
+            int blocks = (level_size + threads - 1) / threads;
+            kernel_nerf_reconstruct_backward_level_anchored<<<blocks, threads, 0, stream>>>(
+                d_coords, d_indices, d_distances, d_angles, d_dihedrals,
+                d_grad_coords, d_grad_distances, d_grad_angles, d_grad_dihedrals,
+                level_start, level_end, (int)n_atoms,
+                d_anchor_coords, d_component_ids
+            );
+        }
+    }
+}
+
 } /* extern "C" */

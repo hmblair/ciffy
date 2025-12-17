@@ -112,6 +112,8 @@ def nerf_reconstruct(
     dihedrals: Array,
     n_atoms: int,
     level_offsets: Array | None = None,
+    anchor_coords: Array | None = None,
+    component_ids: Array | None = None,
 ) -> Array:
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
@@ -130,13 +132,18 @@ def nerf_reconstruct(
         level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
             When provided, enables parallel NERF on CUDA by processing atoms
             at the same BFS level simultaneously.
+        anchor_coords: (n_components, 3, 3) anchor positions for each component.
+            When provided, atoms are placed directly in the reference frame
+            defined by these anchors, eliminating need for Kabsch rotation.
+        component_ids: (M,) int32 component index per Z-matrix entry.
+            Required when anchor_coords is provided.
 
     Returns:
         (N, 3) array of Cartesian coordinates.
     """
     if is_torch(distances):
-        return _torch_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets)
-    return _numpy_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets)
+        return _torch_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets, anchor_coords, component_ids)
+    return _numpy_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets, anchor_coords, component_ids)
 
 
 # =============================================================================
@@ -161,21 +168,34 @@ def _numpy_nerf_reconstruct(
     dihedrals: np.ndarray,
     n_atoms: int,
     level_offsets: np.ndarray | None = None,
+    anchor_coords: np.ndarray | None = None,
+    component_ids: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     NumPy path: use C extension directly.
 
-    Note: level_offsets is accepted for API compatibility but ignored on CPU.
-    The leveled implementation has massive OpenMP overhead on CPU (spawns
-    a parallel region per level), so we always use the sequential version.
+    Note: For anchored NERF, the leveled C extension is used since anchored
+    reconstruction requires the leveled approach. For non-anchored, sequential
+    version is used to avoid OpenMP overhead.
     """
+    from .._c import _nerf_reconstruct_leveled_anchored as _c_nerf_reconstruct_anchored
+
     indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
     dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
     ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
     dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
 
-    # Always use sequential version on CPU - leveled version has massive
-    # OpenMP overhead from spawning parallel regions per level
+    # Anchored path: use leveled anchored C extension
+    if anchor_coords is not None and component_ids is not None and level_offsets is not None:
+        anchor_f32 = np.ascontiguousarray(anchor_coords, dtype=np.float32)
+        comp_ids_i32 = np.ascontiguousarray(component_ids, dtype=np.int32)
+        level_off_i32 = np.ascontiguousarray(level_offsets, dtype=np.int32)
+        return _c_nerf_reconstruct_anchored(
+            indices_i64, dist_f32, ang_f32, dih_f32, n_atoms,
+            level_off_i32, anchor_f32, comp_ids_i32
+        )
+
+    # Non-anchored: use sequential version (avoid OpenMP overhead)
     return _c_nerf_reconstruct(indices_i64, dist_f32, ang_f32, dih_f32, n_atoms)
 
 
@@ -244,6 +264,8 @@ def _torch_nerf_reconstruct(
     dihedrals: "torch.Tensor",
     n_atoms: int,
     level_offsets: Array | None = None,
+    anchor_coords: Array | None = None,
+    component_ids: Array | None = None,
 ) -> "torch.Tensor":
     """
     PyTorch dispatch for NERF reconstruction.
@@ -255,8 +277,12 @@ def _torch_nerf_reconstruct(
 
     When level_offsets is provided, CUDA can process atoms at the same BFS
     level in parallel, reducing kernel launches from O(atoms) to O(levels).
+
+    When anchor_coords and component_ids are provided, uses anchored NERF
+    which places atoms directly in the reference frame defined by anchors.
     """
     import torch
+    from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, HAS_ANCHORED_NERF
 
     device = distances.device
     dtype = distances.dtype
@@ -269,23 +295,57 @@ def _torch_nerf_reconstruct(
     else:
         indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
 
+    # Convert anchor_coords and component_ids if provided
+    anchor_tensor = None
+    comp_ids_tensor = None
+    if anchor_coords is not None and component_ids is not None:
+        if is_torch(anchor_coords) and anchor_coords.device == device:
+            anchor_tensor = anchor_coords
+        elif is_torch(anchor_coords):
+            anchor_tensor = anchor_coords.to(device)
+        else:
+            anchor_tensor = torch.from_numpy(np.asarray(anchor_coords)).to(device)
+
+        if is_torch(component_ids) and component_ids.device == device:
+            comp_ids_tensor = component_ids
+        elif is_torch(component_ids):
+            comp_ids_tensor = component_ids.to(device)
+        else:
+            comp_ids_tensor = torch.from_numpy(np.asarray(component_ids)).to(device)
+
     # Autograd path for gradient computation
     if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms, level_offsets)
+        return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms, level_offsets, anchor_tensor, comp_ids_tensor)
 
-    # CUDA path with level-parallel reconstruction
+    # CUDA path with anchored or level-parallel reconstruction
     if is_cuda_available(distances) and level_offsets is not None:
+        # Convert level_offsets to tensor
+        if is_torch(level_offsets) and level_offsets.device == device:
+            level_offsets_tensor = level_offsets
+        elif is_torch(level_offsets):
+            level_offsets_tensor = level_offsets.to(device)
+        else:
+            level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
+
+        # Anchored CUDA path
+        if anchor_tensor is not None and comp_ids_tensor is not None and HAS_ANCHORED_NERF:
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
+            cuda_nerf_reconstruct_leveled_anchored(
+                coords,
+                indices_tensor.to(torch.int64).contiguous(),
+                distances.to(torch.float32).contiguous(),
+                angles.to(torch.float32).contiguous(),
+                dihedrals.to(torch.float32).contiguous(),
+                level_offsets_tensor.to(torch.int32).contiguous(),
+                anchor_tensor.to(torch.float32).contiguous(),
+                comp_ids_tensor.to(torch.int32).contiguous(),
+            )
+            return coords.to(dtype)
+
+        # Non-anchored CUDA path
         from .cuda_ops import cuda_nerf_reconstruct_leveled, HAS_LEVELED_NERF
         if HAS_LEVELED_NERF:
-            # Convert level_offsets to tensor (skip if already correct)
-            if is_torch(level_offsets) and level_offsets.device == device:
-                level_offsets_tensor = level_offsets
-            elif is_torch(level_offsets):
-                level_offsets_tensor = level_offsets.to(device)
-            else:
-                level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
-
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
             cuda_nerf_reconstruct_leveled(
                 coords,
@@ -297,11 +357,27 @@ def _torch_nerf_reconstruct(
             )
             return coords.to(dtype)
 
-    # CPU path: use sequential C extension (leveled has massive OpenMP overhead)
+    # CPU path: use C extension
     indices_np = indices_tensor.cpu().numpy().astype(np.int64)
     dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
     ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
     dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
 
+    # Anchored CPU path
+    if anchor_tensor is not None and comp_ids_tensor is not None and level_offsets is not None:
+        from .._c import _nerf_reconstruct_leveled_anchored as _c_nerf_reconstruct_anchored
+        anchor_np = anchor_tensor.cpu().numpy().astype(np.float32)
+        comp_ids_np = comp_ids_tensor.cpu().numpy().astype(np.int32)
+        if is_torch(level_offsets):
+            level_off_np = level_offsets.cpu().numpy().astype(np.int32)
+        else:
+            level_off_np = np.asarray(level_offsets, dtype=np.int32)
+        coords_np = _c_nerf_reconstruct_anchored(
+            indices_np, dist_f32, ang_f32, dih_f32, n_atoms,
+            level_off_np, anchor_np, comp_ids_np
+        )
+        return torch.from_numpy(coords_np).to(device=device, dtype=dtype)
+
+    # Non-anchored CPU path
     coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
     return torch.from_numpy(coords_np).to(device=device, dtype=dtype)

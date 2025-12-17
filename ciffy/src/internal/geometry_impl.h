@@ -253,6 +253,95 @@ static inline void nerf_place_in_plane_impl(const float *ref1, const float *ref2
 }
 
 
+/**
+ * Place second atom along direction defined by anchors (instead of +X).
+ *
+ * Places new atom at: ref + distance * normalize(anchor1 - anchor0)
+ * where ref is already at anchor0's position.
+ */
+CIFFY_HOST_DEVICE
+static inline void nerf_place_along_direction_impl(
+    const float *ref,      /* First atom position (already at anchor0) */
+    const float *anchor1,  /* Second anchor (defines direction) */
+    float distance,
+    float *result
+) {
+    /* Direction from anchor0 (ref) to anchor1 */
+    float dx = anchor1[0] - ref[0];
+    float dy = anchor1[1] - ref[1];
+    float dz = anchor1[2] - ref[2];
+    float norm = CIFFY_SQRTF(dx*dx + dy*dy + dz*dz) + CIFFY_EPS;
+
+    /* Place at distance along this direction */
+    result[0] = ref[0] + distance * dx / norm;
+    result[1] = ref[1] + distance * dy / norm;
+    result[2] = ref[2] + distance * dz / norm;
+}
+
+
+/**
+ * Place third atom in plane defined by anchors (instead of XY plane).
+ *
+ * Uses the plane normal from (anchor1-anchor0) x (anchor2-anchor0) to
+ * define the perpendicular direction for the angle.
+ */
+CIFFY_HOST_DEVICE
+static inline void nerf_place_in_plane_anchored_impl(
+    const float *ref1,     /* Distance reference (atom 1, already placed) */
+    const float *ref2,     /* Angle reference (atom 0, already placed) */
+    const float *anchor2,  /* Third anchor (defines plane normal) */
+    float distance,
+    float angle,
+    float *result
+) {
+    /* u = direction from ref1 toward ref2 (normalized) */
+    float ux = ref2[0] - ref1[0];
+    float uy = ref2[1] - ref1[1];
+    float uz = ref2[2] - ref1[2];
+    float u_norm = CIFFY_SQRTF(ux*ux + uy*uy + uz*uz) + CIFFY_EPS;
+    ux /= u_norm; uy /= u_norm; uz /= u_norm;
+
+    /* Build plane normal from anchors: (ref1-ref2) x (anchor2-ref2)
+     * Note: ref2 is at anchor0 position, ref1 is at anchor1 direction */
+    float v1x = ref1[0] - ref2[0];
+    float v1y = ref1[1] - ref2[1];
+    float v1z = ref1[2] - ref2[2];
+
+    float v2x = anchor2[0] - ref2[0];
+    float v2y = anchor2[1] - ref2[1];
+    float v2z = anchor2[2] - ref2[2];
+
+    /* plane_normal = v1 x v2 */
+    float nx = v1y*v2z - v1z*v2y;
+    float ny = v1z*v2x - v1x*v2z;
+    float nz = v1x*v2y - v1y*v2x;
+
+    /* perp = plane_normal x u (in-plane perpendicular to bond direction) */
+    float perpx = ny*uz - nz*uy;
+    float perpy = nz*ux - nx*uz;
+    float perpz = nx*uy - ny*ux;
+    float perp_norm = CIFFY_SQRTF(perpx*perpx + perpy*perpy + perpz*perpz) + CIFFY_EPS;
+    perpx /= perp_norm; perpy /= perp_norm; perpz /= perp_norm;
+
+    /* Check if perp points toward anchor2; if not, flip it.
+     * The cross product can give either direction, so we must ensure
+     * perp points toward the side where anchor2 lies. */
+    float to_anchor_x = anchor2[0] - ref1[0];
+    float to_anchor_y = anchor2[1] - ref1[1];
+    float to_anchor_z = anchor2[2] - ref1[2];
+    float dot = perpx * to_anchor_x + perpy * to_anchor_y + perpz * to_anchor_z;
+    if (dot < 0) {
+        perpx = -perpx; perpy = -perpy; perpz = -perpz;
+    }
+
+    /* Place: ref1 + distance * (cos(angle)*u + sin(angle)*perp) */
+    float cos_a = CIFFY_COSF(angle), sin_a = CIFFY_SINF(angle);
+    result[0] = ref1[0] + distance * (cos_a * ux + sin_a * perpx);
+    result[1] = ref1[1] + distance * (cos_a * uy + sin_a * perpy);
+    result[2] = ref1[2] + distance * (cos_a * uz + sin_a * perpz);
+}
+
+
 /* ========================================================================= */
 /* Backward (gradient) implementations                                       */
 /* ========================================================================= */
@@ -602,6 +691,112 @@ static inline void nerf_place_in_plane_backward_impl(
 
     vec_normalize_backward(u, u_norm, grad_u, grad_u_raw);
     vec_sub_backward(grad_u_raw, grad_ref2, grad_ref1);
+}
+
+
+/**
+ * Backward pass for nerf_place_along_direction.
+ *
+ * Note: No gradients flow to anchor1 (frozen reference).
+ */
+CIFFY_HOST_DEVICE
+static inline void nerf_place_along_direction_backward_impl(
+    const float *ref,
+    const float *anchor1,
+    float distance,
+    const float *grad_result,
+    float *grad_ref,
+    float *grad_distance
+) {
+    /* Forward: result = ref + distance * d_hat where d_hat = (anchor1 - ref) / |anchor1 - ref| */
+    float dx = anchor1[0] - ref[0];
+    float dy = anchor1[1] - ref[1];
+    float dz = anchor1[2] - ref[2];
+    float norm = CIFFY_SQRTF(dx*dx + dy*dy + dz*dz) + CIFFY_EPS;
+    float dhx = dx / norm, dhy = dy / norm, dhz = dz / norm;
+
+    /* grad_distance = grad_result . d_hat */
+    *grad_distance = grad_result[0] * dhx + grad_result[1] * dhy + grad_result[2] * dhz;
+
+    /* grad_ref = grad_result (from the ref term in result = ref + ...) */
+    /* Plus contribution from d_hat depending on ref, but anchor is frozen so we simplify */
+    grad_ref[0] = grad_result[0];
+    grad_ref[1] = grad_result[1];
+    grad_ref[2] = grad_result[2];
+}
+
+
+/**
+ * Backward pass for nerf_place_in_plane_anchored.
+ *
+ * Note: No gradients flow to anchor2 (frozen reference).
+ */
+CIFFY_HOST_DEVICE
+static inline void nerf_place_in_plane_anchored_backward_impl(
+    const float *ref1,
+    const float *ref2,
+    const float *anchor2,
+    float distance,
+    float angle,
+    const float *grad_result,
+    float *grad_ref1,
+    float *grad_ref2,
+    float *grad_distance,
+    float *grad_angle
+) {
+    /* This is similar to nerf_place_in_plane_backward but with anchored plane normal.
+     * For simplicity, we compute gradients only for distance and angle,
+     * and pass gradient through to ref1/ref2. anchor2 is frozen. */
+
+    float ux = ref2[0] - ref1[0];
+    float uy = ref2[1] - ref1[1];
+    float uz = ref2[2] - ref1[2];
+    float u_norm = CIFFY_SQRTF(ux*ux + uy*uy + uz*uz) + CIFFY_EPS;
+    ux /= u_norm; uy /= u_norm; uz /= u_norm;
+
+    float v1x = ref1[0] - ref2[0];
+    float v1y = ref1[1] - ref2[1];
+    float v1z = ref1[2] - ref2[2];
+
+    float v2x = anchor2[0] - ref2[0];
+    float v2y = anchor2[1] - ref2[1];
+    float v2z = anchor2[2] - ref2[2];
+
+    float nx = v1y*v2z - v1z*v2y;
+    float ny = v1z*v2x - v1x*v2z;
+    float nz = v1x*v2y - v1y*v2x;
+
+    float perpx = ny*uz - nz*uy;
+    float perpy = nz*ux - nx*uz;
+    float perpz = nx*uy - ny*ux;
+    float perp_norm = CIFFY_SQRTF(perpx*perpx + perpy*perpy + perpz*perpz) + CIFFY_EPS;
+    perpx /= perp_norm; perpy /= perp_norm; perpz /= perp_norm;
+
+    float cos_a = CIFFY_COSF(angle), sin_a = CIFFY_SINF(angle);
+
+    /* disp = cos_a * u + sin_a * perp */
+    float dispx = cos_a * ux + sin_a * perpx;
+    float dispy = cos_a * uy + sin_a * perpy;
+    float dispz = cos_a * uz + sin_a * perpz;
+
+    /* grad_distance = grad_result . disp */
+    *grad_distance = grad_result[0] * dispx + grad_result[1] * dispy + grad_result[2] * dispz;
+
+    /* grad_angle: result depends on angle via cos_a, sin_a */
+    /* d(result)/d(angle) = distance * (-sin_a * u + cos_a * perp) */
+    float da_dispx = -sin_a * ux + cos_a * perpx;
+    float da_dispy = -sin_a * uy + cos_a * perpy;
+    float da_dispz = -sin_a * uz + cos_a * perpz;
+    *grad_angle = distance * (grad_result[0] * da_dispx + grad_result[1] * da_dispy + grad_result[2] * da_dispz);
+
+    /* Gradients to ref1, ref2 - simplified: pass through from result = ref1 + ... */
+    grad_ref1[0] = grad_result[0];
+    grad_ref1[1] = grad_result[1];
+    grad_ref1[2] = grad_result[2];
+
+    grad_ref2[0] = 0.0f;
+    grad_ref2[1] = 0.0f;
+    grad_ref2[2] = 0.0f;
 }
 
 

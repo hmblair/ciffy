@@ -215,15 +215,18 @@ class ConnectedComponents:
     Connected component storage in CSR format.
 
     Stores which atoms belong to which connected components (chains),
-    along with reference data for position/orientation restoration
-    during NERF reconstruction.
+    along with anchor coordinates for NERF reconstruction. Anchor coords
+    are the first 3 atoms' positions per component, used to place atoms
+    directly in the correct reference frame without post-rotation.
 
     Attributes:
         offsets: (C+1,) int64 CSR offsets array.
         atoms: (N,) int64 atom indices per component (flattened).
-        centroids: (C, 3) float array of component centroids.
-        reference_coords: List of (n_i, 3) centered coordinates for alignment.
-            None for single-atom components.
+        centroids: (C, 3) float array of component centroids. Used for single-atom
+            components that don't participate in NERF.
+        anchor_coords: (C, 3, 3) array of anchor positions for each component.
+            anchor_coords[c] contains [anchor0, anchor1, anchor2] for component c.
+            For components with <3 atoms, remaining anchors are zero-padded.
         contiguous: List of bool indicating if component atoms are contiguous.
 
     Example:
@@ -236,7 +239,7 @@ class ConnectedComponents:
     offsets: np.ndarray
     atoms: np.ndarray
     centroids: Array  # Can be numpy or torch, same device as source coordinates
-    reference_coords: list[Array | None]  # Can be numpy or torch
+    anchor_coords: Array  # (n_components, 3, 3) anchor positions
     contiguous: list[bool]
 
     @classmethod
@@ -251,8 +254,8 @@ class ConnectedComponents:
         Build connected components from bond graph in CSR format.
 
         Finds all connected components including isolated atoms (no bonds).
-        Component centroids and reference coordinates are stored for
-        position/orientation restoration during NERF reconstruction.
+        Stores anchor coordinates (first 3 atoms' positions) for each component,
+        which are used to place atoms directly in the correct frame during NERF.
 
         Args:
             csr_offsets: (N+1,) CSR offsets array for bond graph.
@@ -267,13 +270,15 @@ class ConnectedComponents:
             if is_torch(coordinates):
                 import torch
                 centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
+                anchor_coords = torch.zeros(0, 3, 3, dtype=coordinates.dtype, device=coordinates.device)
             else:
                 centroids = np.zeros((0, 3), dtype=coordinates.dtype)
+                anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
                 centroids=centroids,
-                reference_coords=[],
+                anchor_coords=anchor_coords,
                 contiguous=[],
             )
 
@@ -286,26 +291,31 @@ class ConnectedComponents:
             if is_torch(coordinates):
                 import torch
                 centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
+                anchor_coords = torch.zeros(0, 3, 3, dtype=coordinates.dtype, device=coordinates.device)
             else:
                 centroids = np.zeros((0, 3), dtype=coordinates.dtype)
+                anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
                 centroids=centroids,
-                reference_coords=[],
+                anchor_coords=anchor_coords,
                 contiguous=[],
             )
 
-        # Build centroids array on the same device as coordinates
+        # Build arrays on the same device as coordinates
         if is_torch(coordinates):
             import torch
             centroids = torch.zeros(
                 n_components, 3, dtype=coordinates.dtype, device=coordinates.device
             )
+            anchor_coords = torch.zeros(
+                n_components, 3, 3, dtype=coordinates.dtype, device=coordinates.device
+            )
         else:
             centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
+            anchor_coords = np.zeros((n_components, 3, 3), dtype=coordinates.dtype)
 
-        reference_coords_list = []
         contiguous_list = []
 
         for i in range(n_components):
@@ -323,21 +333,17 @@ class ConnectedComponents:
             )
             contiguous_list.append(is_contiguous)
 
-            # Store reference coords for multi-atom components
-            if len(component_atoms) > 1:
-                centered_coords = component_coords - centroid
-                if is_torch(centered_coords):
-                    reference_coords_list.append(centered_coords.clone())
-                else:
-                    reference_coords_list.append(centered_coords.copy())
-            else:
-                reference_coords_list.append(None)
+            # Store anchor coords (first 3 atoms' positions)
+            n_anchor = min(3, len(component_atoms))
+            if n_anchor > 0:
+                anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
+                # Remaining anchors stay zero-padded
 
         return cls(
             offsets=comp_offsets,
             atoms=comp_atoms,
             centroids=centroids,
-            reference_coords=reference_coords_list,
+            anchor_coords=anchor_coords,
             contiguous=contiguous_list,
         )
 
@@ -358,23 +364,25 @@ class ConnectedComponents:
 
     def update_centroids(self, coordinates: Array) -> None:
         """
-        Update centroids and reference coordinates from new Cartesian coordinates.
+        Update centroids and anchor coordinates from new Cartesian coordinates.
 
         This is called when coordinates change but component structure stays the same.
-        Centroids are kept on the same device as coordinates (no transfers).
+        Data is kept on the same device as coordinates (no transfers).
         """
         n_components = self.n_components
 
-        # Build new centroids array on the same device as coordinates
+        # Build new arrays on the same device as coordinates
         if is_torch(coordinates):
             import torch
             new_centroids = torch.zeros(
                 n_components, 3, dtype=coordinates.dtype, device=coordinates.device
             )
+            new_anchor_coords = torch.zeros(
+                n_components, 3, 3, dtype=coordinates.dtype, device=coordinates.device
+            )
         else:
             new_centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
-
-        new_reference_coords = []
+            new_anchor_coords = np.zeros((n_components, 3, 3), dtype=coordinates.dtype)
 
         for i in range(n_components):
             component_atoms = self.get_component_atoms(i)
@@ -382,19 +390,13 @@ class ConnectedComponents:
             centroid = component_coords.mean(axis=0)
             new_centroids[i] = centroid
 
-            # Update reference coords for multi-atom components
-            if len(component_atoms) > 1:
-                centered_coords = component_coords - centroid
-                # Clone/copy to avoid referencing the original tensor
-                if is_torch(centered_coords):
-                    new_reference_coords.append(centered_coords.clone())
-                else:
-                    new_reference_coords.append(centered_coords.copy())
-            else:
-                new_reference_coords.append(None)
+            # Update anchor coords (first 3 atoms' positions)
+            n_anchor = min(3, len(component_atoms))
+            if n_anchor > 0:
+                new_anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
 
         self.centroids = new_centroids
-        self.reference_coords = new_reference_coords
+        self.anchor_coords = new_anchor_coords
 
 
 # =============================================================================
@@ -420,13 +422,14 @@ class ZMatrix:
         >>> print(zmatrix.atom_indices)  # Column 0
     """
 
-    __slots__ = ('_indices', '_dihedral_types', '_levels', '_level_offsets')
+    __slots__ = ('_indices', '_dihedral_types', '_levels', '_level_offsets', '_component_ids')
 
     def __init__(
         self,
         indices: Array,
         dihedral_types: Array | None = None,
         levels: Array | None = None,
+        component_ids: Array | None = None,
     ) -> None:
         """
         Initialize Z-matrix from indices array.
@@ -435,11 +438,13 @@ class ZMatrix:
             indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 array mapping entry -> dihedral type (-1 if unnamed)
             levels: (M,) int32 array of BFS levels for parallel NERF reconstruction
+            component_ids: (M,) int32 array mapping entry -> component index
         """
         self._indices = indices
         self._dihedral_types = dihedral_types
         self._levels = levels
         self._level_offsets = None  # Computed lazily
+        self._component_ids = component_ids
 
     @classmethod
     def from_topology(
@@ -462,17 +467,17 @@ class ZMatrix:
             csr_neighbors: Optional pre-built CSR neighbors array. If None, built from topology.
 
         Returns:
-            ZMatrix with entries in placement order, dihedral type annotations, and BFS levels.
+            ZMatrix with entries in placement order, dihedral type annotations, BFS levels, and component IDs.
         """
         # Build Z-matrix with dihedral-aware refs in single C pass
-        indices, dihedral_types, levels = _build_zmatrix_indices_from_topology(
+        indices, dihedral_types, levels, component_ids = _build_zmatrix_indices_from_topology(
             topology, csr_offsets, csr_neighbors
         )
 
         if len(indices) == 0:
-            return cls(indices, np.array([], dtype=np.int8), np.array([], dtype=np.int32))
+            return cls(indices, np.array([], dtype=np.int8), np.array([], dtype=np.int32), np.array([], dtype=np.int32))
 
-        return cls(indices, dihedral_types, levels)
+        return cls(indices, dihedral_types, levels, component_ids)
 
     @property
     def indices(self) -> Array:
@@ -508,6 +513,11 @@ class ZMatrix:
     def levels(self) -> Array | None:
         """(M,) int32 BFS level per entry (0 for root atoms)."""
         return self._levels
+
+    @property
+    def component_ids(self) -> Array | None:
+        """(M,) int32 component index per entry."""
+        return self._component_ids
 
     @property
     def level_offsets(self) -> Array:
@@ -615,13 +625,15 @@ class ZMatrix:
         """Convert indices to NumPy array."""
         dihedral_types = to_numpy(self._dihedral_types) if self._dihedral_types is not None else None
         levels = to_numpy(self._levels) if self._levels is not None else None
-        return ZMatrix(to_numpy(self._indices), dihedral_types, levels)
+        component_ids = to_numpy(self._component_ids) if self._component_ids is not None else None
+        return ZMatrix(to_numpy(self._indices), dihedral_types, levels, component_ids)
 
     def torch(self) -> "ZMatrix":
         """Convert indices to PyTorch tensor."""
         dihedral_types = to_torch(self._dihedral_types) if self._dihedral_types is not None else None
         levels = to_torch(self._levels) if self._levels is not None else None
-        return ZMatrix(to_torch(self._indices), dihedral_types, levels)
+        component_ids = to_torch(self._component_ids) if self._component_ids is not None else None
+        return ZMatrix(to_torch(self._indices), dihedral_types, levels, component_ids)
 
     def to(self, device: str) -> "ZMatrix":
         """
@@ -656,7 +668,16 @@ class ZMatrix:
         else:
             levels = None
 
-        return ZMatrix(indices, dihedral_types, levels)
+        # Convert component_ids
+        if self._component_ids is not None:
+            if is_torch(self._component_ids):
+                component_ids = self._component_ids.to(device)
+            else:
+                component_ids = torch.from_numpy(self._component_ids).to(device)
+        else:
+            component_ids = None
+
+        return ZMatrix(indices, dihedral_types, levels, component_ids)
 
     def __repr__(self) -> str:
         backend = "torch" if is_torch(self._indices) else "numpy"
@@ -794,11 +815,14 @@ def _build_zmatrix_indices_from_topology(
     topology: TopologyInfo,
     csr_offsets: np.ndarray | None = None,
     csr_neighbors: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
 
     Internal function used by ZMatrix.from_topology().
+
+    Returns:
+        Tuple of (indices, dihedral_types, levels, component_ids).
     """
     n_atoms = topology.n_atoms
 
@@ -806,7 +830,8 @@ def _build_zmatrix_indices_from_topology(
     if csr_offsets is None or csr_neighbors is None:
         edges, n_atoms = build_bond_graph_from_topology(topology)
         if len(edges) == 0:
-            return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8), np.array([], dtype=np.int32)
+            return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
+                    np.array([], dtype=np.int32), np.array([], dtype=np.int32))
         offsets, neighbors = edges_to_csr(edges, n_atoms)
     else:
         offsets, neighbors = csr_offsets, csr_neighbors
@@ -815,7 +840,8 @@ def _build_zmatrix_indices_from_topology(
     comp_atoms, comp_offsets, n_components = find_connected_components(offsets, neighbors, n_atoms)
 
     if n_components == 0:
-        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8), np.array([], dtype=np.int32)
+        return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
+                np.array([], dtype=np.int32), np.array([], dtype=np.int32))
 
     # Extract component info for Z-matrix construction
     component_sizes = np.diff(comp_offsets).astype(np.int64)
@@ -886,17 +912,18 @@ def _sort_zmatrix_by_level(
     indices: np.ndarray,
     dihedral_types: np.ndarray,
     levels: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    component_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Sort Z-matrix arrays by NERF dependency level for parallel reconstruction."""
     if len(levels) == 0:
-        return indices, dihedral_types, levels
+        return indices, dihedral_types, levels, component_ids
 
     # Recompute levels to ensure NERF-correct dependencies
     nerf_levels = _compute_nerf_levels(indices)
 
     # Sort by level
     sort_idx = np.argsort(nerf_levels, kind='stable')
-    return indices[sort_idx], dihedral_types[sort_idx], nerf_levels[sort_idx]
+    return indices[sort_idx], dihedral_types[sort_idx], nerf_levels[sort_idx], component_ids[sort_idx]
 
 
 def build_zmatrix_from_components(
@@ -909,7 +936,7 @@ def build_zmatrix_from_components(
     atoms: np.ndarray | None = None,
     sequence: np.ndarray | None = None,
     res_sizes: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix from CSR graph for multiple connected components.
 
@@ -933,6 +960,7 @@ def build_zmatrix_from_components(
             zmatrix: (M, 4) Z-matrix array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 dihedral type per entry (-1 if not named)
             levels: (M,) int32 BFS level per entry
+            component_ids: (M,) int32 component index per entry
     """
     # Use parallel C implementation with optional dihedral-aware mode
     zmatrix, dihedral_types, levels, counts = _build_zmatrix_parallel_c(
@@ -940,28 +968,37 @@ def build_zmatrix_from_components(
         component_starts, component_sizes, roots,
         atoms, sequence, res_sizes
     )
-    # Trim to actual entries
+    # Trim to actual entries and build component_ids
     total_entries = int(counts.sum())
     if total_entries < len(zmatrix):
         result = np.zeros((total_entries, 4), dtype=np.int64)
         result_dtypes = np.full(total_entries, -1, dtype=np.int8)
         result_levels = np.zeros(total_entries, dtype=np.int32)
+        result_comp_ids = np.zeros(total_entries, dtype=np.int32)
         src_offset = 0
         dst_offset = 0
-        for size, count in zip(component_sizes, counts):
+        for comp_idx, (size, count) in enumerate(zip(component_sizes, counts)):
             count = int(count)
             result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
             result_dtypes[dst_offset:dst_offset + count] = dihedral_types[src_offset:src_offset + count]
             result_levels[dst_offset:dst_offset + count] = levels[src_offset:src_offset + count]
+            result_comp_ids[dst_offset:dst_offset + count] = comp_idx
             src_offset += size
             dst_offset += count
     else:
         result = zmatrix[:total_entries]
         result_dtypes = dihedral_types[:total_entries]
         result_levels = levels[:total_entries]
+        # Build component_ids from counts
+        result_comp_ids = np.zeros(total_entries, dtype=np.int32)
+        dst_offset = 0
+        for comp_idx, count in enumerate(counts):
+            count = int(count)
+            result_comp_ids[dst_offset:dst_offset + count] = comp_idx
+            dst_offset += count
 
     # Sort by level for parallel NERF (one-time cost at construction)
-    return _sort_zmatrix_by_level(result, result_dtypes, result_levels)
+    return _sort_zmatrix_by_level(result, result_dtypes, result_levels, result_comp_ids)
 
 
 # =============================================================================
@@ -976,6 +1013,8 @@ def nerf_reconstruct(
     dihedrals: Array,
     n_atoms: int | None = None,
     level_offsets: Array | None = None,
+    anchor_coords: Array | None = None,
+    component_ids: Array | None = None,
 ) -> Array:
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
@@ -999,6 +1038,11 @@ def nerf_reconstruct(
         level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
             When provided, enables parallel NERF on CUDA by processing atoms
             at the same BFS level simultaneously. Can be obtained from ZMatrix.level_offsets.
+        anchor_coords: (n_components, 3, 3) float32 anchor positions for each component.
+            When provided with component_ids, atoms are placed directly in the
+            reference frame defined by these anchors, eliminating Kabsch rotation.
+        component_ids: (M,) int32 component index per Z-matrix entry.
+            Required when anchor_coords is provided.
 
     Returns:
         (N, 3) array of Cartesian coordinates in original atom order.
@@ -1015,4 +1059,7 @@ def nerf_reconstruct(
         else:
             n_atoms = 0
 
-    return _dispatch_nerf_reconstruct(zmatrix_indices, distances, angles, dihedrals, n_atoms, level_offsets)
+    return _dispatch_nerf_reconstruct(
+        zmatrix_indices, distances, angles, dihedrals, n_atoms,
+        level_offsets, anchor_coords, component_ids
+    )

@@ -44,18 +44,26 @@ class ZMatrix:
         >>> print(zmatrix[0])  # First row as array
     """
 
-    __slots__ = ('_indices', '_dihedral_types')
+    __slots__ = ('_indices', '_dihedral_types', '_levels', '_level_offsets')
 
-    def __init__(self, indices: Array, dihedral_types: Array | None = None) -> None:
+    def __init__(
+        self,
+        indices: Array,
+        dihedral_types: Array | None = None,
+        levels: Array | None = None,
+    ) -> None:
         """
         Initialize Z-matrix from indices array.
 
         Args:
             indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 array mapping entry -> dihedral type (-1 if unnamed)
+            levels: (M,) int32 array of BFS levels for parallel NERF reconstruction
         """
         self._indices = indices
         self._dihedral_types = dihedral_types
+        self._levels = levels
+        self._level_offsets = None  # Computed lazily
 
     @classmethod
     def from_topology(
@@ -78,19 +86,19 @@ class ZMatrix:
             csr_neighbors: Optional pre-built CSR neighbors array. If None, built from topology.
 
         Returns:
-            ZMatrix with entries in placement order and dihedral type annotations.
+            ZMatrix with entries in placement order, dihedral type annotations, and BFS levels.
         """
         from .graph import _build_zmatrix_indices_from_topology
 
         # Build Z-matrix with dihedral-aware refs in single C pass
-        indices, dihedral_types = _build_zmatrix_indices_from_topology(
+        indices, dihedral_types, levels = _build_zmatrix_indices_from_topology(
             topology, csr_offsets, csr_neighbors
         )
 
         if len(indices) == 0:
-            return cls(indices, np.array([], dtype=np.int8))
+            return cls(indices, np.array([], dtype=np.int8), np.array([], dtype=np.int32))
 
-        return cls(indices, dihedral_types)
+        return cls(indices, dihedral_types, levels)
 
     @property
     def indices(self) -> Array:
@@ -121,6 +129,34 @@ class ZMatrix:
     def dihedral_types(self) -> Array | None:
         """(M,) int8 array mapping Z-matrix entry -> dihedral type (-1 if unnamed)."""
         return self._dihedral_types
+
+    @property
+    def levels(self) -> Array | None:
+        """(M,) int32 BFS level per entry (0 for root atoms)."""
+        return self._levels
+
+    @property
+    def level_offsets(self) -> Array | None:
+        """
+        (n_levels+1,) int32 cumulative count per level for parallel NERF.
+
+        Level i's entries span indices level_offsets[i]:level_offsets[i+1].
+        Computed lazily on first access.
+        """
+        if self._level_offsets is None and self._levels is not None:
+            self._level_offsets = self._compute_level_offsets()
+        return self._level_offsets
+
+    def _compute_level_offsets(self) -> np.ndarray:
+        """Convert per-entry levels to CSR-style offsets."""
+        levels = to_numpy(self._levels)
+        if len(levels) == 0:
+            return np.zeros(1, dtype=np.int32)
+        n_levels = int(levels.max()) + 1
+        counts = np.bincount(levels, minlength=n_levels).astype(np.int32)
+        offsets = np.zeros(n_levels + 1, dtype=np.int32)
+        np.cumsum(counts, out=offsets[1:])
+        return offsets
 
     def __len__(self) -> int:
         """Number of entries in Z-matrix."""
@@ -211,19 +247,22 @@ class ZMatrix:
     def numpy(self) -> "ZMatrix":
         """Convert indices to NumPy array."""
         dihedral_types = to_numpy(self._dihedral_types) if self._dihedral_types is not None else None
-        return ZMatrix(to_numpy(self._indices), dihedral_types)
+        levels = to_numpy(self._levels) if self._levels is not None else None
+        return ZMatrix(to_numpy(self._indices), dihedral_types, levels)
 
     def torch(self) -> "ZMatrix":
         """Convert indices to PyTorch tensor."""
         dihedral_types = to_torch(self._dihedral_types) if self._dihedral_types is not None else None
-        return ZMatrix(to_torch(self._indices), dihedral_types)
+        levels = to_torch(self._levels) if self._levels is not None else None
+        return ZMatrix(to_torch(self._indices), dihedral_types, levels)
 
     def to(self, device: str) -> "ZMatrix":
         """Move to specified device (PyTorch only)."""
         if not is_torch(self._indices):
             raise RuntimeError("to() requires PyTorch backend")
         dihedral_types = self._dihedral_types.to(device) if self._dihedral_types is not None else None
-        return ZMatrix(self._indices.to(device), dihedral_types)
+        levels = self._levels.to(device) if self._levels is not None else None
+        return ZMatrix(self._indices.to(device), dihedral_types, levels)
 
     def __repr__(self) -> str:
         backend = "torch" if is_torch(self._indices) else "numpy"

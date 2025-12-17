@@ -75,6 +75,7 @@ int64_t estimate_max_edges(
  * @param n_chains         Number of chains
  * @param out_zmatrix      Output: (chain_size, 4) int64 Z-matrix entries
  * @param out_dihedral_types Output: (chain_size,) int8 dihedral type or -1 (can be NULL)
+ * @param out_levels       Output: (chain_size,) int32 BFS level per entry (can be NULL)
  * @return                 Number of entries written, or -1 on error
  */
 int64_t build_zmatrix_from_csr(
@@ -91,7 +92,8 @@ int64_t build_zmatrix_from_csr(
     const int64_t *chain_res_starts,
     int64_t n_chains,
     int64_t *out_zmatrix,
-    int8_t *out_dihedral_types
+    int8_t *out_dihedral_types,
+    int32_t *out_levels
 );
 
 /**
@@ -134,6 +136,7 @@ int edges_to_csr(
  * @param chain_res_starts (n_chains,) int64 residue start indices per chain
  * @param out_zmatrix      Output: (total_atoms, 4) int64 Z-matrix
  * @param out_dihedral_types Output: (total_atoms,) int8 dihedral types (can be NULL)
+ * @param out_levels       Output: (total_atoms,) int32 BFS levels (can be NULL)
  * @param out_counts       Output: (n_chains,) int64 entries per chain
  * @return                 Total entries written, or -1 on error
  */
@@ -152,6 +155,7 @@ int64_t build_zmatrix_parallel(
     const int64_t *chain_res_starts,
     int64_t *out_zmatrix,
     int8_t *out_dihedral_types,
+    int32_t *out_levels,
     int64_t *out_counts
 );
 

@@ -72,12 +72,13 @@ def nerf_reconstruct(
     angles: Array,
     dihedrals: Array,
     n_atoms: int,
+    level_offsets: Array | None = None,
 ) -> Array:
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
 
     Automatically dispatches to the optimal implementation:
-    - CUDA kernels for GPU tensors
+    - CUDA kernels for GPU tensors (uses level_offsets for parallelism)
     - C extension for CPU tensors and NumPy arrays
     - Autograd functions when gradients are required
 
@@ -87,12 +88,15 @@ def nerf_reconstruct(
         angles: (M,) bond angles in radians.
         dihedrals: (M,) dihedral angles in radians.
         n_atoms: Total number of atoms.
+        level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
+            When provided, enables parallel NERF on CUDA by processing atoms
+            at the same BFS level simultaneously.
 
     Returns:
         (N, 3) array of Cartesian coordinates.
     """
     if is_torch(distances):
-        return _torch_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms)
+        return _torch_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets)
     return _numpy_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms)
 
 
@@ -188,17 +192,20 @@ def _torch_nerf_reconstruct(
     angles: "torch.Tensor",
     dihedrals: "torch.Tensor",
     n_atoms: int,
+    level_offsets: Array | None = None,
 ) -> "torch.Tensor":
     """
     PyTorch dispatch for NERF reconstruction.
 
     Routes to:
     - Autograd functions if any input requires_grad=True
-    - CUDA kernels for CUDA tensors
+    - CUDA level-parallel kernels if level_offsets provided and on CUDA
     - C extension for CPU tensors
+
+    When level_offsets is provided, CUDA can process atoms at the same BFS
+    level in parallel, reducing kernel launches from O(atoms) to O(levels).
     """
     import torch
-    from .cuda_ops import cuda_nerf_reconstruct
 
     device = distances.device
     dtype = distances.dtype
@@ -212,21 +219,30 @@ def _torch_nerf_reconstruct(
     # Autograd path for gradient computation
     if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms)
+        return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms, level_offsets)
 
-    # CUDA path for GPU tensors
-    if is_cuda_available(distances):
-        coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
-        cuda_nerf_reconstruct(
-            coords,
-            indices_tensor.to(torch.int64).contiguous(),
-            distances.to(torch.float32).contiguous(),
-            angles.to(torch.float32).contiguous(),
-            dihedrals.to(torch.float32).contiguous()
-        )
-        return coords.to(dtype=dtype)
+    # CUDA path with level-parallel reconstruction
+    if is_cuda_available(distances) and level_offsets is not None:
+        from .cuda_ops import cuda_nerf_reconstruct_leveled, HAS_LEVELED_NERF
+        if HAS_LEVELED_NERF:
+            # Convert level_offsets to tensor
+            if not is_torch(level_offsets):
+                level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
+            else:
+                level_offsets_tensor = level_offsets.to(device)
 
-    # CPU path: convert to numpy for C extension
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
+            cuda_nerf_reconstruct_leveled(
+                coords,
+                indices_tensor.to(torch.int64).contiguous(),
+                distances.to(torch.float32).contiguous(),
+                angles.to(torch.float32).contiguous(),
+                dihedrals.to(torch.float32).contiguous(),
+                level_offsets_tensor.to(torch.int32).contiguous(),
+            )
+            return coords.to(dtype)
+
+    # CPU path: use C extension
     indices_np = indices_tensor.cpu().numpy().astype(np.int64)
     dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
     ang_f32 = angles.detach().cpu().to(torch.float32).numpy()

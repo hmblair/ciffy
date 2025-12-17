@@ -95,14 +95,18 @@ except ImportError:
 try:
     from .cuda_ops import (
         HAS_CUDA_EXTENSION,
+        HAS_LEVELED_NERF,
         is_cuda_available,
         cuda_cartesian_to_internal,
         cuda_cartesian_to_internal_backward,
         cuda_nerf_reconstruct,
         cuda_nerf_reconstruct_backward,
+        cuda_nerf_reconstruct_leveled,
+        cuda_nerf_reconstruct_backward_leveled,
     )
 except ImportError:
     HAS_CUDA_EXTENSION = False
+    HAS_LEVELED_NERF = False
     is_cuda_available = lambda x: False
 
 
@@ -217,6 +221,9 @@ class NerfReconstructFunction(Function):
 
     Forward: (distances, angles, dihedrals) -> coords
     Backward: grad_coords -> (grad_distances, grad_angles, grad_dihedrals)
+
+    When level_offsets is provided and leveled CUDA is available, uses
+    level-parallel reconstruction for significantly better performance.
     """
 
     @staticmethod
@@ -227,6 +234,7 @@ class NerfReconstructFunction(Function):
         angles: "torch.Tensor",
         dihedrals: "torch.Tensor",
         n_atoms: int,
+        level_offsets: "torch.Tensor | None" = None,
     ) -> "torch.Tensor":
         """
         Reconstruct Cartesian coordinates from internal coordinates.
@@ -238,17 +246,24 @@ class NerfReconstructFunction(Function):
             angles: (M,) float32 tensor of bond angles.
             dihedrals: (M,) float32 tensor of dihedral angles.
             n_atoms: Total number of atoms.
+            level_offsets: Optional (n_levels+1,) int32 tensor for level-parallel CUDA.
 
         Returns:
             coords: (N, 3) float32 tensor of Cartesian coordinates.
         """
         # Check if we can use CUDA path
         use_cuda = is_cuda_available(distances)
+        use_leveled = use_cuda and HAS_LEVELED_NERF and level_offsets is not None
         ctx.use_cuda = use_cuda
 
-        if use_cuda:
-            # GPU path: stay on device
-            # Allocate output tensor on same device
+        if use_leveled:
+            # GPU path with level-parallel reconstruction
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=distances.device)
+            cuda_nerf_reconstruct_leveled(
+                coords, indices, distances, angles, dihedrals, level_offsets
+            )
+        elif use_cuda:
+            # GPU path: sequential (fallback)
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=distances.device)
             cuda_nerf_reconstruct(coords, indices, distances, angles, dihedrals)
         else:
@@ -270,6 +285,9 @@ class NerfReconstructFunction(Function):
         # Save for backward
         ctx.save_for_backward(coords, indices, distances, angles, dihedrals)
         ctx.n_atoms = n_atoms
+        ctx.use_leveled = use_leveled
+        # Save level_offsets separately (not a tensor we need gradients for)
+        ctx.level_offsets = level_offsets
 
         return coords
 
@@ -277,7 +295,7 @@ class NerfReconstructFunction(Function):
     def backward(
         ctx: Any,
         grad_coords: "torch.Tensor",
-    ) -> tuple[None, "torch.Tensor", "torch.Tensor", "torch.Tensor", None]:
+    ) -> tuple[None, "torch.Tensor", "torch.Tensor", "torch.Tensor", None, None]:
         """
         Backward pass for NERF reconstruction.
 
@@ -286,13 +304,20 @@ class NerfReconstructFunction(Function):
             grad_coords: (N, 3) upstream gradients for coordinates.
 
         Returns:
-            Tuple of (None, grad_distances, grad_angles, grad_dihedrals, None).
-            None for indices and n_atoms (not differentiable).
+            Tuple of (None, grad_distances, grad_angles, grad_dihedrals, None, None).
+            None for indices, n_atoms, and level_offsets (not differentiable).
         """
         coords, indices, distances, angles, dihedrals = ctx.saved_tensors
 
-        if ctx.use_cuda:
-            # GPU path: stay on device
+        if ctx.use_leveled and ctx.level_offsets is not None:
+            # GPU path with level-parallel backward (fastest)
+            # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
+            _, grad_distances, grad_angles, grad_dihedrals = cuda_nerf_reconstruct_backward_leveled(
+                coords, indices, distances, angles, dihedrals,
+                grad_coords.contiguous(), ctx.level_offsets
+            )
+        elif ctx.use_cuda:
+            # GPU path: sequential (fallback)
             # Ensure gradients are contiguous (autograd may provide non-contiguous tensors)
             _, grad_distances, grad_angles, grad_dihedrals = cuda_nerf_reconstruct_backward(
                 coords, indices, distances, angles, dihedrals, grad_coords.contiguous()
@@ -318,7 +343,7 @@ class NerfReconstructFunction(Function):
             grad_angles = torch.from_numpy(grad_angles_np).to(device)
             grad_dihedrals = torch.from_numpy(grad_dihedrals_np).to(device)
 
-        return None, grad_distances, grad_angles, grad_dihedrals, None
+        return None, grad_distances, grad_angles, grad_dihedrals, None, None
 
 
 def cartesian_to_internal(
@@ -349,6 +374,7 @@ def nerf_reconstruct(
     angles: "torch.Tensor",
     dihedrals: "torch.Tensor",
     n_atoms: int,
+    level_offsets: "torch.Tensor | None" = None,
 ) -> "torch.Tensor":
     """
     Reconstruct Cartesian coordinates from internal coordinates with autograd support.
@@ -359,6 +385,9 @@ def nerf_reconstruct(
         angles: (M,) float32 tensor of bond angles.
         dihedrals: (M,) float32 tensor of dihedral angles.
         n_atoms: Total number of atoms.
+        level_offsets: Optional (n_levels+1,) int32 tensor for level-parallel CUDA.
+            When provided and leveled CUDA is available, enables parallel NERF
+            reconstruction by processing atoms at the same BFS level simultaneously.
 
     Returns:
         coords: (N, 3) float32 tensor of Cartesian coordinates.
@@ -368,4 +397,4 @@ def nerf_reconstruct(
     if not HAS_C_EXTENSION:
         raise ImportError("C extension is required for this function")
 
-    return NerfReconstructFunction.apply(indices, distances, angles, dihedrals, n_atoms)
+    return NerfReconstructFunction.apply(indices, distances, angles, dihedrals, n_atoms, level_offsets)

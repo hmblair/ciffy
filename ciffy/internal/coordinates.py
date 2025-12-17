@@ -426,12 +426,14 @@ class CoordinateManager:
         n_atoms = self._n_atoms
 
         # NERF reconstruction (places each chain root at origin)
+        # Pass level_offsets for parallel CUDA reconstruction when available
         coords = nerf_reconstruct(
             zmatrix_indices,
             self._distances,
             self._angles,
             self._dihedrals,
             n_atoms=n_atoms,
+            level_offsets=self._zmatrix.level_offsets,
         )
 
         # Clone coords for in-place modifications below (preserves autograd graph)

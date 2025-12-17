@@ -162,7 +162,7 @@ def _build_zmatrix_indices_from_topology(
     topology: "TopologyInfo",
     csr_offsets: np.ndarray | None = None,
     csr_neighbors: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
 
@@ -179,6 +179,7 @@ def _build_zmatrix_indices_from_topology(
         Tuple of:
             indices: (M, 4) array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 array of dihedral types (-1 if not named)
+            levels: (M,) int32 array of BFS levels
     """
     n_atoms = topology.n_atoms
 
@@ -186,7 +187,7 @@ def _build_zmatrix_indices_from_topology(
     if csr_offsets is None or csr_neighbors is None:
         edges, n_atoms = build_bond_graph_from_topology(topology)
         if len(edges) == 0:
-            return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
+            return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8), np.array([], dtype=np.int32)
         offsets, neighbors = edges_to_csr(edges, n_atoms)
     else:
         offsets, neighbors = csr_offsets, csr_neighbors
@@ -195,7 +196,7 @@ def _build_zmatrix_indices_from_topology(
     comp_atoms, comp_offsets, n_components = find_connected_components(offsets, neighbors, n_atoms)
 
     if n_components == 0:
-        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8)
+        return np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8), np.array([], dtype=np.int32)
 
     # Extract component info for Z-matrix construction
     # For each component: first atom is root, size is offset diff
@@ -232,7 +233,7 @@ def build_zmatrix_from_components(
     atoms: np.ndarray | None = None,
     sequence: np.ndarray | None = None,
     res_sizes: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix from CSR graph for multiple connected components.
 
@@ -255,9 +256,10 @@ def build_zmatrix_from_components(
         Tuple of:
             zmatrix: (M, 4) Z-matrix array [atom_idx, dist_ref, ang_ref, dih_ref]
             dihedral_types: (M,) int8 dihedral type per entry (-1 if not named)
+            levels: (M,) int32 BFS level per entry
     """
     # Use parallel C implementation with optional dihedral-aware mode
-    zmatrix, dihedral_types, counts = _build_zmatrix_parallel_c(
+    zmatrix, dihedral_types, levels, counts = _build_zmatrix_parallel_c(
         offsets, neighbors, n_atoms,
         component_starts, component_sizes, roots,
         atoms, sequence, res_sizes
@@ -267,16 +269,18 @@ def build_zmatrix_from_components(
     if total_entries < len(zmatrix):
         result = np.zeros((total_entries, 4), dtype=np.int64)
         result_dtypes = np.full(total_entries, -1, dtype=np.int8)
+        result_levels = np.zeros(total_entries, dtype=np.int32)
         src_offset = 0
         dst_offset = 0
         for size, count in zip(component_sizes, counts):
             count = int(count)
             result[dst_offset:dst_offset + count] = zmatrix[src_offset:src_offset + count]
             result_dtypes[dst_offset:dst_offset + count] = dihedral_types[src_offset:src_offset + count]
+            result_levels[dst_offset:dst_offset + count] = levels[src_offset:src_offset + count]
             src_offset += size
             dst_offset += count
-        return result, result_dtypes
-    return zmatrix[:total_entries], dihedral_types[:total_entries]
+        return result, result_dtypes, result_levels
+    return zmatrix[:total_entries], dihedral_types[:total_entries], levels[:total_entries]
 
 
 

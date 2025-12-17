@@ -22,6 +22,7 @@ def nerf_reconstruct(
     angles: Array,
     dihedrals: Array,
     n_atoms: int | None = None,
+    level_offsets: Array | None = None,
 ) -> Array:
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
@@ -42,6 +43,9 @@ def nerf_reconstruct(
         dihedrals: (M,) dihedral angles in radians (in BFS order).
         n_atoms: Total number of atoms (including orphans). If None,
             inferred from max Z-matrix index.
+        level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
+            When provided, enables parallel NERF on CUDA by processing atoms
+            at the same BFS level simultaneously. Can be obtained from ZMatrix.level_offsets.
 
     Returns:
         (N, 3) array of Cartesian coordinates in original atom order.
@@ -55,4 +59,4 @@ def nerf_reconstruct(
         else:
             n_atoms = 0
 
-    return _nerf_reconstruct(zmatrix_indices, distances, angles, dihedrals, n_atoms)
+    return _nerf_reconstruct(zmatrix_indices, distances, angles, dihedrals, n_atoms, level_offsets)

@@ -572,7 +572,8 @@ int64_t build_zmatrix_from_csr(
     int64_t n_chains,
     /* Outputs */
     int64_t *out_zmatrix,
-    int8_t *out_dihedral_types       /* Dihedral type per entry (can be NULL) */
+    int8_t *out_dihedral_types,      /* Dihedral type per entry (can be NULL) */
+    int32_t *out_levels              /* BFS level per entry (can be NULL) */
 ) {
     if (chain_size == 0) return 0;
 
@@ -589,6 +590,7 @@ int64_t build_zmatrix_from_csr(
         out_zmatrix[2] = -1;
         out_zmatrix[3] = -1;
         if (out_dihedral_types) out_dihedral_types[0] = -1;
+        if (out_levels) out_levels[0] = 0;
         return 1;
     }
 
@@ -606,6 +608,7 @@ int64_t build_zmatrix_from_csr(
     int8_t *visited = (int8_t *)calloc((size_t)chain_size, sizeof(int8_t));
     int64_t *order = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
     int64_t *queue = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+    int32_t *level = (int32_t *)calloc((size_t)chain_size, sizeof(int32_t));  /* BFS level */
 
     /* Placed array for dihedral resolution (indexed by GLOBAL atom index) */
     int8_t *placed = NULL;
@@ -617,16 +620,18 @@ int64_t build_zmatrix_from_csr(
             free(visited);
             free(order);
             free(queue);
+            free(level);
             return -1;
         }
     }
 
-    if (!parent || !grandparent || !visited || !order || !queue) {
+    if (!parent || !grandparent || !visited || !order || !queue || !level) {
         free(parent);
         free(grandparent);
         free(visited);
         free(order);
         free(queue);
+        free(level);
         free(placed);
         return -1;
     }
@@ -667,8 +672,10 @@ int64_t build_zmatrix_from_csr(
             int64_t neighbor_local = neighbor - chain_start;
             if (visited[neighbor_local]) continue;
 
+            int64_t current_local = current - chain_start;
             visited[neighbor_local] = 1;
             parent[neighbor_local] = current;  /* Store global index as parent */
+            level[neighbor_local] = level[current_local] + 1;  /* Child is one level deeper */
             queue[queue_tail++] = neighbor;
         }
     }
@@ -773,6 +780,11 @@ int64_t build_zmatrix_from_csr(
         if (out_dihedral_types) {
             out_dihedral_types[i] = dihedral_type;
         }
+
+        /* Store BFS level if output array provided */
+        if (out_levels) {
+            out_levels[i] = level[atom_local];
+        }
     }
 
     /* Cleanup */
@@ -781,6 +793,7 @@ int64_t build_zmatrix_from_csr(
     free(visited);
     free(order);
     free(queue);
+    free(level);
     free(placed);
 
     return order_len;
@@ -804,6 +817,7 @@ int64_t build_zmatrix_parallel(
     /* Outputs */
     int64_t *out_zmatrix,
     int8_t *out_dihedral_types,      /* Dihedral type per entry (can be NULL) */
+    int32_t *out_levels,             /* BFS level per entry (can be NULL) */
     int64_t *out_counts
 ) {
     if (n_chains == 0) return 0;
@@ -835,10 +849,12 @@ int64_t build_zmatrix_parallel(
             continue;
         }
 
-        /* Output location for this chain's Z-matrix and dihedral types */
+        /* Output location for this chain's Z-matrix, dihedral types, and levels */
         int64_t *chain_output = &out_zmatrix[output_offsets[c] * 4];
         int8_t *chain_dtypes = out_dihedral_types ?
             &out_dihedral_types[output_offsets[c]] : NULL;
+        int32_t *chain_levels = out_levels ?
+            &out_levels[output_offsets[c]] : NULL;
 
         /* Build Z-matrix for this chain */
         int64_t count = build_zmatrix_from_csr(
@@ -846,7 +862,7 @@ int64_t build_zmatrix_parallel(
             chain_start, chain_size, root,
             atoms, sequence, residue_starts, n_residues,
             chain_res_starts, n_chains,
-            chain_output, chain_dtypes
+            chain_output, chain_dtypes, chain_levels
         );
 
         if (count < 0) {

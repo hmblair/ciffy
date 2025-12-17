@@ -1841,3 +1841,194 @@ class TestInternalCoordsEdgeCasesGPU:
 
         coords_recon = nerf_reconstruct(indices_cuda, d, a, dh, n_atoms)
         assert coords_recon.shape == (n_atoms, 3)
+
+
+class TestBFSLevels:
+    """Tests for BFS level computation in Z-matrix construction."""
+
+    def test_zmatrix_has_levels(self):
+        """Test that ZMatrix stores BFS levels."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        _ = polymer.dihedrals  # Trigger Z-matrix build
+
+        zm = polymer._coord_manager.zmatrix
+        assert zm.levels is not None
+        assert len(zm.levels) == len(zm)
+
+    def test_levels_parent_child_relationship(self):
+        """Test that child level = parent level + 1."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("1ZEW")).poly()
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        indices = zm.indices
+        levels = zm.levels
+
+        # Build atom_idx -> level map from Z-matrix
+        atom_to_level = {}
+        for i in range(len(indices)):
+            atom_idx = int(indices[i, 0])
+            atom_to_level[atom_idx] = int(levels[i])
+
+        # Verify parent-child relationships
+        violations = 0
+        for i in range(len(indices)):
+            dist_ref = int(indices[i, 1])
+            if dist_ref >= 0:  # Has a parent
+                parent_level = atom_to_level.get(dist_ref, -1)
+                child_level = int(levels[i])
+                if parent_level >= 0 and child_level != parent_level + 1:
+                    violations += 1
+
+        assert violations == 0, f"Found {violations} parent-child level violations"
+
+    def test_level_offsets_partition_entries(self):
+        """Test that level_offsets CSR format covers all entries."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("1ZEW")).poly()
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        offsets = zm.level_offsets
+
+        assert offsets is not None
+        # CSR format: offsets[i]:offsets[i+1] defines entries at level i
+        assert offsets[0] == 0, "Offsets should start at 0"
+        assert offsets[-1] == len(zm), f"Offsets should end at {len(zm)}, got {offsets[-1]}"
+
+        # Offsets should be monotonically non-decreasing
+        for i in range(len(offsets) - 1):
+            assert offsets[i] <= offsets[i + 1], f"Offsets not monotonic at {i}"
+
+    def test_level_offsets_consistent_with_levels(self):
+        """Test that level_offsets matches per-entry levels."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("1ZEW")).poly()
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        levels = zm.levels
+        offsets = zm.level_offsets
+
+        n_levels = int(levels.max()) + 1
+
+        # Count entries per level from levels array
+        level_counts = np.bincount(levels.astype(np.int64), minlength=n_levels)
+
+        # Counts from offsets
+        offset_counts = np.diff(offsets)
+
+        assert len(level_counts) == len(offset_counts), \
+            f"Level count mismatch: {len(level_counts)} vs {len(offset_counts)}"
+        assert np.array_equal(level_counts, offset_counts), \
+            "Level offsets don't match level counts"
+
+    def test_multichain_levels(self):
+        """Test levels are computed correctly for multi-chain structures."""
+        from ciffy import load
+
+        polymer = load(get_test_cif("1ZEW")).poly()
+        n_chains = len(polymer.lengths)
+        assert n_chains > 1, "Test requires multi-chain structure"
+
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        levels = zm.levels
+
+        # Each chain should have level 0 entries (chain roots)
+        n_roots = np.sum(levels == 0)
+        assert n_roots >= n_chains, f"Expected at least {n_chains} roots, got {n_roots}"
+
+    def test_levels_reasonable_depth(self):
+        """Test BFS depth is reasonable for molecular structures."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        levels = zm.levels
+
+        max_level = int(levels.max())
+        n_atoms = len(zm)
+
+        # BFS depth should be much less than number of atoms for realistic molecules
+        # (typical depth is sqrt(N) to log(N) depending on branching)
+        assert max_level < n_atoms, f"BFS depth {max_level} >= n_atoms {n_atoms}"
+
+        # For a tetramer (~130 atoms), depth should be < 100
+        assert max_level < 100, f"BFS depth {max_level} seems too large"
+
+
+class TestLeveledNERFCUDA:
+    """Tests for level-parallel NERF reconstruction on CUDA."""
+
+    @requires_cuda
+    @requires_cuda_extension
+    def test_leveled_nerf_available(self):
+        """Test that leveled NERF is available on CUDA."""
+        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
+        # This may be False if cooperative groups not supported
+        # Just check the import works
+        assert isinstance(HAS_LEVELED_NERF, bool)
+
+    @requires_cuda
+    @requires_cuda_extension
+    def test_level_offsets_passed_to_nerf(self):
+        """Test that level_offsets flows through to CUDA NERF."""
+        import torch
+        from ciffy import load
+        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
+
+        if not HAS_LEVELED_NERF:
+            pytest.skip("Leveled NERF CUDA kernel not available")
+
+        polymer = load(get_test_cif("1ZEW")).poly().torch().cuda()
+        _ = polymer.dihedrals
+
+        zm = polymer._coord_manager.zmatrix
+        assert zm.level_offsets is not None
+
+        # Trigger reconstruction
+        dihedrals = polymer.dihedrals.clone()
+        polymer.dihedrals = dihedrals
+        coords = polymer.coordinates
+
+        # Should still be on CUDA
+        assert coords.is_cuda
+
+    @requires_cuda
+    @requires_cuda_extension
+    def test_leveled_cuda_matches_cpu(self):
+        """Test leveled CUDA NERF matches CPU results."""
+        import torch
+        from ciffy import load
+        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
+
+        if not HAS_LEVELED_NERF:
+            pytest.skip("Leveled NERF CUDA kernel not available")
+
+        # Load on CPU
+        polymer_cpu = load(get_test_cif("1ZEW")).poly().torch()
+        orig_coords = polymer_cpu.coordinates.clone()
+
+        # Trigger CPU reconstruction
+        dihedrals = polymer_cpu.dihedrals.clone()
+        polymer_cpu.dihedrals = dihedrals
+        coords_cpu = polymer_cpu.coordinates
+
+        # Load on CUDA
+        polymer_cuda = load(get_test_cif("1ZEW")).poly().torch().cuda()
+        dihedrals_cuda = polymer_cuda.dihedrals.clone()
+        polymer_cuda.dihedrals = dihedrals_cuda
+        coords_cuda = polymer_cuda.coordinates
+
+        # Compare
+        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-5)

@@ -202,11 +202,13 @@ def _torch_cartesian_to_internal(
     device = coords.device
     dtype = coords.dtype
 
-    # Ensure indices are tensor on same device
-    if not is_torch(indices):
-        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
-    else:
+    # Ensure indices are tensor on same device (skip if already correct)
+    if is_torch(indices) and indices.device == device:
+        indices_tensor = indices
+    elif is_torch(indices):
         indices_tensor = indices.to(device)
+    else:
+        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
 
     # Autograd path for gradient computation
     if coords.requires_grad:
@@ -259,11 +261,13 @@ def _torch_nerf_reconstruct(
     device = distances.device
     dtype = distances.dtype
 
-    # Ensure indices are tensor on same device
-    if not is_torch(indices):
-        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
-    else:
+    # Ensure indices are tensor on same device (skip if already correct)
+    if is_torch(indices) and indices.device == device:
+        indices_tensor = indices
+    elif is_torch(indices):
         indices_tensor = indices.to(device)
+    else:
+        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
 
     # Autograd path for gradient computation
     if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
@@ -274,11 +278,13 @@ def _torch_nerf_reconstruct(
     if is_cuda_available(distances) and level_offsets is not None:
         from .cuda_ops import cuda_nerf_reconstruct_leveled, HAS_LEVELED_NERF
         if HAS_LEVELED_NERF:
-            # Convert level_offsets to tensor
-            if not is_torch(level_offsets):
-                level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
-            else:
+            # Convert level_offsets to tensor (skip if already correct)
+            if is_torch(level_offsets) and level_offsets.device == device:
+                level_offsets_tensor = level_offsets
+            elif is_torch(level_offsets):
                 level_offsets_tensor = level_offsets.to(device)
+            else:
+                level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
 
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
             cuda_nerf_reconstruct_leveled(

@@ -587,12 +587,39 @@ class ZMatrix:
         return ZMatrix(to_torch(self._indices), dihedral_types, levels)
 
     def to(self, device: str) -> "ZMatrix":
-        """Move to specified device (PyTorch only)."""
-        if not is_torch(self._indices):
-            raise RuntimeError("to() requires PyTorch backend")
-        dihedral_types = self._dihedral_types.to(device) if self._dihedral_types is not None else None
-        levels = self._levels.to(device) if self._levels is not None else None
-        return ZMatrix(self._indices.to(device), dihedral_types, levels)
+        """
+        Move to specified device.
+
+        Converts numpy arrays to PyTorch tensors if needed, then moves to device.
+        This enables efficient CUDA operations by caching indices on GPU.
+        """
+        import torch
+
+        # Convert indices to torch if needed, then move to device
+        if is_torch(self._indices):
+            indices = self._indices.to(device)
+        else:
+            indices = torch.from_numpy(self._indices).to(device)
+
+        # Convert dihedral_types
+        if self._dihedral_types is not None:
+            if is_torch(self._dihedral_types):
+                dihedral_types = self._dihedral_types.to(device)
+            else:
+                dihedral_types = torch.from_numpy(self._dihedral_types).to(device)
+        else:
+            dihedral_types = None
+
+        # Convert levels
+        if self._levels is not None:
+            if is_torch(self._levels):
+                levels = self._levels.to(device)
+            else:
+                levels = torch.from_numpy(self._levels).to(device)
+        else:
+            levels = None
+
+        return ZMatrix(indices, dihedral_types, levels)
 
     def __repr__(self) -> str:
         backend = "torch" if is_torch(self._indices) else "numpy"

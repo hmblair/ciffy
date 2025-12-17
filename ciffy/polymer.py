@@ -281,7 +281,7 @@ class Polymer:
         self.descriptions = descriptions
 
         # Create topology info for coordinate manager
-        from .internal.topology import TopologyInfo
+        from .backend.dispatch import TopologyInfo
         self._topology = TopologyInfo.from_polymer(self)
 
         # Initialize coordinate manager with Cartesian coordinates

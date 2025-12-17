@@ -767,17 +767,6 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (offsets, neighbors) CSR arrays.\n"},
-    {"_build_zmatrix_from_csr", py_build_zmatrix_from_csr, METH_VARARGS,
-     "Build Z-matrix from CSR graph for a chain.\n\n"
-     "Args:\n"
-     "    offsets (ndarray): (n_atoms+1,) int64 CSR offsets.\n"
-     "    neighbors (ndarray): (E,) int64 neighbor indices.\n"
-     "    n_atoms (int): Total number of atoms.\n"
-     "    chain_start (int): First atom index for this chain.\n"
-     "    chain_size (int): Number of atoms in this chain.\n"
-     "    root (int): Root atom index for BFS.\n\n"
-     "Returns:\n"
-     "    ndarray: (M, 4) int64 Z-matrix [atom_idx, dist_ref, ang_ref, dih_ref].\n"},
     {"_build_zmatrix_parallel", py_build_zmatrix_parallel, METH_VARARGS,
      "Build Z-matrix for all chains in parallel using OpenMP.\n\n"
      "Args:\n"
@@ -820,20 +809,6 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (roots, sizes, n_components).\n"},
-    {"_build_canonical_zmatrix", py_build_canonical_zmatrix, METH_VARARGS,
-     "Build canonical Z-matrix in a single pass.\n\n"
-     "Processes atoms in natural order using pre-defined canonical references.\n"
-     "Captures named dihedrals (phi, psi, alpha, beta, etc.).\n\n"
-     "Args:\n"
-     "    atoms (ndarray): (N,) int32 atom type values.\n"
-     "    sequence (ndarray): (R,) int32 residue type indices.\n"
-     "    res_sizes (ndarray): (R,) int32 atoms per residue.\n"
-     "    chain_lengths (ndarray): (C,) int32 residues per chain.\n"
-     "    bond_offsets (ndarray): (N+1,) int64 CSR offsets for fallback.\n"
-     "    bond_neighbors (ndarray): (E,) int64 CSR neighbor indices.\n\n"
-     "Returns:\n"
-     "    tuple: (zmatrix, dihedral_types) where zmatrix is (N, 4) int64\n"
-     "    and dihedral_types is (N,) int8 (-1 if not a named dihedral).\n"},
     {"_nerf_reconstruct_leveled", py_nerf_reconstruct_leveled, METH_VARARGS,
      "Level-parallel NERF reconstruction using OpenMP.\n\n"
      "Processes atoms level-by-level where all atoms at the same BFS level\n"

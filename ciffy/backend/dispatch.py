@@ -1,13 +1,22 @@
 """
 Device-agnostic dispatch for internal coordinate operations.
 
-This module provides unified dispatch functions that automatically select
-the optimal implementation based on array type and device:
+This module is the **internal dispatch layer** that routes coordinate conversion
+operations to the optimal backend implementation. For most use cases, prefer
+using the higher-level public API via ``ciffy.internal`` or ``Polymer`` methods.
+
+Implementation selection based on array type and device:
 
 - NumPy arrays → C extension
 - PyTorch CPU tensors → C extension (via numpy conversion)
 - PyTorch CUDA tensors → CUDA kernels
 - PyTorch tensors with requires_grad → autograd functions
+
+Import Paths
+------------
+- **Public API**: ``ciffy.internal.nerf_reconstruct``, ``Polymer.coordinates``
+- **Internal dispatch** (this module): ``ciffy.backend.dispatch``
+- **Implementation details**: ``ciffy.backend.autograd`` (do not import directly)
 
 Usage
 -----
@@ -38,9 +47,38 @@ from .._c import (
 )
 
 __all__ = [
+    # Coordinate conversion
     "cartesian_to_internal",
     "nerf_reconstruct",
+    # Graph building
+    "build_bond_graph",
+    "build_bond_graph_csr",
+    "find_connected_components",
+    # Data structures
+    "ZMatrix",
+    "ConnectedComponents",
+    "TopologyInfo",
+    # Alignment
+    "kabsch_rotation",
 ]
+
+
+# =============================================================================
+# RE-EXPORTS FROM BACKEND MODULES
+# =============================================================================
+
+# Graph building and data structures (re-exported from backend.graph)
+from .graph import (
+    ZMatrix,
+    ConnectedComponents,
+    TopologyInfo,
+    build_bond_graph,
+    build_bond_graph_csr,
+    find_connected_components,
+)
+
+# Kabsch rotation for coordinate alignment
+from ..operations.alignment import kabsch_rotation
 
 
 def cartesian_to_internal(

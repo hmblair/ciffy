@@ -6,16 +6,20 @@ coordinate representations with lazy evaluation and automatic conversion.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible
+from ..backend.dispatch import (
+    ZMatrix,
+    ConnectedComponents,
+    TopologyInfo,
+    build_bond_graph_csr,
+    cartesian_to_internal,
+    kabsch_rotation,
+)
+from ..backend.graph import nerf_reconstruct
 from ..types import DihedralType
-
-if TYPE_CHECKING:
-    from .graph import ZMatrix
-    from .topology import TopologyInfo, ConnectedComponents
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,10 +363,6 @@ class CoordinateManager:
         graph, then computes bond lengths, angles, and dihedrals from current
         Cartesian coordinates.
         """
-        from .graph import ZMatrix, build_bond_graph_csr
-        from .topology import ConnectedComponents
-        from .zmatrix import cartesian_to_internal
-
         if self._coordinates is None:
             raise RuntimeError("Cannot compute internal coordinates: Cartesian coordinates are None")
 
@@ -411,8 +411,6 @@ class CoordinateManager:
         Uses NERF (Natural Extension Reference Frame) algorithm to reconstruct
         3D coordinates from bond lengths, angles, and dihedrals.
         """
-        from .nerf import nerf_reconstruct
-
         if self._distances is None or self._angles is None or self._dihedrals is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: internal coordinates are None")
 
@@ -446,8 +444,6 @@ class CoordinateManager:
 
         # Restore chain positions AND orientations, plus orphan atoms
         # NERF places each chain in a canonical frame - we need to rotate back to original
-        from ..operations.alignment import kabsch_rotation
-
         n_components = self._components.n_components
 
         # Process each component (chains need rotation+translation, orphans just position)

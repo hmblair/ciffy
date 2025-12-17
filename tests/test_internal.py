@@ -622,7 +622,7 @@ class TestBondGraph:
     def test_bond_graph_symmetric(self):
         """Test bond graph is symmetric (undirected)."""
         from ciffy import from_sequence
-        from ciffy.internal import build_bond_graph
+        from ciffy.backend.dispatch import build_bond_graph
 
         polymer = from_sequence("acgu")
         edges, n_atoms = build_bond_graph(polymer)
@@ -642,7 +642,7 @@ class TestBondGraph:
     def test_bond_graph_has_expected_bonds(self):
         """Test bond graph has reasonable number of bonds."""
         from ciffy import from_sequence
-        from ciffy.internal import build_bond_graph
+        from ciffy.backend.dispatch import build_bond_graph
 
         polymer = from_sequence("acgu")
         edges, n_atoms = build_bond_graph(polymer)

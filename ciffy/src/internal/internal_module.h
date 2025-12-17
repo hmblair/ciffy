@@ -33,12 +33,6 @@ PyObject *py_build_bond_graph(PyObject *self, PyObject *args);
 PyObject *py_edges_to_csr(PyObject *self, PyObject *args);
 
 /**
- * Build Z-matrix from CSR graph for a chain.
- * Python: _build_zmatrix_from_csr(offsets, neighbors, n_atoms, chain_start, chain_size, root) -> zmatrix
- */
-PyObject *py_build_zmatrix_from_csr(PyObject *self, PyObject *args);
-
-/**
  * Build Z-matrix for all chains in parallel.
  * Python: _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots) -> (zmatrix, counts)
  */
@@ -63,13 +57,6 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args);
  * Python: _find_connected_components(offsets, neighbors, n_atoms) -> (atoms, component_offsets, n_components)
  */
 PyObject *py_find_connected_components(PyObject *self, PyObject *args);
-
-/**
- * Build canonical Z-matrix in a single pass.
- * Python: _build_canonical_zmatrix(atoms, sequence, res_sizes, chain_lengths,
- *             bond_offsets, bond_neighbors) -> (zmatrix, dihedral_types)
- */
-PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
 
 /**
  * Level-parallel NERF reconstruction.

@@ -1,20 +1,21 @@
 """
 PyTorch autograd functions for internal coordinate conversions.
 
+.. warning::
+    This module is an **internal implementation detail**. Do not import directly.
+    Use ``ciffy.backend.dispatch`` for coordinate conversion operations, or
+    the higher-level ``ciffy.internal`` and ``Polymer`` APIs.
+
 Provides custom autograd.Function implementations that use C backward passes
 for efficient gradient computation through the internal coordinate pipeline.
 
-Functions
----------
-cartesian_to_internal
-    Convert Cartesian coordinates to internal coordinates (distances, angles,
-    dihedrals) with full autograd support. Gradients are computed analytically
-    in C for efficiency.
+Classes
+-------
+CartesianToInternalFunction
+    Autograd function for Cartesian to internal coordinate conversion.
 
-nerf_reconstruct
-    Reconstruct Cartesian coordinates from internal coordinates using the NERF
-    algorithm. Supports autograd for gradients w.r.t. distances, angles, and
-    dihedrals.
+NerfReconstructFunction
+    Autograd function for NERF reconstruction from internal coordinates.
 
 Gradient Computation
 --------------------
@@ -27,25 +28,6 @@ The backward passes are implemented by composing primitive operations:
 
 This composition approach ensures numerical correctness by matching the exact
 forward computation graph.
-
-Example
--------
->>> import torch
->>> from ciffy.backend.autograd import cartesian_to_internal
->>>
->>> # Create coordinates with gradient tracking
->>> coords = torch.randn(10, 3, requires_grad=True)
->>> indices = torch.tensor([[i, i-1, i-2, i-3] for i in range(3, 10)])
->>>
->>> # Convert to internal coordinates
->>> distances, angles, dihedrals = cartesian_to_internal(coords, indices)
->>>
->>> # Compute loss and backpropagate
->>> loss = dihedrals.sum()
->>> loss.backward()
->>>
->>> # Gradients are now available
->>> print(coords.grad.shape)  # (10, 3)
 
 Notes
 -----

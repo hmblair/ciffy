@@ -440,7 +440,10 @@ class CoordinateManager:
 
         # Get anchor coordinates and component IDs for anchored NERF
         # This eliminates the need for post-reconstruction Kabsch rotation
+        # Detach anchor_coords to avoid grad history from previous computations
         anchor_coords = self._components.anchor_coords
+        if is_torch(anchor_coords) and anchor_coords.requires_grad:
+            anchor_coords = anchor_coords.detach()
         component_ids = self._zmatrix.component_ids
 
         # NERF reconstruction with anchored placement
@@ -463,6 +466,7 @@ class CoordinateManager:
 
         # Handle single-atom orphans - they need position restoration
         # (NERF places root atoms at origin for each component)
+        # For single-atom components, anchor_coords[comp_idx, 0] is the atom's position
         n_components = self._components.n_components
         for comp_idx in range(n_components):
             component_size = self._components.get_component_size(comp_idx)
@@ -470,7 +474,7 @@ class CoordinateManager:
                 component_atoms = self._components.get_component_atoms(comp_idx)
                 atom_idx = int(component_atoms[0])
                 if atom_idx < n_atoms:
-                    coords[atom_idx] = self._components.centroids[comp_idx]
+                    coords[atom_idx] = anchor_coords[comp_idx, 0]
 
         self._coordinates = coords
         self._cartesian_valid = True

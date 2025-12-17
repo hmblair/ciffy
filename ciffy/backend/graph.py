@@ -339,6 +339,11 @@ class ConnectedComponents:
                 anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
                 # Remaining anchors stay zero-padded
 
+        # Detach tensors to avoid keeping grad history - these are frozen reference values
+        if is_torch(centroids):
+            centroids = centroids.detach()
+            anchor_coords = anchor_coords.detach()
+
         return cls(
             offsets=comp_offsets,
             atoms=comp_atoms,
@@ -394,6 +399,11 @@ class ConnectedComponents:
             n_anchor = min(3, len(component_atoms))
             if n_anchor > 0:
                 new_anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
+
+        # Detach tensors to avoid keeping grad history - these are frozen reference values
+        if is_torch(new_centroids):
+            new_centroids = new_centroids.detach()
+            new_anchor_coords = new_anchor_coords.detach()
 
         self.centroids = new_centroids
         self.anchor_coords = new_anchor_coords

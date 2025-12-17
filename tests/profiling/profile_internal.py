@@ -270,15 +270,7 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
     _ = polymer.dihedrals
     zmatrix = polymer._coord_manager.zmatrix
     results["zmatrix_size"] = len(zmatrix)
-
-    # Count orphan atoms (single-atom components)
-    mgr = polymer._coord_manager
-    n_components = mgr._components.n_components
-    orphan_count = sum(
-        1 for i in range(n_components)
-        if mgr._components.get_component_size(i) == 1
-    )
-    results["orphan_atoms"] = orphan_count
+    results["n_components"] = polymer._coord_manager._components.n_components
 
     # Cache original coordinates
     original_coords = polymer.coordinates.clone()
@@ -319,7 +311,7 @@ def print_results(results: dict) -> None:
           f"Chains: {results.get('chains', '?')}")
     if 'zmatrix_size' in results:
         print(f"  Z-matrix entries: {results['zmatrix_size']:,} | "
-              f"Orphan atoms: {results['orphan_atoms']:,}")
+              f"Components: {results['n_components']:,}")
     print()
 
     # Print timing table

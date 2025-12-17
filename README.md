@@ -99,7 +99,7 @@ print(polymer)  # Summary of chains, residues, atoms
 # Access coordinates and properties
 coords = polymer.coordinates      # (N, 3) array/tensor
 atoms = polymer.atoms             # (N,) array/tensor of atom types
-sequence = polymer.str()          # Sequence string
+sequence = polymer.sequence_str()  # Sequence string
 
 # Geometric operations
 centered, means = polymer.center(ciffy.MOLECULE)
@@ -119,7 +119,7 @@ descriptions = polymer.descriptions  # List of description strings per chain
 
 # Iterate over chains
 for chain in polymer.chains(ciffy.RNA):
-    print(chain.id(), chain.str())
+    print(chain.pdb_id, chain.sequence_str())
 
 # Compute RMSD between structures (defaults to MOLECULE scale)
 rmsd = ciffy.rmsd(polymer1, polymer2)

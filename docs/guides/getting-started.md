@@ -214,7 +214,7 @@ rna_only.write("rna_chains.cif")
 ```python
 # One-letter sequence string
 for chain in polymer.chains(ciffy.RNA):
-    seq = chain.str()
+    seq = chain.sequence_str()
     print(f"Chain {chain.names[0]}: {seq}")
 # Output: Chain A: GCUAGCUAGCUA...
 ```

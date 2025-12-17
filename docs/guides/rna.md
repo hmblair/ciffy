@@ -28,7 +28,7 @@ rna = ciffy.load("structure.cif").by_type(ciffy.RNA)
 
 # One-letter sequence
 for chain in rna.chains():
-    seq = chain.str()
+    seq = chain.sequence_str()
     print(f"Chain {chain.names[0]}: {seq}")
 # Output: Chain A: GCUAGCUAGCUA...
 ```
@@ -284,7 +284,7 @@ rna = ciffy.load("ribosome.cif").by_type(ciffy.RNA)
 for chain in rna.chains():
     name = chain.names[0]
     n_res = chain.size(ciffy.RESIDUE)
-    seq = chain.str()
+    seq = chain.sequence_str()
 
     # Compute radius of gyration
     centered, _ = chain.center(ciffy.MOLECULE)
@@ -346,7 +346,7 @@ def analyze_rna(cif_file):
         n_res = chain.size(ciffy.RESIDUE)
 
         print(f"Chain {name} ({n_res} nt)")
-        print(f"  Sequence: {chain.str()[:50]}...")
+        print(f"  Sequence: {chain.sequence_str()[:50]}...")
 
         # Backbone geometry
         delta = np.degrees(chain.dihedral(ciffy.DihedralType.DELTA))

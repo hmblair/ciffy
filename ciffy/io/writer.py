@@ -53,7 +53,7 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
 
     _save(
         filename,
-        polymer._id,
+        polymer.pdb_id,
         coordinates,
         atoms,
         elements,

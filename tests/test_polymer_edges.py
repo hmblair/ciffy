@@ -66,7 +66,7 @@ class TestEmptyPolymer:
         template = ciffy.from_sequence("a", backend=backend)
         empty = template[template.atoms < 0]
 
-        assert empty.str() == ""
+        assert empty.sequence_str() == ""
 
 
 class TestSingleAtomPolymer:
@@ -160,7 +160,7 @@ class TestSingleResiduePolymer:
 
         p = ciffy.from_sequence("a", backend=backend)
 
-        assert p.str() == "a"
+        assert p.sequence_str() == "a"
 
 
 class TestSingleChainPolymer:

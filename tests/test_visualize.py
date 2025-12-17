@@ -281,7 +281,7 @@ class TestAlignment:
     def test_align_values_identical(self, single_chain_polymer):
         """Test align_values with identical sequences."""
         polymer = single_chain_polymer
-        seq = polymer.str()
+        seq = polymer.sequence_str()
         values = np.random.rand(len(seq))
 
         result = align_values(values, seq, polymer, chain=0)
@@ -290,7 +290,7 @@ class TestAlignment:
     def test_align_values_case_insensitive(self, single_chain_polymer):
         """Test align_values is case insensitive."""
         polymer = single_chain_polymer
-        seq = polymer.str().lower()
+        seq = polymer.sequence_str().lower()
         values = np.random.rand(len(seq))
 
         result = align_values(values, seq, polymer, chain=0)
@@ -299,7 +299,7 @@ class TestAlignment:
     def test_align_values_t_to_u(self, single_chain_polymer):
         """Test align_values converts T to U."""
         polymer = single_chain_polymer
-        seq = polymer.str().replace('u', 't')
+        seq = polymer.sequence_str().replace('u', 't')
         values = np.random.rand(len(seq))
 
         result = align_values(values, seq, polymer, chain=0)
@@ -308,7 +308,7 @@ class TestAlignment:
     def test_align_values_wrong_data_length(self, single_chain_polymer):
         """Test error when data doesn't match data_seq."""
         polymer = single_chain_polymer
-        seq = polymer.str()
+        seq = polymer.sequence_str()
         wrong_values = np.random.rand(len(seq) + 5)
 
         with pytest.raises(ValueError, match="must match"):

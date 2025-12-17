@@ -181,7 +181,7 @@ def align_values(
 
     # Get polymer sequence for the specified chain
     chain_polymer = polymer.by_index(chain)
-    polymer_seq = chain_polymer.str()
+    polymer_seq = chain_polymer.sequence_str()
 
     # Normalize sequences (uppercase, T->U for RNA)
     data_seq_norm = data_seq.upper().replace('T', 'U')

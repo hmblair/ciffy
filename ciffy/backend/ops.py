@@ -2,13 +2,16 @@
 Unified array operations with automatic backend dispatch.
 
 Functions in this module automatically detect the backend from input arrays
-and dispatch to the appropriate implementation using a dispatch table pattern.
+and dispatch to the appropriate implementation. Simple operations use inline
+if/else, while complex operations use a dispatch table to numpy_ops/torch_ops.
 """
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from . import get_backend, Backend, Array
+import numpy as np
+
+from .core import get_backend, is_torch, Backend, Array
 
 if TYPE_CHECKING:
     import torch
@@ -186,3 +189,283 @@ def arange(n: int, like: Array) -> Array:
     if get_backend(like) == Backend.TORCH:
         return ops.arange(n, device=like.device)
     return ops.arange(n)
+
+
+# =============================================================================
+# Backend Conversion
+# =============================================================================
+
+def to_backend(arr: np.ndarray, like: Array) -> Array:
+    """
+    Convert a numpy array to match the backend of 'like'.
+
+    Args:
+        arr: NumPy array to convert.
+        like: Template array whose backend to match.
+
+    Returns:
+        Array in the same backend as 'like'. If 'like' is torch,
+        returns a tensor on the same device.
+    """
+    if is_torch(like):
+        import torch
+        result = torch.from_numpy(np.ascontiguousarray(arr))
+        if hasattr(like, 'device'):
+            result = result.to(like.device)
+        return result
+    return arr
+
+
+def convert_backend(arr: Array, like: Array) -> Array:
+    """
+    Convert arr to match the backend of 'like'.
+
+    More general than to_backend - works with both numpy and torch inputs.
+
+    Args:
+        arr: Array to convert.
+        like: Template array for backend detection.
+
+    Returns:
+        Array in the same backend as 'like'.
+    """
+    if is_torch(like):
+        if not is_torch(arr):
+            import torch
+            return torch.from_numpy(np.asarray(arr)).to(like.device)
+        return arr
+    else:
+        if is_torch(arr):
+            return arr.detach().cpu().numpy()
+        return np.asarray(arr)
+
+
+# =============================================================================
+# Linear Algebra
+# =============================================================================
+
+def eigh(arr: Array) -> tuple[Array, Array]:
+    """
+    Eigenvalue decomposition of a symmetric/Hermitian matrix.
+
+    Args:
+        arr: Symmetric matrix.
+
+    Returns:
+        Tuple of (eigenvalues, eigenvectors) in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.linalg.eigh(arr)
+    return np.linalg.eigh(arr)
+
+
+def det(arr: Array) -> Array:
+    """
+    Matrix determinant.
+
+    Args:
+        arr: Square matrix.
+
+    Returns:
+        Determinant value in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.linalg.det(arr)
+    return np.linalg.det(arr)
+
+
+def svdvals(arr: Array) -> Array:
+    """
+    Singular values of a matrix.
+
+    Args:
+        arr: Input matrix.
+
+    Returns:
+        Singular values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.linalg.svdvals(arr)
+    return np.linalg.svd(arr, compute_uv=False)
+
+
+# =============================================================================
+# Array Creation (backend-aware)
+# =============================================================================
+
+def zeros(size: int, *, like: Array, dtype: str = 'int64') -> Array:
+    """
+    Create a zeros array matching the backend of 'like'.
+
+    Args:
+        size: Length of array.
+        like: Template array for backend detection.
+        dtype: Data type ('int64', 'float32', 'bool').
+
+    Returns:
+        Zeros array in the same backend as 'like'.
+    """
+    if is_torch(like):
+        import torch
+        torch_dtype = {'int64': torch.long, 'float32': torch.float32, 'bool': torch.bool}[dtype]
+        return torch.zeros(size, dtype=torch_dtype, device=getattr(like, 'device', None))
+    np_dtype = {'int64': np.int64, 'float32': np.float32, 'bool': bool}[dtype]
+    return np.zeros(size, dtype=np_dtype)
+
+
+def ones(size: int, *, like: Array, dtype: str = 'int64') -> Array:
+    """
+    Create a ones array matching the backend of 'like'.
+
+    Args:
+        size: Length of array.
+        like: Template array for backend detection.
+        dtype: Data type ('int64', 'float32').
+
+    Returns:
+        Ones array in the same backend as 'like'.
+    """
+    if is_torch(like):
+        import torch
+        torch_dtype = {'int64': torch.long, 'float32': torch.float32}[dtype]
+        return torch.ones(size, dtype=torch_dtype, device=getattr(like, 'device', None))
+    np_dtype = {'int64': np.int64, 'float32': np.float32}[dtype]
+    return np.ones(size, dtype=np_dtype)
+
+
+def array(data: list, *, like: Array, dtype: str = 'int64') -> Array:
+    """
+    Create an array from data matching the backend of 'like'.
+
+    Args:
+        data: List of values.
+        like: Template array for backend detection.
+        dtype: Data type ('int64', 'float32').
+
+    Returns:
+        Array in the same backend as 'like'.
+    """
+    if is_torch(like):
+        import torch
+        torch_dtype = {'int64': torch.long, 'float32': torch.float32}[dtype]
+        return torch.tensor(data, dtype=torch_dtype, device=getattr(like, 'device', None))
+    np_dtype = {'int64': np.int64, 'float32': np.float32}[dtype]
+    return np.array(data, dtype=np_dtype)
+
+
+# =============================================================================
+# Utility Operations
+# =============================================================================
+
+def nonzero_1d(arr: Array) -> Array:
+    """
+    Get indices of non-zero elements in a 1D array.
+
+    Args:
+        arr: 1D array.
+
+    Returns:
+        Indices of non-zero elements in original backend.
+    """
+    if is_torch(arr):
+        return arr.nonzero().squeeze(-1)
+    return arr.nonzero()[0]
+
+
+def to_int64(arr: Array) -> Array:
+    """
+    Convert array to int64 dtype.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Array with int64 dtype in original backend.
+    """
+    if is_torch(arr):
+        return arr.long()
+    return arr.astype(np.int64)
+
+
+# =============================================================================
+# Math Operations
+# =============================================================================
+
+def sqrt(arr: Array) -> Array:
+    """
+    Element-wise square root.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Square root in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.sqrt(arr)
+    return np.sqrt(arr)
+
+
+def clamp(arr: Array, min_val: float | None = None, max_val: float | None = None) -> Array:
+    """
+    Clamp array values to a range.
+
+    Args:
+        arr: Input array.
+        min_val: Minimum value (None for no lower bound).
+        max_val: Maximum value (None for no upper bound).
+
+    Returns:
+        Clamped array in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.clamp(arr, min=min_val, max=max_val)
+    result = arr
+    if min_val is not None:
+        result = np.maximum(result, min_val)
+    if max_val is not None:
+        result = np.minimum(result, max_val)
+    return result
+
+
+def topk(arr: Array, k: int, dim: int = -1, largest: bool = True) -> tuple[Array, Array]:
+    """
+    Find k largest or smallest elements along a dimension.
+
+    Args:
+        arr: Input array.
+        k: Number of elements to return.
+        dim: Dimension along which to find topk.
+        largest: If True, find k largest; if False, find k smallest.
+
+    Returns:
+        Tuple of (values, indices) in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.topk(arr, k, dim=dim, largest=largest)
+    else:
+        # NumPy implementation
+        if largest:
+            # Get indices of k largest
+            indices = np.argpartition(arr, -k, axis=dim)
+            indices = np.take(indices, range(-k, 0), axis=dim)
+        else:
+            # Get indices of k smallest
+            indices = np.argpartition(arr, k, axis=dim)
+            indices = np.take(indices, range(k), axis=dim)
+
+        # Get values and sort by value
+        values = np.take_along_axis(arr, indices, axis=dim)
+        sort_idx = np.argsort(values, axis=dim)
+        if largest:
+            sort_idx = np.flip(sort_idx, axis=dim)
+        indices = np.take_along_axis(indices, sort_idx, axis=dim)
+        values = np.take_along_axis(values, sort_idx, axis=dim)
+
+        return values, indices

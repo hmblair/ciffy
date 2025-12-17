@@ -38,7 +38,7 @@ def _info_command(args):
         if args.sequence:
             print("\nSequence:")
             for chain in polymer.chains():
-                seq = chain.str()
+                seq = chain.sequence_str()
                 if seq:
                     print(f"  {chain.names[0]}: {seq}")
 
@@ -161,9 +161,9 @@ def _map_command(args):
     )
 
     # Set title
-    title = f"{polymer.id()} Contact Map"
+    title = f"{polymer.pdb_id} Contact Map"
     if args.chain is not None:
-        title = f"{polymer.id()} Chain {args.chain}"
+        title = f"{polymer.pdb_id} Chain {args.chain}"
     ax.set_title(title)
 
     # Save or show

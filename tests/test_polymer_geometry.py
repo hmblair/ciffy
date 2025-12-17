@@ -376,7 +376,7 @@ class TestWithCoordinates:
         assert p2.size() == p.size()
         assert p2.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
         assert p2.size(Scale.CHAIN) == p.size(Scale.CHAIN)
-        assert p2.id() == p.id()
+        assert p2.pdb_id == p.pdb_id
 
 
 class TestKabschAlignment:

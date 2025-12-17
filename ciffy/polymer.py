@@ -13,8 +13,7 @@ from copy import copy
 import numpy as np
 
 from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
-from .backend import ops as backend
-from .backend import array_protocol as _ap
+from .backend import ops
 from .types import Scale, Molecule
 from .biochemistry.molecule import molecule_type
 
@@ -34,61 +33,6 @@ from .utils import all_equal, filter_by_mask
 
 
 UNKNOWN = "UNKNOWN"
-
-
-# =============================================================================
-# Backend-Aware Array Helpers
-# Thin wrappers around array_protocol functions preserving old calling convention
-# =============================================================================
-
-def _ones_like_backend(template: Array, size: int) -> Array:
-    """Create a ones array matching the backend of template."""
-    return _ap.ones(size, like=template, dtype='int64')
-
-
-def _zeros_like_backend(template: Array, size: int) -> Array:
-    """Create a zeros array matching the backend of template."""
-    return _ap.zeros(size, like=template, dtype='int64')
-
-
-def _array_like_backend(template: Array, data: list) -> Array:
-    """Create an array from data matching the backend of template."""
-    return _ap.array(data, like=template, dtype='int64')
-
-
-def _bool_zeros_like_backend(template: Array, size: int) -> Array:
-    """Create a boolean zeros array matching the backend of template."""
-    return _ap.zeros(size, like=template, dtype='bool')
-
-
-def _as_backend(template: Array, arr: Array) -> Array:
-    """Convert arr to match the backend of template."""
-    return _ap.convert_backend(arr, template)
-
-
-def _eigh(arr: Array) -> tuple[Array, Array]:
-    """Compute eigendecomposition, backend-agnostic."""
-    return _ap.eigh(arr)
-
-
-def _det(arr: Array) -> Array:
-    """Compute determinant, backend-agnostic."""
-    return _ap.det(arr)
-
-
-def _nonzero_1d(arr: Array) -> Array:
-    """Get indices of non-zero elements in a 1D array, backend-agnostic."""
-    return _ap.nonzero_1d(arr)
-
-
-def _to_int64(arr: Array) -> Array:
-    """Convert array to int64 dtype, backend-agnostic."""
-    return _ap.to_int64(arr)
-
-
-def _cdist(x1: Array, x2: Array) -> Array:
-    """Compute pairwise distances, backend-agnostic."""
-    return backend.cdist(x1, x2)
 
 
 def _classify_chain_type(min_idx: int, max_idx: int,
@@ -237,7 +181,7 @@ class Polymer:
         Raises:
             ValueError: If tensor sizes are inconsistent.
         """
-        self._id = id or UNKNOWN
+        self.pdb_id = id or UNKNOWN
         self.names = names
         self.strands = strands
 
@@ -258,7 +202,7 @@ class Polymer:
         ):
             raise ValueError(
                 f"Coordinate, atom, and element tensors must have equal size "
-                f"for PDB {self.id()}."
+                f"for PDB {self.pdb_id}."
             )
 
         res_count = sizes[Scale.RESIDUE].sum().item()
@@ -268,7 +212,7 @@ class Polymer:
         if not all_equal(res_count + self.nonpoly, chn_count, mol_count):
             raise ValueError(
                 f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
-                f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.id()}."
+                f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
             )
 
         # Store atomic properties
@@ -503,31 +447,29 @@ class Polymer:
     # Identification
     # ─────────────────────────────────────────────────────────────────────────
 
-    def id(self: Polymer, ix: int | None = None) -> str:
+    def chain_id(self: Polymer, ix: int) -> str:
         """
-        Get the PDB ID, optionally with chain suffix.
-
-        Args:
-            ix: Optional chain index for chain-specific ID.
-
-        Returns:
-            PDB ID string, with chain name suffix if ix is provided.
-        """
-        if ix is None:
-            return self._id
-        return f"{self._id}_{self.names[ix]}"
-
-    def strand(self: Polymer, ix: int) -> str:
-        """
-        Get the strand ID for a specific chain.
+        Get a unique identifier for a specific chain.
 
         Args:
             ix: Chain index.
 
         Returns:
-            Strand identifier string.
+            String combining PDB ID and chain name (e.g., "1ABC_A").
         """
-        return f"{self._id}_{self.strands[ix]}"
+        return f"{self.pdb_id}_{self.names[ix]}"
+
+    def strand_id(self: Polymer, ix: int) -> str:
+        """
+        Get the strand identifier for a specific chain.
+
+        Args:
+            ix: Chain index.
+
+        Returns:
+            String combining PDB ID and strand name.
+        """
+        return f"{self.pdb_id}_{self.strands[ix]}"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Size and Structure
@@ -580,7 +522,7 @@ class Polymer:
             array([150, 200, 175])  # residues per chain
         """
         if inner == outer:
-            return _ones_like_backend(self.coordinates, self.size(inner))
+            return ops.ones(self.size(inner), like=self.coordinates)
 
         # Atoms per {residue, chain, molecule} are stored in _sizes
         if inner == Scale.ATOM:
@@ -592,7 +534,7 @@ class Polymer:
 
         # Single-value cases: total count as 1-element array
         if outer == Scale.MOLECULE:
-            return _array_like_backend(self.coordinates, [self.size(inner)])
+            return ops.array([self.size(inner)], like=self.coordinates)
 
         raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
 
@@ -640,11 +582,11 @@ class Polymer:
 
         # Create masked copies for min/max reduction
         unknown_mask = self.sequence == -1
-        seq_for_min = _ap.to_backend(
+        seq_for_min = ops.to_backend(
             np.where(to_numpy(unknown_mask), LARGE_SENTINEL, to_numpy(self.sequence)),
             self.sequence
         )
-        seq_for_max = _ap.to_backend(
+        seq_for_max = ops.to_backend(
             np.where(to_numpy(unknown_mask), SMALL_SENTINEL, to_numpy(self.sequence)),
             self.sequence
         )
@@ -663,7 +605,7 @@ class Polymer:
             result[i] = _classify_chain_type(int(min_np[i]), int(max_np[i]),
                                               LARGE_SENTINEL, SMALL_SENTINEL)
 
-        return _ap.to_backend(result, self.coordinates)
+        return ops.to_backend(result, self.coordinates)
 
     def istype(self: Polymer, mol: Molecule) -> bool:
         """
@@ -769,11 +711,11 @@ class Polymer:
         Returns:
             Expanded feature tensor.
         """
-        # Device mismatch is handled by backend.repeat_interleave
+        # Device mismatch is handled by ops.repeat_interleave
         if dest == Scale.ATOM:
-            return backend.repeat_interleave(features, self._sizes[source])
+            return ops.repeat_interleave(features, self._sizes[source])
         if dest == Scale.RESIDUE:
-            return backend.repeat_interleave(features, self.lengths)
+            return ops.repeat_interleave(features, self.lengths)
         raise ValueError(f"Cannot expand to {dest.name}")
 
     def count(
@@ -791,7 +733,7 @@ class Polymer:
         Returns:
             Count tensor with one value per scale unit.
         """
-        return self.reduce(_to_int64(mask), scale, Reduction.SUM)
+        return self.reduce(ops.to_int64(mask), scale, Reduction.SUM)
 
     def index(self: Polymer, scale: Scale) -> Array:
         """
@@ -819,7 +761,7 @@ class Polymer:
             >>> mask = res_idx[:, None] == res_idx[None, :]
         """
         n = self.size(scale)
-        idx = backend.arange(n, like=self.coordinates)
+        idx = ops.arange(n, like=self.coordinates)
         return self.expand(idx, scale, Scale.ATOM)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -883,14 +825,9 @@ class Polymer:
         sq = centered.coordinates ** 2
         var = self.reduce(sq, scale).mean(axis=-1, keepdims=True)  # (n_units, 1)
 
-        # Backend-agnostic sqrt and maximum
-        if is_torch(var):
-            import torch
-            std = torch.sqrt(var)
-            std = torch.clamp(std, min=1e-8)
-        else:
-            std = np.sqrt(var)
-            std = np.maximum(std, 1e-8)
+        # Backend-agnostic sqrt and clamp
+        std = ops.sqrt(var)
+        std = ops.clamp(std, min_val=1e-8)
 
         # Scale coordinates
         std_expanded = self.expand(std, scale)
@@ -919,7 +856,7 @@ class Polymer:
         else:
             coords = self.reduce(self.coordinates, scale)
 
-        return _cdist(coords, coords)
+        return ops.cdist(coords, coords)
 
     def knn(self: Polymer, k: int, scale: Scale = Scale.ATOM) -> Array:
         """
@@ -951,22 +888,10 @@ class Polymer:
         if k >= n:
             raise ValueError(f"k={k} must be less than number of points ({n})")
 
-        if is_torch(dists):
-            # Use topk to find k+1 smallest (includes self at distance 0)
-            # largest=False gives smallest distances
-            _, indices = dists.topk(k + 1, dim=1, largest=False)
-            # Exclude self (first column) and transpose to (k, N)
-            return indices[:, 1:].T
-        else:
-            # NumPy: use argpartition for efficiency
-            # argpartition gives k+1 smallest but not sorted
-            indices = np.argpartition(dists, k + 1, axis=1)[:, :k + 1]
-            # Sort within the k+1 to get proper order
-            row_indices = np.arange(n)[:, None]
-            sorted_order = np.argsort(dists[row_indices, indices], axis=1)
-            indices = indices[row_indices, sorted_order]
-            # Exclude self (first column) and transpose to (k, N)
-            return indices[:, 1:].T
+        # Use topk to find k+1 smallest (includes self at distance 0)
+        _, indices = ops.topk(dists, k + 1, dim=1, largest=False)
+        # Exclude self (first column) and transpose to (k, N)
+        return indices[:, 1:].T
 
     def _pc(
         self: Polymer,
@@ -987,7 +912,7 @@ class Polymer:
         """
         cov = self.coordinates[:, None, :] * self.coordinates[:, :, None]
         cov = self.reduce(cov, scale)
-        return _eigh(cov)
+        return ops.eigh(cov)
 
     def align(
         self: Polymer,
@@ -1015,8 +940,8 @@ class Polymer:
         ).squeeze()
 
         # Ensure stability by fixing signs based on third moments
-        signs = backend.sign(aligned.moment(3, scale))
-        signs[:, 0] = signs[:, 1] * signs[:, 2] * _det(Q)
+        signs = ops.sign(aligned.moment(3, scale))
+        signs[:, 0] = signs[:, 1] * signs[:, 2] * ops.det(Q)
         signs_exp = aligned.expand(signs, scale)
 
         aligned.coordinates = aligned.coordinates * signs_exp
@@ -1063,7 +988,7 @@ class Polymer:
             Boolean array at dest scale.
         """
         counts = self.size(source)
-        objects = _bool_zeros_like_backend(self.coordinates, counts)
+        objects = ops.zeros(counts, like=self.coordinates, dtype='bool')
         objects[indices] = True
         return self.expand(objects, source, dest)
 
@@ -1079,7 +1004,7 @@ class Polymer:
         """
         # Handle slice by converting to boolean mask
         if isinstance(key, slice):
-            mask = _bool_zeros_like_backend(self.coordinates, self.size())
+            mask = ops.zeros(self.size(), like=self.coordinates, dtype='bool')
             mask[key] = True
             return self[mask]
 
@@ -1098,7 +1023,7 @@ class Polymer:
 
         # Determine which residues have atoms
         chn_mask = chn_sizes > 0
-        residues = backend.repeat_interleave(chn_mask, self.lengths)
+        residues = ops.repeat_interleave(chn_mask, self.lengths)
 
         lengths = self.lengths[chn_mask]
 
@@ -1118,7 +1043,7 @@ class Polymer:
 
         result = Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, new_polymer_count,
+            self.pdb_id, names, strands, lengths, new_polymer_count,
         )
 
         # Replace default coord manager with sliced one and set topology
@@ -1141,7 +1066,7 @@ class Polymer:
             IndexError: If any index is out of range.
         """
         if isinstance(ix, int):
-            ix = _array_like_backend(self.coordinates, [ix])
+            ix = ops.array([ix], like=self.coordinates)
 
         # Validate indices
         max_chain = self.size(Scale.CHAIN)
@@ -1163,7 +1088,7 @@ class Polymer:
         sizes = {
             Scale.RESIDUE: self._sizes[Scale.RESIDUE][res_ix],
             Scale.CHAIN: self._sizes[Scale.CHAIN][ix],
-            Scale.MOLECULE: _array_like_backend(self.coordinates, [len(coordinates)]),
+            Scale.MOLECULE: ops.array([len(coordinates)], like=self.coordinates),
         }
 
         sequence = self.sequence[res_ix]
@@ -1179,7 +1104,7 @@ class Polymer:
 
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
-            self._id, names, strands, lengths, new_polymer_count,
+            self.pdb_id, names, strands, lengths, new_polymer_count,
             mol_types,
         )
 
@@ -1193,7 +1118,7 @@ class Polymer:
         Returns:
             New Polymer with matching atoms.
         """
-        name = _as_backend(self.atoms, name)
+        name = ops.convert_backend(name, self.atoms)
         mask = (self.atoms[:, None] == name).any(1)
         return self[mask]
 
@@ -1212,7 +1137,7 @@ class Polymer:
             >>> adenosines = polymer.by_residue(Residue.ADE)
             >>> purines = polymer.by_residue([Residue.ADE, Residue.GUA])
         """
-        res = _as_backend(self.sequence, res)
+        res = ops.convert_backend(res, self.sequence)
         res_mask = (self.sequence[:, None] == res).any(1)
         atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
         return self[atom_mask]
@@ -1227,7 +1152,7 @@ class Polymer:
         Returns:
             New Polymer with chains of that type.
         """
-        ix = _nonzero_1d(self.molecule_type == mol.value)
+        ix = ops.nonzero_1d(self.molecule_type == mol.value)
         return self.by_index(ix)
 
     def poly(self: Polymer) -> Polymer:
@@ -1270,7 +1195,7 @@ class Polymer:
         sizes = {
             Scale.RESIDUE: self._sizes[Scale.RESIDUE],  # Unchanged
             Scale.CHAIN: chn_sizes,
-            Scale.MOLECULE: _array_like_backend(self.coordinates, [self.polymer_count]),
+            Scale.MOLECULE: ops.array([self.polymer_count], like=self.coordinates),
         }
 
         # Filter molecule types if available
@@ -1278,7 +1203,7 @@ class Polymer:
 
         return Polymer(
             coordinates, atoms, elements, self.sequence, sizes,
-            self._id, names, strands, lengths, self.polymer_count,
+            self.pdb_id, names, strands, lengths, self.polymer_count,
             mol_types,
         )
 
@@ -1349,7 +1274,7 @@ class Polymer:
         poly._sizes = copy(self._sizes)
         poly._sizes[scale] = poly._sizes[scale][resolved]
 
-        poly.lengths = self.rreduce(_to_int64(resolved), Scale.CHAIN, Reduction.SUM)
+        poly.lengths = self.rreduce(ops.to_int64(resolved), Scale.CHAIN, Reduction.SUM)
         poly.sequence = self.sequence[resolved]
 
         return poly
@@ -1378,12 +1303,13 @@ class Polymer:
     # String Representations
     # ─────────────────────────────────────────────────────────────────────────
 
-    def str(self: Polymer) -> str:
+    def sequence_str(self: Polymer) -> str:
         """
-        Get the sequence as a string.
+        Get the sequence as a single-letter string.
 
         Returns:
-            Single-letter sequence string.
+            Single-letter sequence string (e.g., "ACGU" for RNA,
+            "MGKLV" for protein).
         """
         def abbrev(x: int) -> str:
             try:
@@ -1441,7 +1367,7 @@ class Polymer:
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
         rows = self.chain_info()
-        return _format_chain_table(self.id(), self.backend, rows)
+        return _format_chain_table(self.pdb_id, self.backend, rows)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion
@@ -1488,7 +1414,7 @@ class Polymer:
             elements=to_numpy(self.elements),
             sequence=to_numpy(self.sequence),
             sizes={k: to_numpy(v) for k, v in self._sizes.items()},
-            id=self._id,
+            id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=to_numpy(self.lengths),
@@ -1523,7 +1449,7 @@ class Polymer:
             elements=to_torch(self.elements).long(),
             sequence=to_torch(self.sequence).long(),
             sizes={k: to_torch(v).long() for k, v in self._sizes.items()},
-            id=self._id,
+            id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=to_torch(self.lengths).long(),
@@ -1585,7 +1511,7 @@ class Polymer:
             elements=move_int(self.elements),
             sequence=move_int(self.sequence),
             sizes={k: move_int(v) for k, v in self._sizes.items()},
-            id=self._id,
+            id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=move_int(self.lengths),

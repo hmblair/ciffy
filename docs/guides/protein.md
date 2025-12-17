@@ -28,7 +28,7 @@ protein = ciffy.load("structure.cif").by_type(ciffy.PROTEIN)
 
 # One-letter sequence
 for chain in protein.chains():
-    seq = chain.str()
+    seq = chain.sequence_str()
     print(f"Chain {chain.names[0]}: {seq}")
 # Output: Chain A: MGKLVFFAED...
 ```
@@ -374,7 +374,7 @@ protein = ciffy.load("complex.cif").by_type(ciffy.PROTEIN)
 for chain in protein.chains():
     name = chain.names[0]
     n_res = chain.size(ciffy.RESIDUE)
-    seq = chain.str()
+    seq = chain.sequence_str()
 
     # Secondary structure estimate
     phi = np.degrees(chain.dihedral(ciffy.DihedralType.PHI))
@@ -413,7 +413,7 @@ def analyze_protein(cif_file):
         n_res = chain.size(ciffy.RESIDUE)
 
         print(f"Chain {name} ({n_res} residues)")
-        print(f"  Sequence: {chain.str()[:50]}...")
+        print(f"  Sequence: {chain.sequence_str()[:50]}...")
 
         # Backbone geometry
         phi = np.degrees(chain.dihedral(ciffy.DihedralType.PHI))

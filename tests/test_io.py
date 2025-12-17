@@ -173,7 +173,7 @@ class TestLoad:
         repr_str = repr(polymer)
 
         # Check header line contains PDB ID and backend
-        assert polymer.id() in repr_str
+        assert polymer.pdb_id in repr_str
         assert backend in repr_str
 
         # Check column headers are present

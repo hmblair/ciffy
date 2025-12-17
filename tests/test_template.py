@@ -183,7 +183,7 @@ class TestFromSequence:
 
         polymer = from_sequence("acgu", id="my_rna")
 
-        assert polymer.id() == "my_rna"
+        assert polymer.pdb_id == "my_rna"
 
     def test_default_id(self):
         """Test default ID is 'template'."""
@@ -191,7 +191,7 @@ class TestFromSequence:
 
         polymer = from_sequence("acgu")
 
-        assert polymer.id() == "template"
+        assert polymer.pdb_id == "template"
 
     def test_chain_name(self):
         """Test chain name is 'A'."""
@@ -637,7 +637,7 @@ class TestTemplateMatchesCIF:
     def _extract_chain_sequences(self, polymer) -> list[str]:
         """Extract per-chain sequences from a polymer."""
         sequences = []
-        seq_str = polymer.str()
+        seq_str = polymer.sequence_str()
         offset = 0
         for length in polymer.lengths:
             length = int(length)

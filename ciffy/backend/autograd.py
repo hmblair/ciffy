@@ -39,6 +39,7 @@ Notes
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -114,19 +115,32 @@ class CartesianToInternalFunction(Function):
         use_cuda = is_cuda_available(coords)
         ctx.use_cuda = use_cuda
 
+        # Save original device for backward pass
+        device = coords.device
+        ctx.output_device = device
+
         if use_cuda:
             # GPU path: stay on device
             internal = cuda_cartesian_to_internal(coords, indices)
         else:
-            # CPU path: convert to numpy for C extension
-            coords_np = coords.detach().cpu().numpy().astype(np.float32)
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
+            # CPU path: use C extension via buffer protocol
+            if not coords.is_cpu:
+                warnings.warn(
+                    f"Tensor on {device} falling back to CPU for C extension. "
+                    "Consider using CUDA tensors with the CUDA extension for best performance.",
+                    stacklevel=3
+                )
+                coords = coords.cpu()
+                indices = indices.cpu()
 
-            # Call C extension - returns (M, 3) array
-            internal_np = _cartesian_to_internal(coords_np, indices_np)
+            # Ensure contiguous float32/int64 layout for buffer protocol
+            coords_f32 = coords.detach().to(torch.float32).contiguous()
+            indices_i64 = indices.detach().to(torch.int64).contiguous()
 
-            # Convert back to tensor
-            device = coords.device
+            # Call C extension (accepts buffer protocol objects) - returns numpy array
+            internal_np = _cartesian_to_internal(coords_f32, indices_i64)
+
+            # Convert back to tensor on original device
             internal = torch.from_numpy(internal_np).to(device)
 
         # Save for backward
@@ -158,19 +172,30 @@ class CartesianToInternalFunction(Function):
                 coords, indices, internal, grad_internal.contiguous()
             )
         else:
-            # CPU path: convert to numpy
-            coords_np = coords.detach().cpu().numpy().astype(np.float32)
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
-            internal_np = internal.detach().cpu().numpy().astype(np.float32)
-            grad_internal_np = grad_internal.detach().cpu().numpy().astype(np.float32)
+            # CPU path: use C extension via buffer protocol
+            # Use saved device from forward pass
+            device = ctx.output_device
 
-            # Call C backward
+            if not coords.is_cpu:
+                # Transfer to CPU if needed (e.g., MPS fallback)
+                coords = coords.cpu()
+                indices = indices.cpu()
+                internal = internal.cpu()
+                grad_internal = grad_internal.cpu()
+
+            # Ensure contiguous layout for buffer protocol
+            coords_f32 = coords.detach().to(torch.float32).contiguous()
+            indices_i64 = indices.detach().to(torch.int64).contiguous()
+            internal_f32 = internal.detach().to(torch.float32).contiguous()
+            grad_internal_f32 = grad_internal.detach().to(torch.float32).contiguous()
+
+            # Call C backward (accepts buffer protocol objects)
             grad_coords_np = _cartesian_to_internal_backward(
-                coords_np, indices_np, internal_np, grad_internal_np
+                coords_f32, indices_i64, internal_f32, grad_internal_f32
             )
 
-            # Convert back to tensor
-            grad_coords = torch.from_numpy(grad_coords_np).to(coords.device)
+            # Convert back to tensor on original device
+            grad_coords = torch.from_numpy(grad_coords_np).to(device)
 
         return grad_coords, None
 
@@ -250,26 +275,43 @@ class NerfReconstructFunction(Function):
             device=internal.device, dtype=torch.int32
         ).contiguous()
 
+        # Save original device for backward pass
+        device = internal.device
+
         if use_cuda and HAS_ANCHORED_NERF:
             # GPU path with anchored component-parallel reconstruction
-            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=internal.device)
+            coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
             cuda_nerf_reconstruct_leveled_anchored(
                 coords, indices, internal,
                 comp_off_tensor, anchor_tensor, comp_ids_tensor
             )
         else:
-            # CPU path with anchored reconstruction
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
-            internal_np = internal.detach().cpu().numpy().astype(np.float32)
-            comp_off_np = comp_off_tensor.detach().cpu().numpy().astype(np.int32)
-            anchor_np = anchor_tensor.detach().cpu().numpy().astype(np.float32)
-            comp_ids_np = comp_ids_tensor.detach().cpu().numpy().astype(np.int32)
+            # CPU path: use C extension via buffer protocol
+            if not internal.is_cpu:
+                warnings.warn(
+                    f"Tensor on {device} falling back to CPU for C extension. "
+                    "Consider using CUDA tensors with the CUDA extension for best performance.",
+                    stacklevel=3
+                )
+                indices = indices.cpu()
+                internal = internal.cpu()
+                comp_off_tensor = comp_off_tensor.cpu()
+                anchor_tensor = anchor_tensor.cpu()
+                comp_ids_tensor = comp_ids_tensor.cpu()
 
+            # Ensure contiguous layout for buffer protocol
+            indices_i64 = indices.detach().to(torch.int64).contiguous()
+            internal_f32 = internal.detach().to(torch.float32).contiguous()
+            comp_off_i32 = comp_off_tensor.detach().to(torch.int32).contiguous()
+            anchor_f32 = anchor_tensor.detach().to(torch.float32).contiguous()
+            comp_ids_i32 = comp_ids_tensor.detach().to(torch.int32).contiguous()
+
+            # Call C extension (accepts buffer protocol objects)
             coords_np = _nerf_reconstruct_leveled_anchored(
-                indices_np, internal_np, n_atoms,
-                comp_off_np, anchor_np, comp_ids_np
+                indices_i64, internal_f32, n_atoms,
+                comp_off_i32, anchor_f32, comp_ids_i32
             )
-            coords = torch.from_numpy(coords_np).to(internal.device)
+            coords = torch.from_numpy(coords_np).to(device)
 
         # Save for backward
         ctx.save_for_backward(coords, indices, internal)
@@ -278,6 +320,7 @@ class NerfReconstructFunction(Function):
         ctx.component_offsets = comp_off_tensor.detach()
         ctx.anchor_coords = anchor_tensor.detach()
         ctx.component_ids = comp_ids_tensor.detach()
+        ctx.output_device = device  # Save original device for backward
 
         return coords
 
@@ -308,21 +351,40 @@ class NerfReconstructFunction(Function):
                 ctx.anchor_coords, ctx.component_ids
             )
         else:
-            # CPU path with anchored backward
-            coords_np = coords.detach().cpu().numpy().astype(np.float32)
-            indices_np = indices.detach().cpu().numpy().astype(np.int64)
-            internal_np = internal.detach().cpu().numpy().astype(np.float32)
-            grad_coords_np = grad_coords.detach().cpu().numpy().astype(np.float32).copy()
-            comp_off_np = ctx.component_offsets.cpu().numpy().astype(np.int32)
-            anchor_np = ctx.anchor_coords.cpu().numpy().astype(np.float32)
-            comp_ids_np = ctx.component_ids.cpu().numpy().astype(np.int32)
+            # CPU path: use C extension via buffer protocol
+            # Use saved device from forward pass
+            device = ctx.output_device
 
+            if not coords.is_cpu:
+                # Transfer to CPU if needed (e.g., MPS fallback)
+                coords = coords.cpu()
+                indices = indices.cpu()
+                internal = internal.cpu()
+                grad_coords = grad_coords.cpu()
+                component_offsets = ctx.component_offsets.cpu()
+                anchor_coords = ctx.anchor_coords.cpu()
+                component_ids = ctx.component_ids.cpu()
+            else:
+                component_offsets = ctx.component_offsets
+                anchor_coords = ctx.anchor_coords
+                component_ids = ctx.component_ids
+
+            # Ensure contiguous layout for buffer protocol
+            coords_f32 = coords.detach().to(torch.float32).contiguous()
+            indices_i64 = indices.detach().to(torch.int64).contiguous()
+            internal_f32 = internal.detach().to(torch.float32).contiguous()
+            grad_coords_f32 = grad_coords.detach().to(torch.float32).contiguous()
+            comp_off_i32 = component_offsets.to(torch.int32).contiguous()
+            anchor_f32 = anchor_coords.to(torch.float32).contiguous()
+            comp_ids_i32 = component_ids.to(torch.int32).contiguous()
+
+            # Call C backward (accepts buffer protocol objects)
             grad_internal_np = _nerf_reconstruct_backward_leveled_anchored(
-                coords_np, indices_np, internal_np,
-                grad_coords_np, comp_off_np, anchor_np, comp_ids_np
+                coords_f32, indices_i64, internal_f32,
+                grad_coords_f32, comp_off_i32, anchor_f32, comp_ids_i32
             )
 
-            device = internal.device
+            # Transfer result back to original device
             grad_internal = torch.from_numpy(grad_internal_np).to(device)
 
         return None, grad_internal, None, None, None

@@ -231,13 +231,24 @@ def _torch_cartesian_to_internal(
         )
         return internal.to(dtype)
 
-    # CPU path: convert to numpy for C extension
-    coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
-    indices_np = indices_tensor.cpu().numpy().astype(np.int64)
+    # CPU path: use C extension via buffer protocol
+    import warnings
 
-    internal_np = _c_cartesian_to_internal(
-        coords_f32, indices_np
-    )
+    if not coords.is_cpu:
+        warnings.warn(
+            f"Tensor on {device} falling back to CPU for C extension. "
+            "Consider using CUDA tensors with the CUDA extension for best performance.",
+            stacklevel=3
+        )
+        coords = coords.cpu()
+        indices_tensor = indices_tensor.cpu()
+
+    # Ensure contiguous layout for buffer protocol
+    coords_f32 = coords.detach().to(torch.float32).contiguous()
+    indices_i64 = indices_tensor.detach().to(torch.int64).contiguous()
+
+    # Call C extension (accepts buffer protocol objects)
+    internal_np = _c_cartesian_to_internal(coords_f32, indices_i64)
 
     return torch.from_numpy(internal_np).to(device=device, dtype=dtype)
 
@@ -322,15 +333,31 @@ def _torch_nerf_reconstruct(
         )
         return coords.to(dtype)
 
-    # CPU path: use anchored C extension
-    indices_np = indices_tensor.cpu().numpy().astype(np.int64)
-    internal_f32 = internal.detach().cpu().to(torch.float32).numpy()
-    anchor_np = anchor_tensor.detach().cpu().numpy().astype(np.float32)
-    comp_ids_np = comp_ids_tensor.detach().cpu().numpy().astype(np.int32)
-    comp_off_np = comp_off_tensor.detach().cpu().numpy().astype(np.int32)
+    # CPU path: use C extension via buffer protocol
+    import warnings
 
+    if not internal.is_cpu:
+        warnings.warn(
+            f"Tensor on {device} falling back to CPU for C extension. "
+            "Consider using CUDA tensors with the CUDA extension for best performance.",
+            stacklevel=3
+        )
+        indices_tensor = indices_tensor.cpu()
+        internal = internal.cpu()
+        anchor_tensor = anchor_tensor.cpu()
+        comp_ids_tensor = comp_ids_tensor.cpu()
+        comp_off_tensor = comp_off_tensor.cpu()
+
+    # Ensure contiguous layout for buffer protocol
+    indices_i64 = indices_tensor.detach().to(torch.int64).contiguous()
+    internal_f32 = internal.detach().to(torch.float32).contiguous()
+    anchor_f32 = anchor_tensor.detach().to(torch.float32).contiguous()
+    comp_ids_i32 = comp_ids_tensor.detach().to(torch.int32).contiguous()
+    comp_off_i32 = comp_off_tensor.detach().to(torch.int32).contiguous()
+
+    # Call C extension (accepts buffer protocol objects)
     coords_np = _c_nerf_reconstruct_anchored(
-        indices_np, internal_f32, n_atoms,
-        comp_off_np, anchor_np, comp_ids_np
+        indices_i64, internal_f32, n_atoms,
+        comp_off_i32, anchor_f32, comp_ids_i32
     )
     return torch.from_numpy(coords_np).to(device=device, dtype=dtype)

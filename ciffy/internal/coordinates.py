@@ -96,7 +96,6 @@ class CoordinateManager:
         # Structural metadata (injected, not owned)
         '_topology',    # TopologyInfo (immutable reference)
         '_components',  # ConnectedComponents for reconstruction
-        '_components_centroids_valid',  # Whether centroids match current coordinates
 
         '_internal_valid',
         '_n_atoms',  # Total atom count (set from initial coordinates)
@@ -134,7 +133,6 @@ class CoordinateManager:
         # Connected components are built lazily in _recompute_internal
         # when the bond graph is computed for z-matrix construction
         self._components: "ConnectedComponents | None" = None
-        self._components_centroids_valid = False
 
     # ─────────────────────────────────────────────────────────────────────
     # String Representation
@@ -224,10 +222,6 @@ class CoordinateManager:
         check_compatible(self._get_reference_array(), value, "coordinates")
         self._coordinates = value
         self._cartesian_valid = True
-
-        # Mark component centroids as needing update (lazy - only rebuilt when needed)
-        # The component structure (offsets, atoms) doesn't change, only centroids
-        self._components_centroids_valid = False
 
         self._invalidate_internal()
 
@@ -384,17 +378,15 @@ class CoordinateManager:
             self._components = ConnectedComponents.from_bond_graph(
                 csr_offsets, csr_neighbors, coords, n_atoms
             )
-            self._components_centroids_valid = True
 
             # Build z-matrix (reuse CSR to avoid redundant computation)
             self._zmatrix = ZMatrix.from_topology(
                 self._topology, csr_offsets, csr_neighbors
             )
-        elif not self._components_centroids_valid and self._components is not None:
-            # Z-matrix exists but centroids need updating (coordinates changed)
-            # Update centroids for correct position restoration in to_cartesian
-            self._components.update_centroids(coords)
-            self._components_centroids_valid = True
+        elif self._components is not None:
+            # Z-matrix exists but coordinates changed - update anchor coords
+            # Uses vectorized gather for efficiency (O(1) GPU ops instead of O(n) Python loop)
+            self._components.anchor_coords = self._components.get_anchor_coords(coords)
 
         # Use wrapper function that handles C/Python dispatch
         self._distances, self._angles, self._dihedrals = cartesian_to_internal(
@@ -661,7 +653,6 @@ class CoordinateManager:
 
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
-        new_manager._components_centroids_valid = self._components_centroids_valid
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -698,7 +689,6 @@ class CoordinateManager:
 
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
-        new_manager._components_centroids_valid = self._components_centroids_valid
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -747,7 +737,6 @@ class CoordinateManager:
 
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
-        new_manager._components_centroids_valid = self._components_centroids_valid
 
         # Copy atom count
         new_manager._n_atoms = self._n_atoms
@@ -855,6 +844,5 @@ class CoordinateManager:
 
         # ConnectedComponents starts empty (rebuilt when internal coords accessed)
         new_manager._components = None
-        new_manager._components_centroids_valid = False
 
         return new_manager

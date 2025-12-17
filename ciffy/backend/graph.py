@@ -215,18 +215,19 @@ class ConnectedComponents:
     Connected component storage in CSR format.
 
     Stores which atoms belong to which connected components (chains),
-    along with anchor coordinates for NERF reconstruction. Anchor coords
-    are the first 3 atoms' positions per component, used to place atoms
-    directly in the correct reference frame without post-rotation.
+    along with anchor atom indices for efficient coordinate lookup. The
+    anchor_atom_indices allow vectorized extraction of anchor coordinates
+    without Python loops.
 
     Attributes:
         offsets: (C+1,) int64 CSR offsets array.
         atoms: (N,) int64 atom indices per component (flattened).
-        centroids: (C, 3) float array of component centroids. Used for single-atom
-            components that don't participate in NERF.
+        anchor_atom_indices: (C, 3) int64 array of atom indices for first 3 atoms
+            per component. For components with <3 atoms, remaining indices are -1.
         anchor_coords: (C, 3, 3) array of anchor positions for each component.
             anchor_coords[c] contains [anchor0, anchor1, anchor2] for component c.
             For components with <3 atoms, remaining anchors are zero-padded.
+            These are the initial anchor positions computed at construction time.
         contiguous: List of bool indicating if component atoms are contiguous.
 
     Example:
@@ -234,12 +235,14 @@ class ConnectedComponents:
         >>> # Access component 0
         >>> start, end = components.offsets[0], components.offsets[1]
         >>> atom_indices = components.atoms[start:end]
+        >>> # Get current anchor coords efficiently
+        >>> anchor_coords = components.get_anchor_coords(current_coordinates)
     """
 
     offsets: np.ndarray
     atoms: np.ndarray
-    centroids: Array  # Can be numpy or torch, same device as source coordinates
-    anchor_coords: Array  # (n_components, 3, 3) anchor positions
+    anchor_atom_indices: np.ndarray  # (n_components, 3) int64, -1 for padding
+    anchor_coords: Array  # (n_components, 3, 3) anchor positions (initial)
     contiguous: list[bool]
 
     @classmethod
@@ -269,15 +272,13 @@ class ConnectedComponents:
         if n_atoms == 0:
             if is_torch(coordinates):
                 import torch
-                centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
                 anchor_coords = torch.zeros(0, 3, 3, dtype=coordinates.dtype, device=coordinates.device)
             else:
-                centroids = np.zeros((0, 3), dtype=coordinates.dtype)
                 anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
-                centroids=centroids,
+                anchor_atom_indices=np.zeros((0, 3), dtype=np.int64),
                 anchor_coords=anchor_coords,
                 contiguous=[],
             )
@@ -290,30 +291,28 @@ class ConnectedComponents:
         if n_components == 0:
             if is_torch(coordinates):
                 import torch
-                centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
                 anchor_coords = torch.zeros(0, 3, 3, dtype=coordinates.dtype, device=coordinates.device)
             else:
-                centroids = np.zeros((0, 3), dtype=coordinates.dtype)
                 anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
-                centroids=centroids,
+                anchor_atom_indices=np.zeros((0, 3), dtype=np.int64),
                 anchor_coords=anchor_coords,
                 contiguous=[],
             )
 
-        # Build arrays on the same device as coordinates
+        # Build anchor_atom_indices array (always numpy, since it's just indices)
+        # -1 indicates padding for components with fewer than 3 atoms
+        anchor_atom_indices = np.full((n_components, 3), -1, dtype=np.int64)
+
+        # Build anchor_coords on the same device as coordinates
         if is_torch(coordinates):
             import torch
-            centroids = torch.zeros(
-                n_components, 3, dtype=coordinates.dtype, device=coordinates.device
-            )
             anchor_coords = torch.zeros(
                 n_components, 3, 3, dtype=coordinates.dtype, device=coordinates.device
             )
         else:
-            centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
             anchor_coords = np.zeros((n_components, 3, 3), dtype=coordinates.dtype)
 
         contiguous_list = []
@@ -322,9 +321,6 @@ class ConnectedComponents:
             start = comp_offsets[i]
             end = comp_offsets[i + 1]
             component_atoms = comp_atoms[start:end]
-            component_coords = coordinates[component_atoms]
-            centroid = component_coords.mean(axis=0)
-            centroids[i] = centroid
 
             # Check if atoms are contiguous in memory
             is_contiguous = (
@@ -333,21 +329,22 @@ class ConnectedComponents:
             )
             contiguous_list.append(is_contiguous)
 
-            # Store anchor coords (first 3 atoms' positions)
+            # Store anchor atom indices (first 3 atoms)
             n_anchor = min(3, len(component_atoms))
             if n_anchor > 0:
-                anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
-                # Remaining anchors stay zero-padded
+                anchor_atom_indices[i, :n_anchor] = component_atoms[:n_anchor]
+                # Also store initial anchor coords
+                component_coords = coordinates[component_atoms[:n_anchor]]
+                anchor_coords[i, :n_anchor] = component_coords
 
         # Detach tensors to avoid keeping grad history - these are frozen reference values
-        if is_torch(centroids):
-            centroids = centroids.detach()
+        if is_torch(anchor_coords):
             anchor_coords = anchor_coords.detach()
 
         return cls(
             offsets=comp_offsets,
             atoms=comp_atoms,
-            centroids=centroids,
+            anchor_atom_indices=anchor_atom_indices,
             anchor_coords=anchor_coords,
             contiguous=contiguous_list,
         )
@@ -367,46 +364,54 @@ class ConnectedComponents:
         """Get number of atoms in a component."""
         return int(self.offsets[comp_idx + 1] - self.offsets[comp_idx])
 
-    def update_centroids(self, coordinates: Array) -> None:
+    def get_anchor_coords(self, coordinates: Array) -> Array:
         """
-        Update centroids and anchor coordinates from new Cartesian coordinates.
+        Get current anchor coordinates from Cartesian coordinates.
 
-        This is called when coordinates change but component structure stays the same.
-        Data is kept on the same device as coordinates (no transfers).
+        Uses vectorized gather operation for efficiency. This is O(n_components)
+        GPU memory operations instead of O(n_components) Python loop iterations.
+
+        Args:
+            coordinates: (N, 3) array of current Cartesian coordinates.
+
+        Returns:
+            (n_components, 3, 3) array of anchor positions for each component.
+            For components with <3 atoms, extra positions are zero-padded.
         """
         n_components = self.n_components
+        if n_components == 0:
+            if is_torch(coordinates):
+                import torch
+                return torch.zeros(0, 3, 3, dtype=coordinates.dtype, device=coordinates.device)
+            else:
+                return np.zeros((0, 3, 3), dtype=coordinates.dtype)
 
-        # Build new arrays on the same device as coordinates
+        # Vectorized gather: replace -1 indices with 0 for valid indexing
+        # We'll mask out the invalid entries afterward
+        valid_mask = self.anchor_atom_indices >= 0  # (n_components, 3)
+        safe_indices = np.where(valid_mask, self.anchor_atom_indices, 0)
+
         if is_torch(coordinates):
             import torch
-            new_centroids = torch.zeros(
-                n_components, 3, dtype=coordinates.dtype, device=coordinates.device
-            )
-            new_anchor_coords = torch.zeros(
-                n_components, 3, 3, dtype=coordinates.dtype, device=coordinates.device
-            )
+            # Convert indices to torch tensor on same device
+            safe_indices_t = torch.from_numpy(safe_indices).to(coordinates.device)
+            valid_mask_t = torch.from_numpy(valid_mask).to(coordinates.device)
+
+            # Gather: coords[safe_indices] -> (n_components, 3, 3)
+            anchor_coords = coordinates[safe_indices_t]  # (n_components, 3, 3)
+
+            # Zero out invalid entries
+            anchor_coords = anchor_coords * valid_mask_t.unsqueeze(-1).float()
+
+            # Detach to avoid keeping grad history
+            anchor_coords = anchor_coords.detach()
         else:
-            new_centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
-            new_anchor_coords = np.zeros((n_components, 3, 3), dtype=coordinates.dtype)
+            # NumPy version
+            anchor_coords = coordinates[safe_indices]  # (n_components, 3, 3)
+            # Zero out invalid entries
+            anchor_coords = anchor_coords * valid_mask[:, :, np.newaxis]
 
-        for i in range(n_components):
-            component_atoms = self.get_component_atoms(i)
-            component_coords = coordinates[component_atoms]
-            centroid = component_coords.mean(axis=0)
-            new_centroids[i] = centroid
-
-            # Update anchor coords (first 3 atoms' positions)
-            n_anchor = min(3, len(component_atoms))
-            if n_anchor > 0:
-                new_anchor_coords[i, :n_anchor] = component_coords[:n_anchor]
-
-        # Detach tensors to avoid keeping grad history - these are frozen reference values
-        if is_torch(new_centroids):
-            new_centroids = new_centroids.detach()
-            new_anchor_coords = new_anchor_coords.detach()
-
-        self.centroids = new_centroids
-        self.anchor_coords = new_anchor_coords
+        return anchor_coords
 
 
 # =============================================================================

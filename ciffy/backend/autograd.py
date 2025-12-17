@@ -261,28 +261,15 @@ class NerfReconstructFunction(Function):
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=distances.device)
             cuda_nerf_reconstruct(coords, indices, distances, angles, dihedrals)
         else:
-            # CPU path: convert to numpy (use leveled when level_offsets available)
+            # CPU path: always use sequential version (leveled has massive OpenMP overhead)
             indices_np = indices.detach().cpu().numpy().astype(np.int64)
             distances_np = distances.detach().cpu().numpy().astype(np.float32)
             angles_np = angles.detach().cpu().numpy().astype(np.float32)
             dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
 
-            if level_offsets is not None:
-                # Convert level_offsets to numpy
-                if isinstance(level_offsets, torch.Tensor):
-                    level_offsets_np = level_offsets.cpu().numpy().astype(np.int32)
-                else:
-                    level_offsets_np = np.asarray(level_offsets, dtype=np.int32)
-                # Call leveled C extension
-                coords_np = _nerf_reconstruct_leveled(
-                    indices_np, distances_np, angles_np, dihedrals_np, n_atoms, level_offsets_np
-                )
-                use_leveled = True  # Track for backward
-            else:
-                # Call sequential C extension
-                coords_np = _nerf_reconstruct(
-                    indices_np, distances_np, angles_np, dihedrals_np, n_atoms
-                )
+            coords_np = _nerf_reconstruct(
+                indices_np, distances_np, angles_np, dihedrals_np, n_atoms
+            )
 
             # Convert back to tensor
             device = distances.device
@@ -329,7 +316,7 @@ class NerfReconstructFunction(Function):
                 coords, indices, distances, angles, dihedrals, grad_coords.contiguous()
             )
         else:
-            # CPU path: convert to numpy (use leveled when level_offsets available)
+            # CPU path: always use sequential version (leveled has massive OpenMP overhead)
             coords_np = coords.detach().cpu().numpy().astype(np.float32)
             indices_np = indices.detach().cpu().numpy().astype(np.int64)
             distances_np = distances.detach().cpu().numpy().astype(np.float32)
@@ -337,23 +324,10 @@ class NerfReconstructFunction(Function):
             dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
             grad_coords_np = grad_coords.detach().cpu().numpy().astype(np.float32).copy()
 
-            if ctx.use_leveled and ctx.level_offsets is not None:
-                # Convert level_offsets to numpy
-                if isinstance(ctx.level_offsets, torch.Tensor):
-                    level_offsets_np = ctx.level_offsets.cpu().numpy().astype(np.int32)
-                else:
-                    level_offsets_np = np.asarray(ctx.level_offsets, dtype=np.int32)
-                # Call leveled C backward
-                grad_distances_np, grad_angles_np, grad_dihedrals_np = _nerf_reconstruct_backward_leveled(
-                    coords_np, indices_np, distances_np, angles_np, dihedrals_np,
-                    grad_coords_np, level_offsets_np
-                )
-            else:
-                # Call sequential C backward
-                grad_distances_np, grad_angles_np, grad_dihedrals_np = _nerf_reconstruct_backward(
-                    coords_np, indices_np, distances_np, angles_np, dihedrals_np,
-                    grad_coords_np
-                )
+            grad_distances_np, grad_angles_np, grad_dihedrals_np = _nerf_reconstruct_backward(
+                coords_np, indices_np, distances_np, angles_np, dihedrals_np,
+                grad_coords_np
+            )
 
             # Convert back to tensors
             device = distances.device

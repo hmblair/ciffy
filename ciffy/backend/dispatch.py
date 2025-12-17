@@ -165,19 +165,17 @@ def _numpy_nerf_reconstruct(
     """
     NumPy path: use C extension directly.
 
-    When level_offsets is provided, uses the level-parallel implementation
-    which processes atoms at the same BFS level in parallel using OpenMP.
+    Note: level_offsets is accepted for API compatibility but ignored on CPU.
+    The leveled implementation has massive OpenMP overhead on CPU (spawns
+    a parallel region per level), so we always use the sequential version.
     """
     indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
     dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
     ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
     dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
 
-    if level_offsets is not None:
-        level_offsets_i32 = np.ascontiguousarray(level_offsets, dtype=np.int32)
-        return _c_nerf_reconstruct_leveled(
-            indices_i64, dist_f32, ang_f32, dih_f32, n_atoms, level_offsets_i32
-        )
+    # Always use sequential version on CPU - leveled version has massive
+    # OpenMP overhead from spawning parallel regions per level
     return _c_nerf_reconstruct(indices_i64, dist_f32, ang_f32, dih_f32, n_atoms)
 
 
@@ -293,20 +291,11 @@ def _torch_nerf_reconstruct(
             )
             return coords.to(dtype)
 
-    # CPU path: use C extension (leveled when level_offsets available)
+    # CPU path: use sequential C extension (leveled has massive OpenMP overhead)
     indices_np = indices_tensor.cpu().numpy().astype(np.int64)
     dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
     ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
     dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
 
-    if level_offsets is not None:
-        if not is_torch(level_offsets):
-            level_offsets_np = np.ascontiguousarray(level_offsets, dtype=np.int32)
-        else:
-            level_offsets_np = level_offsets.cpu().numpy().astype(np.int32)
-        coords_np = _c_nerf_reconstruct_leveled(
-            indices_np, dist_f32, ang_f32, dih_f32, n_atoms, level_offsets_np
-        )
-    else:
-        coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
+    coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
     return torch.from_numpy(coords_np).to(device=device, dtype=dtype)

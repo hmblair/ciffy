@@ -686,8 +686,8 @@ class TestAutogradGradients:
 
         def wrapper(coords):
             coords32 = coords.float()
-            d, a, dh = cartesian_to_internal(coords32, indices)
-            return d.double(), a.double(), dh.double()
+            internal = cartesian_to_internal(coords32, indices)
+            return internal[:, 0].double(), internal[:, 1].double(), internal[:, 2].double()
 
         coords_check = torch.tensor(coords_np, requires_grad=True, dtype=torch.float64)
         assert torch.autograd.gradcheck(wrapper, coords_check, eps=1e-4, atol=1e-3, rtol=1e-2)
@@ -706,13 +706,10 @@ class TestAutogradGradients:
         indices_np = np.array([[1, 0, -1, -1]], dtype=np.int64)
 
         # C extension forward/backward
-        distances, _, _ = _cartesian_to_internal(coords_np, indices_np)
+        internal = _cartesian_to_internal(coords_np, indices_np)
+        grad_internal = np.array([[1.0, 0.0, 0.0]], dtype=np.float32)  # grad_distance = 1
         grad_coords = _cartesian_to_internal_backward(
-            coords_np, indices_np, distances,
-            np.array([0.0], dtype=np.float32),
-            np.array([1.0], dtype=np.float32),  # grad_distance = 1
-            np.array([0.0], dtype=np.float32),
-            np.array([0.0], dtype=np.float32),
+            coords_np, indices_np, internal, grad_internal
         )
 
         # PyTorch reference
@@ -737,12 +734,10 @@ class TestAutogradGradients:
         indices_np = np.array([[2, 1, 0, -1]], dtype=np.int64)
 
         # C extension
-        distances, angles, _ = _cartesian_to_internal(coords_np, indices_np)
+        internal = _cartesian_to_internal(coords_np, indices_np)
+        grad_internal = np.array([[0.0, 1.0, 0.0]], dtype=np.float32)  # grad_angle = 1
         grad_coords = _cartesian_to_internal_backward(
-            coords_np, indices_np, distances, angles,
-            np.array([0.0], dtype=np.float32),
-            np.array([1.0], dtype=np.float32),  # grad_angle = 1
-            np.array([0.0], dtype=np.float32),
+            coords_np, indices_np, internal, grad_internal
         )
 
         # PyTorch reference
@@ -770,12 +765,10 @@ class TestAutogradGradients:
         indices_np = np.array([[3, 2, 1, 0]], dtype=np.int64)
 
         # C extension
-        distances, angles, dihedrals = _cartesian_to_internal(coords_np, indices_np)
+        internal = _cartesian_to_internal(coords_np, indices_np)
+        grad_internal = np.array([[0.0, 0.0, 1.0]], dtype=np.float32)  # grad_dihedral = 1
         grad_coords = _cartesian_to_internal_backward(
-            coords_np, indices_np, distances, angles,
-            np.array([0.0], dtype=np.float32),
-            np.array([0.0], dtype=np.float32),
-            np.array([1.0], dtype=np.float32),  # grad_dihedral = 1
+            coords_np, indices_np, internal, grad_internal
         )
 
         # PyTorch reference using same normalized formula as C code
@@ -822,10 +815,10 @@ class TestAutogradGradients:
         coords = torch.tensor(coords_np, requires_grad=True)
         indices = torch.tensor(indices_np)
 
-        distances, angles, dihedrals = cartesian_to_internal(coords, indices)
+        internal = cartesian_to_internal(coords, indices)
 
         # Loss using all outputs
-        loss = distances.sum() + angles.sum() + dihedrals.sum()
+        loss = internal[:, 0].sum() + internal[:, 1].sum() + internal[:, 2].sum()
         loss.backward()
 
         # Gradient should exist and not be all zeros

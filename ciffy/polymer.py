@@ -375,19 +375,6 @@ class Polymer:
         """
         self._coord_manager.dihedrals = value
 
-    @property
-    def zmatrix(self) -> list:
-        """
-        Z-matrix structure defining internal coordinate references.
-
-        Returns:
-            List of ZMatrixEntry objects.
-
-        Note:
-            Z-matrix is built automatically when first accessing internal coordinates.
-        """
-        return self._coord_manager.zmatrix
-
     def dihedral(
         self,
         dtype: "DihedralType | list[DihedralType] | tuple[DihedralType, ...]",
@@ -1518,29 +1505,7 @@ class Polymer:
             polymer_count=self.polymer_count,
         )
 
-        # Replace coordinate manager with one moved to device/dtype
-        if device is not None or dtype is not None:
-            from .internal.coordinates import CoordinateManager
-            # Create new coordinate manager with updated coordinates
-            result._coord_manager = CoordinateManager(coords, result._topology)
-
-            # If internal coordinates were computed, convert them too
-            if self._coord_manager._internal_valid:
-                # Apply device and/or dtype conversion to internal coordinates
-                def convert_tensor(t):
-                    if t is None:
-                        return None
-                    if device is not None:
-                        t = t.to(device)
-                    if dtype is not None:
-                        t = t.to(dtype)
-                    return t
-
-                result._coord_manager._distances = convert_tensor(self._coord_manager._distances)
-                result._coord_manager._angles = convert_tensor(self._coord_manager._angles)
-                result._coord_manager._dihedrals = convert_tensor(self._coord_manager._dihedrals)
-                result._coord_manager._internal_valid = True
-                result._coord_manager._zmatrix = self._coord_manager._zmatrix
+        result._coord_manager = self._coord_manager.to(device, dtype)
 
         return result
 

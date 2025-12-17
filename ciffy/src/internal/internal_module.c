@@ -61,14 +61,14 @@ static void decref_arrays(PyArrayObject *a, PyArrayObject *b,
  * Convert Cartesian coordinates to internal coordinates.
  *
  * Python signature:
- *   _cartesian_to_internal(coords, indices) -> (distances, angles, dihedrals)
+ *   _cartesian_to_internal(coords, indices) -> internal
  *
  * Args:
  *   coords: (N, 3) float32 array of Cartesian coordinates.
  *   indices: (M, 4) int64 array of Z-matrix indices.
  *
  * Returns:
- *   Tuple of (distances, angles, dihedrals), each (M,) float32.
+ *   internal: (M, 3) float32 array where each row is [distance, angle, dihedral].
  */
 PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
     (void)self;
@@ -98,40 +98,29 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
     const float *coords = (const float *)PyArray_DATA(coords_arr);
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
 
-    /* Allocate output arrays */
-    npy_intp dims[1] = {n_entries};
-    PyObject *py_distances = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_angles = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_dihedrals = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    /* Allocate output array: (n_entries, 3) for [distance, angle, dihedral] */
+    npy_intp dims[2] = {n_entries, 3};
+    PyObject *py_internal = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
 
-    if (py_distances == NULL || py_angles == NULL || py_dihedrals == NULL) {
-        Py_XDECREF(py_distances);
-        Py_XDECREF(py_angles);
-        Py_XDECREF(py_dihedrals);
+    if (py_internal == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
         return PyErr_NoMemory();
     }
 
-    float *distances = (float *)PyArray_DATA((PyArrayObject *)py_distances);
-    float *angles = (float *)PyArray_DATA((PyArrayObject *)py_angles);
-    float *dihedrals = (float *)PyArray_DATA((PyArrayObject *)py_dihedrals);
+    float *internal = (float *)PyArray_DATA((PyArrayObject *)py_internal);
 
     /* Call batch function */
     batch_cartesian_to_internal(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals
+        internal
     );
 
     Py_DECREF(coords_arr);
     Py_DECREF(indices_arr);
 
-    /* Build result tuple */
-    PyObject *result = PyTuple_Pack(3, py_distances, py_angles, py_dihedrals);
-    Py_DECREF(py_distances);
-    Py_DECREF(py_angles);
-    Py_DECREF(py_dihedrals);
-
-    return result;
+    return py_internal;
 }
 
 
@@ -139,13 +128,12 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
  * Reconstruct Cartesian coordinates from internal coordinates using NERF.
  *
  * Python signature:
- *   _nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms) -> coords
+ *   _nerf_reconstruct(indices, internal, n_atoms) -> coords
  *
  * Args:
  *   indices: (M, 4) int64 array of Z-matrix indices.
- *   distances: (M,) float32 array of bond lengths.
- *   angles: (M,) float32 array of bond angles in radians.
- *   dihedrals: (M,) float32 array of dihedral angles in radians.
+ *   internal: (M, 3) float32 array of internal coordinates.
+ *             Each row: [distance, angle, dihedral].
  *   n_atoms: Total number of atoms (int).
  *
  * Returns:
@@ -154,12 +142,10 @@ PyObject *py_cartesian_to_internal(PyObject *self, PyObject *args) {
 PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_indices, *py_distances, *py_angles, *py_dihedrals;
+    PyObject *py_indices, *py_internal;
     int n_atoms;
 
-    if (!PyArg_ParseTuple(args, "OOOOi",
-                          &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &n_atoms)) {
+    if (!PyArg_ParseTuple(args, "OOi", &py_indices, &py_internal, &n_atoms)) {
         return NULL;
     }
 
@@ -167,49 +153,32 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
     if (indices_arr == NULL) return NULL;
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
-        decref_arrays(indices_arr, NULL, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, angles_arr, NULL);
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(indices_arr);
         return NULL;
     }
 
     /* Verify array length consistency */
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
-    if (PyArray_DIM(distances_arr, 0) != n_entries ||
-        PyArray_DIM(angles_arr, 0) != n_entries ||
-        PyArray_DIM(dihedrals_arr, 0) != n_entries) {
+    if (PyArray_DIM(internal_arr, 0) != n_entries) {
         PyErr_SetString(PyExc_ValueError,
-            "distances, angles, and dihedrals must have same length as indices");
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+            "internal must have same number of rows as indices");
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     /* Get data pointers */
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
 
     /* Allocate output array (initialized to zero) */
     npy_intp dims[2] = {n_atoms, 3};
     PyObject *py_coords = PyArray_ZEROS(2, dims, NPY_FLOAT32, 0);
     if (py_coords == NULL) {
         Py_DECREF(indices_arr);
-        Py_DECREF(distances_arr);
-        Py_DECREF(angles_arr);
-        Py_DECREF(dihedrals_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
@@ -219,13 +188,11 @@ PyObject *py_nerf_reconstruct(PyObject *self, PyObject *args) {
     batch_nerf_reconstruct(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals
+        internal
     );
 
     Py_DECREF(indices_arr);
-    Py_DECREF(distances_arr);
-    Py_DECREF(angles_arr);
-    Py_DECREF(dihedrals_arr);
+    Py_DECREF(internal_arr);
 
     return py_coords;
 }
@@ -698,20 +665,24 @@ PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args) {
  * Backward pass for cartesian_to_internal.
  *
  * Python signature:
- *   _cartesian_to_internal_backward(
- *       coords, indices, distances, angles,
- *       grad_distances, grad_angles, grad_dihedrals
- *   ) -> grad_coords
+ *   _cartesian_to_internal_backward(coords, indices, internal, grad_internal) -> grad_coords
+ *
+ * Args:
+ *   coords: (N, 3) float32 array of Cartesian coordinates.
+ *   indices: (M, 4) int64 array of Z-matrix indices.
+ *   internal: (M, 3) float32 array of internal coordinates from forward pass.
+ *   grad_internal: (M, 3) float32 array of upstream gradients.
+ *
+ * Returns:
+ *   grad_coords: (N, 3) float32 array of gradients w.r.t. coords.
  */
 PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_coords, *py_indices, *py_distances, *py_angles;
-    PyObject *py_grad_distances, *py_grad_angles, *py_grad_dihedrals;
+    PyObject *py_coords, *py_indices, *py_internal, *py_grad_internal;
 
-    if (!PyArg_ParseTuple(args, "OOOOOOO",
-                          &py_coords, &py_indices, &py_distances, &py_angles,
-                          &py_grad_distances, &py_grad_angles, &py_grad_dihedrals)) {
+    if (!PyArg_ParseTuple(args, "OOOO",
+                          &py_coords, &py_indices, &py_internal, &py_grad_internal)) {
         return NULL;
     }
 
@@ -725,77 +696,68 @@ PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, NULL, NULL);
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
         return NULL;
     }
 
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *grad_distances_arr = require_array_1d(py_grad_distances, NPY_FLOAT32, "grad_distances");
-    if (grad_distances_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
-        return NULL;
-    }
-
-    PyArrayObject *grad_angles_arr = require_array_1d(py_grad_angles, NPY_FLOAT32, "grad_angles");
-    if (grad_angles_arr == NULL) {
-        Py_DECREF(grad_distances_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
-        return NULL;
-    }
-
-    PyArrayObject *grad_dihedrals_arr = require_array_1d(py_grad_dihedrals, NPY_FLOAT32, "grad_dihedrals");
-    if (grad_dihedrals_arr == NULL) {
-        Py_DECREF(grad_distances_arr);
-        Py_DECREF(grad_angles_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    PyArrayObject *grad_internal_arr = require_array_2d(py_grad_internal, NPY_FLOAT32, 3, "grad_internal");
+    if (grad_internal_arr == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
 
+    /* Verify array length consistency */
+    if (PyArray_DIM(internal_arr, 0) != n_entries ||
+        PyArray_DIM(grad_internal_arr, 0) != n_entries) {
+        PyErr_SetString(PyExc_ValueError,
+            "internal and grad_internal must have same number of rows as indices");
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
+        Py_DECREF(grad_internal_arr);
+        return NULL;
+    }
+
     /* Allocate output gradient array (initialized to zero) */
     npy_intp dims[2] = {n_atoms, 3};
     PyObject *py_grad_coords = PyArray_ZEROS(2, dims, NPY_FLOAT32, 0);
     if (py_grad_coords == NULL) {
-        Py_DECREF(grad_distances_arr);
-        Py_DECREF(grad_angles_arr);
-        Py_DECREF(grad_dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
+        Py_DECREF(grad_internal_arr);
         return PyErr_NoMemory();
     }
 
     /* Get data pointers */
     const float *coords = (const float *)PyArray_DATA(coords_arr);
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *grad_distances = (const float *)PyArray_DATA(grad_distances_arr);
-    const float *grad_angles = (const float *)PyArray_DATA(grad_angles_arr);
-    const float *grad_dihedrals = (const float *)PyArray_DATA(grad_dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
+    const float *grad_internal = (const float *)PyArray_DATA(grad_internal_arr);
     float *grad_coords = (float *)PyArray_DATA((PyArrayObject *)py_grad_coords);
 
     /* Call batch backward function */
     batch_cartesian_to_internal_backward(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles,
-        grad_distances, grad_angles, grad_dihedrals,
+        internal,
+        grad_internal,
         grad_coords
     );
 
     /* Clean up input arrays */
-    Py_DECREF(grad_distances_arr);
-    Py_DECREF(grad_angles_arr);
-    Py_DECREF(grad_dihedrals_arr);
-    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    Py_DECREF(coords_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
+    Py_DECREF(grad_internal_arr);
 
     return py_grad_coords;
 }
@@ -805,18 +767,24 @@ PyObject *py_cartesian_to_internal_backward(PyObject *self, PyObject *args) {
  * Backward pass for nerf_reconstruct.
  *
  * Python signature:
- *   _nerf_reconstruct_backward(
- *       coords, indices, distances, angles, dihedrals, grad_coords
- *   ) -> (grad_distances, grad_angles, grad_dihedrals)
+ *   _nerf_reconstruct_backward(coords, indices, internal, grad_coords) -> grad_internal
+ *
+ * Args:
+ *   coords: (N, 3) float32 array of reconstructed Cartesian coordinates.
+ *   indices: (M, 4) int64 array of Z-matrix indices.
+ *   internal: (M, 3) float32 array of internal coordinates from forward pass.
+ *   grad_coords: (N, 3) float32 array of upstream gradients (modified in place).
+ *
+ * Returns:
+ *   grad_internal: (M, 3) float32 array of gradients w.r.t. internal coordinates.
  */
 PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_coords, *py_indices, *py_distances, *py_angles, *py_dihedrals, *py_grad_coords;
+    PyObject *py_coords, *py_indices, *py_internal, *py_grad_coords;
 
-    if (!PyArg_ParseTuple(args, "OOOOOO",
-                          &py_coords, &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &py_grad_coords)) {
+    if (!PyArg_ParseTuple(args, "OOOO",
+                          &py_coords, &py_indices, &py_internal, &py_grad_coords)) {
         return NULL;
     }
 
@@ -830,21 +798,10 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
         return NULL;
     }
 
@@ -853,63 +810,63 @@ PyObject *py_nerf_reconstruct_backward(PyObject *self, PyObject *args) {
         py_grad_coords, NPY_FLOAT32, NPY_ARRAY_INOUT_ARRAY2
     );
     if (grad_coords_arr == NULL) {
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
 
-    /* Allocate output gradient arrays */
-    npy_intp dims[1] = {n_entries};
-    PyObject *py_grad_distances = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_angles = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_dihedrals = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-
-    if (py_grad_distances == NULL || py_grad_angles == NULL || py_grad_dihedrals == NULL) {
-        Py_XDECREF(py_grad_distances);
-        Py_XDECREF(py_grad_angles);
-        Py_XDECREF(py_grad_dihedrals);
+    /* Verify array length consistency */
+    if (PyArray_DIM(internal_arr, 0) != n_entries) {
+        PyErr_SetString(PyExc_ValueError,
+            "internal must have same number of rows as indices");
+        PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
+        return NULL;
+    }
+
+    /* Allocate output gradient array: (n_entries, 3) */
+    npy_intp dims[2] = {n_entries, 3};
+    PyObject *py_grad_internal = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
+    if (py_grad_internal == NULL) {
+        PyArray_ResolveWritebackIfCopy(grad_coords_arr);
+        Py_DECREF(grad_coords_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
     /* Get data pointers */
     const float *coords = (const float *)PyArray_DATA(coords_arr);
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
     float *grad_coords = (float *)PyArray_DATA(grad_coords_arr);
-    float *grad_distances = (float *)PyArray_DATA((PyArrayObject *)py_grad_distances);
-    float *grad_angles = (float *)PyArray_DATA((PyArrayObject *)py_grad_angles);
-    float *grad_dihedrals_out = (float *)PyArray_DATA((PyArrayObject *)py_grad_dihedrals);
+    float *grad_internal = (float *)PyArray_DATA((PyArrayObject *)py_grad_internal);
 
     /* Call batch backward function */
     batch_nerf_reconstruct_backward(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals,
+        internal,
         grad_coords,
-        grad_distances, grad_angles, grad_dihedrals_out
+        grad_internal
     );
 
     /* Clean up input arrays */
     PyArray_ResolveWritebackIfCopy(grad_coords_arr);
     Py_DECREF(grad_coords_arr);
-    Py_DECREF(dihedrals_arr);
-    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    Py_DECREF(coords_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
 
-    /* Build result tuple */
-    PyObject *result = PyTuple_Pack(3, py_grad_distances, py_grad_angles, py_grad_dihedrals);
-    Py_DECREF(py_grad_distances);
-    Py_DECREF(py_grad_angles);
-    Py_DECREF(py_grad_dihedrals);
-
-    return result;
+    return py_grad_internal;
 }
 
 
@@ -1008,14 +965,12 @@ PyObject *py_find_connected_components(PyObject *self, PyObject *args) {
  * Level-parallel NERF reconstruction.
  *
  * Python signature:
- *   _nerf_reconstruct_leveled(indices, distances, angles, dihedrals, n_atoms, level_offsets)
- *       -> coords
+ *   _nerf_reconstruct_leveled(indices, internal, n_atoms, level_offsets) -> coords
  *
  * Args:
  *   indices: (M, 4) int64 array of Z-matrix indices (sorted by level).
- *   distances: (M,) float32 array of bond lengths.
- *   angles: (M,) float32 array of bond angles in radians.
- *   dihedrals: (M,) float32 array of dihedral angles in radians.
+ *   internal: (M, 3) float32 array of internal coordinates.
+ *             Each row: [distance, angle, dihedral].
  *   n_atoms: Total number of atoms (int).
  *   level_offsets: (n_levels+1,) int32 array of CSR-style offsets.
  *
@@ -1025,12 +980,11 @@ PyObject *py_find_connected_components(PyObject *self, PyObject *args) {
 PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_indices, *py_distances, *py_angles, *py_dihedrals, *py_level_offsets;
+    PyObject *py_indices, *py_internal, *py_level_offsets;
     int n_atoms;
 
-    if (!PyArg_ParseTuple(args, "OOOOiO",
-                          &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &n_atoms, &py_level_offsets)) {
+    if (!PyArg_ParseTuple(args, "OOiO",
+                          &py_indices, &py_internal, &n_atoms, &py_level_offsets)) {
         return NULL;
     }
 
@@ -1038,39 +992,27 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
     PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
     if (indices_arr == NULL) return NULL;
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
         Py_DECREF(indices_arr);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, angles_arr, NULL);
         return NULL;
     }
 
     PyArrayObject *level_offsets_arr = require_array_1d(py_level_offsets, NPY_INT32, "level_offsets");
     if (level_offsets_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     /* Verify array length consistency */
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
-    if (PyArray_DIM(distances_arr, 0) != n_entries ||
-        PyArray_DIM(angles_arr, 0) != n_entries ||
-        PyArray_DIM(dihedrals_arr, 0) != n_entries) {
+    if (PyArray_DIM(internal_arr, 0) != n_entries) {
         PyErr_SetString(PyExc_ValueError,
-            "distances, angles, and dihedrals must have same length as indices");
+            "internal must have same number of rows as indices");
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1079,15 +1021,14 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
     if (n_levels < 0) {
         PyErr_SetString(PyExc_ValueError, "level_offsets must have at least one element");
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     /* Get data pointers */
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
     const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
 
     /* Allocate output array (initialized to zero) */
@@ -1095,7 +1036,8 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
     PyObject *py_coords = PyArray_ZEROS(2, dims, NPY_FLOAT32, 0);
     if (py_coords == NULL) {
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
@@ -1105,12 +1047,13 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
     batch_nerf_reconstruct_leveled(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals,
+        internal,
         level_offsets, (int)n_levels
     );
 
     Py_DECREF(level_offsets_arr);
-    decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
 
     return py_coords;
 }
@@ -1120,19 +1063,27 @@ PyObject *py_nerf_reconstruct_leveled(PyObject *self, PyObject *args) {
  * Level-parallel backward pass for NERF reconstruction.
  *
  * Python signature:
- *   _nerf_reconstruct_backward_leveled(
- *       coords, indices, distances, angles, dihedrals, grad_coords, level_offsets
- *   ) -> (grad_distances, grad_angles, grad_dihedrals)
+ *   _nerf_reconstruct_backward_leveled(coords, indices, internal, grad_coords, level_offsets)
+ *       -> grad_internal
+ *
+ * Args:
+ *   coords: (N, 3) float32 array of reconstructed Cartesian coordinates.
+ *   indices: (M, 4) int64 array of Z-matrix indices.
+ *   internal: (M, 3) float32 array of internal coordinates from forward pass.
+ *   grad_coords: (N, 3) float32 array of upstream gradients (modified in place).
+ *   level_offsets: (n_levels+1,) int32 array of CSR-style offsets.
+ *
+ * Returns:
+ *   grad_internal: (M, 3) float32 array of gradients w.r.t. internal coordinates.
  */
 PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_coords, *py_indices, *py_distances, *py_angles, *py_dihedrals;
-    PyObject *py_grad_coords, *py_level_offsets;
+    PyObject *py_coords, *py_indices, *py_internal, *py_grad_coords, *py_level_offsets;
 
-    if (!PyArg_ParseTuple(args, "OOOOOOO",
-                          &py_coords, &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &py_grad_coords, &py_level_offsets)) {
+    if (!PyArg_ParseTuple(args, "OOOOO",
+                          &py_coords, &py_indices, &py_internal,
+                          &py_grad_coords, &py_level_offsets)) {
         return NULL;
     }
 
@@ -1146,21 +1097,10 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
         return NULL;
     }
 
@@ -1169,8 +1109,9 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
         py_grad_coords, NPY_FLOAT32, NPY_ARRAY_INOUT_ARRAY2
     );
     if (grad_coords_arr == NULL) {
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1178,8 +1119,9 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
     if (level_offsets_arr == NULL) {
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1187,43 +1129,47 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
     npy_intp n_levels = PyArray_DIM(level_offsets_arr, 0) - 1;
 
-    /* Allocate output gradient arrays */
-    npy_intp dims[1] = {n_entries};
-    PyObject *py_grad_distances = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_angles = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_dihedrals = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-
-    if (py_grad_distances == NULL || py_grad_angles == NULL || py_grad_dihedrals == NULL) {
-        Py_XDECREF(py_grad_distances);
-        Py_XDECREF(py_grad_angles);
-        Py_XDECREF(py_grad_dihedrals);
+    /* Verify array length consistency */
+    if (PyArray_DIM(internal_arr, 0) != n_entries) {
+        PyErr_SetString(PyExc_ValueError,
+            "internal must have same number of rows as indices");
         Py_DECREF(level_offsets_arr);
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
+        return NULL;
+    }
+
+    /* Allocate output gradient array: (n_entries, 3) */
+    npy_intp dims[2] = {n_entries, 3};
+    PyObject *py_grad_internal = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
+    if (py_grad_internal == NULL) {
+        Py_DECREF(level_offsets_arr);
+        PyArray_ResolveWritebackIfCopy(grad_coords_arr);
+        Py_DECREF(grad_coords_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
     /* Get data pointers */
     const float *coords = (const float *)PyArray_DATA(coords_arr);
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
     float *grad_coords = (float *)PyArray_DATA(grad_coords_arr);
     const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
-    float *grad_distances = (float *)PyArray_DATA((PyArrayObject *)py_grad_distances);
-    float *grad_angles = (float *)PyArray_DATA((PyArrayObject *)py_grad_angles);
-    float *grad_dihedrals_out = (float *)PyArray_DATA((PyArrayObject *)py_grad_dihedrals);
+    float *grad_internal = (float *)PyArray_DATA((PyArrayObject *)py_grad_internal);
 
     /* Call batch backward function */
     batch_nerf_reconstruct_backward_leveled(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals,
+        internal,
         grad_coords,
-        grad_distances, grad_angles, grad_dihedrals_out,
+        grad_internal,
         level_offsets, (int)n_levels
     );
 
@@ -1231,16 +1177,11 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
     Py_DECREF(level_offsets_arr);
     PyArray_ResolveWritebackIfCopy(grad_coords_arr);
     Py_DECREF(grad_coords_arr);
-    Py_DECREF(dihedrals_arr);
-    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    Py_DECREF(coords_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
 
-    /* Build result tuple */
-    PyObject *result = PyTuple_Pack(3, py_grad_distances, py_grad_angles, py_grad_dihedrals);
-    Py_DECREF(py_grad_distances);
-    Py_DECREF(py_grad_angles);
-    Py_DECREF(py_grad_dihedrals);
-
-    return result;
+    return py_grad_internal;
 }
 
 
@@ -1248,19 +1189,30 @@ PyObject *py_nerf_reconstruct_backward_leveled(PyObject *self, PyObject *args) {
  * Level-parallel NERF reconstruction with anchor coordinates.
  *
  * Python signature:
- *   _nerf_reconstruct_leveled_anchored(indices, distances, angles, dihedrals,
- *       n_atoms, level_offsets, anchor_coords, component_ids) -> coords
+ *   _nerf_reconstruct_leveled_anchored(indices, internal, n_atoms, level_offsets,
+ *       anchor_coords, component_ids) -> coords
+ *
+ * Args:
+ *   indices: (M, 4) int64 array of Z-matrix indices (sorted by level).
+ *   internal: (M, 3) float32 array of internal coordinates.
+ *             Each row: [distance, angle, dihedral].
+ *   n_atoms: Total number of atoms (int).
+ *   level_offsets: (n_levels+1,) int32 array of CSR-style offsets.
+ *   anchor_coords: (n_components, 3, 3) float32 array of anchor positions.
+ *   component_ids: (M,) int32 array of component IDs per entry.
+ *
+ * Returns:
+ *   coords: (N, 3) float32 array of Cartesian coordinates.
  */
 PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_indices, *py_distances, *py_angles, *py_dihedrals;
+    PyObject *py_indices, *py_internal;
     PyObject *py_level_offsets, *py_anchor_coords, *py_component_ids;
     int n_atoms;
 
-    if (!PyArg_ParseTuple(args, "OOOOiOOO",
-                          &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &n_atoms, &py_level_offsets,
+    if (!PyArg_ParseTuple(args, "OOiOOO",
+                          &py_indices, &py_internal, &n_atoms, &py_level_offsets,
                           &py_anchor_coords, &py_component_ids)) {
         return NULL;
     }
@@ -1269,27 +1221,16 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     PyArrayObject *indices_arr = require_array_2d(py_indices, NPY_INT64, 4, "indices");
     if (indices_arr == NULL) return NULL;
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
         Py_DECREF(indices_arr);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, angles_arr, NULL);
         return NULL;
     }
 
     PyArrayObject *level_offsets_arr = require_array_1d(py_level_offsets, NPY_INT32, "level_offsets");
     if (level_offsets_arr == NULL) {
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1299,7 +1240,8 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     );
     if (anchor_coords_arr == NULL) {
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1307,22 +1249,22 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     if (component_ids_arr == NULL) {
         Py_DECREF(anchor_coords_arr);
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
     /* Verify array length consistency */
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
-    if (PyArray_DIM(distances_arr, 0) != n_entries ||
-        PyArray_DIM(angles_arr, 0) != n_entries ||
-        PyArray_DIM(dihedrals_arr, 0) != n_entries ||
+    if (PyArray_DIM(internal_arr, 0) != n_entries ||
         PyArray_DIM(component_ids_arr, 0) != n_entries) {
         PyErr_SetString(PyExc_ValueError,
-            "distances, angles, dihedrals, component_ids must have same length as indices");
+            "internal and component_ids must have same number of rows as indices");
         Py_DECREF(component_ids_arr);
         Py_DECREF(anchor_coords_arr);
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1330,9 +1272,7 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
 
     /* Get data pointers */
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
     const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
     const float *anchor_coords = (const float *)PyArray_DATA(anchor_coords_arr);
     const int32_t *component_ids = (const int32_t *)PyArray_DATA(component_ids_arr);
@@ -1344,7 +1284,8 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
         Py_DECREF(component_ids_arr);
         Py_DECREF(anchor_coords_arr);
         Py_DECREF(level_offsets_arr);
-        decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
@@ -1354,7 +1295,7 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     batch_nerf_reconstruct_leveled_anchored(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals,
+        internal,
         level_offsets, (int)n_levels,
         anchor_coords, component_ids
     );
@@ -1362,7 +1303,8 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
     Py_DECREF(component_ids_arr);
     Py_DECREF(anchor_coords_arr);
     Py_DECREF(level_offsets_arr);
-    decref_arrays(indices_arr, distances_arr, angles_arr, dihedrals_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
 
     return py_coords;
 }
@@ -1373,19 +1315,31 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
  *
  * Python signature:
  *   _nerf_reconstruct_backward_leveled_anchored(
- *       coords, indices, distances, angles, dihedrals, grad_coords,
+ *       coords, indices, internal, grad_coords,
  *       level_offsets, anchor_coords, component_ids
- *   ) -> (grad_distances, grad_angles, grad_dihedrals)
+ *   ) -> grad_internal
+ *
+ * Args:
+ *   coords: (N, 3) float32 array of reconstructed Cartesian coordinates.
+ *   indices: (M, 4) int64 array of Z-matrix indices.
+ *   internal: (M, 3) float32 array of internal coordinates from forward pass.
+ *   grad_coords: (N, 3) float32 array of upstream gradients (modified in place).
+ *   level_offsets: (n_levels+1,) int32 array of CSR-style offsets.
+ *   anchor_coords: (n_components, 3, 3) float32 array of anchor positions.
+ *   component_ids: (M,) int32 array of component IDs per entry.
+ *
+ * Returns:
+ *   grad_internal: (M, 3) float32 array of gradients w.r.t. internal coordinates.
  */
 PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject *args) {
     (void)self;
 
-    PyObject *py_coords, *py_indices, *py_distances, *py_angles, *py_dihedrals;
+    PyObject *py_coords, *py_indices, *py_internal;
     PyObject *py_grad_coords, *py_level_offsets, *py_anchor_coords, *py_component_ids;
 
-    if (!PyArg_ParseTuple(args, "OOOOOOOOO",
-                          &py_coords, &py_indices, &py_distances, &py_angles,
-                          &py_dihedrals, &py_grad_coords, &py_level_offsets,
+    if (!PyArg_ParseTuple(args, "OOOOOOO",
+                          &py_coords, &py_indices, &py_internal,
+                          &py_grad_coords, &py_level_offsets,
                           &py_anchor_coords, &py_component_ids)) {
         return NULL;
     }
@@ -1400,21 +1354,10 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
         return NULL;
     }
 
-    PyArrayObject *distances_arr = require_array_1d(py_distances, NPY_FLOAT32, "distances");
-    if (distances_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, NULL, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *angles_arr = require_array_1d(py_angles, NPY_FLOAT32, "angles");
-    if (angles_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, NULL);
-        return NULL;
-    }
-
-    PyArrayObject *dihedrals_arr = require_array_1d(py_dihedrals, NPY_FLOAT32, "dihedrals");
-    if (dihedrals_arr == NULL) {
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
         return NULL;
     }
 
@@ -1423,8 +1366,9 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
         py_grad_coords, NPY_FLOAT32, NPY_ARRAY_INOUT_ARRAY2
     );
     if (grad_coords_arr == NULL) {
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1432,8 +1376,9 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
     if (level_offsets_arr == NULL) {
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1444,8 +1389,9 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
         Py_DECREF(level_offsets_arr);
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1455,8 +1401,9 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
         Py_DECREF(level_offsets_arr);
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return NULL;
     }
 
@@ -1464,47 +1411,54 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
     npy_intp n_levels = PyArray_DIM(level_offsets_arr, 0) - 1;
 
-    /* Allocate output gradient arrays */
-    npy_intp dims[1] = {n_entries};
-    PyObject *py_grad_distances = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_angles = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-    PyObject *py_grad_dihedrals = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
-
-    if (py_grad_distances == NULL || py_grad_angles == NULL || py_grad_dihedrals == NULL) {
-        Py_XDECREF(py_grad_distances);
-        Py_XDECREF(py_grad_angles);
-        Py_XDECREF(py_grad_dihedrals);
+    /* Verify array length consistency */
+    if (PyArray_DIM(internal_arr, 0) != n_entries ||
+        PyArray_DIM(component_ids_arr, 0) != n_entries) {
+        PyErr_SetString(PyExc_ValueError,
+            "internal and component_ids must have same number of rows as indices");
         Py_DECREF(component_ids_arr);
         Py_DECREF(anchor_coords_arr);
         Py_DECREF(level_offsets_arr);
         PyArray_ResolveWritebackIfCopy(grad_coords_arr);
         Py_DECREF(grad_coords_arr);
-        Py_DECREF(dihedrals_arr);
-        decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
+        return NULL;
+    }
+
+    /* Allocate output gradient array: (n_entries, 3) */
+    npy_intp dims[2] = {n_entries, 3};
+    PyObject *py_grad_internal = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
+    if (py_grad_internal == NULL) {
+        Py_DECREF(component_ids_arr);
+        Py_DECREF(anchor_coords_arr);
+        Py_DECREF(level_offsets_arr);
+        PyArray_ResolveWritebackIfCopy(grad_coords_arr);
+        Py_DECREF(grad_coords_arr);
+        Py_DECREF(coords_arr);
+        Py_DECREF(indices_arr);
+        Py_DECREF(internal_arr);
         return PyErr_NoMemory();
     }
 
     /* Get data pointers */
     const float *coords = (const float *)PyArray_DATA(coords_arr);
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
-    const float *distances = (const float *)PyArray_DATA(distances_arr);
-    const float *angles = (const float *)PyArray_DATA(angles_arr);
-    const float *dihedrals = (const float *)PyArray_DATA(dihedrals_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
     float *grad_coords = (float *)PyArray_DATA(grad_coords_arr);
     const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
     const float *anchor_coords = (const float *)PyArray_DATA(anchor_coords_arr);
     const int32_t *component_ids = (const int32_t *)PyArray_DATA(component_ids_arr);
-    float *grad_distances = (float *)PyArray_DATA((PyArrayObject *)py_grad_distances);
-    float *grad_angles = (float *)PyArray_DATA((PyArrayObject *)py_grad_angles);
-    float *grad_dihedrals_out = (float *)PyArray_DATA((PyArrayObject *)py_grad_dihedrals);
+    float *grad_internal = (float *)PyArray_DATA((PyArrayObject *)py_grad_internal);
 
     /* Call batch backward function */
     batch_nerf_reconstruct_backward_leveled_anchored(
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
-        distances, angles, dihedrals,
+        internal,
         grad_coords,
-        grad_distances, grad_angles, grad_dihedrals_out,
+        grad_internal,
         level_offsets, (int)n_levels,
         anchor_coords, component_ids
     );
@@ -1515,14 +1469,9 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
     Py_DECREF(level_offsets_arr);
     PyArray_ResolveWritebackIfCopy(grad_coords_arr);
     Py_DECREF(grad_coords_arr);
-    Py_DECREF(dihedrals_arr);
-    decref_arrays(coords_arr, indices_arr, distances_arr, angles_arr);
+    Py_DECREF(coords_arr);
+    Py_DECREF(indices_arr);
+    Py_DECREF(internal_arr);
 
-    /* Build result tuple */
-    PyObject *result = PyTuple_Pack(3, py_grad_distances, py_grad_angles, py_grad_dihedrals);
-    Py_DECREF(py_grad_distances);
-    Py_DECREF(py_grad_angles);
-    Py_DECREF(py_grad_dihedrals);
-
-    return result;
+    return py_grad_internal;
 }

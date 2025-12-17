@@ -85,20 +85,15 @@ class CoordinateManager:
     __slots__ = (
         # Cartesian representation
         '_coordinates',
-        '_cartesian_valid',
 
         # Internal representation
-        '_distances',
-        '_angles',
-        '_dihedrals',
+        '_internal',
         '_zmatrix',  # ZMatrix object wrapping (M, 4) int64 array
 
         # Structural metadata (injected, not owned)
         '_topology',    # TopologyInfo (immutable reference)
         '_components',  # ConnectedComponents for reconstruction
 
-        '_internal_valid',
-        '_n_atoms',  # Total atom count (set from initial coordinates)
         '_is_torch',  # Cached backend flag
     )
 
@@ -117,22 +112,29 @@ class CoordinateManager:
         self._topology = topology
 
         # Initialize Cartesian representation as valid
-        self._coordinates = coordinates
-        self._cartesian_valid = True
-        self._n_atoms = len(coordinates) if coordinates is not None else 0
+        self._coordinates: Array | None = coordinates
         self._is_torch = is_torch(coordinates) if coordinates is not None else False
 
         # Initialize internal representation as invalid (not yet computed)
-        self._distances: Array | None = None
-        self._angles: Array | None = None
-        self._dihedrals: Array | None = None
+        self._internal: Array | None = None
         self._zmatrix: ZMatrix | None = None
-
-        self._internal_valid = False
 
         # Connected components are built lazily in _recompute_internal
         # when the bond graph is computed for z-matrix construction
         self._components: "ConnectedComponents | None" = None
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Number of atoms
+    # ─────────────────────────────────────────────────────────────────────
+
+    def size(self) -> int:
+        """Return the number of atoms in the CoordinateManager."""
+        if self._coordinates is not None:
+            return len(self._coordinates)
+        if self._internal is not None:
+            return len(self._internal)
+        raise ValueError("Invalid CoordinateManager.")
 
     # ─────────────────────────────────────────────────────────────────────
     # String Representation
@@ -140,12 +142,12 @@ class CoordinateManager:
 
     def __repr__(self) -> str:
         """Return string representation of CoordinateManager."""
-        n_atoms = len(self._coordinates) if self._coordinates is not None else 0
+        n_atoms = self.size()
         backend = "torch" if is_torch(self._get_reference_array()) else "numpy"
         status = []
-        if self._cartesian_valid:
+        if self._coordinates is not None:
             status.append("cartesian")
-        if self._internal_valid:
+        if self._internal is not None:
             status.append("internal")
         status_str = "+".join(status) if status else "empty"
         return f"CoordinateManager({n_atoms} atoms, {backend}, {status_str})"
@@ -156,40 +158,10 @@ class CoordinateManager:
 
     def _get_reference_array(self) -> Array:
         """Get a reference array for backend detection."""
-        if self._cartesian_valid and self._coordinates is not None:
+        if self._coordinates is not None:
             return self._coordinates
-        elif self._internal_valid and self._distances is not None:
-            return self._distances
-        else:
-            # Fallback to topology atoms (always numpy, but sufficient for backend detection)
-            return self._topology.atoms
-
-    def _invalidate_cartesian(self) -> None:
-        """Mark Cartesian representation as invalid."""
-        self._cartesian_valid = False
-        self._coordinates = None
-
-    def _invalidate_internal(self) -> None:
-        """Mark internal representation as invalid."""
-        self._internal_valid = False
-        self._distances = None
-        self._angles = None
-        self._dihedrals = None
-        # Note: Keep Z-matrix and dihedral_types cached - they're structure-based
-
-    def _invalidate_structure(self) -> None:
-        """
-        Invalidate structure-dependent caches.
-
-        Call this when the polymer topology changes (bonds, residues, chains).
-        This invalidates the Z-matrix and all dependent data.
-
-        Note:
-            This is more aggressive than _invalidate_internal() which preserves
-            the Z-matrix. Use this only when the molecular structure itself changes.
-        """
-        self._zmatrix = None
-        self._invalidate_internal()
+        elif self._internal is not None:
+            return self._internal
 
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Cartesian
@@ -207,7 +179,7 @@ class CoordinateManager:
             If Cartesian representation is invalid, automatically reconstructs
             from internal coordinates using the NERF algorithm.
         """
-        if not self._cartesian_valid:
+        if self._coordinates is None:
             self._recompute_cartesian()
         return self._coordinates
 
@@ -221,13 +193,40 @@ class CoordinateManager:
         """
         check_compatible(self._get_reference_array(), value, "coordinates")
         self._coordinates = value
-        self._cartesian_valid = True
-
-        self._invalidate_internal()
+        self._internal = None
 
     # ─────────────────────────────────────────────────────────────────────
     # Lazy Evaluation Properties - Internal
     # ─────────────────────────────────────────────────────────────────────
+
+    @property
+    def internal(self) -> Array:
+        """
+        Internal coordinates with lazy computation.
+
+        Returns:
+            (N,3) array of internal coordinates
+
+        Note:
+            If internal representation is invalid, automatically computes
+            from Cartesian coordinates.
+        """
+        if self._internal is None:
+            self._recompute_internal()
+        return self._internal
+
+    @internal.setter
+    def internal(self, value: Array) -> None:
+        """
+        Set dihedral angles and invalidate Cartesian representation.
+
+        Args:
+            value: (N,) array of dihedral angles in radians.
+        """
+        check_compatible(self._get_reference_array(), value, "internal")
+        self._internal = value
+        self._coordinates = None
+
 
     @property
     def distances(self) -> Array:
@@ -241,9 +240,7 @@ class CoordinateManager:
             If internal representation is invalid, automatically computes
             from Cartesian coordinates.
         """
-        if not self._internal_valid:
-            self._recompute_internal()
-        return self._distances
+        return self.internal[:, 0]
 
     @distances.setter
     def distances(self, value: Array) -> None:
@@ -253,10 +250,24 @@ class CoordinateManager:
         Args:
             value: (N,) array of bond lengths in Angstroms.
         """
+        # Ensure internal coordinates are computed
+        if self._internal is None:
+            self._recompute_internal()
+
+        # Check compatibility
         check_compatible(self._get_reference_array(), value, "distances")
-        self._distances = value
-        self._internal_valid = True
-        self._invalidate_cartesian()
+
+        # Copy and detach internal array to avoid graph accumulation
+        if is_torch(self._internal):
+            new_internal = self._internal.detach().clone()
+        else:
+            new_internal = self._internal.copy()
+
+        # Update distance column
+        new_internal[:, 0] = value
+
+        # Use internal setter to trigger Cartesian invalidation
+        self.internal = new_internal
 
     @property
     def angles(self) -> Array:
@@ -270,9 +281,7 @@ class CoordinateManager:
             If internal representation is invalid, automatically computes
             from Cartesian coordinates.
         """
-        if not self._internal_valid:
-            self._recompute_internal()
-        return self._angles
+        return self.internal[:, 1]
 
     @angles.setter
     def angles(self, value: Array) -> None:
@@ -282,10 +291,24 @@ class CoordinateManager:
         Args:
             value: (N,) array of bond angles in radians.
         """
+        # Ensure internal coordinates are computed
+        if self._internal is None:
+            self._recompute_internal()
+
+        # Check compatibility
         check_compatible(self._get_reference_array(), value, "angles")
-        self._angles = value
-        self._internal_valid = True
-        self._invalidate_cartesian()
+
+        # Copy and detach internal array to avoid graph accumulation
+        if is_torch(self._internal):
+            new_internal = self._internal.detach().clone()
+        else:
+            new_internal = self._internal.copy()
+
+        # Update angle column
+        new_internal[:, 1] = value
+
+        # Use internal setter to trigger Cartesian invalidation
+        self.internal = new_internal
 
     @property
     def dihedrals(self) -> Array:
@@ -299,9 +322,7 @@ class CoordinateManager:
             If internal representation is invalid, automatically computes
             from Cartesian coordinates.
         """
-        if not self._internal_valid:
-            self._recompute_internal()
-        return self._dihedrals
+        return self.internal[:, 2]
 
     @dihedrals.setter
     def dihedrals(self, value: Array) -> None:
@@ -311,10 +332,24 @@ class CoordinateManager:
         Args:
             value: (N,) array of dihedral angles in radians.
         """
+        # Ensure internal coordinates are computed
+        if self._internal is None:
+            self._recompute_internal()
+
+        # Check compatibility
         check_compatible(self._get_reference_array(), value, "dihedrals")
-        self._dihedrals = value
-        self._internal_valid = True
-        self._invalidate_cartesian()
+
+        # Copy and detach internal array to avoid graph accumulation
+        if is_torch(self._internal):
+            new_internal = self._internal.detach().clone()
+        else:
+            new_internal = self._internal.copy()
+
+        # Update dihedral column
+        new_internal[:, 2] = value
+
+        # Use internal setter to trigger Cartesian invalidation
+        self.internal = new_internal
 
     @property
     def zmatrix(self) -> "ZMatrix":
@@ -389,11 +424,8 @@ class CoordinateManager:
             self._components.anchor_coords = self._components.get_anchor_coords(coords)
 
         # Use wrapper function that handles C/Python dispatch
-        self._distances, self._angles, self._dihedrals = cartesian_to_internal(
-            coords, self._zmatrix.indices
-        )
-
-        self._internal_valid = True
+        # Returns (M, 3) array where each row is [distance, angle, dihedral]
+        self._internal = cartesian_to_internal(coords, self._zmatrix.indices)
 
     def _recompute_cartesian(self) -> None:
         """
@@ -404,7 +436,7 @@ class CoordinateManager:
         coordinates are available, atoms are placed directly in the correct
         reference frame without needing post-reconstruction Kabsch rotation.
         """
-        if self._distances is None or self._angles is None or self._dihedrals is None:
+        if self._internal is None:
             raise RuntimeError("Cannot reconstruct Cartesian coordinates: internal coordinates are None")
 
         if self._zmatrix is None:
@@ -415,20 +447,19 @@ class CoordinateManager:
 
         zmatrix_indices = self._zmatrix.indices
 
-        # Get atom count (stored from initial coordinates)
-        n_atoms = self._n_atoms
-
-        # Detach distances/angles if they came from a previous cartesian_to_internal
-        # call with requires_grad. This prevents errors when:
+        # Detach internal coords (distances/angles columns) if they came from a previous
+        # cartesian_to_internal call with requires_grad. This prevents errors when:
         # 1. User did to_internal with grad-enabled coords, called backward()
         # 2. User now does to_cartesian with grad-enabled dihedrals
-        # The old distances/angles graph was freed, so we must detach them.
+        # The old graph was freed, so we must detach non-gradient columns.
         # Gradients for to_cartesian should flow through dihedrals only anyway.
-        distances = self._distances
-        angles = self._angles
-        if is_torch(distances) and distances.requires_grad:
-            distances = distances.detach()
-            angles = angles.detach()
+        internal = self._internal
+        if is_torch(internal) and internal.requires_grad:
+            # Clone and selectively enable grad on dihedral column only
+            internal = internal.detach().clone()
+            internal[:, 2] = self._internal[:, 2]  # Preserve grad for dihedrals
+
+        n_atoms = self.size()
 
         # Get anchor coordinates and component IDs for anchored NERF
         # This eliminates the need for post-reconstruction Kabsch rotation
@@ -441,9 +472,7 @@ class CoordinateManager:
         # NERF reconstruction with anchored placement
         coords = nerf_reconstruct(
             zmatrix_indices,
-            distances,
-            angles,
-            self._dihedrals,
+            internal,
             n_atoms=n_atoms,
             level_offsets=self._zmatrix.level_offsets,
             anchor_coords=anchor_coords,
@@ -469,7 +498,6 @@ class CoordinateManager:
                     coords[atom_idx] = anchor_coords[comp_idx, 0]
 
         self._coordinates = coords
-        self._cartesian_valid = True
         self._validate_coordinates()
 
     def _validate_coordinates(self) -> None:
@@ -513,32 +541,31 @@ class CoordinateManager:
             >>> phi = manager.get_dihedral(DihedralType.PHI)
             >>> backbone = manager.get_dihedral([DihedralType.PHI, DihedralType.PSI])
         """
-        # Ensure internal coordinates are computed
-        if not self._internal_valid:
-            self._recompute_internal()
+        # Ensure internal coordinates are computed (use property accessor)
+        dihedrals = self.dihedrals
 
         # Get dihedral types from ZMatrix (single source of truth)
         dihedral_types = self._zmatrix.dihedral_types if self._zmatrix else None
         if dihedral_types is None:
-            return _empty_array(self._dihedrals.dtype, self._dihedrals)
+            return _empty_array(dihedrals.dtype, dihedrals)
 
         # Handle single type - DihedralType is IntEnum, use .value directly
         if isinstance(dtype, DihedralType):
             mask = dihedral_types == dtype.value
-            return self._dihedrals[mask]
+            return dihedrals[mask]
 
         # Handle multiple types - concatenate in order
         arrays = []
         for dt in dtype:
             mask = dihedral_types == dt.value
-            values = self._dihedrals[mask]
+            values = dihedrals[mask]
             if len(values) > 0:
                 arrays.append(values)
 
         if not arrays:
-            return _empty_array(self._dihedrals.dtype, self._dihedrals)
+            return _empty_array(dihedrals.dtype, dihedrals)
 
-        return _concat(arrays, self._dihedrals)
+        return _concat(arrays, dihedrals)
 
     def set_dihedral(
         self,
@@ -564,21 +591,20 @@ class CoordinateManager:
             >>> # Set multiple types at once
             >>> manager.set_dihedral([DihedralType.PHI, DihedralType.PSI], backbone_values)
         """
-        # Ensure internal coordinates are computed
-        if not self._internal_valid:
-            self._recompute_internal()
+        # Ensure internal coordinates are computed (use property accessor)
+        internal = self.internal
 
         # Get dihedral types from ZMatrix (single source of truth)
         dihedral_types = self._zmatrix.dihedral_types if self._zmatrix else None
         if dihedral_types is None:
             raise ValueError("No dihedral types available")
 
-        # Copy and detach dihedrals array to avoid graph accumulation across iterations
+        # Copy and detach internal array to avoid graph accumulation across iterations
         # The new values will bring their own gradients; old values should be detached
-        if is_torch(self._dihedrals):
-            new_dihedrals = self._dihedrals.detach().clone()
+        if is_torch(internal):
+            new_internal = internal.detach().clone()
         else:
-            new_dihedrals = self._dihedrals.copy()
+            new_internal = internal.copy()
 
         # Handle single type - DihedralType is IntEnum, use .value directly
         if isinstance(dtype, DihedralType):
@@ -595,8 +621,8 @@ class CoordinateManager:
                     f"This may be because the structure doesn't contain the appropriate molecule type."
                 )
 
-            new_dihedrals[mask] = values
-            self.dihedrals = new_dihedrals
+            new_internal[mask, 2] = values
+            self.internal = new_internal
             return
 
         # Handle multiple types - split values and assign each
@@ -613,11 +639,11 @@ class CoordinateManager:
                 continue
 
             # Extract values for this type
-            new_dihedrals[mask] = values[offset:offset + count]
+            new_internal[mask, 2] = values[offset:offset + count]
             offset += count
 
         # Use setter to trigger invalidation
-        self.dihedrals = new_dihedrals
+        self.internal = new_internal
 
     # ─────────────────────────────────────────────────────────────────────
     # Backend Conversion
@@ -637,15 +663,8 @@ class CoordinateManager:
             self._topology,
         )
 
-        # Copy validity flags
-        new_manager._cartesian_valid = self._cartesian_valid
-
-        # Convert internal coordinates if valid
-        if self._internal_valid:
-            new_manager._distances = to_numpy(self._distances)
-            new_manager._angles = to_numpy(self._angles)
-            new_manager._dihedrals = to_numpy(self._dihedrals)
-            new_manager._internal_valid = True
+        if self._internal is not None:
+            new_manager._internal = self._internal.numpy()
 
         # Convert Z-matrix
         if self._zmatrix is not None:
@@ -653,9 +672,6 @@ class CoordinateManager:
 
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
-
-        # Copy atom count
-        new_manager._n_atoms = self._n_atoms
 
         return new_manager
 
@@ -673,15 +689,8 @@ class CoordinateManager:
             self._topology,
         )
 
-        # Copy validity flags
-        new_manager._cartesian_valid = self._cartesian_valid
-
-        # Convert internal coordinates if valid
-        if self._internal_valid:
-            new_manager._distances = to_torch(self._distances)
-            new_manager._angles = to_torch(self._angles)
-            new_manager._dihedrals = to_torch(self._dihedrals)
-            new_manager._internal_valid = True
+        if self._internal is not None:
+            new_manager._internal = to_torch(self._internal)
 
         # Convert Z-matrix
         if self._zmatrix is not None:
@@ -690,20 +699,18 @@ class CoordinateManager:
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
 
-        # Copy atom count
-        new_manager._n_atoms = self._n_atoms
-
         return new_manager
 
-    def to(self, device: str) -> "CoordinateManager":
+    def to(self, device: str = None, dtype=None) -> "CoordinateManager":
         """
-        Move tensors to specified device (PyTorch only).
+        Move tensors to specified device and/or convert dtype (PyTorch only).
 
         Args:
             device: Target device (e.g., "cuda", "cpu", "mps").
+            dtype: Target dtype for float tensors (e.g., torch.float16).
 
         Returns:
-            New CoordinateManager on the specified device.
+            New CoordinateManager on the specified device/dtype.
 
         Raises:
             RuntimeError: If arrays are not PyTorch tensors.
@@ -714,32 +721,33 @@ class CoordinateManager:
                 "Use to_torch() first."
             )
 
-        # Create new manager with coordinates on target device
+        def convert(t):
+            """Apply device and/or dtype conversion."""
+            if t is None:
+                return None
+            if device is not None:
+                t = t.to(device)
+            if dtype is not None:
+                t = t.to(dtype)
+            return t
+
+        # Create new manager with coordinates on target device/dtype
         # TopologyInfo is always numpy, so we can share it
         new_manager = CoordinateManager(
-            self._coordinates.to(device) if self._coordinates is not None else None,
+            convert(self._coordinates),
             self._topology,
         )
 
-        # Copy validity flags
-        new_manager._cartesian_valid = self._cartesian_valid
-
         # Move internal coordinates if valid
-        if self._internal_valid:
-            new_manager._distances = self._distances.to(device)
-            new_manager._angles = self._angles.to(device)
-            new_manager._dihedrals = self._dihedrals.to(device)
-            new_manager._internal_valid = True
+        if self._internal is not None:
+            new_manager._internal = convert(self._internal)
 
-        # Copy Z-matrix (move to device if PyTorch)
+        # Copy Z-matrix (move to device if PyTorch, keep int dtype)
         if self._zmatrix is not None:
-            new_manager._zmatrix = self._zmatrix.to(device)
+            new_manager._zmatrix = self._zmatrix.to(device) if device is not None else self._zmatrix
 
         # ConnectedComponents stores numpy arrays, so just copy reference
         new_manager._components = self._components
-
-        # Copy atom count
-        new_manager._n_atoms = self._n_atoms
 
         return new_manager
 
@@ -780,17 +788,9 @@ class CoordinateManager:
             if self._coordinates.requires_grad:
                 self._coordinates = self._coordinates.detach()
 
-        if self._distances is not None and is_torch(self._distances):
-            if self._distances.requires_grad:
-                self._distances = self._distances.detach()
-
-        if self._angles is not None and is_torch(self._angles):
-            if self._angles.requires_grad:
-                self._angles = self._angles.detach()
-
-        if self._dihedrals is not None and is_torch(self._dihedrals):
-            if self._dihedrals.requires_grad:
-                self._dihedrals = self._dihedrals.detach()
+        if self._internal is not None and is_torch(self._internal):
+            if self._internal.requires_grad:
+                self._internal = self._internal.detach()
 
         return self
 
@@ -819,7 +819,7 @@ class CoordinateManager:
             returned manager before internal coordinates can be computed.
         """
         # Ensure Cartesian is valid
-        if not self._cartesian_valid:
+        if self._coordinates is None:
             self._recompute_cartesian()
 
         # Slice Cartesian coordinates
@@ -828,19 +828,14 @@ class CoordinateManager:
         # Create new manager without calling __init__
         new_manager = CoordinateManager.__new__(CoordinateManager)
         new_manager._coordinates = sliced_coords
-        new_manager._cartesian_valid = True
-        new_manager._n_atoms = len(sliced_coords)
         new_manager._is_torch = is_torch(sliced_coords)
 
         # Topology must be set by caller (sliced topology info)
         new_manager._topology = None
 
         # Internal representation starts invalid (lazy recomputation)
-        new_manager._distances = None
-        new_manager._angles = None
-        new_manager._dihedrals = None
+        new_manager._internal = None
         new_manager._zmatrix = None
-        new_manager._internal_valid = False
 
         # ConnectedComponents starts empty (rebuilt when internal coords accessed)
         new_manager._components = None

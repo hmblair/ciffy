@@ -1023,9 +1023,7 @@ def build_zmatrix_from_components(
 
 def nerf_reconstruct(
     zmatrix_indices: Array,
-    distances: Array,
-    angles: Array,
-    dihedrals: Array,
+    internal: Array,
     n_atoms: int | None = None,
     level_offsets: Array | None = None,
     anchor_coords: Array | None = None,
@@ -1045,9 +1043,8 @@ def nerf_reconstruct(
 
     Args:
         zmatrix_indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
-        distances: (M,) bond lengths in Angstroms (in BFS order).
-        angles: (M,) bond angles in radians (in BFS order).
-        dihedrals: (M,) dihedral angles in radians (in BFS order).
+        internal: (M, 3) array of internal coordinates.
+            Each row: [distance, angle, dihedral].
         n_atoms: Total number of atoms (including orphans). If None,
             inferred from max Z-matrix index.
         level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
@@ -1075,6 +1072,6 @@ def nerf_reconstruct(
             n_atoms = 0
 
     return _dispatch_nerf_reconstruct(
-        zmatrix_indices, distances, angles, dihedrals, n_atoms,
+        zmatrix_indices, internal, n_atoms,
         level_offsets, anchor_coords, component_ids
     )

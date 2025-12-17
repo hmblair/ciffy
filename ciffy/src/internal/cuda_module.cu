@@ -23,46 +23,65 @@ extern "C" {
 void cuda_batch_cartesian_to_internal(
     const float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    float *d_distances, float *d_angles, float *d_dihedrals,
+    float *d_internal,  /* (n_entries, 3) output */
     cudaStream_t stream);
 
 void cuda_batch_cartesian_to_internal_backward(
     const float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    const float *d_distances, const float *d_angles,
-    const float *d_grad_distances, const float *d_grad_angles,
-    const float *d_grad_dihedrals,
+    const float *d_internal,       /* (n_entries, 3) */
+    const float *d_grad_internal,  /* (n_entries, 3) */
     float *d_grad_coords,
     cudaStream_t stream);
 
 void cuda_batch_nerf_reconstruct(
     float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    const float *d_distances, const float *d_angles, const float *d_dihedrals,
+    const float *d_internal,  /* (n_entries, 3) */
     cudaStream_t stream);
 
 void cuda_batch_nerf_reconstruct_backward(
     const float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    const float *d_distances, const float *d_angles, const float *d_dihedrals,
+    const float *d_internal,       /* (n_entries, 3) */
     float *d_grad_coords,
-    float *d_grad_distances, float *d_grad_angles, float *d_grad_dihedrals,
+    float *d_grad_internal,        /* (n_entries, 3) output */
     cudaStream_t stream);
 
 void cuda_batch_nerf_reconstruct_leveled(
     float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    const float *d_distances, const float *d_angles, const float *d_dihedrals,
+    const float *d_internal,  /* (n_entries, 3) */
     const int *level_offsets, int n_levels,
     cudaStream_t stream);
 
 void cuda_batch_nerf_reconstruct_backward_leveled(
     const float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
-    const float *d_distances, const float *d_angles, const float *d_dihedrals,
+    const float *d_internal,       /* (n_entries, 3) */
     float *d_grad_coords,
-    float *d_grad_distances, float *d_grad_angles, float *d_grad_dihedrals,
+    float *d_grad_internal,        /* (n_entries, 3) output */
     const int *level_offsets, int n_levels,
+    cudaStream_t stream);
+
+void cuda_batch_nerf_reconstruct_leveled_anchored(
+    float *d_coords, size_t n_atoms,
+    const int64_t *d_indices, size_t n_entries,
+    const float *d_internal,       /* (n_entries, 3) */
+    const int *level_offsets, int n_levels,
+    const float *d_anchor_coords,
+    const int32_t *d_component_ids,
+    cudaStream_t stream);
+
+void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
+    const float *d_coords, size_t n_atoms,
+    const int64_t *d_indices, size_t n_entries,
+    const float *d_internal,       /* (n_entries, 3) */
+    float *d_grad_coords,
+    float *d_grad_internal,        /* (n_entries, 3) output */
+    const int *level_offsets, int n_levels,
+    const float *d_anchor_coords,
+    const int32_t *d_component_ids,
     cudaStream_t stream);
 
 } /* extern "C" */
@@ -89,9 +108,9 @@ void cuda_batch_nerf_reconstruct_backward_leveled(
  *     indices: (M, 4) int64 CUDA tensor
  *
  * Returns:
- *     Tuple of (distances, angles, dihedrals), each (M,) float32 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor with [dist, angle, dihedral] per row
  */
-std::vector<torch::Tensor> cuda_cartesian_to_internal(
+torch::Tensor cuda_cartesian_to_internal(
     torch::Tensor coords,
     torch::Tensor indices
 ) {
@@ -110,14 +129,12 @@ std::vector<torch::Tensor> cuda_cartesian_to_internal(
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
 
-    /* Allocate output tensors on same device */
+    /* Allocate output tensor on same device */
     auto options = torch::TensorOptions()
         .dtype(torch::kFloat32)
         .device(coords.device());
 
-    torch::Tensor distances = torch::empty({n_entries}, options);
-    torch::Tensor angles = torch::empty({n_entries}, options);
-    torch::Tensor dihedrals = torch::empty({n_entries}, options);
+    torch::Tensor internal = torch::empty({n_entries, 3}, options);
 
     /* Get current CUDA stream */
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -128,35 +145,36 @@ std::vector<torch::Tensor> cuda_cartesian_to_internal(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
         stream
     );
 
-    return {distances, angles, dihedrals};
+    return internal;
 }
 
 
 /**
  * Backward pass for cartesian_to_internal on GPU.
+ *
+ * Args:
+ *     coords: (N, 3) float32 CUDA tensor
+ *     indices: (M, 4) int64 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
+ *     grad_internal: (M, 3) float32 CUDA tensor
+ *
+ * Returns:
+ *     grad_coords: (N, 3) float32 CUDA tensor
  */
 torch::Tensor cuda_cartesian_to_internal_backward(
     torch::Tensor coords,
     torch::Tensor indices,
-    torch::Tensor distances,
-    torch::Tensor angles,
-    torch::Tensor grad_distances,
-    torch::Tensor grad_angles,
-    torch::Tensor grad_dihedrals
+    torch::Tensor internal,
+    torch::Tensor grad_internal
 ) {
     CHECK_INPUT(coords);
     CHECK_INPUT(indices);
-    CHECK_INPUT(distances);
-    CHECK_INPUT(angles);
-    CHECK_INPUT(grad_distances);
-    CHECK_INPUT(grad_angles);
-    CHECK_INPUT(grad_dihedrals);
+    CHECK_INPUT(internal);
+    CHECK_INPUT(grad_internal);
 
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
@@ -171,11 +189,8 @@ torch::Tensor cuda_cartesian_to_internal_backward(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        grad_distances.data_ptr<float>(),
-        grad_angles.data_ptr<float>(),
-        grad_dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
+        grad_internal.data_ptr<float>(),
         grad_coords.data_ptr<float>(),
         stream
     );
@@ -190,9 +205,7 @@ torch::Tensor cuda_cartesian_to_internal_backward(
  * Args:
  *     coords: (N, 3) float32 CUDA tensor (will be modified in-place)
  *     indices: (M, 4) int64 CUDA tensor
- *     distances: (M,) float32 CUDA tensor
- *     angles: (M,) float32 CUDA tensor
- *     dihedrals: (M,) float32 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
  *
  * Returns:
  *     coords tensor (modified in-place)
@@ -200,15 +213,11 @@ torch::Tensor cuda_cartesian_to_internal_backward(
 torch::Tensor cuda_nerf_reconstruct(
     torch::Tensor coords,
     torch::Tensor indices,
-    torch::Tensor distances,
-    torch::Tensor angles,
-    torch::Tensor dihedrals
+    torch::Tensor internal
 ) {
     CHECK_INPUT(coords);
     CHECK_INPUT(indices);
-    CHECK_INPUT(distances);
-    CHECK_INPUT(angles);
-    CHECK_INPUT(dihedrals);
+    CHECK_INPUT(internal);
 
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
@@ -220,9 +229,7 @@ torch::Tensor cuda_nerf_reconstruct(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
         stream
     );
 
@@ -232,33 +239,36 @@ torch::Tensor cuda_nerf_reconstruct(
 
 /**
  * Backward pass for NERF reconstruction on GPU.
+ *
+ * Args:
+ *     coords: (N, 3) float32 CUDA tensor
+ *     indices: (M, 4) int64 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
+ *     grad_coords: (N, 3) float32 CUDA tensor
+ *
+ * Returns:
+ *     Tuple of (grad_coords_accum, grad_internal)
  */
 std::vector<torch::Tensor> cuda_nerf_reconstruct_backward(
     torch::Tensor coords,
     torch::Tensor indices,
-    torch::Tensor distances,
-    torch::Tensor angles,
-    torch::Tensor dihedrals,
+    torch::Tensor internal,
     torch::Tensor grad_coords
 ) {
     CHECK_INPUT(coords);
     CHECK_INPUT(indices);
-    CHECK_INPUT(distances);
-    CHECK_INPUT(angles);
-    CHECK_INPUT(dihedrals);
+    CHECK_INPUT(internal);
     CHECK_INPUT(grad_coords);
 
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
 
-    /* Allocate gradient outputs */
+    /* Allocate gradient output */
     auto options = torch::TensorOptions()
         .dtype(torch::kFloat32)
         .device(coords.device());
 
-    torch::Tensor grad_distances = torch::empty({n_entries}, options);
-    torch::Tensor grad_angles = torch::empty({n_entries}, options);
-    torch::Tensor grad_dihedrals = torch::empty({n_entries}, options);
+    torch::Tensor grad_internal = torch::empty({n_entries, 3}, options);
 
     /* Make a copy of grad_coords for accumulation */
     torch::Tensor grad_coords_accum = grad_coords.clone();
@@ -270,17 +280,13 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
         grad_coords_accum.data_ptr<float>(),
-        grad_distances.data_ptr<float>(),
-        grad_angles.data_ptr<float>(),
-        grad_dihedrals.data_ptr<float>(),
+        grad_internal.data_ptr<float>(),
         stream
     );
 
-    return {grad_coords_accum, grad_distances, grad_angles, grad_dihedrals};
+    return {grad_coords_accum, grad_internal};
 }
 
 
@@ -293,9 +299,7 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward(
  * Args:
  *     coords: (N, 3) float32 CUDA tensor (will be modified in-place)
  *     indices: (M, 4) int64 CUDA tensor
- *     distances: (M,) float32 CUDA tensor
- *     angles: (M,) float32 CUDA tensor
- *     dihedrals: (M,) float32 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
  *     level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets
  *
  * Returns:
@@ -304,16 +308,12 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward(
 torch::Tensor cuda_nerf_reconstruct_leveled(
     torch::Tensor coords,
     torch::Tensor indices,
-    torch::Tensor distances,
-    torch::Tensor angles,
-    torch::Tensor dihedrals,
+    torch::Tensor internal,
     torch::Tensor level_offsets
 ) {
     CHECK_INPUT(coords);
     CHECK_INPUT(indices);
-    CHECK_INPUT(distances);
-    CHECK_INPUT(angles);
-    CHECK_INPUT(dihedrals);
+    CHECK_INPUT(internal);
     /* level_offsets can be on CPU or GPU - we'll copy to CPU for host-side loop */
 
     TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
@@ -333,9 +333,7 @@ torch::Tensor cuda_nerf_reconstruct_leveled(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
         level_offsets_cpu.data_ptr<int>(),
         n_levels,
         stream
@@ -347,21 +345,27 @@ torch::Tensor cuda_nerf_reconstruct_leveled(
 
 /**
  * Backward pass for level-parallel NERF reconstruction on GPU.
+ *
+ * Args:
+ *     coords: (N, 3) float32 CUDA tensor
+ *     indices: (M, 4) int64 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
+ *     grad_coords: (N, 3) float32 CUDA tensor
+ *     level_offsets: (n_levels+1,) int32 tensor
+ *
+ * Returns:
+ *     Tuple of (grad_coords_accum, grad_internal)
  */
 std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
     torch::Tensor coords,
     torch::Tensor indices,
-    torch::Tensor distances,
-    torch::Tensor angles,
-    torch::Tensor dihedrals,
+    torch::Tensor internal,
     torch::Tensor grad_coords,
     torch::Tensor level_offsets
 ) {
     CHECK_INPUT(coords);
     CHECK_INPUT(indices);
-    CHECK_INPUT(distances);
-    CHECK_INPUT(angles);
-    CHECK_INPUT(dihedrals);
+    CHECK_INPUT(internal);
     CHECK_INPUT(grad_coords);
     /* level_offsets can be on CPU or GPU - we'll copy to CPU for host-side loop */
 
@@ -375,14 +379,12 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
     /* Copy level_offsets to CPU (the batch.cu function reads it on host side) */
     torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
 
-    /* Allocate gradient outputs */
+    /* Allocate gradient output */
     auto options = torch::TensorOptions()
         .dtype(torch::kFloat32)
         .device(coords.device());
 
-    torch::Tensor grad_distances = torch::empty({n_entries}, options);
-    torch::Tensor grad_angles = torch::empty({n_entries}, options);
-    torch::Tensor grad_dihedrals = torch::empty({n_entries}, options);
+    torch::Tensor grad_internal = torch::empty({n_entries, 3}, options);
 
     /* Make a copy of grad_coords for accumulation */
     torch::Tensor grad_coords_accum = grad_coords.clone();
@@ -394,19 +396,148 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
         (size_t)n_atoms,
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
-        distances.data_ptr<float>(),
-        angles.data_ptr<float>(),
-        dihedrals.data_ptr<float>(),
+        internal.data_ptr<float>(),
         grad_coords_accum.data_ptr<float>(),
-        grad_distances.data_ptr<float>(),
-        grad_angles.data_ptr<float>(),
-        grad_dihedrals.data_ptr<float>(),
+        grad_internal.data_ptr<float>(),
         level_offsets_cpu.data_ptr<int>(),
         n_levels,
         stream
     );
 
-    return {grad_coords_accum, grad_distances, grad_angles, grad_dihedrals};
+    return {grad_coords_accum, grad_internal};
+}
+
+
+/**
+ * Level-parallel anchored NERF reconstruction on GPU.
+ *
+ * Args:
+ *     coords: (N, 3) float32 CUDA tensor (will be modified in-place)
+ *     indices: (M, 4) int64 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
+ *     level_offsets: (n_levels+1,) int32 tensor
+ *     anchor_coords: (n_components, 3, 3) float32 CUDA tensor
+ *     component_ids: (M,) int32 CUDA tensor
+ *
+ * Returns:
+ *     coords tensor (modified in-place)
+ */
+torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
+    torch::Tensor coords,
+    torch::Tensor indices,
+    torch::Tensor internal,
+    torch::Tensor level_offsets,
+    torch::Tensor anchor_coords,
+    torch::Tensor component_ids
+) {
+    CHECK_INPUT(coords);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(internal);
+    CHECK_INPUT(anchor_coords);
+    CHECK_INPUT(component_ids);
+
+    TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
+                "level_offsets must be int32");
+    TORCH_CHECK(anchor_coords.dtype() == torch::kFloat32,
+                "anchor_coords must be float32");
+    TORCH_CHECK(component_ids.dtype() == torch::kInt32,
+                "component_ids must be int32");
+
+    int64_t n_atoms = coords.size(0);
+    int64_t n_entries = indices.size(0);
+    int n_levels = level_offsets.size(0) - 1;
+
+    /* Copy level_offsets to CPU */
+    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    cuda_batch_nerf_reconstruct_leveled_anchored(
+        coords.data_ptr<float>(),
+        (size_t)n_atoms,
+        indices.data_ptr<int64_t>(),
+        (size_t)n_entries,
+        internal.data_ptr<float>(),
+        level_offsets_cpu.data_ptr<int>(),
+        n_levels,
+        anchor_coords.data_ptr<float>(),
+        component_ids.data_ptr<int32_t>(),
+        stream
+    );
+
+    return coords;
+}
+
+
+/**
+ * Backward pass for level-parallel anchored NERF reconstruction on GPU.
+ *
+ * Args:
+ *     coords: (N, 3) float32 CUDA tensor
+ *     indices: (M, 4) int64 CUDA tensor
+ *     internal: (M, 3) float32 CUDA tensor
+ *     grad_coords: (N, 3) float32 CUDA tensor
+ *     level_offsets: (n_levels+1,) int32 tensor
+ *     anchor_coords: (n_components, 3, 3) float32 CUDA tensor
+ *     component_ids: (M,) int32 CUDA tensor
+ *
+ * Returns:
+ *     Tuple of (grad_coords_accum, grad_internal)
+ */
+std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled_anchored(
+    torch::Tensor coords,
+    torch::Tensor indices,
+    torch::Tensor internal,
+    torch::Tensor grad_coords,
+    torch::Tensor level_offsets,
+    torch::Tensor anchor_coords,
+    torch::Tensor component_ids
+) {
+    CHECK_INPUT(coords);
+    CHECK_INPUT(indices);
+    CHECK_INPUT(internal);
+    CHECK_INPUT(grad_coords);
+    CHECK_INPUT(anchor_coords);
+    CHECK_INPUT(component_ids);
+
+    TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
+                "level_offsets must be int32");
+
+    int64_t n_atoms = coords.size(0);
+    int64_t n_entries = indices.size(0);
+    int n_levels = level_offsets.size(0) - 1;
+
+    /* Copy level_offsets to CPU */
+    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
+
+    /* Allocate gradient output */
+    auto options = torch::TensorOptions()
+        .dtype(torch::kFloat32)
+        .device(coords.device());
+
+    torch::Tensor grad_internal = torch::empty({n_entries, 3}, options);
+
+    /* Make a copy of grad_coords for accumulation */
+    torch::Tensor grad_coords_accum = grad_coords.clone();
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    cuda_batch_nerf_reconstruct_backward_leveled_anchored(
+        coords.data_ptr<float>(),
+        (size_t)n_atoms,
+        indices.data_ptr<int64_t>(),
+        (size_t)n_entries,
+        internal.data_ptr<float>(),
+        grad_coords_accum.data_ptr<float>(),
+        grad_internal.data_ptr<float>(),
+        level_offsets_cpu.data_ptr<int>(),
+        n_levels,
+        anchor_coords.data_ptr<float>(),
+        component_ids.data_ptr<int32_t>(),
+        stream
+    );
+
+    return {grad_coords_accum, grad_internal};
 }
 
 
@@ -424,29 +555,36 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cartesian_to_internal_backward", &cuda_cartesian_to_internal_backward,
           "Backward pass for Cartesian to internal (CUDA)",
           py::arg("coords"), py::arg("indices"),
-          py::arg("distances"), py::arg("angles"),
-          py::arg("grad_distances"), py::arg("grad_angles"), py::arg("grad_dihedrals"));
+          py::arg("internal"), py::arg("grad_internal"));
 
     m.def("nerf_reconstruct", &cuda_nerf_reconstruct,
           "NERF reconstruction (CUDA)",
-          py::arg("coords"), py::arg("indices"),
-          py::arg("distances"), py::arg("angles"), py::arg("dihedrals"));
+          py::arg("coords"), py::arg("indices"), py::arg("internal"));
 
     m.def("nerf_reconstruct_backward", &cuda_nerf_reconstruct_backward,
           "Backward pass for NERF reconstruction (CUDA)",
           py::arg("coords"), py::arg("indices"),
-          py::arg("distances"), py::arg("angles"), py::arg("dihedrals"),
-          py::arg("grad_coords"));
+          py::arg("internal"), py::arg("grad_coords"));
 
     m.def("nerf_reconstruct_leveled", &cuda_nerf_reconstruct_leveled,
           "Level-parallel NERF reconstruction (CUDA)",
           py::arg("coords"), py::arg("indices"),
-          py::arg("distances"), py::arg("angles"), py::arg("dihedrals"),
-          py::arg("level_offsets"));
+          py::arg("internal"), py::arg("level_offsets"));
 
     m.def("nerf_reconstruct_backward_leveled", &cuda_nerf_reconstruct_backward_leveled,
           "Backward pass for level-parallel NERF reconstruction (CUDA)",
           py::arg("coords"), py::arg("indices"),
-          py::arg("distances"), py::arg("angles"), py::arg("dihedrals"),
-          py::arg("grad_coords"), py::arg("level_offsets"));
+          py::arg("internal"), py::arg("grad_coords"), py::arg("level_offsets"));
+
+    m.def("nerf_reconstruct_leveled_anchored", &cuda_nerf_reconstruct_leveled_anchored,
+          "Level-parallel anchored NERF reconstruction (CUDA)",
+          py::arg("coords"), py::arg("indices"),
+          py::arg("internal"), py::arg("level_offsets"),
+          py::arg("anchor_coords"), py::arg("component_ids"));
+
+    m.def("nerf_reconstruct_backward_leveled_anchored", &cuda_nerf_reconstruct_backward_leveled_anchored,
+          "Backward pass for level-parallel anchored NERF reconstruction (CUDA)",
+          py::arg("coords"), py::arg("indices"),
+          py::arg("internal"), py::arg("grad_coords"), py::arg("level_offsets"),
+          py::arg("anchor_coords"), py::arg("component_ids"));
 }

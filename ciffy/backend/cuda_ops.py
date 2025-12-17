@@ -93,7 +93,7 @@ def is_cuda_available(tensor: "torch.Tensor") -> bool:
 def cuda_cartesian_to_internal(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+) -> "torch.Tensor":
     """
     GPU: Convert Cartesian to internal coordinates.
 
@@ -102,7 +102,7 @@ def cuda_cartesian_to_internal(
         indices: (M, 4) int64 CUDA tensor.
 
     Returns:
-        Tuple of (distances, angles, dihedrals), each (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor with [dist, angle, dihedral] per row.
 
     Raises:
         RuntimeError: If CUDA extension is not available.
@@ -121,11 +121,8 @@ def cuda_cartesian_to_internal(
 def cuda_cartesian_to_internal_backward(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    grad_distances: "torch.Tensor",
-    grad_angles: "torch.Tensor",
-    grad_dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
+    grad_internal: "torch.Tensor",
 ) -> "torch.Tensor":
     """
     GPU: Backward pass for Cartesian to internal conversion.
@@ -133,11 +130,8 @@ def cuda_cartesian_to_internal_backward(
     Args:
         coords: (N, 3) float32 CUDA tensor.
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor (from forward pass).
-        angles: (M,) float32 CUDA tensor (from forward pass).
-        grad_distances: (M,) float32 CUDA tensor of upstream gradients.
-        grad_angles: (M,) float32 CUDA tensor of upstream gradients.
-        grad_dihedrals: (M,) float32 CUDA tensor of upstream gradients.
+        internal: (M, 3) float32 CUDA tensor (from forward pass).
+        grad_internal: (M, 3) float32 CUDA tensor of upstream gradients.
 
     Returns:
         grad_coords: (N, 3) float32 CUDA tensor.
@@ -146,17 +140,14 @@ def cuda_cartesian_to_internal_backward(
         raise RuntimeError("CUDA extension not available")
 
     return _cuda_cartesian_to_internal_backward(
-        coords, indices, distances, angles,
-        grad_distances, grad_angles, grad_dihedrals
+        coords, indices, internal, grad_internal
     )
 
 
 def cuda_nerf_reconstruct(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
 ) -> "torch.Tensor":
     """
     GPU: NERF reconstruction.
@@ -164,9 +155,7 @@ def cuda_nerf_reconstruct(
     Args:
         coords: (N, 3) float32 CUDA tensor (will be modified in-place).
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
 
     Returns:
         coords tensor (modified in-place).
@@ -174,45 +163,39 @@ def cuda_nerf_reconstruct(
     if not HAS_CUDA_EXTENSION:
         raise RuntimeError("CUDA extension not available")
 
-    return _cuda_nerf_reconstruct(coords, indices, distances, angles, dihedrals)
+    return _cuda_nerf_reconstruct(coords, indices, internal)
 
 
 def cuda_nerf_reconstruct_backward(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
     grad_coords: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+) -> tuple["torch.Tensor", "torch.Tensor"]:
     """
     GPU: Backward pass for NERF reconstruction.
 
     Args:
         coords: (N, 3) float32 CUDA tensor.
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
         grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
 
     Returns:
-        Tuple of (grad_coords_accum, grad_distances, grad_angles, grad_dihedrals).
+        Tuple of (grad_coords_accum, grad_internal).
     """
     if not HAS_CUDA_EXTENSION:
         raise RuntimeError("CUDA extension not available")
 
     return _cuda_nerf_reconstruct_backward(
-        coords, indices, distances, angles, dihedrals, grad_coords
+        coords, indices, internal, grad_coords
     )
 
 
 def cuda_nerf_reconstruct_leveled(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
     level_offsets: "torch.Tensor",
 ) -> "torch.Tensor":
     """
@@ -225,9 +208,7 @@ def cuda_nerf_reconstruct_leveled(
     Args:
         coords: (N, 3) float32 CUDA tensor (will be modified in-place).
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
         level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
             Level i's entries span indices[level_offsets[i]:level_offsets[i+1]].
 
@@ -244,19 +225,17 @@ def cuda_nerf_reconstruct_leveled(
         )
 
     return _cuda_nerf_reconstruct_leveled(
-        coords, indices, distances, angles, dihedrals, level_offsets
+        coords, indices, internal, level_offsets
     )
 
 
 def cuda_nerf_reconstruct_backward_leveled(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
     grad_coords: "torch.Tensor",
     level_offsets: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+) -> tuple["torch.Tensor", "torch.Tensor"]:
     """
     GPU: Backward pass for level-parallel NERF reconstruction.
 
@@ -265,14 +244,12 @@ def cuda_nerf_reconstruct_backward_leveled(
     Args:
         coords: (N, 3) float32 CUDA tensor.
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
         grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
         level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
 
     Returns:
-        Tuple of (grad_coords_accum, grad_distances, grad_angles, grad_dihedrals).
+        Tuple of (grad_coords_accum, grad_internal).
 
     Raises:
         RuntimeError: If leveled NERF CUDA kernel is not available.
@@ -284,16 +261,14 @@ def cuda_nerf_reconstruct_backward_leveled(
         )
 
     return _cuda_nerf_reconstruct_backward_leveled(
-        coords, indices, distances, angles, dihedrals, grad_coords, level_offsets
+        coords, indices, internal, grad_coords, level_offsets
     )
 
 
 def cuda_nerf_reconstruct_leveled_anchored(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
     level_offsets: "torch.Tensor",
     anchor_coords: "torch.Tensor",
     component_ids: "torch.Tensor",
@@ -307,9 +282,7 @@ def cuda_nerf_reconstruct_leveled_anchored(
     Args:
         coords: (N, 3) float32 CUDA tensor (will be modified in-place).
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
         level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
         anchor_coords: (n_components, 3, 3) float32 CUDA tensor of anchor positions.
         component_ids: (M,) int32 CUDA tensor mapping entries to components.
@@ -327,7 +300,7 @@ def cuda_nerf_reconstruct_leveled_anchored(
         )
 
     return _cuda_nerf_reconstruct_leveled_anchored(
-        coords, indices, distances, angles, dihedrals,
+        coords, indices, internal,
         level_offsets, anchor_coords, component_ids
     )
 
@@ -335,14 +308,12 @@ def cuda_nerf_reconstruct_leveled_anchored(
 def cuda_nerf_reconstruct_backward_leveled_anchored(
     coords: "torch.Tensor",
     indices: "torch.Tensor",
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    internal: "torch.Tensor",
     grad_coords: "torch.Tensor",
     level_offsets: "torch.Tensor",
     anchor_coords: "torch.Tensor",
     component_ids: "torch.Tensor",
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+) -> tuple["torch.Tensor", "torch.Tensor"]:
     """
     GPU: Backward pass for level-parallel anchored NERF reconstruction.
 
@@ -351,16 +322,14 @@ def cuda_nerf_reconstruct_backward_leveled_anchored(
     Args:
         coords: (N, 3) float32 CUDA tensor.
         indices: (M, 4) int64 CUDA tensor.
-        distances: (M,) float32 CUDA tensor.
-        angles: (M,) float32 CUDA tensor.
-        dihedrals: (M,) float32 CUDA tensor.
+        internal: (M, 3) float32 CUDA tensor.
         grad_coords: (N, 3) float32 CUDA tensor of upstream gradients.
         level_offsets: (n_levels+1,) int32 CUDA tensor of CSR-style offsets.
         anchor_coords: (n_components, 3, 3) float32 CUDA tensor of anchor positions.
         component_ids: (M,) int32 CUDA tensor mapping entries to components.
 
     Returns:
-        Tuple of (grad_coords_accum, grad_distances, grad_angles, grad_dihedrals).
+        Tuple of (grad_coords_accum, grad_internal).
 
     Raises:
         RuntimeError: If anchored NERF CUDA kernel is not available.
@@ -372,6 +341,6 @@ def cuda_nerf_reconstruct_backward_leveled_anchored(
         )
 
     return _cuda_nerf_reconstruct_backward_leveled_anchored(
-        coords, indices, distances, angles, dihedrals,
+        coords, indices, internal,
         grad_coords, level_offsets, anchor_coords, component_ids
     )

@@ -4,6 +4,9 @@
  *
  * Provides batch versions of coordinate conversion that operate on
  * arrays, suitable for calling from Python with NumPy arrays.
+ *
+ * Internal coordinates are stored as (N, 3) arrays where each row contains
+ * [distance, angle, dihedral]. Use the INTERNAL_* constants below for indexing.
  */
 
 #ifndef CIFFY_INTERNAL_BATCH_H
@@ -11,6 +14,15 @@
 
 #include <stdint.h>
 #include <stddef.h>
+
+/* Column indices for internal coordinate (N, 3) arrays */
+#define INTERNAL_DIST  0   /* Bond length (Angstroms) */
+#define INTERNAL_ANGLE 1   /* Bond angle (radians) */
+#define INTERNAL_DIHE  2   /* Dihedral angle (radians) */
+#define INTERNAL_COLS  3   /* Number of columns in internal array */
+
+/* Helper macro for accessing internal[i, col] in row-major layout */
+#define INTERNAL_IDX(i, col) ((i) * INTERNAL_COLS + (col))
 
 /**
  * Batch conversion from Cartesian to internal coordinates.
@@ -23,14 +35,13 @@
  *                Each row: [atom_idx, distance_ref, angle_ref, dihedral_ref].
  *                Use -1 for missing references.
  * @param n_entries Number of Z-matrix entries.
- * @param distances Output bond lengths, size (n_entries,).
- * @param angles Output bond angles in radians, size (n_entries,).
- * @param dihedrals Output dihedral angles in radians, size (n_entries,).
+ * @param internal Output internal coordinates, shape (n_entries, 3), row-major.
+ *                 Each row: [distance, angle, dihedral].
  */
 void batch_cartesian_to_internal(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    float *distances, float *angles, float *dihedrals
+    float *internal
 );
 
 /**
@@ -45,14 +56,13 @@ void batch_cartesian_to_internal(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4).
  * @param n_entries Number of Z-matrix entries.
- * @param distances Bond lengths, size (n_entries,).
- * @param angles Bond angles in radians, size (n_entries,).
- * @param dihedrals Dihedral angles in radians, size (n_entries,).
+ * @param internal Internal coordinates, shape (n_entries, 3), row-major.
+ *                 Each row: [distance, angle, dihedral].
  */
 void batch_nerf_reconstruct(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals
+    const float *internal
 );
 
 /* ========================================================================= */
@@ -68,19 +78,17 @@ void batch_nerf_reconstruct(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4).
  * @param n_entries Number of Z-matrix entries.
- * @param distances Forward pass distances (for efficiency).
- * @param angles Forward pass angles (for efficiency).
- * @param grad_distances Upstream gradients for distances, size (n_entries,).
- * @param grad_angles Upstream gradients for angles, size (n_entries,).
- * @param grad_dihedrals Upstream gradients for dihedrals, size (n_entries,).
+ * @param internal Forward pass internal coordinates, shape (n_entries, 3).
+ *                 Each row: [distance, angle, dihedral].
+ * @param grad_internal Upstream gradients for internal, shape (n_entries, 3).
  * @param grad_coords Output gradients for coords, shape (n_atoms, 3).
  *                    MUST be pre-initialized (gradients are accumulated).
  */
 void batch_cartesian_to_internal_backward(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles,
-    const float *grad_distances, const float *grad_angles, const float *grad_dihedrals,
+    const float *internal,
+    const float *grad_internal,
     float *grad_coords
 );
 
@@ -94,21 +102,18 @@ void batch_cartesian_to_internal_backward(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4).
  * @param n_entries Number of Z-matrix entries.
- * @param distances Bond lengths, size (n_entries,).
- * @param angles Bond angles, size (n_entries,).
- * @param dihedrals Dihedral angles, size (n_entries,).
+ * @param internal Internal coordinates, shape (n_entries, 3), row-major.
+ *                 Each row: [distance, angle, dihedral].
  * @param grad_coords Upstream gradients for coords, shape (n_atoms, 3).
  *                    Will be modified during backward pass.
- * @param grad_distances Output gradients for distances, size (n_entries,).
- * @param grad_angles Output gradients for angles, size (n_entries,).
- * @param grad_dihedrals Output gradients for dihedrals, size (n_entries,).
+ * @param grad_internal Output gradients for internal, shape (n_entries, 3).
  */
 void batch_nerf_reconstruct_backward(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals
+    float *grad_internal
 );
 
 /* ========================================================================= */
@@ -126,9 +131,8 @@ void batch_nerf_reconstruct_backward(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
  * @param n_entries Number of Z-matrix entries.
- * @param distances Bond lengths, size (n_entries,).
- * @param angles Bond angles in radians, size (n_entries,).
- * @param dihedrals Dihedral angles in radians, size (n_entries,).
+ * @param internal Internal coordinates, shape (n_entries, 3), row-major.
+ *                 Each row: [distance, angle, dihedral].
  * @param level_offsets CSR-style offsets, size (n_levels+1,).
  *                      Level i's entries span [level_offsets[i], level_offsets[i+1]).
  * @param n_levels Number of BFS levels.
@@ -136,7 +140,7 @@ void batch_nerf_reconstruct_backward(
 void batch_nerf_reconstruct_leveled(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     const int32_t *level_offsets, int n_levels
 );
 
@@ -150,22 +154,18 @@ void batch_nerf_reconstruct_leveled(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
  * @param n_entries Number of Z-matrix entries.
- * @param distances Bond lengths, size (n_entries,).
- * @param angles Bond angles, size (n_entries,).
- * @param dihedrals Dihedral angles, size (n_entries,).
+ * @param internal Internal coordinates, shape (n_entries, 3), row-major.
  * @param grad_coords Upstream gradients for coords, shape (n_atoms, 3). Modified in place.
- * @param grad_distances Output gradients for distances, size (n_entries,).
- * @param grad_angles Output gradients for angles, size (n_entries,).
- * @param grad_dihedrals Output gradients for dihedrals, size (n_entries,).
+ * @param grad_internal Output gradients for internal, shape (n_entries, 3).
  * @param level_offsets CSR-style offsets, size (n_levels+1,).
  * @param n_levels Number of BFS levels.
  */
 void batch_nerf_reconstruct_backward_leveled(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    float *grad_internal,
     const int32_t *level_offsets, int n_levels
 );
 
@@ -185,9 +185,7 @@ void batch_nerf_reconstruct_backward_leveled(
  * @param n_atoms Number of atoms.
  * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
  * @param n_entries Number of Z-matrix entries.
- * @param distances Bond lengths, size (n_entries,).
- * @param angles Bond angles in radians, size (n_entries,).
- * @param dihedrals Dihedral angles in radians, size (n_entries,).
+ * @param internal Internal coordinates, shape (n_entries, 3), row-major.
  * @param level_offsets CSR-style offsets, size (n_levels+1,).
  * @param n_levels Number of BFS levels.
  * @param anchor_coords Anchor coordinates, shape (n_components, 3, 3).
@@ -200,7 +198,7 @@ void batch_nerf_reconstruct_backward_leveled(
 void batch_nerf_reconstruct_leveled_anchored(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     const int32_t *level_offsets, int n_levels,
     const float *anchor_coords, const int32_t *component_ids
 );
@@ -213,9 +211,9 @@ void batch_nerf_reconstruct_leveled_anchored(
 void batch_nerf_reconstruct_backward_leveled_anchored(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    float *grad_internal,
     const int32_t *level_offsets, int n_levels,
     const float *anchor_coords, const int32_t *component_ids
 );

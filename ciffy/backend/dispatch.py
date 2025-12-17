@@ -23,8 +23,8 @@ Usage
 >>> from ciffy.backend.dispatch import cartesian_to_internal, nerf_reconstruct
 >>>
 >>> # Works with any array type on any device
->>> distances, angles, dihedrals = cartesian_to_internal(coords, indices)
->>> coords = nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms)
+>>> internal = cartesian_to_internal(coords, indices)  # (M, 3) [dist, ang, dih]
+>>> coords = nerf_reconstruct(indices, internal, n_atoms)
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ from ..operations.alignment import kabsch_rotation
 def cartesian_to_internal(
     coords: Array,
     indices: Array,
-) -> tuple[Array, Array, Array]:
+    ) -> Array:
     """
     Convert Cartesian coordinates to internal coordinates.
 
@@ -98,7 +98,7 @@ def cartesian_to_internal(
         indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
 
     Returns:
-        Tuple of (distances, angles, dihedrals), each (M,) float32.
+        internal: (N, 3) array of internal coordinates.
     """
     if is_torch(coords):
         return _torch_cartesian_to_internal(coords, indices)
@@ -107,9 +107,7 @@ def cartesian_to_internal(
 
 def nerf_reconstruct(
     indices: Array,
-    distances: Array,
-    angles: Array,
-    dihedrals: Array,
+    internal: Array,
     n_atoms: int,
     level_offsets: Array | None = None,
     anchor_coords: Array | None = None,
@@ -125,9 +123,8 @@ def nerf_reconstruct(
 
     Args:
         indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
-        distances: (M,) bond lengths in Angstroms.
-        angles: (M,) bond angles in radians.
-        dihedrals: (M,) dihedral angles in radians.
+        internal: (M, 3) array of internal coordinates.
+            Each row: [distance, angle, dihedral].
         n_atoms: Total number of atoms.
         level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
             When provided, enables parallel NERF on CUDA by processing atoms
@@ -141,9 +138,9 @@ def nerf_reconstruct(
     Returns:
         (N, 3) array of Cartesian coordinates.
     """
-    if is_torch(distances):
-        return _torch_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets, anchor_coords, component_ids)
-    return _numpy_nerf_reconstruct(indices, distances, angles, dihedrals, n_atoms, level_offsets, anchor_coords, component_ids)
+    if is_torch(internal):
+        return _torch_nerf_reconstruct(indices, internal, n_atoms, level_offsets, anchor_coords, component_ids)
+    return _numpy_nerf_reconstruct(indices, internal, n_atoms, level_offsets, anchor_coords, component_ids)
 
 
 # =============================================================================
@@ -154,8 +151,8 @@ def nerf_reconstruct(
 def _numpy_cartesian_to_internal(
     coords: np.ndarray,
     indices: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """NumPy path: use C extension directly."""
+) -> np.ndarray:
+    """NumPy path: use C extension directly. Returns (M, 3) internal array."""
     coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
     indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
     return _c_cartesian_to_internal(coords_f32, indices_i64)
@@ -163,9 +160,7 @@ def _numpy_cartesian_to_internal(
 
 def _numpy_nerf_reconstruct(
     indices: np.ndarray,
-    distances: np.ndarray,
-    angles: np.ndarray,
-    dihedrals: np.ndarray,
+    internal: np.ndarray,
     n_atoms: int,
     level_offsets: np.ndarray | None = None,
     anchor_coords: np.ndarray | None = None,
@@ -181,9 +176,7 @@ def _numpy_nerf_reconstruct(
     from .._c import _nerf_reconstruct_leveled_anchored as _c_nerf_reconstruct_anchored
 
     indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
-    dist_f32 = np.ascontiguousarray(distances, dtype=np.float32)
-    ang_f32 = np.ascontiguousarray(angles, dtype=np.float32)
-    dih_f32 = np.ascontiguousarray(dihedrals, dtype=np.float32)
+    internal_f32 = np.ascontiguousarray(internal, dtype=np.float32)
 
     # Anchored path: use leveled anchored C extension
     if anchor_coords is not None and component_ids is not None and level_offsets is not None:
@@ -191,12 +184,12 @@ def _numpy_nerf_reconstruct(
         comp_ids_i32 = np.ascontiguousarray(component_ids, dtype=np.int32)
         level_off_i32 = np.ascontiguousarray(level_offsets, dtype=np.int32)
         return _c_nerf_reconstruct_anchored(
-            indices_i64, dist_f32, ang_f32, dih_f32, n_atoms,
+            indices_i64, internal_f32, n_atoms,
             level_off_i32, anchor_f32, comp_ids_i32
         )
 
     # Non-anchored: use sequential version (avoid OpenMP overhead)
-    return _c_nerf_reconstruct(indices_i64, dist_f32, ang_f32, dih_f32, n_atoms)
+    return _c_nerf_reconstruct(indices_i64, internal_f32, n_atoms)
 
 
 # =============================================================================
@@ -207,7 +200,7 @@ def _numpy_nerf_reconstruct(
 def _torch_cartesian_to_internal(
     coords: "torch.Tensor",
     indices: Array,
-) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+) -> "torch.Tensor":
     """
     PyTorch dispatch for Cartesian to internal conversion.
 
@@ -237,31 +230,26 @@ def _torch_cartesian_to_internal(
 
     # CUDA path for GPU tensors
     if is_cuda_available(coords):
-        distances, angles, dihedrals = cuda_cartesian_to_internal(
+        internal = cuda_cartesian_to_internal(
             coords.to(torch.float32).contiguous(),
             indices_tensor.to(torch.int64).contiguous()
         )
-        return distances.to(dtype), angles.to(dtype), dihedrals.to(dtype)
+        return internal.to(dtype)
 
     # CPU path: convert to numpy for C extension
     coords_f32 = coords.detach().cpu().to(torch.float32).numpy()
     indices_np = indices_tensor.cpu().numpy().astype(np.int64)
 
-    distances_np, angles_np, dihedrals_np = _c_cartesian_to_internal(
+    internal_np = _c_cartesian_to_internal(
         coords_f32, indices_np
     )
 
-    distances = torch.from_numpy(distances_np).to(device=device, dtype=dtype)
-    angles = torch.from_numpy(angles_np).to(device=device, dtype=dtype)
-    dihedrals = torch.from_numpy(dihedrals_np).to(device=device, dtype=dtype)
-    return distances, angles, dihedrals
+    return torch.from_numpy(internal_np).to(device=device, dtype=dtype)
 
 
 def _torch_nerf_reconstruct(
-    indices: Array,
-    distances: "torch.Tensor",
-    angles: "torch.Tensor",
-    dihedrals: "torch.Tensor",
+    indices: "torch.Tensor",
+    internal: "torch.Tensor",
     n_atoms: int,
     level_offsets: Array | None = None,
     anchor_coords: Array | None = None,
@@ -284,10 +272,10 @@ def _torch_nerf_reconstruct(
     import torch
     from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, HAS_ANCHORED_NERF
 
-    device = distances.device
-    dtype = distances.dtype
+    device = internal.device
+    dtype = internal.dtype
 
-    # Ensure indices are tensor on same device (skip if already correct)
+    # Ensure indices are tensor on same device
     if is_torch(indices) and indices.device == device:
         indices_tensor = indices
     elif is_torch(indices):
@@ -314,12 +302,12 @@ def _torch_nerf_reconstruct(
             comp_ids_tensor = torch.from_numpy(np.asarray(component_ids)).to(device)
 
     # Autograd path for gradient computation
-    if distances.requires_grad or angles.requires_grad or dihedrals.requires_grad:
+    if internal.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, distances, angles, dihedrals, n_atoms, level_offsets, anchor_tensor, comp_ids_tensor)
+        return autograd_nerf(indices_tensor, internal, n_atoms, level_offsets, anchor_tensor, comp_ids_tensor)
 
     # CUDA path with anchored or level-parallel reconstruction
-    if is_cuda_available(distances) and level_offsets is not None:
+    if is_cuda_available(internal) and level_offsets is not None:
         # Convert level_offsets to tensor
         if is_torch(level_offsets) and level_offsets.device == device:
             level_offsets_tensor = level_offsets
@@ -334,9 +322,7 @@ def _torch_nerf_reconstruct(
             cuda_nerf_reconstruct_leveled_anchored(
                 coords,
                 indices_tensor.to(torch.int64).contiguous(),
-                distances.to(torch.float32).contiguous(),
-                angles.to(torch.float32).contiguous(),
-                dihedrals.to(torch.float32).contiguous(),
+                internal.to(torch.float32).contiguous(),
                 level_offsets_tensor.to(torch.int32).contiguous(),
                 anchor_tensor.to(torch.float32).contiguous(),
                 comp_ids_tensor.to(torch.int32).contiguous(),
@@ -350,18 +336,14 @@ def _torch_nerf_reconstruct(
             cuda_nerf_reconstruct_leveled(
                 coords,
                 indices_tensor.to(torch.int64).contiguous(),
-                distances.to(torch.float32).contiguous(),
-                angles.to(torch.float32).contiguous(),
-                dihedrals.to(torch.float32).contiguous(),
+                internal.to(torch.float32).contiguous(),
                 level_offsets_tensor.to(torch.int32).contiguous(),
             )
             return coords.to(dtype)
 
     # CPU path: use C extension
     indices_np = indices_tensor.cpu().numpy().astype(np.int64)
-    dist_f32 = distances.detach().cpu().to(torch.float32).numpy()
-    ang_f32 = angles.detach().cpu().to(torch.float32).numpy()
-    dih_f32 = dihedrals.detach().cpu().to(torch.float32).numpy()
+    internal_f32 = internal.detach().cpu().to(torch.float32).numpy()
 
     # Anchored CPU path
     if anchor_tensor is not None and comp_ids_tensor is not None and level_offsets is not None:
@@ -373,11 +355,11 @@ def _torch_nerf_reconstruct(
         else:
             level_off_np = np.asarray(level_offsets, dtype=np.int32)
         coords_np = _c_nerf_reconstruct_anchored(
-            indices_np, dist_f32, ang_f32, dih_f32, n_atoms,
+            indices_np, internal_f32, n_atoms,
             level_off_np, anchor_np, comp_ids_np
         )
         return torch.from_numpy(coords_np).to(device=device, dtype=dtype)
 
     # Non-anchored CPU path
-    coords_np = _c_nerf_reconstruct(indices_np, dist_f32, ang_f32, dih_f32, n_atoms)
+    coords_np = _c_nerf_reconstruct(indices_np, internal_f32, n_atoms)
     return torch.from_numpy(coords_np).to(device=device, dtype=dtype)

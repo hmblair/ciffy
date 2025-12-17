@@ -21,7 +21,7 @@
 static inline void nerf_place_single_entry(
     float *coords, size_t n_atoms,
     const int64_t *indices,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     size_t i
 ) {
     int64_t atom_idx = indices[i * 4 + 0];
@@ -35,6 +35,11 @@ static inline void nerf_place_single_entry(
     }
 #endif
     float *result = &coords[atom_idx * 3];
+
+    /* Extract internal coordinates for this entry */
+    float distance = internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+    float angle = internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+    float dihedral = internal[INTERNAL_IDX(i, INTERNAL_DIHE)];
 
     if (dist_ref < 0) {
         /* First atom: place at origin */
@@ -51,7 +56,7 @@ static inline void nerf_place_single_entry(
 #endif
         {
             const float *ref = &coords[dist_ref * 3];
-            nerf_place_along_x(ref, distances[i], result);
+            nerf_place_along_x(ref, distance, result);
         }
 
     } else if (dihe_ref < 0) {
@@ -64,7 +69,7 @@ static inline void nerf_place_single_entry(
         {
             const float *ref1 = &coords[dist_ref * 3];
             const float *ref2 = &coords[angl_ref * 3];
-            nerf_place_in_plane(ref1, ref2, distances[i], angles[i], result);
+            nerf_place_in_plane(ref1, ref2, distance, angle, result);
         }
 
     } else {
@@ -80,7 +85,7 @@ static inline void nerf_place_single_entry(
             const float *p1 = &coords[dihe_ref * 3];
             const float *p2 = &coords[angl_ref * 3];
             const float *p3 = &coords[dist_ref * 3];
-            nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+            nerf_place_atom(p1, p2, p3, distance, angle, dihedral, result);
         }
     }
 }
@@ -89,7 +94,7 @@ static inline void nerf_place_single_entry(
 void batch_cartesian_to_internal(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    float *distances, float *angles, float *dihedrals
+    float *internal
 ) {
     /* Embarrassingly parallel: each entry reads independently from coords */
 #ifdef _OPENMP
@@ -104,7 +109,9 @@ void batch_cartesian_to_internal(
 #ifdef CIFFY_INTERNAL_BOUNDS_CHECK
         /* Guard against invalid indices in debug builds */
         if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
-            distances[i] = angles[i] = dihedrals[i] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
             continue;
         }
 #endif
@@ -114,32 +121,32 @@ void batch_cartesian_to_internal(
         if (dist_ref >= 0) {
 #ifdef CIFFY_INTERNAL_BOUNDS_CHECK
             if ((size_t)dist_ref >= n_atoms) {
-                distances[i] = 0.0f;
+                internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
             } else
 #endif
             {
                 const float *ref1 = &coords[dist_ref * 3];
-                distances[i] = compute_distance(atom, ref1);
+                internal[INTERNAL_IDX(i, INTERNAL_DIST)] = compute_distance(atom, ref1);
             }
         } else {
-            distances[i] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
         }
 
         /* Bond angle */
         if (angl_ref >= 0 && dist_ref >= 0) {
 #ifdef CIFFY_INTERNAL_BOUNDS_CHECK
             if ((size_t)angl_ref >= n_atoms || (size_t)dist_ref >= n_atoms) {
-                angles[i] = 0.0f;
+                internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
             } else
 #endif
             {
                 const float *ref1 = &coords[dist_ref * 3];
                 const float *ref2 = &coords[angl_ref * 3];
                 /* Angle at dist_ref between atom and angl_ref */
-                angles[i] = compute_angle(atom, ref1, ref2);
+                internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = compute_angle(atom, ref1, ref2);
             }
         } else {
-            angles[i] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
         }
 
         /* Dihedral angle */
@@ -148,7 +155,7 @@ void batch_cartesian_to_internal(
             if ((size_t)dihe_ref >= n_atoms ||
                 (size_t)angl_ref >= n_atoms ||
                 (size_t)dist_ref >= n_atoms) {
-                dihedrals[i] = 0.0f;
+                internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
             } else
 #endif
             {
@@ -156,10 +163,10 @@ void batch_cartesian_to_internal(
                 const float *ref2 = &coords[angl_ref * 3];
                 const float *ref3 = &coords[dihe_ref * 3];
                 /* Dihedral: dihe_ref - angl_ref - dist_ref - atom */
-                dihedrals[i] = compute_dihedral(ref3, ref2, ref1, atom);
+                internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = compute_dihedral(ref3, ref2, ref1, atom);
             }
         } else {
-            dihedrals[i] = 0.0f;
+            internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
         }
     }
 }
@@ -168,68 +175,10 @@ void batch_cartesian_to_internal(
 void batch_nerf_reconstruct(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals
+    const float *internal
 ) {
     for (size_t i = 0; i < n_entries; i++) {
-        int64_t atom_idx = indices[i * 4 + 0];
-        int64_t dist_ref = indices[i * 4 + 1];
-        int64_t angl_ref = indices[i * 4 + 2];
-        int64_t dihe_ref = indices[i * 4 + 3];
-
-#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
-        if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
-            continue;
-        }
-#endif
-        float *result = &coords[atom_idx * 3];
-
-        if (dist_ref < 0) {
-            /* First atom: place at origin */
-            result[0] = 0.0f;
-            result[1] = 0.0f;
-            result[2] = 0.0f;
-
-        } else if (angl_ref < 0) {
-            /* Second atom: place along +X from distance reference */
-#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
-            if ((size_t)dist_ref >= n_atoms) {
-                result[0] = result[1] = result[2] = 0.0f;
-            } else
-#endif
-            {
-                const float *ref = &coords[dist_ref * 3];
-                nerf_place_along_x(ref, distances[i], result);
-            }
-
-        } else if (dihe_ref < 0) {
-            /* Third atom: place in plane */
-#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
-            if ((size_t)dist_ref >= n_atoms || (size_t)angl_ref >= n_atoms) {
-                result[0] = result[1] = result[2] = 0.0f;
-            } else
-#endif
-            {
-                const float *ref1 = &coords[dist_ref * 3];
-                const float *ref2 = &coords[angl_ref * 3];
-                nerf_place_in_plane(ref1, ref2, distances[i], angles[i], result);
-            }
-
-        } else {
-            /* Full NERF placement */
-#ifdef CIFFY_INTERNAL_BOUNDS_CHECK
-            if ((size_t)dihe_ref >= n_atoms ||
-                (size_t)angl_ref >= n_atoms ||
-                (size_t)dist_ref >= n_atoms) {
-                result[0] = result[1] = result[2] = 0.0f;
-            } else
-#endif
-            {
-                const float *p1 = &coords[dihe_ref * 3];
-                const float *p2 = &coords[angl_ref * 3];
-                const float *p3 = &coords[dist_ref * 3];
-                nerf_place_atom(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
-            }
-        }
+        nerf_place_single_entry(coords, n_atoms, indices, internal, i);
     }
 }
 
@@ -242,8 +191,8 @@ void batch_nerf_reconstruct(
 void batch_cartesian_to_internal_backward(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles,
-    const float *grad_distances, const float *grad_angles, const float *grad_dihedrals,
+    const float *internal,
+    const float *grad_internal,
     float *grad_coords
 ) {
     /* Parallel with atomic accumulation since multiple entries reference same atoms */
@@ -263,12 +212,19 @@ void batch_cartesian_to_internal_backward(
 
         const float *atom = &coords[atom_idx * 3];
 
+        /* Extract internal coordinates and gradients for this entry */
+        float distance = internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+        float angle = internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+        float grad_distance = grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+        float grad_angle = grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+        float grad_dihedral = grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)];
+
         /* Distance gradient */
         if (dist_ref >= 0 && (size_t)dist_ref < n_atoms) {
             const float *ref1 = &coords[dist_ref * 3];
             compute_distance_backward(
                 atom, ref1,
-                distances[i], grad_distances[i],
+                distance, grad_distance,
                 grad_atom, grad_ref1
             );
             /* Atomic accumulate gradients for thread safety */
@@ -306,7 +262,7 @@ void batch_cartesian_to_internal_backward(
             /* Angle at dist_ref between atom and angl_ref */
             compute_angle_backward(
                 atom, ref1, ref2,
-                angles[i], grad_angles[i],
+                angle, grad_angle,
                 grad_atom, grad_ref1, grad_ref2
             );
 #ifdef _OPENMP
@@ -358,7 +314,7 @@ void batch_cartesian_to_internal_backward(
             /* Dihedral: dihe_ref - angl_ref - dist_ref - atom */
             compute_dihedral_backward(
                 ref3, ref2, ref1, atom,
-                grad_dihedrals[i],
+                grad_dihedral,
                 grad_ref3, grad_ref2, grad_ref1, grad_atom
             );
 #ifdef _OPENMP
@@ -417,12 +373,13 @@ void batch_cartesian_to_internal_backward(
 void batch_nerf_reconstruct_backward(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals
+    float *grad_internal
 ) {
     /* Temporary gradient storage */
     float grad_a[3], grad_b[3], grad_c[3];
+    float grad_dist, grad_angle, grad_dihe;
 
     /* Process in REVERSE order since later atoms depend on earlier ones */
     for (size_t i = n_entries; i > 0; i--) {
@@ -433,28 +390,33 @@ void batch_nerf_reconstruct_backward(
         int64_t dihe_ref = indices[idx * 4 + 3];
 
         if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
-            grad_distances[idx] = 0.0f;
-            grad_angles[idx] = 0.0f;
-            grad_dihedrals[idx] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
             continue;
         }
 
         const float *grad_result = &grad_coords[atom_idx * 3];
 
+        /* Extract internal coordinates for this entry */
+        float distance = internal[INTERNAL_IDX(idx, INTERNAL_DIST)];
+        float angle = internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)];
+        float dihedral = internal[INTERNAL_IDX(idx, INTERNAL_DIHE)];
+
         if (dist_ref < 0) {
             /* First atom at origin: no gradients to propagate */
-            grad_distances[idx] = 0.0f;
-            grad_angles[idx] = 0.0f;
-            grad_dihedrals[idx] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
         } else if (angl_ref < 0) {
             /* Second atom: placed along +X from distance reference */
             /* result = ref + (distance, 0, 0) */
             /* ∂result/∂distance = (1, 0, 0) */
             /* ∂result/∂ref = I */
-            grad_distances[idx] = grad_result[0];  /* Only x component */
-            grad_angles[idx] = 0.0f;
-            grad_dihedrals[idx] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_result[0];  /* Only x component */
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
             if ((size_t)dist_ref < n_atoms) {
                 /* Propagate gradient to reference atom */
@@ -472,12 +434,14 @@ void batch_nerf_reconstruct_backward(
                 float grad_ref1[3], grad_ref2[3];
                 nerf_place_in_plane_backward(
                     ref1, ref2,
-                    distances[idx], angles[idx],
+                    distance, angle,
                     grad_result,
                     grad_ref1, grad_ref2,
-                    &grad_distances[idx], &grad_angles[idx]
+                    &grad_dist, &grad_angle
                 );
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_angle;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
                 /* Propagate gradients to reference atoms */
                 grad_coords[dist_ref * 3 + 0] += grad_ref1[0];
@@ -487,9 +451,9 @@ void batch_nerf_reconstruct_backward(
                 grad_coords[angl_ref * 3 + 1] += grad_ref2[1];
                 grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
             } else {
-                grad_distances[idx] = 0.0f;
-                grad_angles[idx] = 0.0f;
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
             }
 
         } else {
@@ -504,11 +468,14 @@ void batch_nerf_reconstruct_backward(
 
                 nerf_place_atom_backward(
                     p1, p2, p3,
-                    distances[idx], angles[idx], dihedrals[idx],
+                    distance, angle, dihedral,
                     grad_result,
                     grad_a, grad_b, grad_c,
-                    &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                    &grad_dist, &grad_angle, &grad_dihe
                 );
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_angle;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = grad_dihe;
 
                 /* Propagate gradients to reference atoms */
                 grad_coords[dihe_ref * 3 + 0] += grad_a[0];
@@ -521,9 +488,9 @@ void batch_nerf_reconstruct_backward(
                 grad_coords[dist_ref * 3 + 1] += grad_c[1];
                 grad_coords[dist_ref * 3 + 2] += grad_c[2];
             } else {
-                grad_distances[idx] = 0.0f;
-                grad_angles[idx] = 0.0f;
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
             }
         }
     }
@@ -539,7 +506,7 @@ void batch_nerf_reconstruct_backward(
 static inline void nerf_place_single_entry_anchored(
     float *coords, size_t n_atoms,
     const int64_t *indices,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     size_t i,
     const float *anchor_coords, const int32_t *component_ids
 ) {
@@ -554,6 +521,11 @@ static inline void nerf_place_single_entry_anchored(
     }
 #endif
     float *result = &coords[atom_idx * 3];
+
+    /* Extract internal coordinates for this entry */
+    float distance = internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+    float angle = internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+    float dihedral = internal[INTERNAL_IDX(i, INTERNAL_DIHE)];
 
     /* Get anchors for this component if available */
     const float *anchor0 = NULL;
@@ -588,9 +560,9 @@ static inline void nerf_place_single_entry_anchored(
         {
             const float *ref = &coords[dist_ref * 3];
             if (anchor1 != NULL) {
-                nerf_place_along_direction_impl(ref, anchor1, distances[i], result);
+                nerf_place_along_direction_impl(ref, anchor1, distance, result);
             } else {
-                nerf_place_along_x_impl(ref, distances[i], result);
+                nerf_place_along_x_impl(ref, distance, result);
             }
         }
 
@@ -605,9 +577,9 @@ static inline void nerf_place_single_entry_anchored(
             const float *ref1 = &coords[dist_ref * 3];
             const float *ref2 = &coords[angl_ref * 3];
             if (anchor2 != NULL) {
-                nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distances[i], angles[i], result);
+                nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distance, angle, result);
             } else {
-                nerf_place_in_plane_impl(ref1, ref2, distances[i], angles[i], result);
+                nerf_place_in_plane_impl(ref1, ref2, distance, angle, result);
             }
         }
 
@@ -624,7 +596,7 @@ static inline void nerf_place_single_entry_anchored(
             const float *p1 = &coords[dihe_ref * 3];
             const float *p2 = &coords[angl_ref * 3];
             const float *p3 = &coords[dist_ref * 3];
-            nerf_place_atom_impl(p1, p2, p3, distances[i], angles[i], dihedrals[i], result);
+            nerf_place_atom_impl(p1, p2, p3, distance, angle, dihedral, result);
         }
     }
 }
@@ -633,7 +605,7 @@ static inline void nerf_place_single_entry_anchored(
 void batch_nerf_reconstruct_leveled(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     const int32_t *level_offsets, int n_levels
 ) {
     (void)n_entries;  /* Used implicitly via level_offsets */
@@ -652,7 +624,7 @@ void batch_nerf_reconstruct_leveled(
             #pragma omp for schedule(static)
 #endif
             for (int i = start; i < end; i++) {
-                nerf_place_single_entry(coords, n_atoms, indices, distances, angles, dihedrals, (size_t)i);
+                nerf_place_single_entry(coords, n_atoms, indices, internal, (size_t)i);
             }
             /* Implicit barrier at end of omp for ensures level completes before next */
         }
@@ -665,9 +637,9 @@ void batch_nerf_reconstruct_leveled(
 void batch_nerf_reconstruct_backward_leveled(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    float *grad_internal,
     const int32_t *level_offsets, int n_levels
 ) {
     (void)n_entries;  /* Used implicitly via level_offsets */
@@ -693,25 +665,30 @@ void batch_nerf_reconstruct_backward_leveled(
             int64_t dihe_ref = indices[idx * 4 + 3];
 
             if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
-                grad_distances[idx] = 0.0f;
-                grad_angles[idx] = 0.0f;
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                 continue;
             }
 
             const float *grad_result = &grad_coords[atom_idx * 3];
 
+            /* Extract internal coordinates for this entry */
+            float distance = internal[INTERNAL_IDX(idx, INTERNAL_DIST)];
+            float angle = internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)];
+            float dihedral = internal[INTERNAL_IDX(idx, INTERNAL_DIHE)];
+
             if (dist_ref < 0) {
                 /* First atom at origin: no gradients to propagate */
-                grad_distances[idx] = 0.0f;
-                grad_angles[idx] = 0.0f;
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
             } else if (angl_ref < 0) {
                 /* Second atom: placed along +X from distance reference */
-                grad_distances[idx] = grad_result[0];
-                grad_angles[idx] = 0.0f;
-                grad_dihedrals[idx] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_result[0];
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
                 if ((size_t)dist_ref < n_atoms) {
                     /* Atomic add for thread safety */
@@ -736,14 +713,17 @@ void batch_nerf_reconstruct_backward_leveled(
                     const float *ref2 = &coords[angl_ref * 3];
 
                     float grad_ref1[3], grad_ref2[3];
+                    float grad_dist, grad_ang;
                     nerf_place_in_plane_backward(
                         ref1, ref2,
-                        distances[idx], angles[idx],
+                        distance, angle,
                         grad_result,
                         grad_ref1, grad_ref2,
-                        &grad_distances[idx], &grad_angles[idx]
+                        &grad_dist, &grad_ang
                     );
-                    grad_dihedrals[idx] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_ang;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
                     /* Atomic adds for thread safety */
 #ifdef _OPENMP
@@ -771,9 +751,9 @@ void batch_nerf_reconstruct_backward_leveled(
 #endif
                     grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
                 } else {
-                    grad_distances[idx] = 0.0f;
-                    grad_angles[idx] = 0.0f;
-                    grad_dihedrals[idx] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                 }
 
             } else {
@@ -787,13 +767,17 @@ void batch_nerf_reconstruct_backward_leveled(
                     const float *p3 = &coords[dist_ref * 3];
 
                     float grad_a[3], grad_b[3], grad_c[3];
+                    float grad_dist, grad_ang, grad_dihe;
                     nerf_place_atom_backward(
                         p1, p2, p3,
-                        distances[idx], angles[idx], dihedrals[idx],
+                        distance, angle, dihedral,
                         grad_result,
                         grad_a, grad_b, grad_c,
-                        &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                        &grad_dist, &grad_ang, &grad_dihe
                     );
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_ang;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = grad_dihe;
 
                     /* Atomic adds for thread safety */
 #ifdef _OPENMP
@@ -833,9 +817,9 @@ void batch_nerf_reconstruct_backward_leveled(
 #endif
                     grad_coords[dist_ref * 3 + 2] += grad_c[2];
                 } else {
-                    grad_distances[idx] = 0.0f;
-                    grad_angles[idx] = 0.0f;
-                    grad_dihedrals[idx] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                 }
             }
             }
@@ -855,7 +839,7 @@ void batch_nerf_reconstruct_backward_leveled(
 void batch_nerf_reconstruct_leveled_anchored(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     const int32_t *level_offsets, int n_levels,
     const float *anchor_coords, const int32_t *component_ids
 ) {
@@ -874,7 +858,7 @@ void batch_nerf_reconstruct_leveled_anchored(
 #endif
             for (int i = start; i < end; i++) {
                 nerf_place_single_entry_anchored(coords, n_atoms, indices,
-                    distances, angles, dihedrals, (size_t)i,
+                    internal, (size_t)i,
                     anchor_coords, component_ids);
             }
         }
@@ -887,9 +871,9 @@ void batch_nerf_reconstruct_leveled_anchored(
 void batch_nerf_reconstruct_backward_leveled_anchored(
     const float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
-    const float *distances, const float *angles, const float *dihedrals,
+    const float *internal,
     float *grad_coords,
-    float *grad_distances, float *grad_angles, float *grad_dihedrals,
+    float *grad_internal,
     const int32_t *level_offsets, int n_levels,
     const float *anchor_coords, const int32_t *component_ids
 ) {
@@ -924,33 +908,40 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
                 int64_t dihe_ref = indices[idx * 4 + 3];
 
                 if (atom_idx < 0 || (size_t)atom_idx >= n_atoms) {
-                    grad_distances[idx] = 0.0f;
-                    grad_angles[idx] = 0.0f;
-                    grad_dihedrals[idx] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                     continue;
                 }
 
                 const float *grad_result = &grad_coords[atom_idx * 3];
                 GET_ANCHORS(idx);
 
+                /* Extract internal coordinates for this entry */
+                float distance = internal[INTERNAL_IDX(idx, INTERNAL_DIST)];
+                float angle = internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)];
+                float dihedral = internal[INTERNAL_IDX(idx, INTERNAL_DIHE)];
+
                 if (dist_ref < 0) {
                     /* First atom: no gradients to propagate (anchor is frozen) */
-                    grad_distances[idx] = 0.0f;
-                    grad_angles[idx] = 0.0f;
-                    grad_dihedrals[idx] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
                 } else if (angl_ref < 0) {
                     /* Second atom */
                     if ((size_t)dist_ref < n_atoms) {
+                        float grad_dist;
                         if (anchor1 != NULL) {
                             const float *ref = &coords[dist_ref * 3];
                             float grad_ref[3];
                             nerf_place_along_direction_backward_impl(
-                                ref, anchor1, distances[idx],
-                                grad_result, grad_ref, &grad_distances[idx]
+                                ref, anchor1, distance,
+                                grad_result, grad_ref, &grad_dist
                             );
-                            grad_angles[idx] = 0.0f;
-                            grad_dihedrals[idx] = 0.0f;
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 #ifdef _OPENMP
                             #pragma omp atomic
 #endif
@@ -965,9 +956,9 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
                             grad_coords[dist_ref * 3 + 2] += grad_ref[2];
                         } else {
                             /* Canonical +X case */
-                            grad_distances[idx] = grad_result[0];
-                            grad_angles[idx] = 0.0f;
-                            grad_dihedrals[idx] = 0.0f;
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_result[0];
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                            grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 #ifdef _OPENMP
                             #pragma omp atomic
 #endif
@@ -989,25 +980,28 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
                         const float *ref1 = &coords[dist_ref * 3];
                         const float *ref2 = &coords[angl_ref * 3];
                         float grad_ref1[3], grad_ref2[3];
+                        float grad_dist, grad_ang;
 
                         if (anchor2 != NULL) {
                             nerf_place_in_plane_anchored_backward_impl(
                                 ref1, ref2, anchor2,
-                                distances[idx], angles[idx],
+                                distance, angle,
                                 grad_result,
                                 grad_ref1, grad_ref2,
-                                &grad_distances[idx], &grad_angles[idx]
+                                &grad_dist, &grad_ang
                             );
                         } else {
                             nerf_place_in_plane_backward_impl(
                                 ref1, ref2,
-                                distances[idx], angles[idx],
+                                distance, angle,
                                 grad_result,
                                 grad_ref1, grad_ref2,
-                                &grad_distances[idx], &grad_angles[idx]
+                                &grad_dist, &grad_ang
                             );
                         }
-                        grad_dihedrals[idx] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_ang;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
 
 #ifdef _OPENMP
                         #pragma omp atomic
@@ -1034,9 +1028,9 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
 #endif
                         grad_coords[angl_ref * 3 + 2] += grad_ref2[2];
                     } else {
-                        grad_distances[idx] = 0.0f;
-                        grad_angles[idx] = 0.0f;
-                        grad_dihedrals[idx] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                     }
 
                 } else {
@@ -1050,13 +1044,17 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
                         const float *p3 = &coords[dist_ref * 3];
 
                         float grad_a[3], grad_b[3], grad_c[3];
+                        float grad_dist, grad_ang, grad_dihe;
                         nerf_place_atom_backward_impl(
                             p1, p2, p3,
-                            distances[idx], angles[idx], dihedrals[idx],
+                            distance, angle, dihedral,
                             grad_result,
                             grad_a, grad_b, grad_c,
-                            &grad_distances[idx], &grad_angles[idx], &grad_dihedrals[idx]
+                            &grad_dist, &grad_ang, &grad_dihe
                         );
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = grad_dist;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = grad_ang;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = grad_dihe;
 
 #ifdef _OPENMP
                         #pragma omp atomic
@@ -1095,9 +1093,9 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
 #endif
                         grad_coords[dist_ref * 3 + 2] += grad_c[2];
                     } else {
-                        grad_distances[idx] = 0.0f;
-                        grad_angles[idx] = 0.0f;
-                        grad_dihedrals[idx] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                     }
                 }
             }

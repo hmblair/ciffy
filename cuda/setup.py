@@ -150,18 +150,6 @@ def main():
     project_root = cuda_dir.parent
     src_dir = project_root / 'ciffy' / 'src' / 'internal'
 
-    # For editable installs, we need a ciffy/ directory in cuda/ so the .so
-    # file can be placed in ciffy/_cuda.so. Create a symlink if needed.
-    ciffy_link = cuda_dir / 'ciffy'
-    ciffy_target = project_root / 'ciffy'
-    if not ciffy_link.exists() and ciffy_target.exists():
-        try:
-            ciffy_link.symlink_to('../ciffy')
-            print(f"Created symlink: {ciffy_link} -> ../ciffy")
-        except OSError as e:
-            print(f"Warning: Could not create symlink {ciffy_link}: {e}")
-            print("For editable installs, manually run: ln -s ../ciffy cuda/ciffy")
-
     cuda_sources = [
         str(src_dir / 'batch.cu'),
         str(src_dir / 'cuda_module.cu'),

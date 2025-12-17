@@ -390,31 +390,28 @@ void batch_nerf_reconstruct_leveled_anchored(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
     const float *internal,
-    const int32_t *level_offsets, int n_levels,
+    const int32_t *component_offsets, int n_components,
     const float *anchor_coords, const int32_t *component_ids
 ) {
-    (void)n_entries;  /* Used implicitly via level_offsets */
+    (void)n_entries;  /* Used implicitly via component_offsets */
 
+    /* Component-parallel NERF: each component is independent, so we can
+     * process them in parallel. Within each component, entries must be
+     * processed sequentially due to dependencies. */
 #ifdef _OPENMP
-    #pragma omp parallel
-    {
+    #pragma omp parallel for schedule(dynamic)
 #endif
-        for (int level = 0; level < n_levels; level++) {
-            int start = level_offsets[level];
-            int end = level_offsets[level + 1];
+    for (int comp = 0; comp < n_components; comp++) {
+        int start = component_offsets[comp];
+        int end = component_offsets[comp + 1];
 
-#ifdef _OPENMP
-            #pragma omp for schedule(static)
-#endif
-            for (int i = start; i < end; i++) {
-                nerf_place_single_entry_anchored(coords, n_atoms, indices,
-                    internal, (size_t)i,
-                    anchor_coords, component_ids);
-            }
+        /* Sequential within component (entries depend on previous placements) */
+        for (int i = start; i < end; i++) {
+            nerf_place_single_entry_anchored(coords, n_atoms, indices,
+                internal, (size_t)i,
+                anchor_coords, component_ids);
         }
-#ifdef _OPENMP
     }
-#endif
 }
 
 
@@ -424,7 +421,7 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
     const float *internal,
     float *grad_coords,
     float *grad_internal,
-    const int32_t *level_offsets, int n_levels,
+    const int32_t *component_offsets, int n_components,
     const float *anchor_coords, const int32_t *component_ids
 ) {
     (void)n_entries;
@@ -439,18 +436,18 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
             anchor2 = &anchor_coords[comp_id * 9 + 6]; \
         }
 
+    /* Component-parallel backward: each component is independent, so we can
+     * process them in parallel. Within each component, entries are processed
+     * in reverse order to properly accumulate gradients through dependencies. */
 #ifdef _OPENMP
-    #pragma omp parallel
-    {
+    #pragma omp parallel for schedule(dynamic)
 #endif
-        for (int level = n_levels - 1; level >= 0; level--) {
-            int start = level_offsets[level];
-            int end = level_offsets[level + 1];
+    for (int comp = 0; comp < n_components; comp++) {
+        int start = component_offsets[comp];
+        int end = component_offsets[comp + 1];
 
-#ifdef _OPENMP
-            #pragma omp for schedule(static)
-#endif
-            for (int i = start; i < end; i++) {
+        /* Reverse within component (gradients flow backwards) */
+        for (int i = end - 1; i >= start; i--) {
                 size_t idx = (size_t)i;
                 int64_t atom_idx = indices[idx * 4 + 0];
                 int64_t dist_ref = indices[idx * 4 + 1];
@@ -642,17 +639,14 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
                         #pragma omp atomic
 #endif
                         grad_coords[dist_ref * 3 + 2] += grad_c[2];
-                    } else {
-                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
-                        grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
-                        grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
-                    }
+                } else {
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIST)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(idx, INTERNAL_DIHE)] = 0.0f;
                 }
             }
         }
-#ifdef _OPENMP
     }
-#endif
 
     #undef GET_ANCHORS
 }

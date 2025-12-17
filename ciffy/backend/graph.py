@@ -212,16 +212,14 @@ class TopologyInfo:
 @dataclass
 class ConnectedComponents:
     """
-    Connected component storage in CSR format.
+    Connected component storage.
 
-    Stores which atoms belong to which connected components (chains),
-    along with anchor atom indices for efficient coordinate lookup. The
-    anchor_atom_indices allow vectorized extraction of anchor coordinates
-    without Python loops.
+    Stores anchor atom indices for efficient coordinate lookup during NERF
+    reconstruction. The anchor_atom_indices allow vectorized extraction of
+    anchor coordinates without Python loops.
 
     Attributes:
-        offsets: (C+1,) int64 CSR offsets array.
-        atoms: (N,) int64 atom indices per component (flattened).
+        offsets: (C+1,) int64 CSR offsets array for component boundaries.
         anchor_atom_indices: (C, 3) int64 array of atom indices for first 3 atoms
             per component. For components with <3 atoms, remaining indices are -1.
         anchor_coords: (C, 3, 3) array of anchor positions for each component.
@@ -232,15 +230,11 @@ class ConnectedComponents:
 
     Example:
         >>> components = ConnectedComponents.from_bond_graph(csr_offsets, csr_neighbors, coords, n_atoms)
-        >>> # Access component 0
-        >>> start, end = components.offsets[0], components.offsets[1]
-        >>> atom_indices = components.atoms[start:end]
         >>> # Get current anchor coords efficiently
         >>> anchor_coords = components.get_anchor_coords(current_coordinates)
     """
 
     offsets: np.ndarray
-    atoms: np.ndarray
     anchor_atom_indices: np.ndarray  # (n_components, 3) int64, -1 for padding
     anchor_coords: Array  # (n_components, 3, 3) anchor positions (initial)
     contiguous: list[bool]
@@ -277,7 +271,6 @@ class ConnectedComponents:
                 anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
-                atoms=np.array([], dtype=np.int64),
                 anchor_atom_indices=np.zeros((0, 3), dtype=np.int64),
                 anchor_coords=anchor_coords,
                 contiguous=[],
@@ -296,7 +289,6 @@ class ConnectedComponents:
                 anchor_coords = np.zeros((0, 3, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
-                atoms=np.array([], dtype=np.int64),
                 anchor_atom_indices=np.zeros((0, 3), dtype=np.int64),
                 anchor_coords=anchor_coords,
                 contiguous=[],
@@ -343,7 +335,6 @@ class ConnectedComponents:
 
         return cls(
             offsets=comp_offsets,
-            atoms=comp_atoms,
             anchor_atom_indices=anchor_atom_indices,
             anchor_coords=anchor_coords,
             contiguous=contiguous_list,
@@ -353,16 +344,6 @@ class ConnectedComponents:
     def n_components(self) -> int:
         """Number of connected components."""
         return len(self.offsets) - 1
-
-    def get_component_atoms(self, comp_idx: int) -> np.ndarray:
-        """Get atom indices for a component."""
-        start = int(self.offsets[comp_idx])
-        end = int(self.offsets[comp_idx + 1])
-        return self.atoms[start:end]
-
-    def get_component_size(self, comp_idx: int) -> int:
-        """Get number of atoms in a component."""
-        return int(self.offsets[comp_idx + 1] - self.offsets[comp_idx])
 
     def get_anchor_coords(self, coordinates: Array) -> Array:
         """
@@ -437,7 +418,7 @@ class ZMatrix:
         >>> print(zmatrix.atom_indices)  # Column 0
     """
 
-    __slots__ = ('_indices', '_dihedral_types', '_levels', '_level_offsets', '_component_ids')
+    __slots__ = ('_indices', '_dihedral_types', '_levels', '_component_offsets', '_component_ids')
 
     def __init__(
         self,
@@ -458,7 +439,7 @@ class ZMatrix:
         self._indices = indices
         self._dihedral_types = dihedral_types
         self._levels = levels
-        self._level_offsets = None  # Computed lazily
+        self._component_offsets = None  # Computed lazily
         self._component_ids = component_ids
 
     @classmethod
@@ -535,26 +516,26 @@ class ZMatrix:
         return self._component_ids
 
     @property
-    def level_offsets(self) -> Array:
+    def component_offsets(self) -> Array:
         """
-        (n_levels+1,) int32 cumulative count per level for parallel NERF.
+        (n_components+1,) int32 cumulative count per component for parallel NERF.
 
-        Level i's entries span indices level_offsets[i]:level_offsets[i+1].
+        Component i's entries span indices component_offsets[i]:component_offsets[i+1].
         Computed lazily on first access.
         """
-        if self._level_offsets is None and self._levels is not None:
-            self._level_offsets = self._compute_level_offsets()
-        return self._level_offsets
+        if self._component_offsets is None and self._component_ids is not None:
+            self._component_offsets = self._compute_component_offsets()
+        return self._component_offsets
 
-    def _compute_level_offsets(self) -> np.ndarray:
-        """Convert per-entry levels to CSR-style offsets."""
-        levels = to_numpy(self._levels)
-        if len(levels) == 0:
+    def _compute_component_offsets(self) -> np.ndarray:
+        """Convert per-entry component_ids to CSR-style offsets."""
+        comp_ids = to_numpy(self._component_ids)
+        if len(comp_ids) == 0:
             return np.zeros(1, dtype=np.int32)
 
-        n_levels = int(levels.max()) + 1
-        counts = np.bincount(levels, minlength=n_levels).astype(np.int32)
-        offsets = np.zeros(n_levels + 1, dtype=np.int32)
+        n_components = int(comp_ids.max()) + 1
+        counts = np.bincount(comp_ids, minlength=n_components).astype(np.int32)
+        offsets = np.zeros(n_components + 1, dtype=np.int32)
         np.cumsum(counts, out=offsets[1:])
         return offsets
 
@@ -923,22 +904,6 @@ def _compute_nerf_levels(indices: np.ndarray) -> np.ndarray:
     return levels
 
 
-def _sort_zmatrix_by_level(
-    indices: np.ndarray,
-    dihedral_types: np.ndarray,
-    levels: np.ndarray,
-    component_ids: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Sort Z-matrix arrays by NERF dependency level for parallel reconstruction."""
-    if len(levels) == 0:
-        return indices, dihedral_types, levels, component_ids
-
-    # Recompute levels to ensure NERF-correct dependencies
-    nerf_levels = _compute_nerf_levels(indices)
-
-    # Sort by level
-    sort_idx = np.argsort(nerf_levels, kind='stable')
-    return indices[sort_idx], dihedral_types[sort_idx], nerf_levels[sort_idx], component_ids[sort_idx]
 
 
 def build_zmatrix_from_components(
@@ -1012,8 +977,9 @@ def build_zmatrix_from_components(
             result_comp_ids[dst_offset:dst_offset + count] = comp_idx
             dst_offset += count
 
-    # Sort by level for parallel NERF (one-time cost at construction)
-    return _sort_zmatrix_by_level(result, result_dtypes, result_levels, result_comp_ids)
+    # Return with entries sorted by component (from construction order)
+    # This enables component-level parallelism in NERF reconstruction
+    return result, result_dtypes, result_levels, result_comp_ids
 
 
 # =============================================================================
@@ -1025,7 +991,7 @@ def nerf_reconstruct(
     zmatrix_indices: Array,
     internal: Array,
     n_atoms: int | None = None,
-    level_offsets: Array | None = None,
+    component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
 ) -> Array:
@@ -1047,9 +1013,9 @@ def nerf_reconstruct(
             Each row: [distance, angle, dihedral].
         n_atoms: Total number of atoms (including orphans). If None,
             inferred from max Z-matrix index.
-        level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
-            When provided, enables parallel NERF on CUDA by processing atoms
-            at the same BFS level simultaneously. Can be obtained from ZMatrix.level_offsets.
+        component_offsets: (n_components+1,) int32 CSR-style offsets for component-parallel NERF.
+            When provided, enables parallel NERF by processing each connected component
+            independently. Can be obtained from ZMatrix.component_offsets.
         anchor_coords: (n_components, 3, 3) float32 anchor positions for each component.
             When provided with component_ids, atoms are placed directly in the
             reference frame defined by these anchors, eliminating Kabsch rotation.
@@ -1073,5 +1039,5 @@ def nerf_reconstruct(
 
     return _dispatch_nerf_reconstruct(
         zmatrix_indices, internal, n_atoms,
-        level_offsets, anchor_coords, component_ids
+        component_offsets, anchor_coords, component_ids
     )

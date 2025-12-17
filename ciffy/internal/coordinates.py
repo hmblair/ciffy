@@ -474,7 +474,7 @@ class CoordinateManager:
             zmatrix_indices,
             internal,
             n_atoms=n_atoms,
-            level_offsets=self._zmatrix.level_offsets,
+            component_offsets=self._zmatrix.component_offsets,
             anchor_coords=anchor_coords,
             component_ids=component_ids,
         )
@@ -484,18 +484,6 @@ class CoordinateManager:
             coords = coords.clone()
         else:
             coords = coords.copy()
-
-        # Handle single-atom orphans - they need position restoration
-        # (NERF places root atoms at origin for each component)
-        # For single-atom components, anchor_coords[comp_idx, 0] is the atom's position
-        n_components = self._components.n_components
-        for comp_idx in range(n_components):
-            component_size = self._components.get_component_size(comp_idx)
-            if component_size == 1:
-                component_atoms = self._components.get_component_atoms(comp_idx)
-                atom_idx = int(component_atoms[0])
-                if atom_idx < n_atoms:
-                    coords[atom_idx] = anchor_coords[comp_idx, 0]
 
         self._coordinates = coords
         self._validate_coordinates()

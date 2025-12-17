@@ -108,7 +108,7 @@ def nerf_reconstruct(
     indices: Array,
     internal: Array,
     n_atoms: int,
-    level_offsets: Array | None = None,
+    component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
 ) -> Array:
@@ -116,7 +116,7 @@ def nerf_reconstruct(
     Reconstruct Cartesian coordinates using NERF algorithm.
 
     Automatically dispatches to the optimal implementation:
-    - CUDA kernels for GPU tensors (uses level_offsets for parallelism)
+    - CUDA kernels for GPU tensors
     - C extension for CPU tensors and NumPy arrays
     - Autograd functions when gradients are required
 
@@ -125,9 +125,8 @@ def nerf_reconstruct(
         internal: (M, 3) array of internal coordinates.
             Each row: [distance, angle, dihedral].
         n_atoms: Total number of atoms.
-        level_offsets: (n_levels+1,) int32 CSR-style offsets for level-parallel CUDA.
-            When provided, enables parallel NERF on CUDA by processing atoms
-            at the same BFS level simultaneously.
+        component_offsets: (n_components+1,) int32 CSR-style offsets for component-parallel NERF.
+            Enables parallel NERF by processing each connected component independently.
         anchor_coords: (n_components, 3, 3) anchor positions for each component.
             When provided, atoms are placed directly in the reference frame
             defined by these anchors, eliminating need for Kabsch rotation.
@@ -138,8 +137,8 @@ def nerf_reconstruct(
         (N, 3) array of Cartesian coordinates.
     """
     if is_torch(internal):
-        return _torch_nerf_reconstruct(indices, internal, n_atoms, level_offsets, anchor_coords, component_ids)
-    return _numpy_nerf_reconstruct(indices, internal, n_atoms, level_offsets, anchor_coords, component_ids)
+        return _torch_nerf_reconstruct(indices, internal, n_atoms, component_offsets, anchor_coords, component_ids)
+    return _numpy_nerf_reconstruct(indices, internal, n_atoms, component_offsets, anchor_coords, component_ids)
 
 
 # =============================================================================
@@ -161,19 +160,19 @@ def _numpy_nerf_reconstruct(
     indices: np.ndarray,
     internal: np.ndarray,
     n_atoms: int,
-    level_offsets: np.ndarray | None = None,
+    component_offsets: np.ndarray | None = None,
     anchor_coords: np.ndarray | None = None,
     component_ids: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     NumPy path: use anchored C extension.
 
-    Requires level_offsets, anchor_coords, and component_ids for anchored
+    Requires component_offsets, anchor_coords, and component_ids for anchored
     reconstruction which places atoms directly in the reference frame.
     """
-    if level_offsets is None or anchor_coords is None or component_ids is None:
+    if component_offsets is None or anchor_coords is None or component_ids is None:
         raise ValueError(
-            "nerf_reconstruct requires level_offsets, anchor_coords, and component_ids. "
+            "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
             "Use CoordinateManager for automatic setup of these parameters."
         )
 
@@ -181,11 +180,11 @@ def _numpy_nerf_reconstruct(
     internal_f32 = np.ascontiguousarray(internal, dtype=np.float32)
     anchor_f32 = np.ascontiguousarray(anchor_coords, dtype=np.float32)
     comp_ids_i32 = np.ascontiguousarray(component_ids, dtype=np.int32)
-    level_off_i32 = np.ascontiguousarray(level_offsets, dtype=np.int32)
+    comp_off_i32 = np.ascontiguousarray(component_offsets, dtype=np.int32)
 
     return _c_nerf_reconstruct_anchored(
         indices_i64, internal_f32, n_atoms,
-        level_off_i32, anchor_f32, comp_ids_i32
+        comp_off_i32, anchor_f32, comp_ids_i32
     )
 
 
@@ -248,7 +247,7 @@ def _torch_nerf_reconstruct(
     indices: "torch.Tensor",
     internal: "torch.Tensor",
     n_atoms: int,
-    level_offsets: Array | None = None,
+    component_offsets: Array | None = None,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
 ) -> "torch.Tensor":
@@ -257,18 +256,18 @@ def _torch_nerf_reconstruct(
 
     Routes to:
     - Autograd functions if any input requires_grad=True
-    - CUDA level-parallel kernels for CUDA tensors
+    - CUDA component-parallel kernels for CUDA tensors
     - C extension for CPU tensors
 
-    Requires level_offsets, anchor_coords, and component_ids for anchored
+    Requires component_offsets, anchor_coords, and component_ids for anchored
     reconstruction which places atoms directly in the reference frame.
     """
     import torch
     from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, HAS_ANCHORED_NERF
 
-    if level_offsets is None or anchor_coords is None or component_ids is None:
+    if component_offsets is None or anchor_coords is None or component_ids is None:
         raise ValueError(
-            "nerf_reconstruct requires level_offsets, anchor_coords, and component_ids. "
+            "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
             "Use CoordinateManager for automatic setup of these parameters."
         )
 
@@ -298,27 +297,27 @@ def _torch_nerf_reconstruct(
     else:
         comp_ids_tensor = torch.from_numpy(np.asarray(component_ids)).to(device)
 
-    # Convert level_offsets to tensor
-    if is_torch(level_offsets) and level_offsets.device == device:
-        level_offsets_tensor = level_offsets
-    elif is_torch(level_offsets):
-        level_offsets_tensor = level_offsets.to(device)
+    # Convert component_offsets to tensor
+    if is_torch(component_offsets) and component_offsets.device == device:
+        comp_off_tensor = component_offsets
+    elif is_torch(component_offsets):
+        comp_off_tensor = component_offsets.to(device)
     else:
-        level_offsets_tensor = torch.from_numpy(np.asarray(level_offsets)).to(device)
+        comp_off_tensor = torch.from_numpy(np.asarray(component_offsets)).to(device)
 
     # Autograd path for gradient computation
     if internal.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, internal, n_atoms, level_offsets_tensor, anchor_tensor, comp_ids_tensor)
+        return autograd_nerf(indices_tensor, internal, n_atoms, comp_off_tensor, anchor_tensor, comp_ids_tensor)
 
-    # CUDA path with anchored level-parallel reconstruction
+    # CUDA path with anchored component-parallel reconstruction
     if is_cuda_available(internal) and HAS_ANCHORED_NERF:
         coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
         cuda_nerf_reconstruct_leveled_anchored(
             coords,
             indices_tensor.to(torch.int64).contiguous(),
             internal.to(torch.float32).contiguous(),
-            level_offsets_tensor.to(torch.int32).contiguous(),
+            comp_off_tensor.to(torch.int32).contiguous(),
             anchor_tensor.to(torch.float32).contiguous(),
             comp_ids_tensor.to(torch.int32).contiguous(),
         )
@@ -329,10 +328,10 @@ def _torch_nerf_reconstruct(
     internal_f32 = internal.detach().cpu().to(torch.float32).numpy()
     anchor_np = anchor_tensor.detach().cpu().numpy().astype(np.float32)
     comp_ids_np = comp_ids_tensor.detach().cpu().numpy().astype(np.int32)
-    level_off_np = level_offsets_tensor.detach().cpu().numpy().astype(np.int32)
+    comp_off_np = comp_off_tensor.detach().cpu().numpy().astype(np.int32)
 
     coords_np = _c_nerf_reconstruct_anchored(
         indices_np, internal_f32, n_atoms,
-        level_off_np, anchor_np, comp_ids_np
+        comp_off_np, anchor_np, comp_ids_np
     )
     return torch.from_numpy(coords_np).to(device=device, dtype=dtype)

@@ -76,19 +76,22 @@ void batch_cartesian_to_internal_backward(
 /* ========================================================================= */
 
 /**
- * Level-parallel NERF reconstruction with anchor coordinates.
+ * Component-parallel NERF reconstruction with anchor coordinates.
  *
  * Instead of placing the first 3 atoms in a canonical frame (origin, +X, XY plane),
  * this function places them using anchor coordinates from a reference structure.
  * This eliminates the need for post-reconstruction Kabsch rotation.
  *
+ * Parallelizes across connected components (each component is independent),
+ * while processing entries within each component sequentially.
+ *
  * @param coords Output coordinates, shape (n_atoms, 3). Pre-allocated.
  * @param n_atoms Number of atoms.
- * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by level.
+ * @param indices Z-matrix indices, shape (n_entries, 4). MUST be sorted by component.
  * @param n_entries Number of Z-matrix entries.
  * @param internal Internal coordinates, shape (n_entries, 3), row-major.
- * @param level_offsets CSR-style offsets, size (n_levels+1,).
- * @param n_levels Number of BFS levels.
+ * @param component_offsets CSR-style offsets, size (n_components+1,).
+ * @param n_components Number of connected components.
  * @param anchor_coords Anchor coordinates, shape (n_components, 3, 3).
  *                      For each component: anchor_coords[comp*9..comp*9+8] are
  *                      the 3 anchor positions (each 3 floats).
@@ -100,12 +103,15 @@ void batch_nerf_reconstruct_leveled_anchored(
     float *coords, size_t n_atoms,
     const int64_t *indices, size_t n_entries,
     const float *internal,
-    const int32_t *level_offsets, int n_levels,
+    const int32_t *component_offsets, int n_components,
     const float *anchor_coords, const int32_t *component_ids
 );
 
 /**
- * Level-parallel backward pass for anchored NERF reconstruction.
+ * Component-parallel backward pass for anchored NERF reconstruction.
+ *
+ * Parallelizes across connected components, processing entries within each
+ * component in reverse order to properly propagate gradients.
  *
  * Note: Gradients do NOT flow through anchor_coords (they are frozen references).
  */
@@ -115,7 +121,7 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
     const float *internal,
     float *grad_coords,
     float *grad_internal,
-    const int32_t *level_offsets, int n_levels,
+    const int32_t *component_offsets, int n_components,
     const float *anchor_coords, const int32_t *component_ids
 );
 

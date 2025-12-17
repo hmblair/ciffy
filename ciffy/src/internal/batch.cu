@@ -503,78 +503,316 @@ __global__ void kernel_nerf_reconstruct_backward_level_anchored(
 }
 
 
+/* ========================================================================= */
+/* Component-parallel NERF (one thread per component)                        */
+/* ========================================================================= */
+
+
 /**
- * CUDA implementation of batch_nerf_reconstruct_leveled_anchored.
+ * Kernel: Component-parallel NERF reconstruction.
+ *
+ * Each thread processes one connected component sequentially.
+ * Components are independent so no synchronization needed.
  */
-void cuda_batch_nerf_reconstruct_leveled_anchored(
-    float *d_coords,
-    size_t n_atoms,
-    const int64_t *d_indices,
-    size_t n_entries,
-    const float *d_internal,        /* (n_entries, 3) */
-    const int *level_offsets,
-    int n_levels,
-    const float *d_anchor_coords,
-    const int32_t *d_component_ids,
-    cudaStream_t stream
+__global__ void kernel_nerf_reconstruct_component_parallel(
+    float *coords,
+    const int64_t *indices,
+    const float *internal,           /* (n_entries, 3) */
+    const int *component_offsets,    /* (n_components+1,) */
+    int n_components,
+    int n_atoms,
+    const float *anchor_coords,
+    const int32_t *component_ids
 ) {
-    if (n_entries == 0) return;
+    int comp = blockIdx.x * blockDim.x + threadIdx.x;
+    if (comp >= n_components) return;
 
-    int threads = 256;
+    int start = component_offsets[comp];
+    int end = component_offsets[comp + 1];
 
-    for (int level = 0; level < n_levels; level++) {
-        int level_start = level_offsets[level];
-        int level_end = level_offsets[level + 1];
-        int level_size = level_end - level_start;
+    /* Process all entries in this component sequentially */
+    for (int i = start; i < end; i++) {
+        int64_t atom_idx = indices[i * 4 + 0];
+        int64_t dist_ref = indices[i * 4 + 1];
+        int64_t angl_ref = indices[i * 4 + 2];
+        int64_t dihe_ref = indices[i * 4 + 3];
 
-        if (level_size > 0) {
-            int blocks = (level_size + threads - 1) / threads;
-            kernel_nerf_reconstruct_level_anchored<<<blocks, threads, 0, stream>>>(
-                d_coords, d_indices, d_internal,
-                level_start, level_end, (int)n_atoms,
-                d_anchor_coords, d_component_ids
-            );
+        if (atom_idx < 0 || atom_idx >= n_atoms) continue;
+
+        float *result = &coords[atom_idx * 3];
+
+        float distance = internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+        float angle = internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+        float dihedral = internal[INTERNAL_IDX(i, INTERNAL_DIHE)];
+
+        /* Get anchors for this component */
+        const float *anchor0 = NULL;
+        const float *anchor1 = NULL;
+        const float *anchor2 = NULL;
+        if (anchor_coords != NULL && component_ids != NULL) {
+            int32_t comp_id = component_ids[i];
+            anchor0 = &anchor_coords[comp_id * 9 + 0];
+            anchor1 = &anchor_coords[comp_id * 9 + 3];
+            anchor2 = &anchor_coords[comp_id * 9 + 6];
+        }
+
+        if (dist_ref < 0) {
+            if (anchor0 != NULL) {
+                float3 a0 = ciffy_load_float3_ldg(anchor0);
+                result[0] = a0.x;
+                result[1] = a0.y;
+                result[2] = a0.z;
+            } else {
+                result[0] = 0.0f;
+                result[1] = 0.0f;
+                result[2] = 0.0f;
+            }
+        } else if (angl_ref < 0) {
+            if (dist_ref < n_atoms) {
+                const float *ref = &coords[dist_ref * 3];
+                if (anchor1 != NULL) {
+                    nerf_place_along_direction_impl(ref, anchor1, distance, result);
+                } else {
+                    nerf_place_along_x_impl(ref, distance, result);
+                }
+            }
+        } else if (dihe_ref < 0) {
+            if (dist_ref < n_atoms && angl_ref < n_atoms) {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
+                if (anchor2 != NULL) {
+                    nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distance, angle, result);
+                } else {
+                    nerf_place_in_plane_impl(ref1, ref2, distance, angle, result);
+                }
+            }
+        } else {
+            if (dihe_ref < n_atoms && angl_ref < n_atoms && dist_ref < n_atoms) {
+                const float *p1 = &coords[dihe_ref * 3];
+                const float *p2 = &coords[angl_ref * 3];
+                const float *p3 = &coords[dist_ref * 3];
+                nerf_place_atom_impl(p1, p2, p3, distance, angle, dihedral, result);
+            }
         }
     }
 }
 
 
 /**
+ * Kernel: Component-parallel backward pass for NERF reconstruction.
+ *
+ * Each thread processes one component in reverse order.
+ */
+__global__ void kernel_nerf_reconstruct_backward_component_parallel(
+    const float *coords,
+    const int64_t *indices,
+    const float *internal,
+    float *grad_coords,
+    float *grad_internal,
+    const int *component_offsets,
+    int n_components,
+    int n_atoms,
+    const float *anchor_coords,
+    const int32_t *component_ids
+) {
+    int comp = blockIdx.x * blockDim.x + threadIdx.x;
+    if (comp >= n_components) return;
+
+    int start = component_offsets[comp];
+    int end = component_offsets[comp + 1];
+
+    /* Process in reverse order for gradient flow */
+    for (int i = end - 1; i >= start; i--) {
+        int64_t atom_idx = indices[i * 4 + 0];
+        int64_t dist_ref = indices[i * 4 + 1];
+        int64_t angl_ref = indices[i * 4 + 2];
+        int64_t dihe_ref = indices[i * 4 + 3];
+
+        if (atom_idx < 0 || atom_idx >= n_atoms) {
+            grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+            grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+            grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+            continue;
+        }
+
+        float distance = internal[INTERNAL_IDX(i, INTERNAL_DIST)];
+        float angle = internal[INTERNAL_IDX(i, INTERNAL_ANGLE)];
+        float dihedral = internal[INTERNAL_IDX(i, INTERNAL_DIHE)];
+
+        const float *grad_result = &grad_coords[atom_idx * 3];
+        float grad_dist, grad_ang, grad_dih;
+
+        const float *anchor1 = NULL;
+        const float *anchor2 = NULL;
+        if (anchor_coords != NULL && component_ids != NULL) {
+            int32_t comp_id = component_ids[i];
+            anchor1 = &anchor_coords[comp_id * 9 + 3];
+            anchor2 = &anchor_coords[comp_id * 9 + 6];
+        }
+
+        if (dist_ref < 0) {
+            grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+            grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+            grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+
+        } else if (angl_ref < 0) {
+            if (dist_ref < n_atoms) {
+                if (anchor1 != NULL) {
+                    const float *ref = &coords[dist_ref * 3];
+                    float grad_ref[3];
+                    nerf_place_along_direction_backward_impl(
+                        ref, anchor1, distance,
+                        grad_result, grad_ref, &grad_dist
+                    );
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = grad_dist;
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+                    atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_ref[0]);
+                    atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_ref[1]);
+                    atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_ref[2]);
+                } else {
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = grad_result[0];
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+                    grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+                    atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_result[0]);
+                    atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_result[1]);
+                    atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_result[2]);
+                }
+            }
+
+        } else if (dihe_ref < 0) {
+            if (angl_ref < n_atoms && dist_ref < n_atoms) {
+                const float *ref1 = &coords[dist_ref * 3];
+                const float *ref2 = &coords[angl_ref * 3];
+                float grad_ref1[3], grad_ref2[3];
+
+                if (anchor2 != NULL) {
+                    nerf_place_in_plane_anchored_backward_impl(
+                        ref1, ref2, anchor2,
+                        distance, angle, grad_result,
+                        grad_ref1, grad_ref2,
+                        &grad_dist, &grad_ang
+                    );
+                } else {
+                    nerf_place_in_plane_backward_impl(
+                        ref1, ref2,
+                        distance, angle, grad_result,
+                        grad_ref1, grad_ref2,
+                        &grad_dist, &grad_ang
+                    );
+                }
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = grad_dist;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = grad_ang;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+
+                atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_ref1[0]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_ref1[1]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_ref1[2]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 0], grad_ref2[0]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 1], grad_ref2[1]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 2], grad_ref2[2]);
+            } else {
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+            }
+
+        } else {
+            if (dihe_ref < n_atoms && angl_ref < n_atoms && dist_ref < n_atoms) {
+                const float *p1 = &coords[dihe_ref * 3];
+                const float *p2 = &coords[angl_ref * 3];
+                const float *p3 = &coords[dist_ref * 3];
+                float grad_a[3], grad_b[3], grad_c[3];
+
+                nerf_place_atom_backward_impl(
+                    p1, p2, p3, distance, angle, dihedral, grad_result,
+                    grad_a, grad_b, grad_c,
+                    &grad_dist, &grad_ang, &grad_dih
+                );
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = grad_dist;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = grad_ang;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = grad_dih;
+
+                atomicAdd(&grad_coords[dihe_ref * 3 + 0], grad_a[0]);
+                atomicAdd(&grad_coords[dihe_ref * 3 + 1], grad_a[1]);
+                atomicAdd(&grad_coords[dihe_ref * 3 + 2], grad_a[2]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 0], grad_b[0]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 1], grad_b[1]);
+                atomicAdd(&grad_coords[angl_ref * 3 + 2], grad_b[2]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 0], grad_c[0]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 1], grad_c[1]);
+                atomicAdd(&grad_coords[dist_ref * 3 + 2], grad_c[2]);
+            } else {
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+            }
+        }
+    }
+}
+
+
+/**
+ * CUDA implementation of batch_nerf_reconstruct_leveled_anchored.
+ *
+ * Uses component-parallel approach: single kernel launch with one thread
+ * per component. Each thread processes its component sequentially.
+ */
+void cuda_batch_nerf_reconstruct_leveled_anchored(
+    float *d_coords,
+    size_t n_atoms,
+    const int64_t *d_indices,
+    size_t n_entries,
+    const float *d_internal,
+    const int *component_offsets,
+    int n_components,
+    const float *d_anchor_coords,
+    const int32_t *d_component_ids,
+    cudaStream_t stream
+) {
+    if (n_entries == 0 || n_components == 0) return;
+
+    int threads = 256;
+    int blocks = (n_components + threads - 1) / threads;
+
+    kernel_nerf_reconstruct_component_parallel<<<blocks, threads, 0, stream>>>(
+        d_coords, d_indices, d_internal,
+        component_offsets, n_components, (int)n_atoms,
+        d_anchor_coords, d_component_ids
+    );
+}
+
+
+/**
  * CUDA implementation of batch_nerf_reconstruct_backward_leveled_anchored.
+ *
+ * Uses component-parallel approach with single kernel launch.
  */
 void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
     const float *d_coords,
     size_t n_atoms,
     const int64_t *d_indices,
     size_t n_entries,
-    const float *d_internal,        /* (n_entries, 3) */
+    const float *d_internal,
     float *d_grad_coords,
-    float *d_grad_internal,         /* (n_entries, 3) output */
-    const int *level_offsets,
-    int n_levels,
+    float *d_grad_internal,
+    const int *component_offsets,
+    int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
     cudaStream_t stream
 ) {
-    if (n_entries == 0) return;
+    if (n_entries == 0 || n_components == 0) return;
 
     int threads = 256;
+    int blocks = (n_components + threads - 1) / threads;
 
-    for (int level = n_levels - 1; level >= 0; level--) {
-        int level_start = level_offsets[level];
-        int level_end = level_offsets[level + 1];
-        int level_size = level_end - level_start;
-
-        if (level_size > 0) {
-            int blocks = (level_size + threads - 1) / threads;
-            kernel_nerf_reconstruct_backward_level_anchored<<<blocks, threads, 0, stream>>>(
-                d_coords, d_indices, d_internal,
-                d_grad_coords, d_grad_internal,
-                level_start, level_end, (int)n_atoms,
-                d_anchor_coords, d_component_ids
-            );
-        }
-    }
+    kernel_nerf_reconstruct_backward_component_parallel<<<blocks, threads, 0, stream>>>(
+        d_coords, d_indices, d_internal,
+        d_grad_coords, d_grad_internal,
+        component_offsets, n_components, (int)n_atoms,
+        d_anchor_coords, d_component_ids
+    );
 }
 
 } /* extern "C" */

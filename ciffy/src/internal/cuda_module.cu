@@ -38,7 +38,7 @@ void cuda_batch_nerf_reconstruct_leveled_anchored(
     float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
     const float *d_internal,       /* (n_entries, 3) */
-    const int *level_offsets, int n_levels,
+    const int *component_offsets, int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
     cudaStream_t stream);
@@ -49,7 +49,7 @@ void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
     const float *d_internal,       /* (n_entries, 3) */
     float *d_grad_coords,
     float *d_grad_internal,        /* (n_entries, 3) output */
-    const int *level_offsets, int n_levels,
+    const int *component_offsets, int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
     cudaStream_t stream);
@@ -170,13 +170,13 @@ torch::Tensor cuda_cartesian_to_internal_backward(
 
 
 /**
- * Level-parallel anchored NERF reconstruction on GPU.
+ * Component-parallel anchored NERF reconstruction on GPU.
  *
  * Args:
  *     coords: (N, 3) float32 CUDA tensor (will be modified in-place)
  *     indices: (M, 4) int64 CUDA tensor
  *     internal: (M, 3) float32 CUDA tensor
- *     level_offsets: (n_levels+1,) int32 tensor
+ *     component_offsets: (n_components+1,) int32 tensor
  *     anchor_coords: (n_components, 3, 3) float32 CUDA tensor
  *     component_ids: (M,) int32 CUDA tensor
  *
@@ -187,7 +187,7 @@ torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
     torch::Tensor coords,
     torch::Tensor indices,
     torch::Tensor internal,
-    torch::Tensor level_offsets,
+    torch::Tensor component_offsets,
     torch::Tensor anchor_coords,
     torch::Tensor component_ids
 ) {
@@ -197,19 +197,18 @@ torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
     CHECK_INPUT(anchor_coords);
     CHECK_INPUT(component_ids);
 
-    TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
-                "level_offsets must be int32");
+    TORCH_CHECK(component_offsets.dtype() == torch::kInt32,
+                "component_offsets must be int32");
     TORCH_CHECK(anchor_coords.dtype() == torch::kFloat32,
                 "anchor_coords must be float32");
     TORCH_CHECK(component_ids.dtype() == torch::kInt32,
                 "component_ids must be int32");
 
+    CHECK_INPUT(component_offsets);
+
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
-    int n_levels = level_offsets.size(0) - 1;
-
-    /* Copy level_offsets to CPU */
-    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
+    int n_components = component_offsets.size(0) - 1;
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -219,8 +218,8 @@ torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
         internal.data_ptr<float>(),
-        level_offsets_cpu.data_ptr<int>(),
-        n_levels,
+        component_offsets.data_ptr<int>(),
+        n_components,
         anchor_coords.data_ptr<float>(),
         component_ids.data_ptr<int32_t>(),
         stream
@@ -231,14 +230,14 @@ torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
 
 
 /**
- * Backward pass for level-parallel anchored NERF reconstruction on GPU.
+ * Backward pass for component-parallel anchored NERF reconstruction on GPU.
  *
  * Args:
  *     coords: (N, 3) float32 CUDA tensor
  *     indices: (M, 4) int64 CUDA tensor
  *     internal: (M, 3) float32 CUDA tensor
  *     grad_coords: (N, 3) float32 CUDA tensor
- *     level_offsets: (n_levels+1,) int32 tensor
+ *     component_offsets: (n_components+1,) int32 tensor
  *     anchor_coords: (n_components, 3, 3) float32 CUDA tensor
  *     component_ids: (M,) int32 CUDA tensor
  *
@@ -250,7 +249,7 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled_anchored(
     torch::Tensor indices,
     torch::Tensor internal,
     torch::Tensor grad_coords,
-    torch::Tensor level_offsets,
+    torch::Tensor component_offsets,
     torch::Tensor anchor_coords,
     torch::Tensor component_ids
 ) {
@@ -261,15 +260,14 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled_anchored(
     CHECK_INPUT(anchor_coords);
     CHECK_INPUT(component_ids);
 
-    TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
-                "level_offsets must be int32");
+    CHECK_INPUT(component_offsets);
+
+    TORCH_CHECK(component_offsets.dtype() == torch::kInt32,
+                "component_offsets must be int32");
 
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
-    int n_levels = level_offsets.size(0) - 1;
-
-    /* Copy level_offsets to CPU */
-    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
+    int n_components = component_offsets.size(0) - 1;
 
     /* Allocate gradient output */
     auto options = torch::TensorOptions()
@@ -291,8 +289,8 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled_anchored(
         internal.data_ptr<float>(),
         grad_coords_accum.data_ptr<float>(),
         grad_internal.data_ptr<float>(),
-        level_offsets_cpu.data_ptr<int>(),
-        n_levels,
+        component_offsets.data_ptr<int>(),
+        n_components,
         anchor_coords.data_ptr<float>(),
         component_ids.data_ptr<int32_t>(),
         stream

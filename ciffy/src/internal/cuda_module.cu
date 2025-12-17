@@ -314,7 +314,7 @@ torch::Tensor cuda_nerf_reconstruct_leveled(
     CHECK_INPUT(distances);
     CHECK_INPUT(angles);
     CHECK_INPUT(dihedrals);
-    CHECK_INPUT(level_offsets);
+    /* level_offsets can be on CPU or GPU - we'll copy to CPU for host-side loop */
 
     TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
                 "level_offsets must be int32");
@@ -322,6 +322,9 @@ torch::Tensor cuda_nerf_reconstruct_leveled(
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
     int n_levels = level_offsets.size(0) - 1;
+
+    /* Copy level_offsets to CPU (the batch.cu function reads it on host side) */
+    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -333,7 +336,7 @@ torch::Tensor cuda_nerf_reconstruct_leveled(
         distances.data_ptr<float>(),
         angles.data_ptr<float>(),
         dihedrals.data_ptr<float>(),
-        level_offsets.data_ptr<int>(),
+        level_offsets_cpu.data_ptr<int>(),
         n_levels,
         stream
     );
@@ -360,7 +363,7 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
     CHECK_INPUT(angles);
     CHECK_INPUT(dihedrals);
     CHECK_INPUT(grad_coords);
-    CHECK_INPUT(level_offsets);
+    /* level_offsets can be on CPU or GPU - we'll copy to CPU for host-side loop */
 
     TORCH_CHECK(level_offsets.dtype() == torch::kInt32,
                 "level_offsets must be int32");
@@ -368,6 +371,9 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
     int64_t n_atoms = coords.size(0);
     int64_t n_entries = indices.size(0);
     int n_levels = level_offsets.size(0) - 1;
+
+    /* Copy level_offsets to CPU (the batch.cu function reads it on host side) */
+    torch::Tensor level_offsets_cpu = level_offsets.to(torch::kCPU).contiguous();
 
     /* Allocate gradient outputs */
     auto options = torch::TensorOptions()
@@ -395,7 +401,7 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled(
         grad_distances.data_ptr<float>(),
         grad_angles.data_ptr<float>(),
         grad_dihedrals.data_ptr<float>(),
-        level_offsets.data_ptr<int>(),
+        level_offsets_cpu.data_ptr<int>(),
         n_levels,
         stream
     );

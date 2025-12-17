@@ -233,6 +233,50 @@ class Polymer:
         self._coord_manager = CoordinateManager(coordinates, self._topology)
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Factory Methods
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def create_empty(cls, id: str = "empty", backend: str = "numpy") -> "Polymer":
+        """
+        Create an empty Polymer with 0 atoms and 0 chains.
+
+        Useful as a base case for operations that may produce empty results,
+        or for testing edge cases.
+
+        Args:
+            id: PDB identifier for the empty polymer.
+            backend: Array backend, either "numpy" or "torch".
+
+        Returns:
+            An empty Polymer with no atoms, residues, or chains.
+
+        Example:
+            >>> empty = Polymer.create_empty()
+            >>> empty.size()
+            0
+            >>> empty.size(Scale.CHAIN)
+            0
+        """
+        polymer = cls(
+            coordinates=np.zeros((0, 3), dtype=np.float32),
+            atoms=np.array([], dtype=np.int64),
+            elements=np.array([], dtype=np.int64),
+            sequence=np.array([], dtype=np.int64),
+            sizes={
+                Scale.RESIDUE: np.array([], dtype=np.int64),
+                Scale.CHAIN: np.array([], dtype=np.int64),
+                Scale.MOLECULE: np.array([0], dtype=np.int64),
+            },
+            id=id,
+            names=[],
+            strands=[],
+            lengths=np.array([], dtype=np.int64),
+            polymer_count=0,
+        )
+        return polymer.torch() if backend == "torch" else polymer
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Array Properties (with backend/device validation)
     # ─────────────────────────────────────────────────────────────────────────
 

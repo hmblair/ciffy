@@ -8,6 +8,7 @@ sequences but zero coordinates - useful for generative modeling.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
 
@@ -16,7 +17,45 @@ import numpy as np
 from .polymer import Polymer
 from .types import Scale, Molecule
 from .biochemistry._generated_residues import Residue
-from .biochemistry.linking import LINKING_BY_TYPE
+from .biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
+
+
+# =============================================================================
+# DATA CLASSES
+# =============================================================================
+
+
+@dataclass
+class ResidueExpansion:
+    """Expanded atom data for a single residue type."""
+    atom_indices: tuple[int, ...]
+    element_indices: tuple[int, ...]
+    atom_names: tuple[str, ...]
+    ideal_coords: np.ndarray  # (N, 3)
+
+
+@dataclass
+class ChainData:
+    """Processed data for a single chain."""
+    atom_indices: list[int]
+    element_indices: list[int]
+    atoms_per_residue: list[int]
+    residue_indices: list[int]
+    coords: list[np.ndarray]
+
+
+@dataclass(frozen=True)
+class MoleculeTypeConfig:
+    """
+    Configuration for a molecule type in sequence generation.
+
+    Bundles all molecule-specific parameters needed for template generation:
+    linking info, terminal atoms, and sequence character mapping.
+    """
+    linking: LinkingDefinition | None
+    start_terminal_atoms: frozenset[str]  # 5'/N-terminal only
+    end_terminal_atoms: frozenset[str]    # 3'/C-terminal only
+    sequence_map: dict[str, int]          # char -> residue index
 
 
 # =============================================================================
@@ -32,23 +71,6 @@ _ELEMENT_MAP: dict[str, int] = {
     'P': 15,  # Phosphorus
     'S': 16,  # Sulfur
 }
-
-
-# =============================================================================
-# TERMINAL ATOM DEFINITIONS
-# =============================================================================
-
-# Nucleic acid terminal atoms (atom names as they appear in enum, with p for ')
-# 5'-terminal only: OP3 and its hydrogen
-_NA_5_TERMINAL_ATOMS = frozenset({'OP3', 'HOP3'})
-# 3'-terminal only: hydroxyl hydrogen on O3'
-_NA_3_TERMINAL_ATOMS = frozenset({'HO3p'})
-
-# Protein terminal atoms
-# N-terminal only: extra ammonium hydrogens (NH3+ vs NH in peptide bond)
-_PROTEIN_N_TERMINAL_ATOMS = frozenset({'H2', 'H3'})
-# C-terminal only: second carboxyl oxygen and its hydrogen (COO- vs C=O in peptide bond)
-_PROTEIN_C_TERMINAL_ATOMS = frozenset({'OXT', 'HXT'})
 
 
 # =============================================================================
@@ -104,6 +126,40 @@ _NUCLEOTIDE_CHARS = frozenset('ACGUT')
 
 
 # =============================================================================
+# MOLECULE TYPE CONFIGURATIONS
+# =============================================================================
+
+_MOLECULE_CONFIGS: dict[Molecule, MoleculeTypeConfig] = {
+    Molecule.RNA: MoleculeTypeConfig(
+        linking=NUCLEIC_ACID_LINK,
+        start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
+        end_terminal_atoms=frozenset({'HO3p'}),
+        sequence_map=RNA_MAP,
+    ),
+    Molecule.DNA: MoleculeTypeConfig(
+        linking=NUCLEIC_ACID_LINK,
+        start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
+        end_terminal_atoms=frozenset({'HO3p'}),
+        sequence_map=DNA_MAP,
+    ),
+    Molecule.PROTEIN: MoleculeTypeConfig(
+        linking=PEPTIDE_LINK,
+        start_terminal_atoms=frozenset({'H2', 'H3'}),
+        end_terminal_atoms=frozenset({'OXT', 'HXT'}),
+        sequence_map=AMINO_ACID_MAP,
+    ),
+}
+
+
+def _get_molecule_config(residue_idx: int) -> MoleculeTypeConfig:
+    """Get config for a residue's molecule type."""
+    mol_type = Residue(residue_idx).molecule_type
+    if mol_type not in _MOLECULE_CONFIGS:
+        raise ValueError(f"Unsupported molecule type: {mol_type.name}")
+    return _MOLECULE_CONFIGS[mol_type]
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -130,21 +186,11 @@ def _generate_chain_name(index: int) -> str:
 
 
 @lru_cache(maxsize=32)
-def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...], np.ndarray]:
+def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...], np.ndarray]:
     """
-    Get atom indices, element indices, atom names, and ideal coordinates for a residue type.
+    Internal cached expansion - returns tuple for hashability.
 
-    Results are cached since the same residue type always expands identically.
-
-    Args:
-        residue_idx: Residue index (from Residue enum value).
-
-    Returns:
-        Tuple of (atom_indices, element_indices, atom_names, ideal_coords).
-        First three are tuples for hashability, ideal_coords is (N, 3) array.
-
-    Raises:
-        ValueError: If residue_idx has no atom definitions.
+    The numpy array is cached but callers should copy if mutating.
     """
     try:
         residue = Residue(residue_idx)
@@ -170,12 +216,30 @@ def _expand_residue_full(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, 
     return tuple(atom_indices), tuple(element_indices), tuple(atom_names), ideal_coords
 
 
+def _expand_residue(residue_idx: int) -> ResidueExpansion:
+    """
+    Get atom data for a residue type.
+
+    Results are cached since the same residue type always expands identically.
+    Coordinates are copied to allow safe mutation by callers.
+
+    Args:
+        residue_idx: Residue index (from Residue enum value).
+
+    Returns:
+        ResidueExpansion with atom indices, elements, names, and ideal coordinates.
+
+    Raises:
+        ValueError: If residue_idx has no atom definitions.
+    """
+    atoms, elements, names, coords = _expand_residue_cached(residue_idx)
+    return ResidueExpansion(atoms, elements, names, coords.copy())
+
+
 def _filter_atoms_by_position(
-    atom_indices: tuple[int, ...],
-    element_indices: tuple[int, ...],
-    atom_names: tuple[str, ...],
-    ideal_coords: np.ndarray,
-    is_nucleic_acid: bool,
+    expansion: ResidueExpansion,
+    coords: np.ndarray,
+    config: MoleculeTypeConfig,
     is_first: bool,
     is_last: bool,
 ) -> tuple[list[int], list[int], list[np.ndarray]]:
@@ -188,32 +252,25 @@ def _filter_atoms_by_position(
     - Internal residues: exclude all terminal atoms
 
     Args:
-        atom_indices: Full atom index tuple from _expand_residue_full.
-        element_indices: Full element index tuple from _expand_residue_full.
-        atom_names: Atom names (enum member names) from _expand_residue_full.
-        ideal_coords: Ideal coordinates array (N, 3) from _expand_residue_full.
-        is_nucleic_acid: True for RNA/DNA, False for protein.
+        expansion: Residue expansion with atom data.
+        coords: Positioned coordinates (may differ from expansion.ideal_coords).
+        config: Molecule type configuration with terminal atom definitions.
         is_first: True if this is the first residue in the chain.
         is_last: True if this is the last residue in the chain.
 
     Returns:
         Tuple of (filtered_atom_indices, filtered_element_indices, filtered_coords) as lists.
     """
-    if is_nucleic_acid:
-        start_terminal = _NA_5_TERMINAL_ATOMS
-        end_terminal = _NA_3_TERMINAL_ATOMS
-    else:
-        start_terminal = _PROTEIN_N_TERMINAL_ATOMS
-        end_terminal = _PROTEIN_C_TERMINAL_ATOMS
-
     filtered_atoms = []
     filtered_elements = []
     filtered_coords = []
 
-    for i, (atom_idx, elem_idx, name) in enumerate(zip(atom_indices, element_indices, atom_names)):
+    for i, (atom_idx, elem_idx, name) in enumerate(zip(
+        expansion.atom_indices, expansion.element_indices, expansion.atom_names
+    )):
         # Check if this is a terminal-only atom
-        is_start_terminal = name in start_terminal
-        is_end_terminal = name in end_terminal
+        is_start_terminal = name in config.start_terminal_atoms
+        is_end_terminal = name in config.end_terminal_atoms
 
         # Include atom if:
         # - It's not a terminal atom, OR
@@ -228,7 +285,7 @@ def _filter_atoms_by_position(
         if include:
             filtered_atoms.append(atom_idx)
             filtered_elements.append(elem_idx)
-            filtered_coords.append(ideal_coords[i])
+            filtered_coords.append(coords[i])
 
     return filtered_atoms, filtered_elements, filtered_coords
 
@@ -284,13 +341,13 @@ def _parse_sequence(sequence: str) -> list[int]:
             - Uppercase: Protein (ACDEFGHIKLMNPQRSTVWY)
 
     Returns:
-        List of residue indices.
+        List of residue indices (empty list for empty sequence).
 
     Raises:
-        ValueError: If sequence is empty, mixed case, or contains invalid chars.
+        ValueError: If sequence is mixed case or contains invalid chars.
     """
     if not sequence:
-        raise ValueError("Empty sequence")
+        return []
 
     has_lower = any(c.islower() for c in sequence)
     has_upper = any(c.isupper() for c in sequence)
@@ -324,7 +381,64 @@ def _find_atom_index(atom_names: tuple[str, ...], target: str) -> int | None:
         return None
 
 
-def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list[int], list[np.ndarray]]:
+# Direction for chain extension (along positive X axis for linear templates)
+_EXTENSION_DIR = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+
+def _position_residue(
+    expansion: ResidueExpansion,
+    residue_idx: int,
+    prev_link_pos: np.ndarray | None,
+    config: MoleculeTypeConfig,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """
+    Position residue coordinates relative to previous residue.
+
+    Args:
+        expansion: Residue expansion with ideal coordinates.
+        residue_idx: Residue index (for error messages).
+        prev_link_pos: Position of previous residue's linking atom, or None for first.
+        config: Molecule type configuration with linking definition.
+
+    Returns:
+        Tuple of (positioned_coords, new_link_pos for next residue).
+        new_link_pos is None if no linking definition.
+
+    Raises:
+        ValueError: If linking atoms are not found in the residue.
+    """
+    coords = expansion.ideal_coords.copy()
+    link_def = config.linking
+
+    # Position relative to previous residue
+    if link_def is not None and prev_link_pos is not None:
+        curr_link_idx = _find_atom_index(expansion.atom_names, link_def.next_atom)
+        if curr_link_idx is None:
+            res_name = Residue(residue_idx).name
+            raise ValueError(
+                f"Linking atom '{link_def.next_atom}' not found in residue {res_name}. "
+                f"Available atoms: {list(expansion.atom_names)[:10]}..."
+            )
+        target_pos = prev_link_pos + _EXTENSION_DIR * link_def.bond_length
+        offset = target_pos - coords[curr_link_idx]
+        coords = coords + offset
+
+    # Compute new link position for next residue
+    new_link_pos = None
+    if link_def is not None:
+        prev_link_idx = _find_atom_index(expansion.atom_names, link_def.prev_atom)
+        if prev_link_idx is None:
+            res_name = Residue(residue_idx).name
+            raise ValueError(
+                f"Linking atom '{link_def.prev_atom}' not found in residue {res_name}. "
+                f"Available atoms: {list(expansion.atom_names)[:10]}..."
+            )
+        new_link_pos = coords[prev_link_idx].copy()
+
+    return coords, new_link_pos
+
+
+def _process_chain(sequence: str) -> ChainData:
     """
     Process a single chain sequence into atom/element/residue/coordinate data.
 
@@ -338,70 +452,31 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         sequence: Single-letter sequence for one chain.
 
     Returns:
-        Tuple of (atom_indices, element_indices, atoms_per_residue, residue_indices, coords).
+        ChainData with all atom and coordinate information.
     """
     residue_indices = _parse_sequence(sequence)
     n_residues = len(residue_indices)
-
-    # Determine if nucleic acid or protein based on first residue
-    first_mol_type = Residue(residue_indices[0]).molecule_type
-    is_nucleic_acid = first_mol_type in (Molecule.RNA, Molecule.DNA)
-
-    # Get linking definition for this molecule type
-    link_def = LINKING_BY_TYPE.get(first_mol_type)
-
-    # Direction for chain extension (along positive X axis for linear)
-    extension_dir = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    config = _get_molecule_config(residue_indices[0])
 
     all_atoms: list[int] = []
     all_elements: list[int] = []
     all_coords: list[np.ndarray] = []
     atoms_per_res: list[int] = []
-
-    # Track position of previous residue's "end" linking atom
     prev_link_pos: np.ndarray | None = None
 
     for i, res_idx in enumerate(residue_indices):
         is_first = (i == 0)
         is_last = (i == n_residues - 1)
 
-        # Get full atom expansion (cached)
-        atom_indices, element_indices, atom_names, ideal_coords = _expand_residue_full(res_idx)
+        # Get residue data and position it
+        expansion = _expand_residue(res_idx)
+        positioned_coords, prev_link_pos = _position_residue(
+            expansion, res_idx, prev_link_pos, config
+        )
 
-        # Make a mutable copy of coordinates for positioning
-        positioned_coords = ideal_coords.copy()
-
-        # Position this residue relative to previous one
-        if link_def is not None and prev_link_pos is not None:
-            # Find current residue's "start" linking atom (P for NA, N for protein)
-            curr_link_idx = _find_atom_index(atom_names, link_def.next_atom)
-            if curr_link_idx is None:
-                res_name = Residue(res_idx).name if res_idx < len(Residue) else f"index {res_idx}"
-                raise ValueError(
-                    f"Linking atom '{link_def.next_atom}' not found in residue {res_name}. "
-                    f"Available atoms: {list(atom_names)[:10]}..."
-                )
-            # Target position: prev_link_pos + bond_length in extension direction
-            target_pos = prev_link_pos + extension_dir * link_def.bond_length
-            # Compute offset to move curr_link_atom to target
-            offset = target_pos - positioned_coords[curr_link_idx]
-            positioned_coords = positioned_coords + offset
-
-        # Update prev_link_pos for next residue
-        if link_def is not None:
-            prev_link_idx = _find_atom_index(atom_names, link_def.prev_atom)
-            if prev_link_idx is None:
-                res_name = Residue(res_idx).name if res_idx < len(Residue) else f"index {res_idx}"
-                raise ValueError(
-                    f"Linking atom '{link_def.prev_atom}' not found in residue {res_name}. "
-                    f"Available atoms: {list(atom_names)[:10]}..."
-                )
-            prev_link_pos = positioned_coords[prev_link_idx].copy()
-
-        # Filter based on position
+        # Filter terminal atoms based on position
         filtered_atoms, filtered_elements, filtered_coords = _filter_atoms_by_position(
-            atom_indices, element_indices, atom_names, positioned_coords,
-            is_nucleic_acid, is_first, is_last
+            expansion, positioned_coords, config, is_first, is_last
         )
 
         all_atoms.extend(filtered_atoms)
@@ -409,7 +484,13 @@ def _process_chain(sequence: str) -> tuple[list[int], list[int], list[int], list
         all_coords.extend(filtered_coords)
         atoms_per_res.append(len(filtered_atoms))
 
-    return all_atoms, all_elements, atoms_per_res, residue_indices, all_coords
+    return ChainData(
+        atom_indices=all_atoms,
+        element_indices=all_elements,
+        atoms_per_residue=atoms_per_res,
+        residue_indices=residue_indices,
+        coords=all_coords,
+    )
 
 
 # =============================================================================
@@ -437,6 +518,7 @@ def from_sequence(
             - Lowercase with only a/c/g: RNA (default)
             - Uppercase: Protein (ACDEFGHIKLMNPQRSTVWY)
             - List creates multiple chains: ['acgu', 'acgt']
+            - Empty strings are filtered out; "" returns empty polymer with 0 chains
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
         sample_dihedrals: If True, randomize backbone dihedrals using empirical
@@ -451,9 +533,10 @@ def from_sequence(
         - sequence: Residue type indices (matching Residue enum)
         - sizes: Atoms per residue/chain/molecule
         - coordinates: Ideal CCD coordinates (or randomized if sample_dihedrals=True)
+        Empty sequence returns an empty Polymer with 0 atoms and 0 chains.
 
     Raises:
-        ValueError: If sequence is empty, mixed case, contains both 'u' and 't',
+        ValueError: If sequence is mixed case, contains both 'u' and 't',
             or contains invalid characters.
 
     Examples:
@@ -478,10 +561,13 @@ def from_sequence(
         >>> # Generate protein with random backbone conformations
         >>> protein = from_sequence("MGKLF", sample_dihedrals=True, seed=42)
     """
-    # Normalize input
+    # Normalize input and filter out empty sequences
     sequences = [sequence] if isinstance(sequence, str) else list(sequence)
+    sequences = [s for s in sequences if s]  # Remove empty strings
+
+    # Handle empty polymer (0 chains)
     if not sequences:
-        raise ValueError("Empty sequence list")
+        return Polymer.create_empty(id=id, backend=backend)
 
     # Accumulate data across all chains
     all_atoms: list[int] = []
@@ -494,15 +580,15 @@ def from_sequence(
     chain_names: list[str] = []
 
     for chain_idx, seq in enumerate(sequences):
-        atoms, elements, atoms_per_res, residues, coords = _process_chain(seq)
+        chain_data = _process_chain(seq)
 
-        all_atoms.extend(atoms)
-        all_elements.extend(elements)
-        all_coords.extend(coords)
-        all_atoms_per_res.extend(atoms_per_res)
-        all_residue_indices.extend(residues)
-        atoms_per_chain.append(len(atoms))
-        residues_per_chain.append(len(residues))
+        all_atoms.extend(chain_data.atom_indices)
+        all_elements.extend(chain_data.element_indices)
+        all_coords.extend(chain_data.coords)
+        all_atoms_per_res.extend(chain_data.atoms_per_residue)
+        all_residue_indices.extend(chain_data.residue_indices)
+        atoms_per_chain.append(len(chain_data.atom_indices))
+        residues_per_chain.append(len(chain_data.residue_indices))
         chain_names.append(_generate_chain_name(chain_idx))
 
     # Build arrays

@@ -74,7 +74,6 @@ class TestFromSequence:
         ("acgx", "Unknown RNA residue 'x'"),
         ("MGXLF", "Unknown protein residue 'X'"),
         ("acgut", "both 'u'.*and 't'"),
-        ("", "Empty sequence"),
         ("AcGu", "Mixed case not supported"),
     ])
     def test_invalid_sequences(self, sequence, error_match):
@@ -353,12 +352,29 @@ class TestFromSequenceMultiChain:
         assert p1.size(Scale.CHAIN) == p2.size(Scale.CHAIN)
         assert p1.names == p2.names
 
-    def test_empty_list_raises(self):
-        """Test empty list raises ValueError."""
-        from ciffy import from_sequence
+    def test_empty_sequences_return_empty_polymer(self):
+        """Test empty sequences return an empty polymer with 0 chains."""
+        from ciffy import from_sequence, Scale
 
-        with pytest.raises(ValueError, match="Empty sequence list"):
-            from_sequence([])
+        # Empty string
+        p1 = from_sequence("")
+        assert p1.size() == 0
+        assert p1.size(Scale.CHAIN) == 0
+
+        # Empty list
+        p2 = from_sequence([])
+        assert p2.size() == 0
+        assert p2.size(Scale.CHAIN) == 0
+
+        # List with empty strings
+        p3 = from_sequence(["", ""])
+        assert p3.size() == 0
+        assert p3.size(Scale.CHAIN) == 0
+
+        # Mixed empty and non-empty (filters out empty)
+        p4 = from_sequence(["", "a", ""])
+        assert p4.size() > 0
+        assert p4.size(Scale.CHAIN) == 1
 
     def test_chain_names_beyond_z(self):
         """Test chain naming beyond 26 chains."""

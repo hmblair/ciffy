@@ -145,18 +145,19 @@ def main():
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension
     from setuptools import setup
 
-    # Source files are in ../ciffy/src/internal/
+    # Source files are in ../ciffy/src/internal/ (relative to cuda/)
     cuda_dir = Path(__file__).parent
     project_root = cuda_dir.parent
     src_dir = project_root / 'ciffy' / 'src' / 'internal'
 
+    # Use relative paths for setuptools compatibility
     cuda_sources = [
-        str(src_dir / 'batch.cu'),
-        str(src_dir / 'cuda_module.cu'),
+        '../ciffy/src/internal/batch.cu',
+        '../ciffy/src/internal/cuda_module.cu',
     ]
 
-    # Verify source files exist
-    missing = [src for src in cuda_sources if not Path(src).exists()]
+    # Verify source files exist (using absolute paths for check)
+    missing = [src for src in cuda_sources if not (cuda_dir / src).exists()]
     if missing:
         print(f"ERROR: Missing CUDA source files: {missing}")
         print(f"Expected to find sources in: {src_dir}")
@@ -177,7 +178,7 @@ def main():
     cuda_ext = CUDAExtension(
         name='ciffy._cuda',  # Installs into ciffy namespace
         sources=cuda_sources,
-        include_dirs=[str(project_root / 'ciffy' / 'src')],
+        include_dirs=['../ciffy/src'],
         extra_compile_args={
             'cxx': ['-O3', '-std=c++17'],
             'nvcc': nvcc_flags,

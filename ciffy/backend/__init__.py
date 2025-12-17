@@ -32,6 +32,9 @@ from .core import (
     size,
     get_device,
     check_compatible,
+    has_nan,
+    has_inf,
+    any_abs_greater_than,
 )
 
 __all__ = [
@@ -45,4 +48,7 @@ __all__ = [
     "size",
     "get_device",
     "check_compatible",
+    "has_nan",
+    "has_inf",
+    "any_abs_greater_than",
 ]

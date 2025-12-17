@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible
+from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible, has_nan, has_inf, any_abs_greater_than
 from ..backend.dispatch import (
     ZMatrix,
     ConnectedComponents,
@@ -532,12 +532,12 @@ class CoordinateManager:
         Raises:
             ValueError: If coordinates contain NaN, Inf, or unreasonable values.
         """
-        coords = to_numpy(self._coordinates)
-        if np.any(np.isnan(coords)):
+        coords = self._coordinates
+        if has_nan(coords):
             raise ValueError("Invalid coordinates after reconstruction (NaN detected)")
-        if np.any(np.isinf(coords)):
+        if has_inf(coords):
             raise ValueError("Invalid coordinates after reconstruction (Inf detected)")
-        if np.any(np.abs(coords) > 10000):
+        if any_abs_greater_than(coords, 10000):
             raise ValueError(
                 "Coordinates exceed 10000 Angstroms - likely reconstruction error. "
                 "Check that internal coordinates are within reasonable bounds."

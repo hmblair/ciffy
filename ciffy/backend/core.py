@@ -151,3 +151,27 @@ def check_compatible(target: Array, source: Array, name: str = "array") -> None:
                 f"Polymer on device '{target_device}'. "
                 f"Move tensor using .to('{target_device}') first."
             )
+
+
+def has_nan(arr: Array) -> bool:
+    """Check if array contains any NaN values."""
+    if is_torch(arr):
+        import torch
+        return torch.isnan(arr).any().item()
+    return np.any(np.isnan(arr))
+
+
+def has_inf(arr: Array) -> bool:
+    """Check if array contains any Inf values."""
+    if is_torch(arr):
+        import torch
+        return torch.isinf(arr).any().item()
+    return np.any(np.isinf(arr))
+
+
+def any_abs_greater_than(arr: Array, threshold: float) -> bool:
+    """Check if any absolute value in array exceeds threshold."""
+    if is_torch(arr):
+        import torch
+        return (torch.abs(arr) > threshold).any().item()
+    return np.any(np.abs(arr) > threshold)

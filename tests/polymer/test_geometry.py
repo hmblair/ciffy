@@ -8,6 +8,7 @@ import pytest
 import numpy as np
 
 from tests.utils import get_test_cif, BACKENDS, random_coordinates
+from tests.testing import get_tolerances
 
 
 class TestPairwiseDistances:
@@ -45,7 +46,8 @@ class TestPairwiseDistances:
         # Should be symmetric
         d01 = dists[0, 1].item() if hasattr(dists[0, 1], 'item') else dists[0, 1]
         d10 = dists[1, 0].item() if hasattr(dists[1, 0], 'item') else dists[1, 0]
-        assert abs(d01 - d10) < 1e-6
+        tol = get_tolerances()
+        assert abs(d01 - d10) < tol.symmetry
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_pairwise_at_residue_scale(self, backend):
@@ -187,7 +189,8 @@ class TestCenter:
         # Centered structure's mean should be ~zero (within floating point tolerance)
         mean = centered.reduce(centered.coordinates, Scale.MOLECULE)
         mean_np = np.asarray(mean)
-        assert np.allclose(mean_np, 0, atol=1e-4)
+        tol = get_tolerances()
+        assert np.allclose(mean_np, 0, atol=tol.center_origin)
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_center_chain_scale(self, backend):
@@ -230,7 +233,8 @@ class TestCenter:
 
         # Should center to mean ~0
         mean = np.asarray(centered.coordinates).mean(axis=0)
-        assert np.allclose(mean, 0, atol=1e-5)
+        tol = get_tolerances()
+        assert np.allclose(mean, 0, atol=tol.allclose_atol)
 
 
 class TestMoment:
@@ -306,7 +310,8 @@ class TestAlign:
 
         # Aligned structure should be centered
         mean = np.asarray(aligned.coordinates).mean(axis=0)
-        assert np.allclose(mean, 0, atol=1e-4)
+        tol = get_tolerances()
+        assert np.allclose(mean, 0, atol=tol.center_origin)
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_returns_rotation_matrix(self, backend):
@@ -329,7 +334,8 @@ class TestAlign:
 
         # Should be orthogonal: Q @ Q.T ≈ I
         QQt = Q_np @ Q_np.T
-        assert np.allclose(QQt, np.eye(3), atol=1e-4)
+        tol = get_tolerances()
+        assert np.allclose(QQt, np.eye(3), atol=tol.orthogonality)
 
 
 class TestWithCoordinates:
@@ -417,7 +423,8 @@ class TestKabschAlignment:
 
         # R @ R.T should be identity
         RRt = R_np @ R_np.T
-        assert np.allclose(RRt, np.eye(3), atol=1e-5)
+        tol = get_tolerances()
+        assert np.allclose(RRt, np.eye(3), atol=tol.allclose_atol)
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_rotation_det_positive(self, backend):
@@ -436,7 +443,8 @@ class TestKabschAlignment:
         det = np.linalg.det(np.asarray(R))
 
         # Should be a proper rotation (not reflection)
-        assert abs(det - 1.0) < 1e-5
+        tol = get_tolerances()
+        assert abs(det - 1.0) < tol.rotation_determinant
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_returns_tuple(self, backend):
@@ -476,7 +484,8 @@ class TestKabschAlignment:
 
         # RMSD should be ~0
         rmsd = np.sqrt(((aligned_np - coords_np) ** 2).sum(axis=1).mean())
-        assert rmsd < 1e-5
+        tol = get_tolerances()
+        assert rmsd < tol.allclose_atol
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_rotation_only(self, backend):
@@ -513,7 +522,8 @@ class TestKabschAlignment:
         aligned_np = np.asarray(aligned)
         coords2_c_np = np.asarray(coords2_c)
         rmsd = np.sqrt(((aligned_np - coords2_c_np) ** 2).sum(axis=1).mean())
-        assert rmsd < 1e-4
+        tol = get_tolerances()
+        assert rmsd < tol.alignment_rmsd
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_kabsch_align_with_translation(self, backend):
@@ -535,7 +545,8 @@ class TestKabschAlignment:
         aligned_np = np.asarray(aligned)
         coords2_np = np.asarray(coords2)
         rmsd = np.sqrt(((aligned_np - coords2_np) ** 2).sum(axis=1).mean())
-        assert rmsd < 1e-4
+        tol = get_tolerances()
+        assert rmsd < tol.alignment_rmsd
 
 
 class TestAlignFunction:
@@ -598,7 +609,8 @@ class TestAlignFunction:
         # After alignment, raw RMSD should be minimal
         ref, aligned = ciffy.align(p1, p2)
         raw_rmsd_after = np.sqrt(((np.asarray(ref.coordinates) - np.asarray(aligned.coordinates)) ** 2).sum(axis=1).mean())
-        assert raw_rmsd_after < 1e-3
+        tol = get_tolerances()
+        assert raw_rmsd_after < tol.roundtrip_medium
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_self(self, backend):
@@ -611,7 +623,8 @@ class TestAlignFunction:
 
         # Should be essentially identical
         rmsd = np.sqrt(((np.asarray(ref.coordinates) - np.asarray(aligned.coordinates)) ** 2).sum(axis=1).mean())
-        assert rmsd < 1e-5
+        tol = get_tolerances()
+        assert rmsd < tol.allclose_atol
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_align_size_mismatch_raises(self, backend):

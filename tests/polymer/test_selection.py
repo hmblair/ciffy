@@ -229,7 +229,7 @@ class TestMask:
 
         # Mask should be True for atoms of first residue only
         true_count = mask.sum().item() if hasattr(mask.sum(), 'item') else mask.sum()
-        atoms_in_first_residue = p._sizes[Scale.RESIDUE][0].item()
+        atoms_in_first_residue = p.sizes(Scale.RESIDUE)[0].item()
 
         assert true_count == atoms_in_first_residue
 
@@ -261,7 +261,7 @@ class TestMask:
 
         # Sum should equal atoms in first chain
         true_count = mask.sum().item() if hasattr(mask.sum(), 'item') else mask.sum()
-        atoms_in_first_chain = p._sizes[Scale.CHAIN][0].item()
+        atoms_in_first_chain = p.sizes(Scale.CHAIN)[0].item()
 
         assert true_count == atoms_in_first_chain
 

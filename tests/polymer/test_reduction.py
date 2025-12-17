@@ -291,7 +291,7 @@ class TestCount:
         counts = p.count(mask, Scale.RESIDUE)
 
         # Counts should match atoms per residue
-        expected = p._sizes[Scale.RESIDUE]
+        expected = p.sizes(Scale.RESIDUE)
         counts_np = np.asarray(counts)
         expected_np = np.asarray(expected)
 

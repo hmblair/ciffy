@@ -39,6 +39,16 @@ class ToleranceProfile:
     allclose_atol: float = 1e-5
     allclose_rtol: float = 1e-5
 
+    # Geometry tolerances
+    orthogonality: float = 1e-4  # R @ R.T ≈ I
+    rotation_determinant: float = 1e-5  # det(R) ≈ 1
+    center_origin: float = 1e-4  # centered coords ≈ 0
+    alignment_rmsd: float = 1e-4  # RMSD after Kabsch alignment
+    symmetry: float = 1e-6  # Symmetric matrix checks
+
+    # Metric tolerances
+    score_self: float = 1e-6  # TM-score/lDDT of self should be ~1.0
+
     def roundtrip_for_size(self, n_residues: int) -> float:
         """Get appropriate roundtrip tolerance based on structure size."""
         if n_residues == 1:

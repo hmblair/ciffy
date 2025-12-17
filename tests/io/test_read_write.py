@@ -10,6 +10,7 @@ import tempfile
 import pytest
 
 from tests.utils import DATA_DIR, BACKENDS
+from tests.testing import get_tolerances
 
 CIF_FILES = sorted(glob.glob(str(DATA_DIR / "*.cif")))
 
@@ -188,7 +189,7 @@ class TestLoad:
         for ix in range(polymer.size(Scale.CHAIN)):
             chain_name = polymer.names[ix]
             residue_count = polymer.lengths[ix].item()
-            atom_count = polymer._sizes[Scale.CHAIN][ix].item()
+            atom_count = polymer.sizes(Scale.CHAIN)[ix].item()
 
             # Chain name should appear in output
             assert chain_name in repr_str
@@ -329,7 +330,8 @@ class TestCifSave:
             # Verify polymer coordinates are close (allow small float precision loss)
             orig_coords = np.asarray(original.coordinates[:original.polymer_count])
             reload_coords = np.asarray(reloaded.coordinates)
-            assert np.allclose(orig_coords, reload_coords, atol=0.001)
+            tol = get_tolerances()
+            assert np.allclose(orig_coords, reload_coords, atol=tol.coord_roundtrip)
 
             # Verify chain count matches
             assert len(reloaded.names) == len(original.names)
@@ -555,7 +557,7 @@ class TestPolymerCountInvariant:
         polymer = load(cif_file, backend=backend)
 
         # Sum of atoms per residue should equal polymer_count
-        atoms_per_res_sum = polymer._sizes[Scale.RESIDUE].sum().item()
+        atoms_per_res_sum = polymer.sizes(Scale.RESIDUE).sum().item()
         assert atoms_per_res_sum == polymer.polymer_count, \
             f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum} != polymer_count={polymer.polymer_count}"
 

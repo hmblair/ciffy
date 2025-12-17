@@ -12,6 +12,7 @@ from tests.utils import (
     skip_if_no_torch,
     random_coordinates,
 )
+from tests.testing import get_tolerances
 
 
 # =============================================================================
@@ -29,7 +30,8 @@ class TestTMScore:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.RESIDUE)
 
-        assert abs(score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(score - 1.0) < tol.score_self
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_tm_score_range(self, backend):
@@ -49,7 +51,8 @@ class TestTMScore:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p, scale=Scale.ATOM)
 
-        assert abs(score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(score - 1.0) < tol.score_self
 
     def test_tm_score_size_mismatch(self):
         """TM-score should raise error for mismatched sizes."""
@@ -75,7 +78,8 @@ class TestLDDT:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         global_score, per_res = lddt(p, p)
 
-        assert abs(global_score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(global_score - 1.0) < tol.score_self
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_lddt_range(self, backend):
@@ -119,7 +123,8 @@ class TestLDDT:
 
         # Custom thresholds
         global_score, _ = lddt(p, p, thresholds=(0.5, 1.0))
-        assert abs(global_score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(global_score - 1.0) < tol.score_self
 
     def test_lddt_custom_cutoff(self):
         """Test lDDT with custom cutoff."""
@@ -127,7 +132,8 @@ class TestLDDT:
 
         # Very small cutoff should still work
         global_score, _ = lddt(p, p, cutoff=5.0)
-        assert abs(global_score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(global_score - 1.0) < tol.score_self
 
     def test_lddt_size_mismatch(self):
         """lDDT should raise error for mismatched sizes."""
@@ -290,4 +296,5 @@ class TestLDDTEdgeCases:
         global_score, per_res = lddt(p, p, cutoff=1000.0)
 
         # Self comparison should be 1.0
-        assert abs(global_score - 1.0) < 1e-6
+        tol = get_tolerances()
+        assert abs(global_score - 1.0) < tol.score_self

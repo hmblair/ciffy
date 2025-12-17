@@ -150,11 +150,12 @@ class TestSampleProteinDihedrals:
 
 
 class TestRandomizeBackbone:
-    """Tests for the randomize_backbone function."""
+    """Tests for the randomize_backbone function with both protein and RNA."""
 
-    def test_randomize_backbone_changes_coordinates(self):
+    @pytest.mark.parametrize("sequence", ["MGKLF", "acgu"])
+    def test_randomize_backbone_changes_coordinates(self, sequence):
         """Test that randomize_backbone modifies coordinates."""
-        polymer = ciffy.from_sequence("MGKLF")
+        polymer = ciffy.from_sequence(sequence)
         original_coords = polymer.coordinates.copy()
 
         polymer = randomize_backbone(polymer, seed=42)
@@ -163,9 +164,10 @@ class TestRandomizeBackbone:
         # Coordinates should be different
         assert not np.allclose(original_coords, new_coords)
 
-    def test_randomize_backbone_preserves_size(self):
+    @pytest.mark.parametrize("sequence", ["MGKLF", "acgu"])
+    def test_randomize_backbone_preserves_size(self, sequence):
         """Test that randomize_backbone preserves polymer size."""
-        polymer = ciffy.from_sequence("MGKLF")
+        polymer = ciffy.from_sequence(sequence)
         original_size = polymer.size()
         original_n_res = polymer.size(Scale.RESIDUE)
 
@@ -174,10 +176,11 @@ class TestRandomizeBackbone:
         assert polymer.size() == original_size
         assert polymer.size(Scale.RESIDUE) == original_n_res
 
-    def test_randomize_backbone_reproducibility(self):
+    @pytest.mark.parametrize("sequence", ["MGKLF", "acgu"])
+    def test_randomize_backbone_reproducibility(self, sequence):
         """Test that randomize_backbone is reproducible with seed."""
-        polymer1 = ciffy.from_sequence("MGKLF")
-        polymer2 = ciffy.from_sequence("MGKLF")
+        polymer1 = ciffy.from_sequence(sequence)
+        polymer2 = ciffy.from_sequence(sequence)
 
         polymer1 = randomize_backbone(polymer1, seed=42)
         polymer2 = randomize_backbone(polymer2, seed=42)
@@ -186,10 +189,11 @@ class TestRandomizeBackbone:
             polymer1.coordinates, polymer2.coordinates
         )
 
-    def test_randomize_backbone_different_seeds(self):
+    @pytest.mark.parametrize("sequence", ["MGKLF", "acgu"])
+    def test_randomize_backbone_different_seeds(self, sequence):
         """Test that different seeds produce different results."""
-        polymer1 = ciffy.from_sequence("MGKLF")
-        polymer2 = ciffy.from_sequence("MGKLF")
+        polymer1 = ciffy.from_sequence(sequence)
+        polymer2 = ciffy.from_sequence(sequence)
 
         polymer1 = randomize_backbone(polymer1, seed=42)
         polymer2 = randomize_backbone(polymer2, seed=123)
@@ -288,49 +292,3 @@ class TestSampleRNADihedrals:
             assert np.all(np.isfinite(valid)), f"{name} has non-finite values"
 
 
-class TestRandomizeBackboneRNA:
-    """Tests for randomize_backbone with RNA polymers."""
-
-    def test_randomize_backbone_rna_changes_coordinates(self):
-        """Test that randomize_backbone modifies RNA coordinates."""
-        polymer = ciffy.from_sequence("acgu")
-        original_coords = polymer.coordinates.copy()
-
-        polymer = randomize_backbone(polymer, seed=42)
-        new_coords = polymer.coordinates
-
-        # Coordinates should be different
-        assert not np.allclose(original_coords, new_coords)
-
-    def test_randomize_backbone_rna_preserves_size(self):
-        """Test that randomize_backbone preserves RNA polymer size."""
-        polymer = ciffy.from_sequence("acgu")
-        original_size = polymer.size()
-        original_n_res = polymer.size(Scale.RESIDUE)
-
-        polymer = randomize_backbone(polymer, seed=42)
-
-        assert polymer.size() == original_size
-        assert polymer.size(Scale.RESIDUE) == original_n_res
-
-    def test_randomize_backbone_rna_reproducibility(self):
-        """Test that randomize_backbone is reproducible for RNA with seed."""
-        polymer1 = ciffy.from_sequence("acgu")
-        polymer2 = ciffy.from_sequence("acgu")
-
-        polymer1 = randomize_backbone(polymer1, seed=42)
-        polymer2 = randomize_backbone(polymer2, seed=42)
-
-        np.testing.assert_array_almost_equal(
-            polymer1.coordinates, polymer2.coordinates
-        )
-
-    def test_randomize_backbone_rna_different_seeds(self):
-        """Test that different seeds produce different RNA results."""
-        polymer1 = ciffy.from_sequence("acgu")
-        polymer2 = ciffy.from_sequence("acgu")
-
-        polymer1 = randomize_backbone(polymer1, seed=42)
-        polymer2 = randomize_backbone(polymer2, seed=123)
-
-        assert not np.allclose(polymer1.coordinates, polymer2.coordinates)

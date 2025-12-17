@@ -483,8 +483,11 @@ void cuda_batch_nerf_reconstruct_leveled(
                 d_coords, d_indices, d_distances, d_angles, d_dihedrals,
                 level_start, level_end, (int)n_atoms
             );
-            /* Synchronize before next level */
-            cudaStreamSynchronize(stream);
+            /*
+             * No explicit sync needed between levels on same stream.
+             * CUDA guarantees kernel execution order and memory consistency
+             * for kernels launched on the same stream.
+             */
         }
     }
 }
@@ -560,7 +563,10 @@ void cuda_batch_nerf_reconstruct_backward_leveled(
                 d_grad_coords, d_grad_distances, d_grad_angles, d_grad_dihedrals,
                 level_start, level_end, (int)n_atoms
             );
-            cudaStreamSynchronize(stream);
+            /*
+             * No explicit sync needed between levels on same stream.
+             * CUDA guarantees kernel execution order and memory consistency.
+             */
         }
     }
 }

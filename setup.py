@@ -313,25 +313,8 @@ def check_openmp_available():
 
 
 # Build compile args
-extra_compile_args = []
+extra_compile_args = ['-O3']
 extra_link_args = []
-
-# Enable AddressSanitizer if CIFFY_ASAN environment variable is set
-# This helps debug memory errors like use-after-free, buffer overflows, etc.
-if os.environ.get('CIFFY_ASAN', '').lower() in ('1', 'true', 'yes'):
-    asan_compile = ['-fsanitize=address', '-fno-omit-frame-pointer', '-g', '-O1']
-    asan_link = ['-fsanitize=address']
-    extra_compile_args.extend(asan_compile)
-    extra_link_args.extend(asan_link)
-    print("AddressSanitizer enabled: building with -fsanitize=address -O1")
-    if sys.platform == 'darwin':
-        print("  On macOS, run with:")
-        print("    DYLD_INSERT_LIBRARIES=$(clang -print-file-name=libclang_rt.asan_osx_dynamic.dylib) python ...")
-    else:
-        print("  Run with: ASAN_OPTIONS=detect_leaks=1 python ...")
-else:
-    # Default optimization level (only when not using ASan)
-    extra_compile_args.append('-O3')
 
 # Enable profiling if CIFFY_PROFILE environment variable is set
 if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):

@@ -308,9 +308,9 @@ class NerfReconstructFunction(Function):
             distances_np = distances.detach().cpu().numpy().astype(np.float32)
             angles_np = angles.detach().cpu().numpy().astype(np.float32)
             dihedrals_np = dihedrals.detach().cpu().numpy().astype(np.float32)
-            level_off_np = level_offsets_tensor.cpu().numpy().astype(np.int32)
-            anchor_np = anchor_tensor.cpu().numpy().astype(np.float32)
-            comp_ids_np = comp_ids_tensor.cpu().numpy().astype(np.int32)
+            level_off_np = level_offsets_tensor.detach().cpu().numpy().astype(np.int32)
+            anchor_np = anchor_tensor.detach().cpu().numpy().astype(np.float32)
+            comp_ids_np = comp_ids_tensor.detach().cpu().numpy().astype(np.int32)
 
             coords_np = _nerf_reconstruct_leveled_anchored(
                 indices_np, distances_np, angles_np, dihedrals_np, n_atoms,
@@ -347,9 +347,10 @@ class NerfReconstructFunction(Function):
         ctx.n_atoms = n_atoms
         ctx.use_leveled = use_leveled
         # Save extra context (not tensors we need gradients for)
-        ctx.level_offsets = level_offsets_tensor
-        ctx.anchor_coords = anchor_tensor
-        ctx.component_ids = comp_ids_tensor
+        # Detach these to avoid keeping grad history - they're frozen references
+        ctx.level_offsets = level_offsets_tensor.detach() if level_offsets_tensor is not None else None
+        ctx.anchor_coords = anchor_tensor.detach() if anchor_tensor is not None else None
+        ctx.component_ids = comp_ids_tensor.detach() if comp_ids_tensor is not None else None
 
         return coords
 

@@ -366,10 +366,10 @@ def _torch_nerf_reconstruct(
     # Anchored CPU path
     if anchor_tensor is not None and comp_ids_tensor is not None and level_offsets is not None:
         from .._c import _nerf_reconstruct_leveled_anchored as _c_nerf_reconstruct_anchored
-        anchor_np = anchor_tensor.cpu().numpy().astype(np.float32)
-        comp_ids_np = comp_ids_tensor.cpu().numpy().astype(np.int32)
+        anchor_np = anchor_tensor.detach().cpu().numpy().astype(np.float32)
+        comp_ids_np = comp_ids_tensor.detach().cpu().numpy().astype(np.int32)
         if is_torch(level_offsets):
-            level_off_np = level_offsets.cpu().numpy().astype(np.int32)
+            level_off_np = level_offsets.detach().cpu().numpy().astype(np.int32)
         else:
             level_off_np = np.asarray(level_offsets, dtype=np.int32)
         coords_np = _c_nerf_reconstruct_anchored(

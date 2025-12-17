@@ -33,7 +33,7 @@ Homepage = "https://github.com/hmblair/ciffy"
 Repository = "https://github.com/hmblair/ciffy"
 
 [tool.setuptools]
-packages = ["ciffy_cuda"]
+packages = ["ciffy_cuda", "ciffy"]
 
 [tool.setuptools_scm]
 root = ".."

@@ -469,11 +469,7 @@ class CoordinateManager:
                 # NERF places root atoms at origin, so we must restore original position
                 atom_idx = int(component_atoms[0])
                 if atom_idx < n_atoms:
-                    centroid = self._components.centroids[comp_idx]
-                    if is_torch(coords):
-                        import torch
-                        centroid = torch.from_numpy(centroid).to(coords.device)
-                    coords[atom_idx] = centroid
+                    coords[atom_idx] = self._components.centroids[comp_idx]
             else:
                 # Multi-atom component (chain) - restore orientation AND position
                 atom_start = int(component_atoms[0])
@@ -489,12 +485,6 @@ class CoordinateManager:
                     continue
 
                 original_centroid = self._components.centroids[comp_idx]
-
-                # Convert reference data to torch if needed (stored as numpy)
-                if is_torch(coords):
-                    import torch
-                    reference_coords = torch.from_numpy(reference_coords).to(coords.device)
-                    original_centroid = torch.from_numpy(original_centroid).to(coords.device)
 
                 # Use pre-computed contiguity flag (avoids per-iteration check)
                 if self._components.contiguous[comp_idx]:

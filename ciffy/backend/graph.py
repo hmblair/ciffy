@@ -235,8 +235,8 @@ class ConnectedComponents:
 
     offsets: np.ndarray
     atoms: np.ndarray
-    centroids: np.ndarray
-    reference_coords: list[np.ndarray | None]
+    centroids: Array  # Can be numpy or torch, same device as source coordinates
+    reference_coords: list[Array | None]  # Can be numpy or torch
     contiguous: list[bool]
 
     @classmethod
@@ -263,13 +263,16 @@ class ConnectedComponents:
         Returns:
             ConnectedComponents with all components (bonded and isolated).
         """
-        coords_np = to_numpy(coordinates)
-
         if n_atoms == 0:
+            if is_torch(coordinates):
+                import torch
+                centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
+            else:
+                centroids = np.zeros((0, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
-                centroids=np.zeros((0, 3), dtype=coords_np.dtype),
+                centroids=centroids,
                 reference_coords=[],
                 contiguous=[],
             )
@@ -280,16 +283,28 @@ class ConnectedComponents:
         )
 
         if n_components == 0:
+            if is_torch(coordinates):
+                import torch
+                centroids = torch.zeros(0, 3, dtype=coordinates.dtype, device=coordinates.device)
+            else:
+                centroids = np.zeros((0, 3), dtype=coordinates.dtype)
             return cls(
                 offsets=np.array([0], dtype=np.int64),
                 atoms=np.array([], dtype=np.int64),
-                centroids=np.zeros((0, 3), dtype=coords_np.dtype),
+                centroids=centroids,
                 reference_coords=[],
                 contiguous=[],
             )
 
-        # Process each component to compute centroids and reference coords
-        centroids_list = []
+        # Build centroids array on the same device as coordinates
+        if is_torch(coordinates):
+            import torch
+            centroids = torch.zeros(
+                n_components, 3, dtype=coordinates.dtype, device=coordinates.device
+            )
+        else:
+            centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
+
         reference_coords_list = []
         contiguous_list = []
 
@@ -297,29 +312,31 @@ class ConnectedComponents:
             start = comp_offsets[i]
             end = comp_offsets[i + 1]
             component_atoms = comp_atoms[start:end]
-            component_coords = coords_np[component_atoms]
+            component_coords = coordinates[component_atoms]
             centroid = component_coords.mean(axis=0)
+            centroids[i] = centroid
 
             # Check if atoms are contiguous in memory
             is_contiguous = (
                 len(component_atoms) > 0 and
                 (len(component_atoms) == 1 or np.all(np.diff(component_atoms) == 1))
             )
-
-            centroids_list.append(centroid.copy())
             contiguous_list.append(is_contiguous)
 
             # Store reference coords for multi-atom components
             if len(component_atoms) > 1:
                 centered_coords = component_coords - centroid
-                reference_coords_list.append(centered_coords.copy())
+                if is_torch(centered_coords):
+                    reference_coords_list.append(centered_coords.clone())
+                else:
+                    reference_coords_list.append(centered_coords.copy())
             else:
                 reference_coords_list.append(None)
 
         return cls(
             offsets=comp_offsets,
             atoms=comp_atoms,
-            centroids=np.array(centroids_list, dtype=coords_np.dtype),
+            centroids=centroids,
             reference_coords=reference_coords_list,
             contiguous=contiguous_list,
         )
@@ -344,20 +361,40 @@ class ConnectedComponents:
         Update centroids and reference coordinates from new Cartesian coordinates.
 
         This is called when coordinates change but component structure stays the same.
+        Centroids are kept on the same device as coordinates (no transfers).
         """
-        coords_np = to_numpy(coordinates)
         n_components = self.n_components
+
+        # Build new centroids array on the same device as coordinates
+        if is_torch(coordinates):
+            import torch
+            new_centroids = torch.zeros(
+                n_components, 3, dtype=coordinates.dtype, device=coordinates.device
+            )
+        else:
+            new_centroids = np.zeros((n_components, 3), dtype=coordinates.dtype)
+
+        new_reference_coords = []
 
         for i in range(n_components):
             component_atoms = self.get_component_atoms(i)
-            component_coords = coords_np[component_atoms]
+            component_coords = coordinates[component_atoms]
             centroid = component_coords.mean(axis=0)
-            self.centroids[i] = centroid
+            new_centroids[i] = centroid
 
             # Update reference coords for multi-atom components
             if len(component_atoms) > 1:
                 centered_coords = component_coords - centroid
-                self.reference_coords[i] = centered_coords.copy()
+                # Clone/copy to avoid referencing the original tensor
+                if is_torch(centered_coords):
+                    new_reference_coords.append(centered_coords.clone())
+                else:
+                    new_reference_coords.append(centered_coords.copy())
+            else:
+                new_reference_coords.append(None)
+
+        self.centroids = new_centroids
+        self.reference_coords = new_reference_coords
 
 
 # =============================================================================

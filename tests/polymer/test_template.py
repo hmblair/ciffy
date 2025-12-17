@@ -5,25 +5,47 @@ import numpy as np
 import warnings
 
 from tests.utils import get_test_cif
+from tests.testing import expected_sequence_values, assert_sequence_matches
 
 
 class TestFromSequence:
     """Test the from_sequence function."""
 
-    def test_rna_sequence(self):
-        """Test RNA sequence generates correct polymer."""
+    @pytest.mark.parametrize("sequence,expected_residues,expected_chains", [
+        ("acgu", 4, 1),      # RNA tetramer
+        ("MGKLF", 5, 1),     # Protein pentamer
+        ("a", 1, 1),         # Single RNA
+        ("M", 1, 1),         # Single protein
+        ("acgt", 4, 1),      # DNA tetramer
+    ])
+    def test_sequence_structure_counts(self, sequence, expected_residues, expected_chains):
+        """Test sequence generates correct structure counts."""
         from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
+
+        polymer = from_sequence(sequence)
+
+        assert polymer.size(Scale.RESIDUE) == expected_residues
+        assert polymer.size(Scale.CHAIN) == expected_chains
+
+    @pytest.mark.parametrize("sequence", [
+        "acgu",   # RNA
+        "MGKLF",  # Protein
+        "a",      # Single RNA
+        "M",      # Single protein
+        "acgt",   # DNA
+    ])
+    def test_sequence_values_match(self, sequence):
+        """Test sequence values match expected Residue enum values."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence(sequence)
+        assert_sequence_matches(polymer, sequence)
+
+    def test_rna_valid_elements(self):
+        """Test RNA has valid element types."""
+        from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-
-        # Check structure counts
-        assert polymer.size(Scale.RESIDUE) == 4
-        assert polymer.size(Scale.CHAIN) == 1
-
-        # Check sequence values match Residue enum
-        expected = [Residue.A.value, Residue.C.value, Residue.G.value, Residue.U.value]
-        assert list(polymer.sequence) == expected
 
         # Check all atoms have valid indices (> 0)
         assert (polymer.atoms > 0).all()
@@ -33,172 +55,76 @@ class TestFromSequence:
         unique_elements = set(polymer.elements.tolist())
         assert unique_elements.issubset(valid_elements)
 
-    def test_protein_sequence(self):
-        """Test protein sequence generates correct polymer."""
-        from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
-
-        polymer = from_sequence("MGKLF")
-
-        # Check structure counts
-        assert polymer.size(Scale.RESIDUE) == 5
-        assert polymer.size(Scale.CHAIN) == 1
-
-        # Check sequence values match Residue enum
-        expected = [Residue.MET.value, Residue.GLY.value, Residue.LYS.value,
-                    Residue.LEU.value, Residue.PHE.value]
-        assert list(polymer.sequence) == expected
-
-    def test_single_residue_rna(self):
-        """Test single nucleotide."""
-        from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
-
-        polymer = from_sequence("a")
-
-        assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [Residue.A.value]
-
-    def test_single_residue_protein(self):
-        """Test single amino acid."""
-        from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
-
-        polymer = from_sequence("M")  # Methionine (not ambiguous with nucleotides)
-
-        assert polymer.size(Scale.RESIDUE) == 1
-        assert list(polymer.sequence) == [Residue.MET.value]
-
-    def test_warning_uppercase_nucleotides(self):
+    @pytest.mark.parametrize("sequence", ["ACG", "ACGT"])
+    def test_warning_uppercase_nucleotides(self, sequence):
         """Test warning when uppercase looks like nucleotides."""
         from ciffy import from_sequence
-        from ciffy.biochemistry import Residue
-
-        # Note: "ACGU" would fail because U is not a valid protein letter
-        # Use "ACG" which is A=Ala, C=Cys, G=Gly (all valid protein)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            polymer = from_sequence("ACG")
-
-            assert len(w) == 1
-            assert "nucleotide characters" in str(w[0].message)
-            assert "Did you mean lowercase" in str(w[0].message)
-
-        # Should work as protein
-        expected = [Residue.ALA.value, Residue.CYS.value, Residue.GLY.value]
-        assert list(polymer.sequence) == expected
-
-    def test_uppercase_acgt_warning(self):
-        """Test warning for ACGT (valid protein letters)."""
-        from ciffy import from_sequence
-        from ciffy.biochemistry import Residue
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            # A=Ala, C=Cys, G=Gly, T=Thr - all valid protein letters
-            polymer = from_sequence("ACGT")
+            polymer = from_sequence(sequence)
 
             assert len(w) == 1
             assert "nucleotide characters" in str(w[0].message)
 
-        # Check sequence matches Residue enum
-        expected = [Residue.ALA.value, Residue.CYS.value, Residue.GLY.value, Residue.THR.value]
-        assert list(polymer.sequence) == expected
+        # Should still work as protein with correct sequence
+        assert_sequence_matches(polymer, sequence)
 
-    def test_invalid_character_rna(self):
-        """Test invalid character in RNA sequence raises ValueError."""
+    @pytest.mark.parametrize("sequence,error_match", [
+        ("acgx", "Unknown RNA residue 'x'"),
+        ("MGXLF", "Unknown protein residue 'X'"),
+        ("acgut", "both 'u'.*and 't'"),
+        ("", "Empty sequence"),
+        ("AcGu", "Mixed case not supported"),
+    ])
+    def test_invalid_sequences(self, sequence, error_match):
+        """Test invalid sequences raise ValueError with appropriate message."""
         from ciffy import from_sequence
 
-        with pytest.raises(ValueError, match="Unknown RNA residue 'x'"):
-            from_sequence("acgx")
+        with pytest.raises(ValueError, match=error_match):
+            from_sequence(sequence)
 
-    def test_invalid_character_protein(self):
-        """Test invalid character in protein sequence raises ValueError."""
+    def test_dna_valid_atoms(self):
+        """Test DNA has valid atom indices."""
         from ciffy import from_sequence
-
-        with pytest.raises(ValueError, match="Unknown protein residue 'X'"):
-            from_sequence("MGXLF")
-
-    def test_dna_sequence(self):
-        """Test DNA sequence generates correct polymer."""
-        from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
 
         polymer = from_sequence("acgt")
-
-        # Check structure counts
-        assert polymer.size(Scale.RESIDUE) == 4
-        assert polymer.size(Scale.CHAIN) == 1
-
-        # Check sequence values match Residue enum
-        expected = [Residue.DA.value, Residue.DC.value, Residue.DG.value, Residue.DT.value]
-        assert list(polymer.sequence) == expected
-
-        # Check all atoms have valid indices (> 0)
         assert (polymer.atoms > 0).all()
 
-    def test_dna_rna_mixed_raises(self):
-        """Test mixing 'u' and 't' raises ValueError."""
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_backend(self, backend):
+        """Test backend selection."""
         from ciffy import from_sequence
 
-        with pytest.raises(ValueError, match="both 'u'.*and 't'"):
-            from_sequence("acgut")
+        polymer = from_sequence("acgu", backend=backend)
+        assert polymer.backend == backend
 
-    def test_empty_sequence(self):
-        """Test empty sequence raises ValueError."""
+        if backend == "numpy":
+            assert isinstance(polymer.coordinates, np.ndarray)
+        else:
+            import torch
+            assert isinstance(polymer.coordinates, torch.Tensor)
+
+    @pytest.mark.parametrize("id_arg,expected_id", [
+        ("my_rna", "my_rna"),
+        (None, "template"),  # default
+    ])
+    def test_polymer_id(self, id_arg, expected_id):
+        """Test polymer ID assignment."""
         from ciffy import from_sequence
 
-        with pytest.raises(ValueError, match="Empty sequence"):
-            from_sequence("")
+        if id_arg is None:
+            polymer = from_sequence("acgu")
+        else:
+            polymer = from_sequence("acgu", id=id_arg)
 
-    def test_mixed_case(self):
-        """Test mixed case raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError, match="Mixed case not supported"):
-            from_sequence("AcGu")
-
-    def test_backend_numpy(self):
-        """Test numpy backend."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu", backend="numpy")
-
-        assert isinstance(polymer.coordinates, np.ndarray)
-        assert polymer.backend == "numpy"
-
-    def test_backend_torch(self):
-        """Test torch backend."""
-        import torch
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu", backend="torch")
-
-        assert isinstance(polymer.coordinates, torch.Tensor)
-        assert polymer.backend == "torch"
-
-    def test_custom_id(self):
-        """Test custom ID."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu", id="my_rna")
-
-        assert polymer.pdb_id == "my_rna"
-
-    def test_default_id(self):
-        """Test default ID is 'template'."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        assert polymer.pdb_id == "template"
+        assert polymer.pdb_id == expected_id
 
     def test_chain_name(self):
         """Test chain name is 'A'."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-
         assert polymer.names == ["A"]
 
     def test_atoms_per_residue_vary(self):
@@ -354,47 +280,20 @@ class TestFromSequenceEdgeCases:
         assert polymer.size(Scale.RESIDUE) == 10000
         assert elapsed < 10.0
 
-    def test_whitespace_in_sequence(self):
-        """Test whitespace in sequence raises ValueError."""
+    @pytest.mark.parametrize("sequence", [
+        "ac gu",   # whitespace
+        "ac\ngu",  # newline
+        "ac\tgu",  # tab
+        "ac1gu",   # number
+        "ac-gu",   # special character
+        "xyz",     # only invalid characters
+    ])
+    def test_invalid_characters_raise(self, sequence):
+        """Test sequences with invalid characters raise ValueError."""
         from ciffy import from_sequence
 
         with pytest.raises(ValueError):
-            from_sequence("ac gu")
-
-    def test_newline_in_sequence(self):
-        """Test newline in sequence raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError):
-            from_sequence("ac\ngu")
-
-    def test_tab_in_sequence(self):
-        """Test tab in sequence raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError):
-            from_sequence("ac\tgu")
-
-    def test_number_in_sequence(self):
-        """Test number in sequence raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError):
-            from_sequence("ac1gu")
-
-    def test_special_character_in_sequence(self):
-        """Test special character in sequence raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError):
-            from_sequence("ac-gu")
-
-    def test_only_invalid_characters(self):
-        """Test sequence with only invalid characters raises ValueError."""
-        from ciffy import from_sequence
-
-        with pytest.raises(ValueError):
-            from_sequence("xyz")
+            from_sequence(sequence)
 
     def test_repeated_single_residue(self):
         """Test repeated single residue."""
@@ -419,33 +318,20 @@ class TestFromSequenceEdgeCases:
 class TestFromSequenceMultiChain:
     """Test multi-chain from_sequence functionality."""
 
-    def test_two_rna_chains(self):
-        """Test creating two RNA chains."""
+    @pytest.mark.parametrize("sequences,expected_chains,expected_residues,expected_names", [
+        (["acgu", "acgu"], 2, 8, ["A", "B"]),
+        (["acgu", "acgu", "acgu"], 3, 12, ["A", "B", "C"]),
+        (["acgu", "MGKLF"], 2, 9, ["A", "B"]),  # Mixed RNA + protein
+    ])
+    def test_multi_chain_structure(self, sequences, expected_chains, expected_residues, expected_names):
+        """Test multi-chain structure generation."""
         from ciffy import from_sequence, Scale
 
-        polymer = from_sequence(["acgu", "acgu"])
+        polymer = from_sequence(sequences)
 
-        assert polymer.size(Scale.CHAIN) == 2
-        assert polymer.size(Scale.RESIDUE) == 8
-        assert polymer.names == ["A", "B"]
-
-    def test_three_chains(self):
-        """Test creating three chains."""
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence(["acgu", "acgu", "acgu"])
-
-        assert polymer.size(Scale.CHAIN) == 3
-        assert polymer.names == ["A", "B", "C"]
-
-    def test_mixed_rna_protein(self):
-        """Test mixing RNA and protein chains."""
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence(["acgu", "MGKLF"])
-
-        assert polymer.size(Scale.CHAIN) == 2
-        assert polymer.size(Scale.RESIDUE) == 9  # 4 RNA + 5 protein
+        assert polymer.size(Scale.CHAIN) == expected_chains
+        assert polymer.size(Scale.RESIDUE) == expected_residues
+        assert polymer.names == expected_names
 
     def test_different_length_chains(self):
         """Test chains with different lengths."""
@@ -527,7 +413,6 @@ class TestFromSequenceMultiChain:
     def test_mixed_rna_dna(self):
         """Test mixing RNA and DNA chains."""
         from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import Residue
 
         polymer = from_sequence(["acgu", "acgt"])
 
@@ -535,8 +420,8 @@ class TestFromSequenceMultiChain:
         assert polymer.size(Scale.RESIDUE) == 8
         # First chain is RNA, second is DNA
         seq = list(polymer.sequence)
-        rna_expected = [Residue.A.value, Residue.C.value, Residue.G.value, Residue.U.value]
-        dna_expected = [Residue.DA.value, Residue.DC.value, Residue.DG.value, Residue.DT.value]
+        rna_expected = expected_sequence_values("acgu")
+        dna_expected = expected_sequence_values("acgt")
         assert seq[:4] == rna_expected
         assert seq[4:] == dna_expected
 

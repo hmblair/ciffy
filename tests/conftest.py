@@ -100,3 +100,42 @@ def multi_chain_polymer(backend):
     """Polymer loaded from CIF with multiple chains."""
     from ciffy import load
     return load(get_test_cif("9GCM"), backend=backend)
+
+
+# =============================================================================
+# Testing infrastructure fixtures
+# =============================================================================
+
+@pytest.fixture
+def tolerances():
+    """Fixture providing tolerance profile for numerical comparisons."""
+    from tests.testing import DEFAULT
+    return DEFAULT
+
+
+@pytest.fixture
+def gpu_tolerances():
+    """Fixture providing relaxed tolerances for GPU tests."""
+    from tests.testing import GPU
+    return GPU
+
+
+@pytest.fixture
+def strict_tolerances():
+    """Fixture providing strict tolerances for precision tests."""
+    from tests.testing import STRICT
+    return STRICT
+
+
+@pytest.fixture
+def assert_roundtrip():
+    """Fixture providing the roundtrip assertion function."""
+    from tests.testing import assert_roundtrip_preserves_structure
+    return assert_roundtrip_preserves_structure
+
+
+@pytest.fixture
+def assert_gradients():
+    """Fixture providing the gradient flow assertion function."""
+    from tests.testing import assert_gradient_flows
+    return assert_gradient_flows

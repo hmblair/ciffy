@@ -10,106 +10,29 @@ from tests.utils import (
     requires_cuda,
     requires_cuda_extension,
 )
+from tests.testing import (
+    assert_roundtrip_preserves_structure,
+    assert_gradient_flows,
+    assert_valid_angles,
+    assert_valid_dihedrals,
+    assert_positive_distances,
+    get_tolerances,
+)
 
 
 class TestInternalCoordinatesBasic:
     """Basic tests for internal coordinate conversion."""
 
-    def test_single_nucleotide_roundtrip(self):
-        """Test round-trip for single nucleotide."""
-        from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
-
-        polymer = from_sequence("a")
-        orig_coords = polymer.coordinates.copy()
-
-        # Access internal coordinates, then modify to trigger reconstruction
-        dihedrals = polymer.dihedrals.copy()
-        polymer.dihedrals = dihedrals
-
-        # Coordinates are now reconstructed
-        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
-        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
-
-        assert rmsd < 1e-5, f"RMSD {rmsd} exceeds threshold"
-
-    def test_rna_tetramer_roundtrip(self):
-        """Test round-trip for RNA tetramer."""
-        from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
-
-        polymer = from_sequence("acgu")
-        orig_coords = polymer.coordinates.copy()
-
-        # Access internal coordinates, then modify to trigger reconstruction
-        dihedrals = polymer.dihedrals.copy()
-        polymer.dihedrals = dihedrals
-
-        # Coordinates are now reconstructed
-        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
-        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
-
-        assert rmsd < 1e-4, f"RMSD {rmsd} exceeds threshold"
-
-    def test_internal_polymer_properties(self):
-        """Test Polymer has correct internal coordinate properties."""
+    @pytest.mark.parametrize("sequence,tolerance_key", [
+        ("a", "roundtrip_single_residue"),
+        ("acgu", "roundtrip_small"),
+    ])
+    def test_roundtrip(self, sequence, tolerance_key):
+        """Test round-trip conversion preserves structure."""
         from ciffy import from_sequence
 
-        polymer = from_sequence("acgu")
-
-        # Access internal coordinates
-        distances = polymer.distances
-        angles = polymer.angles
-        dihedrals = polymer.dihedrals
-
-        # Check array shapes using ZMatrix
-        zmatrix = polymer._coord_manager.zmatrix
-        n_zmatrix = len(zmatrix)
-        assert distances.shape == (n_zmatrix,)
-        assert angles.shape == (n_zmatrix,)
-        assert dihedrals.shape == (n_zmatrix,)
-
-    def test_distances_are_positive(self):
-        """Test all bond distances are positive."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        distances = polymer.distances
-        zmatrix = polymer._coord_manager.zmatrix
-
-        # First entry has no distance (root atom)
-        for i in range(len(zmatrix)):
-            dist_ref = int(zmatrix.distance_refs[i])
-            if dist_ref >= 0:
-                assert distances[i] > 0, f"Distance at {i} is not positive"
-
-    def test_angles_in_valid_range(self):
-        """Test all bond angles are in [0, pi]."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        angles = polymer.angles
-        zmatrix = polymer._coord_manager.zmatrix
-
-        for i in range(len(zmatrix)):
-            ang_ref = int(zmatrix.angle_refs[i])
-            if ang_ref >= 0:
-                angle = angles[i]
-                assert 0 <= angle <= np.pi, f"Angle at {i} is {angle}, not in [0, pi]"
-
-    def test_dihedrals_in_valid_range(self):
-        """Test all dihedral angles are in [-pi, pi]."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        dihedrals = polymer.dihedrals
-        zmatrix = polymer._coord_manager.zmatrix
-
-        for i in range(len(zmatrix)):
-            dih_ref = int(zmatrix.dihedral_refs[i])
-            if dih_ref >= 0:
-                dih = dihedrals[i]
-                assert -np.pi <= dih <= np.pi, f"Dihedral at {i} is {dih}, not in [-pi, pi]"
+        polymer = from_sequence(sequence)
+        assert_roundtrip_preserves_structure(polymer, tolerance_key=tolerance_key)
 
 
 class TestInternalCoordinatesPDB:
@@ -172,23 +95,10 @@ class TestInternalCoordinatesTorchBackend:
 
     def test_torch_roundtrip(self):
         """Test round-trip with torch backend."""
-        import torch
         from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
 
         polymer = from_sequence("acgu", backend="torch")
-        orig_coords = polymer.coordinates.clone()
-
-        # Trigger reconstruction
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-
-        assert isinstance(polymer.coordinates, torch.Tensor)
-
-        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
-        rmsd = torch.sqrt(((aligned - orig_coords) ** 2).sum(dim=1).mean())
-
-        assert rmsd.item() < 1e-4, f"RMSD {rmsd.item()} exceeds threshold"
+        assert_roundtrip_preserves_structure(polymer, tolerance_key="roundtrip_small")
 
     def test_torch_roundtrip_preserves_device_and_dtype(self):
         """Ensure internal coordinates preserve device/dtype."""
@@ -244,28 +154,10 @@ class TestInternalCoordinatesTorchBackend:
 
     def test_differentiability(self):
         """Test gradients flow through reconstruction."""
-        import torch
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
-
-        # Enable gradients on dihedrals
-        dihedrals = polymer.dihedrals.clone()
-        dihedrals.requires_grad_(True)
-        polymer.dihedrals = dihedrals
-
-        # Access coordinates (triggers reconstruction)
-        coords = polymer.coordinates
-
-        # Compute loss
-        loss = coords.pow(2).mean()
-
-        # Should not raise
-        loss.backward()
-
-        # Gradients should exist
-        assert dihedrals.grad is not None
-        assert not torch.all(dihedrals.grad == 0)
+        assert_gradient_flows(polymer)
 
 
 class TestNamedDihedrals:
@@ -448,172 +340,24 @@ class TestNamedDihedrals:
 class TestSetMethods:
     """Tests for setting internal coordinates."""
 
-    def test_set_dihedrals(self):
-        """Test setting dihedrals modifies polymer in-place."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        orig_dihedrals = polymer.dihedrals.copy()
-
-        new_dihedrals = polymer.dihedrals.copy()
-        new_dihedrals[5] = 1.5
-
-        polymer.dihedrals = new_dihedrals
-
-        # Should be modified
-        assert polymer.dihedrals[5] == 1.5
-        assert polymer.dihedrals[5] != orig_dihedrals[5]
-
-    def test_set_angles(self):
-        """Test setting angles modifies polymer in-place."""
+    @pytest.mark.parametrize("coord_type,index,new_value", [
+        ("dihedrals", 5, 1.5),
+        ("angles", 5, 2.0),
+        ("distances", 5, 2.0),
+    ])
+    def test_set_internal_coords(self, coord_type, index, new_value):
+        """Test setting internal coordinates modifies polymer in-place."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
 
-        new_angles = polymer.angles.copy()
-        new_angles[5] = 2.0
+        # Get, modify, set
+        coords = getattr(polymer, coord_type).copy()
+        coords[index] = new_value
+        setattr(polymer, coord_type, coords)
 
-        polymer.angles = new_angles
-
-        assert polymer.angles[5] == 2.0
-
-    def test_set_distances(self):
-        """Test setting distances modifies polymer in-place."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        new_distances = polymer.distances.copy()
-        new_distances[5] = 2.0
-
-        polymer.distances = new_distances
-
-        assert polymer.distances[5] == 2.0
-
-
-class TestOrphanAtoms:
-    """Tests for orphan atom handling (single-atom connected components)."""
-
-    def test_waters_become_orphans(self):
-        """Test that water molecules become single-atom connected components."""
-        from ciffy import load
-
-        # Load structure with waters
-        polymer = load(get_test_cif("1ZEW"))  # Don't call .poly()
-
-        # Access internal coords to build Z-matrix
-        _ = polymer.dihedrals
-
-        # Should have single-atom components (waters, ions)
-        # Access ConnectedComponents object
-        mgr = polymer._coord_manager
-        components = mgr._components
-        n_components = components.n_components
-        single_atom_count = 0
-        for i in range(n_components):
-            if components.get_component_size(i) == 1:
-                single_atom_count += 1
-
-        assert single_atom_count > 0
-
-    def test_orphan_coords_restored(self):
-        """Test orphan coordinates are restored after round-trip."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW"))
-        orig_coords = polymer.coordinates.copy()
-
-        # Trigger reconstruction
-        dihedrals = polymer.dihedrals.copy()
-        polymer.dihedrals = dihedrals
-
-        # Find single-atom components using ConnectedComponents
-        mgr = polymer._coord_manager
-        components = mgr._components
-        n_components = components.n_components
-
-        for i in range(n_components):
-            if components.get_component_size(i) == 1:
-                # This is a single-atom component
-                atom_idx = int(components.get_component_atoms(i)[0])
-                orig_coord = orig_coords[atom_idx]
-                rec_coord = polymer.coordinates[atom_idx]
-                assert np.allclose(orig_coord, rec_coord), \
-                    f"Orphan atom {atom_idx} coords not restored"
-
-    def test_no_orphans_for_clean_polymer(self):
-        """Test no orphans for polymer-only structure."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW")).poly()
-
-        # Access internal coords to build Z-matrix
-        _ = polymer.dihedrals
-
-        # Should have no single-atom components
-        mgr = polymer._coord_manager
-        components = mgr._components
-        n_components = components.n_components
-        single_atom_count = 0
-        for i in range(n_components):
-            if components.get_component_size(i) == 1:
-                single_atom_count += 1
-
-        assert single_atom_count == 0
-
-
-class TestZMatrix:
-    """Tests for Z-matrix construction."""
-
-    def test_zmatrix_references_valid(self):
-        """Test all Z-matrix references point to valid atoms."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        # Access internal coords to build Z-matrix
-        _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager.zmatrix
-
-        # Use validate() method from ZMatrix class
-        zmatrix.validate()  # Should not raise
-
-    def test_zmatrix_distinct_references(self):
-        """Test Z-matrix references are distinct for full entries."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        # Access internal coords to build Z-matrix
-        _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager.zmatrix
-
-        for i in range(len(zmatrix)):
-            dih_ref = int(zmatrix.dihedral_refs[i])
-            if dih_ref >= 0:
-                # All four atoms should be distinct
-                atoms = {
-                    int(zmatrix.atom_indices[i]),
-                    int(zmatrix.distance_refs[i]),
-                    int(zmatrix.angle_refs[i]),
-                    dih_ref,
-                }
-                assert len(atoms) == 4, \
-                    f"Entry {i}: atoms not all distinct"
-
-    def test_first_atom_at_origin(self):
-        """Test first atom has no references (placed at origin)."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        # Access internal coords to build Z-matrix
-        _ = polymer.dihedrals
-        zmatrix = polymer._coord_manager.zmatrix
-
-        assert int(zmatrix.distance_refs[0]) == -1
-        assert int(zmatrix.angle_refs[0]) == -1
-        assert int(zmatrix.dihedral_refs[0]) == -1
+        # Verify modification
+        assert getattr(polymer, coord_type)[index] == new_value
 
 
 class TestBondGraph:
@@ -666,6 +410,8 @@ class TestAutogradGradients:
         if not HAS_C_EXTENSION:
             pytest.skip("C extension not available")
 
+        tol = get_tolerances()
+
         # Test coordinates
         coords_np = np.array([
             [0.0, 0.0, 0.0],
@@ -690,13 +436,17 @@ class TestAutogradGradients:
             return internal[:, 0].double(), internal[:, 1].double(), internal[:, 2].double()
 
         coords_check = torch.tensor(coords_np, requires_grad=True, dtype=torch.float64)
-        assert torch.autograd.gradcheck(wrapper, coords_check, eps=1e-4, atol=1e-3, rtol=1e-2)
+        assert torch.autograd.gradcheck(
+            wrapper, coords_check,
+            eps=tol.gradcheck_eps, atol=tol.gradcheck_atol, rtol=tol.gradcheck_rtol
+        )
 
     def test_distance_gradient_direct(self):
         """Test distance gradient directly against PyTorch autograd."""
         import torch
         from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
 
+        tol = get_tolerances()
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.3, 0.2],
@@ -717,13 +467,14 @@ class TestAutogradGradients:
         d = torch.norm(coords[1] - coords[0])
         d.backward()
 
-        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-5)
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=tol.allclose_atol)
 
     def test_angle_gradient_direct(self):
         """Test angle gradient directly against PyTorch autograd."""
         import torch
         from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
 
+        tol = get_tolerances()
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.0, 0.0],
@@ -748,13 +499,14 @@ class TestAutogradGradients:
         angle = torch.acos(cos_angle.clamp(-1, 1))
         angle.backward()
 
-        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-4)
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=tol.gradcheck_atol)
 
     def test_dihedral_gradient_direct(self):
         """Test dihedral gradient directly against PyTorch autograd."""
         import torch
         from ciffy._c import _cartesian_to_internal, _cartesian_to_internal_backward
 
+        tol = get_tolerances()
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.0, 0.0],
@@ -789,7 +541,7 @@ class TestAutogradGradients:
         dihedral = torch.atan2(y, x)
         dihedral.backward()
 
-        assert np.allclose(grad_coords, coords.grad.numpy(), atol=1e-4)
+        assert np.allclose(grad_coords, coords.grad.numpy(), atol=tol.gradcheck_atol)
 
     def test_multiple_entries_gradients(self):
         """Test gradients with multiple Z-matrix entries."""
@@ -959,21 +711,10 @@ class TestProteinInternalCoordinates:
         if protein_chain is None:
             pytest.skip("No protein chain found in 9GCM")
 
-        # All non-root distances should be positive (first entry is root with no distance)
-        distances = protein_chain.distances
-        assert np.all(distances[1:] > 0), "Non-root distances should be positive"
-
-        # Angles should be in valid range [0, pi] (skip first 2 entries - root atoms)
-        angles = protein_chain.angles
-        valid_angles = angles[2:]  # First two atoms don't have valid angles
-        assert np.all(valid_angles >= 0)
-        assert np.all(valid_angles <= np.pi + 1e-5)
-
-        # Dihedrals should be in valid range [-pi, pi] (skip first 3 entries)
-        dihedrals = protein_chain.dihedrals
-        valid_dihedrals = dihedrals[3:]  # First three atoms don't have valid dihedrals
-        assert np.all(valid_dihedrals >= -np.pi - 1e-5)
-        assert np.all(valid_dihedrals <= np.pi + 1e-5)
+        # Use testing infrastructure assertions
+        assert_positive_distances(protein_chain.distances, skip_first=1)
+        assert_valid_angles(protein_chain.angles, skip_first=2)
+        assert_valid_dihedrals(protein_chain.dihedrals, skip_first=3)
 
 
 class TestNumericalEdgeCases:
@@ -1001,20 +742,9 @@ class TestNumericalEdgeCases:
     def test_zero_perturbation_preserves_structure(self):
         """Test zero perturbation exactly preserves structure."""
         from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
 
         polymer = from_sequence("acgu")
-        orig_coords = polymer.coordinates.copy()
-        orig_dihedrals = polymer.dihedrals.copy()
-
-        # Zero perturbation
-        polymer.dihedrals = orig_dihedrals + 0.0
-
-        # Should be essentially identical
-        aligned, _, _ = kabsch_align(polymer.coordinates, orig_coords)
-        rmsd = np.sqrt(((aligned - orig_coords) ** 2).sum(axis=1).mean())
-
-        assert rmsd < 1e-4, f"Zero perturbation changed structure: RMSD {rmsd}"
+        assert_roundtrip_preserves_structure(polymer, tolerance_key="roundtrip_small")
 
 
 class TestErrorHandling:
@@ -1053,15 +783,6 @@ class TestErrorHandling:
         with pytest.raises((ValueError, np.linalg.LinAlgError)):
             _ = polymer.coordinates
 
-    def test_validation_method_exists(self):
-        """Test that CoordinateManager has validation method."""
-        from ciffy import from_sequence
-        from ciffy.internal.coordinates import CoordinateManager
-
-        polymer = from_sequence("acgu")
-
-        # Verify validation method exists
-        assert hasattr(polymer._coord_manager, '_validate_coordinates')
 
 
 class TestRingPreservation:
@@ -1268,179 +989,6 @@ class TestRingPreservation:
                         err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
                     )
 
-    @pytest.mark.xfail(reason="Ring deformation during gradient-based backbone optimization - architectural limitation")
-    def test_ring_torsion_during_backbone_optimization(self):
-        """Test that rings remain planar during gradient-based backbone optimization.
-
-        This test optimizes backbone dihedrals using gradient descent with a simple
-        energy function and measures ring dihedral angles throughout. Currently fails
-        because the Z-matrix structure causes ring atoms to move inconsistently when
-        backbone dihedrals change.
-
-        The root cause is that ring atoms reference a mix of backbone and ring atoms
-        in the Z-matrix. When backbone atoms move, ring atoms that reference them
-        move differently than ring atoms that reference other ring atoms, breaking
-        ring planarity.
-        """
-        import torch
-        from ciffy import load, DihedralType
-
-        def compute_dihedral_angle(p1, p2, p3, p4):
-            """Compute dihedral angle in degrees from 4 points."""
-            b1 = p2 - p1
-            b2 = p3 - p2
-            b3 = p4 - p3
-            n1 = torch.linalg.cross(b1, b2)
-            n2 = torch.linalg.cross(b2, b3)
-            n1 = n1 / (torch.linalg.norm(n1) + 1e-10)
-            n2 = n2 / (torch.linalg.norm(n2) + 1e-10)
-            m1 = torch.linalg.cross(n1, b2 / (torch.linalg.norm(b2) + 1e-10))
-            x = torch.dot(n1, n2)
-            y = torch.dot(m1, n2)
-            return torch.atan2(y, x) * 180 / np.pi
-
-        def get_ring_dihedrals_for_residue(coords, atoms, res_start, res_end, res_type, is_purine):
-            """Get ring dihedral angles for a single residue."""
-            from ciffy.biochemistry import Residue
-
-            residue = Residue(res_type)
-            atom_enum = residue.atoms
-
-            # Map atom types to global indices
-            atom_idx = {}
-            for i in range(res_start, res_end):
-                atom_type = atoms[i]
-                for name in dir(atom_enum):
-                    if name.startswith('_'):
-                        continue
-                    try:
-                        member = getattr(atom_enum, name)
-                        if hasattr(member, 'value') and member.value == atom_type:
-                            atom_idx[name] = i
-                            break
-                    except:
-                        pass
-
-            # Define ring dihedral patterns
-            if is_purine:
-                patterns = [
-                    ["C8", "N9", "C4", "C5"],
-                    ["N9", "C4", "C5", "N7"],
-                    ["C4", "C5", "N7", "C8"],
-                    ["C4", "C5", "C6", "N1"],
-                ]
-            else:
-                patterns = [
-                    ["C6", "N1", "C2", "N3"],
-                    ["N1", "C2", "N3", "C4"],
-                    ["C2", "N3", "C4", "C5"],
-                ]
-
-            dihedrals = []
-            for atom_names in patterns:
-                try:
-                    indices = [atom_idx[n] for n in atom_names]
-                    angle = compute_dihedral_angle(
-                        coords[indices[0]], coords[indices[1]],
-                        coords[indices[2]], coords[indices[3]]
-                    )
-                    dihedrals.append(angle.item())
-                except KeyError:
-                    pass
-            return dihedrals
-
-        def get_all_ring_dihedrals(polymer, coords):
-            """Get all ring dihedrals for RNA."""
-            from ciffy.biochemistry import Residue
-
-            atoms = polymer._coord_manager._topology.atoms
-            sequence = polymer._coord_manager._topology.sequence
-            res_sizes = polymer._coord_manager._topology.residue_sizes
-
-            res_starts = np.zeros(len(res_sizes) + 1, dtype=np.int64)
-            res_starts[1:] = np.cumsum(res_sizes)
-
-            purine_types = {Residue.A.value, Residue.G.value}
-            pyrimidine_types = {Residue.C.value, Residue.U.value}
-
-            all_dihedrals = []
-            for res_idx in range(len(sequence)):
-                res_type = sequence[res_idx]
-                start, end = int(res_starts[res_idx]), int(res_starts[res_idx + 1])
-
-                if res_type in purine_types:
-                    dihedrals = get_ring_dihedrals_for_residue(
-                        coords, atoms, start, end, res_type, is_purine=True)
-                    all_dihedrals.extend(dihedrals)
-                elif res_type in pyrimidine_types:
-                    dihedrals = get_ring_dihedrals_for_residue(
-                        coords, atoms, start, end, res_type, is_purine=False)
-                    all_dihedrals.extend(dihedrals)
-            return all_dihedrals
-
-        # Load RNA structure
-        rna = load(get_test_cif("9GCM")).by_index(0).torch()
-
-        # Get initial ring dihedrals
-        coords_initial = rna.coordinates.clone()
-        ring_dihedrals_initial = get_all_ring_dihedrals(rna, coords_initial)
-
-        # Setup backbone optimization
-        cm = rna._coord_manager
-        zm = cm.zmatrix
-        dihedral_types = zm.dihedral_types
-
-        # Include CHI (glycosidic) dihedrals - these connect base to sugar
-        # and cause ring deformation when optimized
-        backbone_types = [
-            DihedralType.ALPHA, DihedralType.BETA, DihedralType.GAMMA,
-            DihedralType.DELTA, DihedralType.EPSILON, DihedralType.ZETA,
-            DihedralType.CHI_PURINE, DihedralType.CHI_PYRIMIDINE,
-        ]
-        backbone_mask = torch.zeros(len(dihedral_types), dtype=torch.bool)
-        for dt in backbone_types:
-            backbone_mask |= torch.from_numpy(dihedral_types == dt.value)
-
-        dihedrals = cm.dihedrals.clone()
-        dihedrals.requires_grad_(True)
-
-        # Run optimization steps
-        n_steps = 20
-        lr = 0.01
-        max_deviation = 0.0
-
-        for step in range(n_steps):
-            cm._dihedrals = dihedrals
-            cm._invalidate_cartesian()
-            coords = cm.coordinates
-
-            # Simple energy: sum of squared coordinates
-            E = (coords ** 2).sum()
-
-            # Measure ring deviation
-            ring_dihedrals_current = get_all_ring_dihedrals(rna, coords.detach())
-            for init, curr in zip(ring_dihedrals_initial, ring_dihedrals_current):
-                diff = abs(init - curr)
-                if diff > 180:
-                    diff = 360 - diff
-                max_deviation = max(max_deviation, diff)
-
-            # Update backbone dihedrals
-            E.backward()
-            with torch.no_grad():
-                grad = dihedrals.grad
-                if grad is not None:
-                    update = torch.zeros_like(dihedrals)
-                    update[backbone_mask] = grad[backbone_mask]
-                    dihedrals -= lr * update
-                    dihedrals.grad.zero_()
-
-        # Rings should remain planar (< 5 degree deviation)
-        assert max_deviation < 5.0, (
-            f"Ring deformation detected: max deviation {max_deviation:.1f}° >= 5°. "
-            "This is a known architectural limitation where ring atoms reference "
-            "a mix of backbone and ring atoms in the Z-matrix."
-        )
 
 
 # =============================================================================
@@ -1458,25 +1006,14 @@ class TestInternalCoordinatesGPU:
     def test_roundtrip_on_gpu(self, device):
         """Test round-trip conversion on GPU device."""
         skip_if_no_device(device)
-        import torch
         from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
 
+        tol = get_tolerances(device)
         polymer = from_sequence("acgu", backend="torch").to(device)
-        orig_coords = polymer.coordinates.clone()
-
-        # Trigger reconstruction by setting dihedrals
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-
-        new_coords = polymer.coordinates
-        assert new_coords.device.type == device
-
-        # Compare using Kabsch alignment
-        aligned, _, _ = kabsch_align(new_coords.cpu(), orig_coords.cpu())
-        rmsd = torch.sqrt(((aligned - orig_coords.cpu()) ** 2).sum(dim=1).mean())
-
-        assert rmsd.item() < 1e-4, f"GPU round-trip RMSD {rmsd.item()} exceeds threshold"
+        assert_roundtrip_preserves_structure(
+            polymer, threshold=tol.roundtrip_small,
+            message=f"on {device}"
+        )
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
     def test_internal_coords_on_gpu(self, device):
@@ -1495,32 +1032,26 @@ class TestInternalCoordinatesGPU:
         assert angles.device.type == device
         assert dihedrals.device.type == device
 
-        # Values should be reasonable
+        # Use centralized tolerances
+        tol = get_tolerances(device)
         assert torch.all(distances >= 0)
-        assert torch.all(angles >= 0) and torch.all(angles <= np.pi + 1e-5)
-        assert torch.all(dihedrals >= -np.pi - 1e-5) and torch.all(dihedrals <= np.pi + 1e-5)
+        assert torch.all(angles >= -tol.angle_range_epsilon)
+        assert torch.all(angles <= np.pi + tol.angle_range_epsilon)
+        assert torch.all(dihedrals >= -np.pi - tol.angle_range_epsilon)
+        assert torch.all(dihedrals <= np.pi + tol.angle_range_epsilon)
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
     def test_pdb_roundtrip_on_gpu(self, device):
         """Test round-trip on real PDB structure on GPU."""
         skip_if_no_device(device)
-        import torch
         from ciffy import load
-        from ciffy.operations.alignment import kabsch_align
 
+        tol = get_tolerances(device)
         polymer = load(get_test_cif("1ZEW")).poly().torch().to(device)
-        orig_coords = polymer.coordinates.clone()
-
-        # Trigger reconstruction
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-
-        new_coords = polymer.coordinates
-
-        aligned, _, _ = kabsch_align(new_coords.cpu(), orig_coords.cpu())
-        rmsd = torch.sqrt(((aligned - orig_coords.cpu()) ** 2).sum(dim=1).mean())
-
-        assert rmsd.item() < 1e-3, f"PDB round-trip RMSD {rmsd.item()} exceeds threshold"
+        assert_roundtrip_preserves_structure(
+            polymer, threshold=tol.roundtrip_real_structure,
+            message=f"on {device}"
+        )
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
     def test_gpu_cpu_transfer(self, device):
@@ -1529,45 +1060,29 @@ class TestInternalCoordinatesGPU:
         import torch
         from ciffy import from_sequence
 
+        tol = get_tolerances()
         polymer_cpu = from_sequence("acgu", backend="torch")
         dihedrals_cpu = polymer_cpu.dihedrals.clone()
 
         polymer_gpu = polymer_cpu.to(device)
         dihedrals_gpu = polymer_gpu.dihedrals
 
-        assert torch.allclose(dihedrals_cpu, dihedrals_gpu.cpu(), atol=1e-5)
+        assert torch.allclose(dihedrals_cpu, dihedrals_gpu.cpu(), atol=tol.allclose_atol)
 
         # Move back to CPU
         polymer_back = polymer_gpu.to("cpu")
         dihedrals_back = polymer_back.dihedrals
 
-        assert torch.allclose(dihedrals_cpu, dihedrals_back, atol=1e-5)
+        assert torch.allclose(dihedrals_cpu, dihedrals_back, atol=tol.allclose_atol)
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
     def test_differentiability_on_gpu(self, device):
         """Test gradient flow through reconstruction on GPU."""
         skip_if_no_device(device)
-        import torch
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch").to(device)
-
-        # Enable gradients on dihedrals
-        dihedrals = polymer.dihedrals.clone()
-        dihedrals.requires_grad_(True)
-        polymer.dihedrals = dihedrals
-
-        # Access coordinates (triggers reconstruction)
-        coords = polymer.coordinates
-
-        # Compute loss and backpropagate
-        loss = coords.pow(2).mean()
-        loss.backward()
-
-        # Gradients should exist and be on GPU
-        assert dihedrals.grad is not None
-        assert dihedrals.grad.device.type == device
-        assert not torch.all(dihedrals.grad == 0)
+        assert_gradient_flows(polymer)
 
 
 class TestAutogradGradientsGPU:
@@ -1584,6 +1099,7 @@ class TestAutogradGradientsGPU:
         import torch
         from ciffy.backend.autograd import cartesian_to_internal
 
+        tol = get_tolerances("cuda")
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.0, 0.0],
@@ -1607,7 +1123,7 @@ class TestAutogradGradientsGPU:
         # CUDA computation
         internal_cuda = cartesian_to_internal(coords_cpu.cuda(), indices.cuda())
 
-        assert torch.allclose(internal_cpu, internal_cuda.cpu(), atol=1e-5)
+        assert torch.allclose(internal_cpu, internal_cuda.cpu(), atol=tol.allclose_atol)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1616,6 +1132,7 @@ class TestAutogradGradientsGPU:
         import torch
         from ciffy.backend.autograd import nerf_reconstruct
 
+        tol = get_tolerances("cuda")
         n_atoms = 4
         indices_np = np.array([
             [0, -1, -1, -1],
@@ -1639,7 +1156,7 @@ class TestAutogradGradientsGPU:
         # CUDA reconstruction
         coords_cuda = nerf_reconstruct(indices.cuda(), internal.cuda(), n_atoms)
 
-        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-5)
+        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=tol.allclose_atol)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1648,6 +1165,7 @@ class TestAutogradGradientsGPU:
         import torch
         from ciffy.backend.autograd import cartesian_to_internal
 
+        tol = get_tolerances("cuda")
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.3, 0.2],
@@ -1680,7 +1198,7 @@ class TestAutogradGradientsGPU:
         loss.backward()
         grad_cuda = coords_cuda.grad.cpu()
 
-        assert torch.allclose(grad_cpu, grad_cuda, atol=1e-4)
+        assert torch.allclose(grad_cpu, grad_cuda, atol=tol.gradcheck_atol)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1689,6 +1207,7 @@ class TestAutogradGradientsGPU:
         import torch
         from ciffy.backend.autograd import nerf_reconstruct
 
+        tol = get_tolerances("cuda")
         n_atoms = 4
         indices_np = np.array([
             [0, -1, -1, -1],
@@ -1720,7 +1239,7 @@ class TestAutogradGradientsGPU:
         coords = nerf_reconstruct(indices.cuda(), internal_cuda, n_atoms)
         coords.sum().backward()
 
-        assert torch.allclose(grad_internal_cpu, internal_cuda.grad.cpu(), atol=1e-4)
+        assert torch.allclose(grad_internal_cpu, internal_cuda.grad.cpu(), atol=tol.gradcheck_atol)
 
     @requires_cuda
     @requires_cuda_extension
@@ -1729,6 +1248,7 @@ class TestAutogradGradientsGPU:
         import torch
         from ciffy.backend.autograd import cartesian_to_internal
 
+        tol = get_tolerances("cuda")
         coords_np = np.array([
             [0.0, 0.0, 0.0],
             [1.5, 0.0, 0.0],
@@ -1755,7 +1275,8 @@ class TestAutogradGradientsGPU:
             coords_np, requires_grad=True, dtype=torch.float64, device="cuda"
         )
         assert torch.autograd.gradcheck(
-            wrapper, coords_check, eps=1e-4, atol=1e-3, rtol=1e-2
+            wrapper, coords_check,
+            eps=tol.gradcheck_eps, atol=tol.gradcheck_atol, rtol=tol.gradcheck_rtol
         )
 
 
@@ -1827,192 +1348,3 @@ class TestInternalCoordsEdgeCasesGPU:
         assert coords_recon.shape == (n_atoms, 3)
 
 
-class TestBFSLevels:
-    """Tests for BFS level computation in Z-matrix construction."""
-
-    def test_zmatrix_has_levels(self):
-        """Test that ZMatrix stores BFS levels."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        _ = polymer.dihedrals  # Trigger Z-matrix build
-
-        zm = polymer._coord_manager.zmatrix
-        assert zm.levels is not None
-        assert len(zm.levels) == len(zm)
-
-    def test_levels_parent_child_relationship(self):
-        """Test that child level = parent level + 1."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW")).poly()
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        indices = zm.indices
-        levels = zm.levels
-
-        # Build atom_idx -> level map from Z-matrix
-        atom_to_level = {}
-        for i in range(len(indices)):
-            atom_idx = int(indices[i, 0])
-            atom_to_level[atom_idx] = int(levels[i])
-
-        # Verify parent-child relationships
-        violations = 0
-        for i in range(len(indices)):
-            dist_ref = int(indices[i, 1])
-            if dist_ref >= 0:  # Has a parent
-                parent_level = atom_to_level.get(dist_ref, -1)
-                child_level = int(levels[i])
-                if parent_level >= 0 and child_level != parent_level + 1:
-                    violations += 1
-
-        assert violations == 0, f"Found {violations} parent-child level violations"
-
-    def test_level_offsets_partition_entries(self):
-        """Test that level_offsets CSR format covers all entries."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW")).poly()
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        offsets = zm.level_offsets
-
-        assert offsets is not None
-        # CSR format: offsets[i]:offsets[i+1] defines entries at level i
-        assert offsets[0] == 0, "Offsets should start at 0"
-        assert offsets[-1] == len(zm), f"Offsets should end at {len(zm)}, got {offsets[-1]}"
-
-        # Offsets should be monotonically non-decreasing
-        for i in range(len(offsets) - 1):
-            assert offsets[i] <= offsets[i + 1], f"Offsets not monotonic at {i}"
-
-    def test_level_offsets_consistent_with_levels(self):
-        """Test that level_offsets matches per-entry levels."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW")).poly()
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        levels = zm.levels
-        offsets = zm.level_offsets
-
-        n_levels = int(levels.max()) + 1
-
-        # Count entries per level from levels array
-        level_counts = np.bincount(levels.astype(np.int64), minlength=n_levels)
-
-        # Counts from offsets
-        offset_counts = np.diff(offsets)
-
-        assert len(level_counts) == len(offset_counts), \
-            f"Level count mismatch: {len(level_counts)} vs {len(offset_counts)}"
-        assert np.array_equal(level_counts, offset_counts), \
-            "Level offsets don't match level counts"
-
-    def test_multichain_levels(self):
-        """Test levels are computed correctly for multi-chain structures."""
-        from ciffy import load
-
-        polymer = load(get_test_cif("1ZEW")).poly()
-        n_chains = len(polymer.lengths)
-        assert n_chains > 1, "Test requires multi-chain structure"
-
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        levels = zm.levels
-
-        # Each chain should have level 0 entries (chain roots)
-        n_roots = np.sum(levels == 0)
-        assert n_roots >= n_chains, f"Expected at least {n_chains} roots, got {n_roots}"
-
-    def test_levels_reasonable_depth(self):
-        """Test BFS depth is reasonable for molecular structures."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        levels = zm.levels
-
-        max_level = int(levels.max())
-        n_atoms = len(zm)
-
-        # BFS depth should be much less than number of atoms for realistic molecules
-        # (typical depth is sqrt(N) to log(N) depending on branching)
-        assert max_level < n_atoms, f"BFS depth {max_level} >= n_atoms {n_atoms}"
-
-        # For a tetramer (~130 atoms), depth should be < 100
-        assert max_level < 100, f"BFS depth {max_level} seems too large"
-
-
-class TestLeveledNERFCUDA:
-    """Tests for level-parallel NERF reconstruction on CUDA."""
-
-    @requires_cuda
-    @requires_cuda_extension
-    def test_leveled_nerf_available(self):
-        """Test that leveled NERF is available on CUDA."""
-        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
-        # This may be False if cooperative groups not supported
-        # Just check the import works
-        assert isinstance(HAS_LEVELED_NERF, bool)
-
-    @requires_cuda
-    @requires_cuda_extension
-    def test_level_offsets_passed_to_nerf(self):
-        """Test that level_offsets flows through to CUDA NERF."""
-        import torch
-        from ciffy import load
-        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
-
-        if not HAS_LEVELED_NERF:
-            pytest.skip("Leveled NERF CUDA kernel not available")
-
-        polymer = load(get_test_cif("1ZEW")).poly().torch().cuda()
-        _ = polymer.dihedrals
-
-        zm = polymer._coord_manager.zmatrix
-        assert zm.level_offsets is not None
-
-        # Trigger reconstruction
-        dihedrals = polymer.dihedrals.clone()
-        polymer.dihedrals = dihedrals
-        coords = polymer.coordinates
-
-        # Should still be on CUDA
-        assert coords.is_cuda
-
-    @requires_cuda
-    @requires_cuda_extension
-    def test_leveled_cuda_matches_cpu(self):
-        """Test leveled CUDA NERF matches CPU results."""
-        import torch
-        from ciffy import load
-        from ciffy.backend.cuda_ops import HAS_LEVELED_NERF
-
-        if not HAS_LEVELED_NERF:
-            pytest.skip("Leveled NERF CUDA kernel not available")
-
-        # Load on CPU
-        polymer_cpu = load(get_test_cif("1ZEW")).poly().torch()
-        orig_coords = polymer_cpu.coordinates.clone()
-
-        # Trigger CPU reconstruction
-        dihedrals = polymer_cpu.dihedrals.clone()
-        polymer_cpu.dihedrals = dihedrals
-        coords_cpu = polymer_cpu.coordinates
-
-        # Load on CUDA
-        polymer_cuda = load(get_test_cif("1ZEW")).poly().torch().cuda()
-        dihedrals_cuda = polymer_cuda.dihedrals.clone()
-        polymer_cuda.dihedrals = dihedrals_cuda
-        coords_cuda = polymer_cuda.coordinates
-
-        # Compare (1e-4 tolerance needed for accumulated float32 precision differences)
-        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-4)

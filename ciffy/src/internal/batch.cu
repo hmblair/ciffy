@@ -23,6 +23,8 @@
  * Kernel: Convert Cartesian coordinates to internal coordinates.
  *
  * Each thread processes one Z-matrix entry independently (embarrassingly parallel).
+ * Uses __ldg() via ciffy_load_float3_ldg() for read-only cache optimization on
+ * scattered coordinate reads. Each coordinate is loaded once and reused.
  */
 __global__ void kernel_cartesian_to_internal(
     const float *coords,       /* (n_atoms, 3) */
@@ -49,35 +51,35 @@ __global__ void kernel_cartesian_to_internal(
         return;
     }
 
-    const float *atom = &coords[atom_idx * 3];
+    /* Load all coordinates ONCE using __ldg() for read-only cache optimization.
+     * This reduces memory traffic by not re-loading the same coords multiple times. */
+    float3 atom_f3 = ciffy_load_float3_ldg(&coords[atom_idx * 3]);
+    float atom[3] = {atom_f3.x, atom_f3.y, atom_f3.z};
 
-    /* Bond length */
-    if (dist_ref >= 0 && dist_ref < n_atoms) {
-        const float *ref1 = &coords[dist_ref * 3];
-        distances[i] = compute_distance_impl(atom, ref1);
-    } else {
-        distances[i] = 0.0f;
+    /* Check if we have valid references and load them once */
+    int has_dist = (dist_ref >= 0 && dist_ref < n_atoms);
+    int has_angl = has_dist && (angl_ref >= 0 && angl_ref < n_atoms);
+    int has_dihe = has_angl && (dihe_ref >= 0 && dihe_ref < n_atoms);
+
+    float ref1[3], ref2[3], ref3[3];
+
+    if (has_dist) {
+        float3 ref1_f3 = ciffy_load_float3_ldg(&coords[dist_ref * 3]);
+        ref1[0] = ref1_f3.x; ref1[1] = ref1_f3.y; ref1[2] = ref1_f3.z;
+    }
+    if (has_angl) {
+        float3 ref2_f3 = ciffy_load_float3_ldg(&coords[angl_ref * 3]);
+        ref2[0] = ref2_f3.x; ref2[1] = ref2_f3.y; ref2[2] = ref2_f3.z;
+    }
+    if (has_dihe) {
+        float3 ref3_f3 = ciffy_load_float3_ldg(&coords[dihe_ref * 3]);
+        ref3[0] = ref3_f3.x; ref3[1] = ref3_f3.y; ref3[2] = ref3_f3.z;
     }
 
-    /* Bond angle */
-    if (angl_ref >= 0 && dist_ref >= 0 && angl_ref < n_atoms && dist_ref < n_atoms) {
-        const float *ref1 = &coords[dist_ref * 3];
-        const float *ref2 = &coords[angl_ref * 3];
-        angles[i] = compute_angle_impl(atom, ref1, ref2);
-    } else {
-        angles[i] = 0.0f;
-    }
-
-    /* Dihedral angle */
-    if (dihe_ref >= 0 && angl_ref >= 0 && dist_ref >= 0 &&
-        dihe_ref < n_atoms && angl_ref < n_atoms && dist_ref < n_atoms) {
-        const float *ref1 = &coords[dist_ref * 3];
-        const float *ref2 = &coords[angl_ref * 3];
-        const float *ref3 = &coords[dihe_ref * 3];
-        dihedrals[i] = compute_dihedral_impl(ref3, ref2, ref1, atom);
-    } else {
-        dihedrals[i] = 0.0f;
-    }
+    /* Compute internal coordinates using pre-loaded data */
+    distances[i] = has_dist ? compute_distance_impl(atom, ref1) : 0.0f;
+    angles[i] = has_angl ? compute_angle_impl(atom, ref1, ref2) : 0.0f;
+    dihedrals[i] = has_dihe ? compute_dihedral_impl(ref3, ref2, ref1, atom) : 0.0f;
 }
 
 

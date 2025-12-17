@@ -32,6 +32,15 @@
     #define CIFFY_GLOBAL __global__
 
     #include <cuda_runtime.h>
+
+    /*
+     * Load a float3 from memory using __ldg() for read-only cache optimization.
+     * The __ldg() intrinsic hints to the GPU that this data is read-only,
+     * enabling use of the texture cache for better performance on scattered reads.
+     */
+    __device__ __forceinline__ float3 ciffy_load_float3_ldg(const float *p) {
+        return make_float3(__ldg(p), __ldg(p + 1), __ldg(p + 2));
+    }
 #else
     /* Standard C/C++ compiler */
     #define CIFFY_HAS_CUDA 0

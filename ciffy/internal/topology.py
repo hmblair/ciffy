@@ -351,3 +351,28 @@ class ConnectedComponents:
             Number of atoms.
         """
         return int(self.offsets[comp_idx + 1] - self.offsets[comp_idx])
+
+    def update_centroids(self, coordinates: "Array") -> None:
+        """
+        Update centroids and reference coordinates from new Cartesian coordinates.
+
+        This is called when coordinates change but component structure stays the same.
+        Only updates the coordinate-dependent data (centroids, reference_coords),
+        not the topology-dependent data (offsets, atoms, contiguous).
+
+        Args:
+            coordinates: (N, 3) array of new Cartesian coordinates.
+        """
+        coords_np = to_numpy(coordinates)
+        n_components = self.n_components
+
+        for i in range(n_components):
+            component_atoms = self.get_component_atoms(i)
+            component_coords = coords_np[component_atoms]
+            centroid = component_coords.mean(axis=0)
+            self.centroids[i] = centroid
+
+            # Update reference coords for multi-atom components
+            if len(component_atoms) > 1:
+                centered_coords = component_coords - centroid
+                self.reference_coords[i] = centered_coords.copy()

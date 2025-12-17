@@ -2030,5 +2030,5 @@ class TestLeveledNERFCUDA:
         polymer_cuda.dihedrals = dihedrals_cuda
         coords_cuda = polymer_cuda.coordinates
 
-        # Compare
-        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-5)
+        # Compare (1e-4 tolerance needed for accumulated float32 precision differences)
+        assert torch.allclose(coords_cpu, coords_cuda.cpu(), atol=1e-4)

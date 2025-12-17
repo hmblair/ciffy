@@ -112,20 +112,8 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
         elif device == "mps":
             torch.mps.synchronize()
 
-    # Benchmark Cartesian -> Internal (accessing dihedrals triggers computation)
-    def to_internal():
-        sync()
-        p = ciffy.load(filepath, backend="torch").poly()
-        if device != "cpu":
-            p = p.to(device)
-        result = p.dihedrals
-        sync()
-        return result
-
-    results["to_internal"] = _benchmark(to_internal, runs=runs)
-
-    # Get Z-matrix size after initial computation
-    _ = polymer.dihedrals  # Trigger computation
+    # Initialize Z-matrix by triggering first computation
+    _ = polymer.dihedrals
     zmatrix = polymer._coord_manager.zmatrix
     results["zmatrix_size"] = len(zmatrix)
 
@@ -138,7 +126,21 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
     )
     results["orphan_atoms"] = orphan_count
 
-    # Benchmark Internal -> Cartesian (setting dihedrals triggers reconstruction)
+    # Cache original coordinates for dirtying
+    original_coords = polymer.coordinates.clone()
+
+    # Benchmark Cartesian -> Internal (dirty coords, then access dihedrals)
+    def to_internal():
+        sync()
+        # Dirty coordinates to force recomputation of internal coords
+        polymer.coordinates = original_coords.clone()
+        result = polymer.dihedrals
+        sync()
+        return result
+
+    results["to_internal"] = _benchmark(to_internal, runs=runs)
+
+    # Benchmark Internal -> Cartesian (set dihedrals, then access coordinates)
     def to_cartesian():
         sync()
         dihedrals = polymer.dihedrals.clone()
@@ -149,15 +151,16 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
 
     results["to_cartesian"] = _benchmark(to_cartesian, runs=runs)
 
-    # Benchmark round-trip
+    # Benchmark round-trip (dirty coords -> internal -> cartesian)
     def round_trip():
         sync()
-        p = ciffy.load(filepath, backend="torch").poly()
-        if device != "cpu":
-            p = p.to(device)
-        dihedrals = p.dihedrals.clone()
-        p.dihedrals = dihedrals
-        result = p.coordinates
+        # Dirty coordinates
+        polymer.coordinates = original_coords.clone()
+        # Get internal coords
+        dihedrals = polymer.dihedrals.clone()
+        # Set internal coords to trigger reconstruction
+        polymer.dihedrals = dihedrals
+        result = polymer.coordinates
         sync()
         return result
 

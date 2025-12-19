@@ -7,7 +7,7 @@ provides fallback mechanisms.
 
 Usage
 -----
->>> from ciffy.backend.cuda_ops import HAS_CUDA_EXTENSION, is_cuda_available
+>>> from ciffy.backend.cuda_ops import CUDA_EXTENSION_AVAILABLE, is_cuda_available
 >>> if is_cuda_available(tensor):
 ...     result = cuda_cartesian_to_internal(coords, indices)
 """
@@ -20,8 +20,8 @@ if TYPE_CHECKING:
     import torch
 
 __all__ = [
-    "HAS_CUDA_EXTENSION",
-    "HAS_ANCHORED_NERF",
+    "CUDA_EXTENSION_AVAILABLE",
+    "ANCHORED_NERF_AVAILABLE",
     "is_cuda_available",
     "cuda_cartesian_to_internal",
     "cuda_cartesian_to_internal_backward",
@@ -36,9 +36,9 @@ try:
         cartesian_to_internal as _cuda_cartesian_to_internal,
         cartesian_to_internal_backward as _cuda_cartesian_to_internal_backward,
     )
-    HAS_CUDA_EXTENSION = True
+    CUDA_EXTENSION_AVAILABLE = True
 except ImportError:
-    HAS_CUDA_EXTENSION = False
+    CUDA_EXTENSION_AVAILABLE = False
     _cuda_cartesian_to_internal = None
     _cuda_cartesian_to_internal_backward = None
 
@@ -48,9 +48,9 @@ try:
         nerf_reconstruct_leveled_anchored as _cuda_nerf_reconstruct_leveled_anchored,
         nerf_reconstruct_backward_leveled_anchored as _cuda_nerf_reconstruct_backward_leveled_anchored,
     )
-    HAS_ANCHORED_NERF = True
+    ANCHORED_NERF_AVAILABLE = True
 except (ImportError, AttributeError):
-    HAS_ANCHORED_NERF = False
+    ANCHORED_NERF_AVAILABLE = False
     _cuda_nerf_reconstruct_leveled_anchored = None
     _cuda_nerf_reconstruct_backward_leveled_anchored = None
 
@@ -65,7 +65,7 @@ def is_cuda_available(tensor: "torch.Tensor") -> bool:
     Returns:
         True if CUDA extension is available and tensor is on CUDA.
     """
-    return HAS_CUDA_EXTENSION and tensor.is_cuda
+    return CUDA_EXTENSION_AVAILABLE and tensor.is_cuda
 
 
 def cuda_cartesian_to_internal(
@@ -86,7 +86,7 @@ def cuda_cartesian_to_internal(
         RuntimeError: If CUDA extension is not available.
         ValueError: If tensors are not on CUDA device.
     """
-    if not HAS_CUDA_EXTENSION:
+    if not CUDA_EXTENSION_AVAILABLE:
         raise RuntimeError("CUDA extension not available")
     if not coords.is_cuda:
         raise ValueError("coords must be a CUDA tensor")
@@ -114,7 +114,7 @@ def cuda_cartesian_to_internal_backward(
     Returns:
         grad_coords: (N, 3) float32 CUDA tensor.
     """
-    if not HAS_CUDA_EXTENSION:
+    if not CUDA_EXTENSION_AVAILABLE:
         raise RuntimeError("CUDA extension not available")
 
     return _cuda_cartesian_to_internal_backward(
@@ -150,7 +150,7 @@ def cuda_nerf_reconstruct_leveled_anchored(
     Raises:
         RuntimeError: If anchored NERF CUDA kernel is not available.
     """
-    if not HAS_ANCHORED_NERF:
+    if not ANCHORED_NERF_AVAILABLE:
         raise RuntimeError(
             "Anchored NERF CUDA kernel not available. "
             "Rebuild with CUDA support."
@@ -191,7 +191,7 @@ def cuda_nerf_reconstruct_backward_leveled_anchored(
     Raises:
         RuntimeError: If anchored NERF CUDA kernel is not available.
     """
-    if not HAS_ANCHORED_NERF:
+    if not ANCHORED_NERF_AVAILABLE:
         raise RuntimeError(
             "Anchored NERF CUDA kernel not available. "
             "Rebuild with CUDA support."

@@ -37,7 +37,18 @@ from .core import (
     any_abs_greater_than,
 )
 
+from .ops import (
+    svd,
+    svdvals,
+    det,
+    eigh,
+    multiply,
+    sqrt,
+    clamp,
+)
+
 __all__ = [
+    # Core
     "Array",
     "Backend",
     "get_backend",
@@ -51,4 +62,13 @@ __all__ = [
     "has_nan",
     "has_inf",
     "any_abs_greater_than",
+    # Linear algebra
+    "svd",
+    "svdvals",
+    "det",
+    "eigh",
+    "multiply",
+    # Math
+    "sqrt",
+    "clamp",
 ]

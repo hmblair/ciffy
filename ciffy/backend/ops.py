@@ -276,6 +276,22 @@ def det(arr: Array) -> Array:
     return np.linalg.det(arr)
 
 
+def svd(arr: Array) -> tuple[Array, Array, Array]:
+    """
+    Full singular value decomposition.
+
+    Args:
+        arr: Input matrix.
+
+    Returns:
+        Tuple of (U, S, Vh) matrices in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.linalg.svd(arr)
+    return np.linalg.svd(arr)
+
+
 def svdvals(arr: Array) -> Array:
     """
     Singular values of a matrix.

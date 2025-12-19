@@ -90,3 +90,11 @@ RNA_GLYCOSIDIC: tuple[DihedralType, ...] = (
     DihedralType.CHI_PURINE,
     DihedralType.CHI_PYRIMIDINE,
 )
+
+# Extended backbone definitions (includes glycosidic bond for full conformational description)
+RNA_BACKBONE_EXTENDED: tuple[DihedralType, ...] = RNA_BACKBONE + (DihedralType.CHI_PYRIMIDINE,)
+
+# Dihedral counts (derived from tuples for single source of truth)
+NUM_PROTEIN_BACKBONE_DIHEDRALS: int = len(PROTEIN_BACKBONE)
+NUM_RNA_BACKBONE_DIHEDRALS: int = len(RNA_BACKBONE_EXTENDED)
+MAX_DIHEDRALS_PER_RESIDUE: int = max(NUM_PROTEIN_BACKBONE_DIHEDRALS, NUM_RNA_BACKBONE_DIHEDRALS)

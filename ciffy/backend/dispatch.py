@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import Array, is_torch
-from .cuda_ops import HAS_CUDA_EXTENSION, is_cuda_available
+from .cuda_ops import CUDA_EXTENSION_AVAILABLE, is_cuda_available
 
 if TYPE_CHECKING:
     import torch
@@ -272,7 +272,7 @@ def _torch_nerf_reconstruct(
     reconstruction which places atoms directly in the reference frame.
     """
     import torch
-    from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, HAS_ANCHORED_NERF
+    from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, ANCHORED_NERF_AVAILABLE
 
     if component_offsets is None or anchor_coords is None or component_ids is None:
         raise ValueError(
@@ -321,7 +321,7 @@ def _torch_nerf_reconstruct(
         return autograd_nerf(indices_tensor, internal, comp_off_tensor, anchor_tensor, comp_ids_tensor)
 
     # CUDA path with anchored component-parallel reconstruction
-    if is_cuda_available(internal) and HAS_ANCHORED_NERF:
+    if is_cuda_available(internal) and ANCHORED_NERF_AVAILABLE:
         coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
         cuda_nerf_reconstruct_leveled_anchored(
             coords,

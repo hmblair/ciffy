@@ -37,7 +37,24 @@ Homepage = "https://github.com/hmblair/ciffy"
 Repository = "https://github.com/hmblair/ciffy"
 
 [tool.setuptools]
-packages = ["ciffy", "ciffy.backend", "ciffy.utils", "ciffy.types", "ciffy.biochemistry", "ciffy.operations", "ciffy.io", "ciffy.nn", "ciffy.visualize", "ciffy.cli", "ciffy.internal"]
+packages = [
+    "ciffy",
+    "ciffy.backend",
+    "ciffy.utils",
+    "ciffy.types",
+    "ciffy.biochemistry",
+    "ciffy.operations",
+    "ciffy.io",
+    "ciffy.nn",
+    "ciffy.nn.vae",
+    "ciffy.visualize",
+    "ciffy.cli",
+    "ciffy.internal",
+    "ciffy.sampling",
+]
+
+[tool.setuptools.package-data]
+ciffy = ["data/*.npz"]
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

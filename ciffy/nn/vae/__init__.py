@@ -33,9 +33,11 @@ from .distributions import (
     sincos_decode,
     angular_distance,
     VonMisesNLL,
+)
+from ...types.dihedral import (
     MAX_DIHEDRALS_PER_RESIDUE,
-    PROTEIN_BACKBONE_DIHEDRALS,
-    RNA_BACKBONE_DIHEDRALS,
+    NUM_PROTEIN_BACKBONE_DIHEDRALS,
+    NUM_RNA_BACKBONE_DIHEDRALS,
 )
 
 __all__ = [
@@ -53,6 +55,6 @@ __all__ = [
     "angular_distance",
     # Constants
     "MAX_DIHEDRALS_PER_RESIDUE",
-    "PROTEIN_BACKBONE_DIHEDRALS",
-    "RNA_BACKBONE_DIHEDRALS",
+    "NUM_PROTEIN_BACKBONE_DIHEDRALS",
+    "NUM_RNA_BACKBONE_DIHEDRALS",
 ]

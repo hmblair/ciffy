@@ -49,16 +49,16 @@ __all__ = [
     "nerf_reconstruct",
     "CartesianToInternalFunction",
     "NerfReconstructFunction",
-    "HAS_TORCH",
-    "HAS_CUDA_EXTENSION",
+    "TORCH_AVAILABLE",
+    "CUDA_EXTENSION_AVAILABLE",
 ]
 
 try:
     import torch
     from torch.autograd import Function
-    HAS_TORCH = True
+    TORCH_AVAILABLE = True
 except ImportError:
-    HAS_TORCH = False
+    TORCH_AVAILABLE = False
     Function = object  # Dummy for type hints
 
 # C extension functions (required)
@@ -72,8 +72,8 @@ from .._c import (
 # Import CUDA extension functions
 try:
     from .cuda_ops import (
-        HAS_CUDA_EXTENSION,
-        HAS_ANCHORED_NERF,
+        CUDA_EXTENSION_AVAILABLE,
+        ANCHORED_NERF_AVAILABLE,
         is_cuda_available,
         cuda_cartesian_to_internal,
         cuda_cartesian_to_internal_backward,
@@ -81,8 +81,8 @@ try:
         cuda_nerf_reconstruct_backward_leveled_anchored,
     )
 except ImportError:
-    HAS_CUDA_EXTENSION = False
-    HAS_ANCHORED_NERF = False
+    CUDA_EXTENSION_AVAILABLE = False
+    ANCHORED_NERF_AVAILABLE = False
     is_cuda_available = lambda x: False
 
 
@@ -278,7 +278,7 @@ class NerfReconstructFunction(Function):
         # Save original device for backward pass
         device = internal.device
 
-        if use_cuda and HAS_ANCHORED_NERF:
+        if use_cuda and ANCHORED_NERF_AVAILABLE:
             # GPU path with anchored component-parallel reconstruction
             coords = torch.zeros(n_atoms, 3, dtype=torch.float32, device=device)
             cuda_nerf_reconstruct_leveled_anchored(
@@ -343,7 +343,7 @@ class NerfReconstructFunction(Function):
         """
         coords, indices, internal = ctx.saved_tensors
 
-        if ctx.use_cuda and HAS_ANCHORED_NERF:
+        if ctx.use_cuda and ANCHORED_NERF_AVAILABLE:
             # GPU path with anchored component-parallel backward
             grad_internal = cuda_nerf_reconstruct_backward_leveled_anchored(
                 coords, indices, internal,
@@ -404,7 +404,7 @@ def cartesian_to_internal(
     Returns:
         internal: (M, 3) float32 tensor where each row is [distance, angle, dihedral].
     """
-    if not HAS_TORCH:
+    if not TORCH_AVAILABLE:
         raise ImportError("PyTorch is required for this function")
 
     return CartesianToInternalFunction.apply(coords, indices)
@@ -437,7 +437,7 @@ def nerf_reconstruct(
     Returns:
         coords: (N, 3) float32 tensor of Cartesian coordinates.
     """
-    if not HAS_TORCH:
+    if not TORCH_AVAILABLE:
         raise ImportError("PyTorch is required for this function")
 
     return NerfReconstructFunction.apply(

@@ -21,10 +21,13 @@ except ImportError:
 from .encoder import DihedralEncoder
 from .decoder import DihedralDecoder
 from .losses import VAELoss
-from .distributions import MAX_DIHEDRALS_PER_RESIDUE
 
 from ...types import DihedralType, Molecule, Scale
-from ...types.dihedral import PROTEIN_BACKBONE, RNA_BACKBONE
+from ...types.dihedral import (
+    PROTEIN_BACKBONE,
+    RNA_BACKBONE_EXTENDED,
+    MAX_DIHEDRALS_PER_RESIDUE,
+)
 
 if TYPE_CHECKING:
     from ...polymer import Polymer
@@ -37,10 +40,6 @@ MOLECULE_TO_INDEX = {
     Molecule.RNA: 1,
     Molecule.DNA: 2,
 }
-
-# Dihedral types per molecule (in order they appear in the unified tensor)
-PROTEIN_BACKBONE_TYPES = list(PROTEIN_BACKBONE)  # [PHI, PSI, OMEGA]
-RNA_BACKBONE_TYPES = list(RNA_BACKBONE) + [DihedralType.CHI_PYRIMIDINE]
 
 
 class PolymerVAE(nn.Module if TORCH_AVAILABLE else object):
@@ -151,9 +150,9 @@ class PolymerVAE(nn.Module if TORCH_AVAILABLE else object):
     def _get_dihedral_types(self, mol_type_idx: int) -> list[DihedralType]:
         """Get list of dihedral types for a molecule type."""
         if mol_type_idx == 0:  # Protein
-            return PROTEIN_BACKBONE_TYPES
+            return list(PROTEIN_BACKBONE)
         else:  # RNA or DNA
-            return RNA_BACKBONE_TYPES
+            return list(RNA_BACKBONE_EXTENDED)
 
     def _extract_dihedrals(
         self, polymer: "Polymer"

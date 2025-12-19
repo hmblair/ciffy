@@ -18,11 +18,11 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = None
 
-
-# Constants for dihedral representation
-PROTEIN_BACKBONE_DIHEDRALS = 3  # phi, psi, omega
-RNA_BACKBONE_DIHEDRALS = 7  # alpha, beta, gamma, delta, epsilon, zeta, chi
-MAX_DIHEDRALS_PER_RESIDUE = 7  # Unified representation (proteins padded)
+from ...types.dihedral import (
+    NUM_PROTEIN_BACKBONE_DIHEDRALS,
+    NUM_RNA_BACKBONE_DIHEDRALS,
+    MAX_DIHEDRALS_PER_RESIDUE,
+)
 
 
 def sincos_encode(angles: "torch.Tensor") -> "torch.Tensor":

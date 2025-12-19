@@ -10,47 +10,11 @@ from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 
-from ..backend import is_torch, Array
+from ..backend import is_torch, Array, svd, svdvals, det, multiply
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..types import Scale
-
-
-# =============================================================================
-# Backend-agnostic linear algebra primitives
-# =============================================================================
-
-def _svd(arr: Array) -> Tuple[Array, Array, Array]:
-    """Compute full SVD, backend-agnostic."""
-    if is_torch(arr):
-        import torch
-        return torch.linalg.svd(arr)
-    return np.linalg.svd(arr)
-
-
-def _svdvals(arr: Array) -> Array:
-    """Compute singular values only, backend-agnostic."""
-    if is_torch(arr):
-        import torch
-        return torch.linalg.svdvals(arr)
-    return np.linalg.svd(arr, compute_uv=False)
-
-
-def _det(arr: Array) -> Array:
-    """Compute determinant, backend-agnostic."""
-    if is_torch(arr):
-        import torch
-        return torch.linalg.det(arr)
-    return np.linalg.det(arr)
-
-
-def _multiply(a: Array, b: Array) -> Array:
-    """Element-wise multiplication, backend-agnostic."""
-    if is_torch(a):
-        import torch
-        return torch.multiply(a, b)
-    return np.multiply(a, b)
 
 
 # =============================================================================
@@ -75,13 +39,13 @@ def kabsch_rotation(coords1: Array, coords2: Array) -> Array:
     H = coords1.T @ coords2
 
     # SVD: H = U @ S @ Vt
-    U, S, Vt = _svd(H)
+    U, S, Vt = svd(H)
 
     # Optimal rotation: R = V @ U^T
     R = Vt.T @ U.T
 
     # Handle reflection case (det(R) = -1)
-    if _det(R) < 0:
+    if det(R) < 0:
         if is_torch(Vt):
             Vt = Vt.clone()
         else:
@@ -154,7 +118,7 @@ def coordinate_covariance(
     Returns:
         Array of covariance matrices, one per scale unit.
     """
-    outer_prod = _multiply(
+    outer_prod = multiply(
         polymer1.coordinates[:, None, :],
         polymer2.coordinates[:, :, None],
     )
@@ -200,17 +164,17 @@ def kabsch_distance(
     cov = coordinate_covariance(polymer1_c, polymer2_c, scale)
 
     # SVD to find optimal rotation
-    sigma = _svdvals(cov)
-    det = _det(cov)
+    sigma = svdvals(cov)
+    cov_det = det(cov)
 
     # Handle reflection case
     if is_torch(sigma):
         import torch
         sigma = sigma.clone()
-        sigma[det < 0, -1] = -sigma[det < 0, -1]
+        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
     else:
         sigma = sigma.copy()
-        sigma[det < 0, -1] = -sigma[det < 0, -1]
+        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
     sigma = sigma.mean(-1)
 
     # Get variances of both point clouds

@@ -34,7 +34,11 @@ except ImportError as e:
 
 # Core types
 from .polymer import Polymer
-from .types import Scale, Molecule, DihedralType, PROTEIN_BACKBONE, RNA_BACKBONE, RNA_GLYCOSIDIC
+from .types import (
+    Scale, Molecule, DihedralType,
+    PROTEIN_BACKBONE, RNA_BACKBONE, RNA_GLYCOSIDIC,
+    DIHEDRAL_ATOMS, DIHEDRAL_NAME_TO_TYPE,
+)
 
 # Operations
 from .operations.reduction import Reduction
@@ -94,6 +98,8 @@ __all__ = [
     "PROTEIN_BACKBONE",
     "RNA_BACKBONE",
     "RNA_GLYCOSIDIC",
+    "DIHEDRAL_ATOMS",
+    "DIHEDRAL_NAME_TO_TYPE",
     "Reduction",
     # Functions
     "load",

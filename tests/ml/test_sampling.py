@@ -243,7 +243,11 @@ class TestSampleRNADihedrals:
     def test_sample_rna_dihedrals_keys(self):
         """Test sample_rna_dihedrals returns correct keys."""
         dihedrals = sample_rna_dihedrals(10)
-        expected = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "chi"}
+        expected = {
+            DihedralType.ALPHA, DihedralType.BETA, DihedralType.GAMMA,
+            DihedralType.DELTA, DihedralType.EPSILON, DihedralType.ZETA,
+            DihedralType.CHI_PYRIMIDINE,
+        }
         assert set(dihedrals.keys()) == expected
 
     def test_sample_rna_dihedrals_shapes(self):
@@ -257,16 +261,16 @@ class TestSampleRNADihedrals:
         dihedrals = sample_rna_dihedrals(5)
 
         # Alpha: first residue has no alpha (requires previous O3')
-        assert np.isnan(dihedrals["alpha"][0])
-        assert not np.isnan(dihedrals["alpha"][1:]).any()
+        assert np.isnan(dihedrals[DihedralType.ALPHA][0])
+        assert not np.isnan(dihedrals[DihedralType.ALPHA][1:]).any()
 
         # Epsilon: last residue has no epsilon (requires next P)
-        assert np.isnan(dihedrals["epsilon"][-1])
-        assert not np.isnan(dihedrals["epsilon"][:-1]).any()
+        assert np.isnan(dihedrals[DihedralType.EPSILON][-1])
+        assert not np.isnan(dihedrals[DihedralType.EPSILON][:-1]).any()
 
         # Zeta: last residue has no zeta (requires next O5')
-        assert np.isnan(dihedrals["zeta"][-1])
-        assert not np.isnan(dihedrals["zeta"][:-1]).any()
+        assert np.isnan(dihedrals[DihedralType.ZETA][-1])
+        assert not np.isnan(dihedrals[DihedralType.ZETA][:-1]).any()
 
     def test_sample_rna_dihedrals_reproducibility(self):
         """Test reproducibility with seed."""

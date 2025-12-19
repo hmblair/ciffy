@@ -122,10 +122,15 @@ def sample_protein_dihedrals(
 # RNA Sampling
 # =============================================================================
 
+# Import DihedralType for type hints - actual import happens in functions to avoid circular imports
+if TYPE_CHECKING:
+    from ..types import DihedralType as DihedralTypeHint
+
+
 def sample_rna_dihedrals(
     n_residues: int,
     rng: np.random.Generator | None = None,
-) -> dict[str, np.ndarray]:
+) -> dict["DihedralTypeHint", np.ndarray]:
     """
     Sample backbone dihedrals for n RNA residues.
 
@@ -137,43 +142,55 @@ def sample_rna_dihedrals(
         rng: Random number generator for reproducibility.
 
     Returns:
-        Dict mapping dihedral name -> (n_residues,) array in radians.
-        Keys: alpha, beta, gamma, delta, epsilon, zeta, chi
+        Dict mapping DihedralType -> (n_residues,) array in radians.
+        Keys: ALPHA, BETA, GAMMA, DELTA, EPSILON, ZETA, CHI_PYRIMIDINE
         Terminal residues have NaN where the dihedral cannot be defined.
     """
+    from ..types import DihedralType
+
     if rng is None:
         rng = np.random.default_rng()
 
     gmms = _get_rna_gmms()
-    result = {}
+    result: dict[DihedralType, np.ndarray] = {}
+
+    # Map DihedralType to GMM key names (GMM files use lowercase string keys)
+    backbone_dihedrals = [
+        (DihedralType.ALPHA, "alpha"),
+        (DihedralType.BETA, "beta"),
+        (DihedralType.GAMMA, "gamma"),
+        (DihedralType.DELTA, "delta"),
+        (DihedralType.EPSILON, "epsilon"),
+        (DihedralType.ZETA, "zeta"),
+    ]
 
     # Sample each backbone dihedral
-    for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]:
-        if name in gmms:
-            samples = gmms[name].sample(n_residues, rng)
-            result[name] = samples[:, 0].copy()  # 1D GMM, take first column
+    for dtype, gmm_key in backbone_dihedrals:
+        if gmm_key in gmms:
+            samples = gmms[gmm_key].sample(n_residues, rng)
+            result[dtype] = samples[:, 0].copy()  # 1D GMM, take first column
         else:
             # Fallback: use uniform distribution if GMM not available
-            result[name] = rng.uniform(-np.pi, np.pi, n_residues)
+            result[dtype] = rng.uniform(-np.pi, np.pi, n_residues)
 
     # Chi (glycosidic) - use chi_pyrimidine as it has more data
     # TODO: Handle purine vs pyrimidine based on residue type
     if "chi_pyrimidine" in gmms:
         samples = gmms["chi_pyrimidine"].sample(n_residues, rng)
-        result["chi"] = samples[:, 0].copy()
+        result[DihedralType.CHI_PYRIMIDINE] = samples[:, 0].copy()
     elif "chi_purine" in gmms:
         samples = gmms["chi_purine"].sample(n_residues, rng)
-        result["chi"] = samples[:, 0].copy()
+        result[DihedralType.CHI_PYRIMIDINE] = samples[:, 0].copy()
     else:
-        result["chi"] = rng.uniform(-np.pi, np.pi, n_residues)
+        result[DihedralType.CHI_PYRIMIDINE] = rng.uniform(-np.pi, np.pi, n_residues)
 
     # Set terminal NaN values
     # Alpha: requires O3' from previous residue (first residue has no alpha)
-    result["alpha"][0] = np.nan
+    result[DihedralType.ALPHA][0] = np.nan
     # Epsilon: requires P from next residue (last residue has no epsilon)
-    result["epsilon"][-1] = np.nan
+    result[DihedralType.EPSILON][-1] = np.nan
     # Zeta: requires O5' from next residue (last residue has no zeta)
-    result["zeta"][-1] = np.nan
+    result[DihedralType.ZETA][-1] = np.nan
 
     return result
 
@@ -239,30 +256,17 @@ def randomize_backbone(
         polymer.set_dihedral(DihedralType.OMEGA, omega[~np.isnan(omega)])
 
     elif mol_type in (Molecule.RNA, Molecule.DNA):
-        # Sample RNA/DNA dihedrals
+        # Sample RNA/DNA dihedrals (returns dict[DihedralType, np.ndarray])
         dihedrals = sample_rna_dihedrals(n_residues, rng)
 
-        # Map names to DihedralType
-        name_to_type = {
-            "alpha": DihedralType.ALPHA,
-            "beta": DihedralType.BETA,
-            "gamma": DihedralType.GAMMA,
-            "delta": DihedralType.DELTA,
-            "epsilon": DihedralType.EPSILON,
-            "zeta": DihedralType.ZETA,
-            "chi": DihedralType.CHI_PYRIMIDINE,  # Use pyrimidine for now
-        }
-
-        for name, dtype in name_to_type.items():
-            if name in dihedrals:
-                values = dihedrals[name]
-                valid = values[~np.isnan(values)]
-                if len(valid) > 0:
-                    try:
-                        polymer.set_dihedral(dtype, valid)
-                    except (ValueError, KeyError):
-                        # Dihedral type may not be defined for this polymer
-                        pass
+        for dtype, values in dihedrals.items():
+            valid = values[~np.isnan(values)]
+            if len(valid) > 0:
+                try:
+                    polymer.set_dihedral(dtype, valid)
+                except (ValueError, KeyError):
+                    # Dihedral type may not be defined for this polymer
+                    pass
 
     # Force coordinate reconstruction
     _ = polymer.coordinates

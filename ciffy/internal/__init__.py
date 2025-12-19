@@ -23,20 +23,14 @@ Example:
 For backend operations (coordinate conversion, graph building, Z-matrix construction),
 use ``ciffy.backend.dispatch``. This is an internal API and should not be needed
 for typical use cases.
+
+Note: Dihedral type definitions and atom mappings are now in:
+    - ciffy.types.dihedral (DihedralType enum, PROTEIN_BACKBONE, RNA_BACKBONE, etc.)
+    - ciffy.biochemistry (DIHEDRAL_ATOMS, DIHEDRAL_NAME_TO_TYPE)
 """
 
 from .coordinates import CoordinateManager
-from .dihedrals import (
-    PROTEIN_DIHEDRALS,
-    NUCLEIC_ACID_DIHEDRALS,
-    INDEX_TO_DIHEDRAL_TYPE,
-)
 
 __all__ = [
-    # Main class
     "CoordinateManager",
-    # Dihedral definitions
-    "PROTEIN_DIHEDRALS",
-    "NUCLEIC_ACID_DIHEDRALS",
-    "INDEX_TO_DIHEDRAL_TYPE",
 ]

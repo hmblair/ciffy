@@ -16,7 +16,7 @@ Unsupported polymer types (no linking definition):
 
 from dataclasses import dataclass
 
-from .molecule import Molecule
+from ._generated_molecule import Molecule
 
 
 @dataclass

@@ -217,7 +217,7 @@ def lddt(
 
 def _get_molecule_type(polymer: Polymer) -> Molecule:
     """Get the predominant molecule type of a polymer."""
-    from ..biochemistry.molecule import molecule_type
+    from ..biochemistry._generated_molecule import molecule_type
 
     mol_types = polymer.molecule_type
     if is_torch(mol_types):

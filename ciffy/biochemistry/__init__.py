@@ -64,7 +64,7 @@ from .linking import (
     PEPTIDE_LINK,
     LINKING_BY_TYPE,
 )
-from .molecule import Molecule, molecule_type
+from ._generated_molecule import Molecule, molecule_type
 
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)

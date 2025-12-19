@@ -11,7 +11,6 @@ poetry.lock
 ciffy/src/hash/
 ciffy/src/internal/canonical_refs.h
 ciffy/biochemistry/_generated_*.py
-ciffy/types/molecule.py
 
 # Test data (downloaded on demand from RCSB PDB)
 tests/data/

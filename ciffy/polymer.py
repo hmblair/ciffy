@@ -15,7 +15,7 @@ import numpy as np
 from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
 from .backend import ops
 from .types import Scale, Molecule
-from .biochemistry.molecule import molecule_type
+from .biochemistry._generated_molecule import molecule_type
 
 if TYPE_CHECKING:
     import torch

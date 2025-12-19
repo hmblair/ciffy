@@ -79,8 +79,8 @@ def generate_python_molecule(biochem_dir: Path) -> None:
         '',
     ])
 
-    (biochem_dir / "molecule.py").write_text('\n'.join(lines))
-    print("Generated: biochemistry/molecule.py")
+    (biochem_dir / "_generated_molecule.py").write_text('\n'.join(lines))
+    print("Generated: biochemistry/_generated_molecule.py")
 
 
 def generate_python_elements(biochem_dir: Path) -> None:
@@ -337,7 +337,7 @@ def generate_python_residues(
         '"""',
         '',
         'from ..utils import ResidueType, ResidueMeta',
-        'from .molecule import Molecule',
+        'from ._generated_molecule import Molecule',
     ]
 
     # Import atom classes (only those that exist)

@@ -128,7 +128,7 @@ class TestMoleculeEnum:
     """Test Molecule enum functionality."""
 
     def test_molecule_type_function(self):
-        from ciffy.biochemistry.molecule import molecule_type, Molecule
+        from ciffy.biochemistry import molecule_type, Molecule
         assert molecule_type(0) == Molecule.PROTEIN
         assert molecule_type(1) == Molecule.RNA
         assert molecule_type(2) == Molecule.DNA

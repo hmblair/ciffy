@@ -190,7 +190,8 @@ def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int
     """
     Internal cached expansion - returns tuple for hashability.
 
-    The numpy array is cached but callers should copy if mutating.
+    The numpy array is cached; callers MUST copy if mutating.
+    The _expand_residue() wrapper handles copying for safe mutation.
     """
     try:
         residue = Residue(residue_idx)
@@ -211,7 +212,8 @@ def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int
         element_indices.append(_atom_name_to_element(atom_name_display))
 
     # Get ideal coordinates from the residue (delegates to atom enum)
-    ideal_coords = residue.ideal.copy()
+    # No copy here - _expand_residue() copies when needed
+    ideal_coords = residue.ideal
 
     return tuple(atom_indices), tuple(element_indices), tuple(atom_names), ideal_coords
 
@@ -407,7 +409,8 @@ def _position_residue(
     Raises:
         ValueError: If linking atoms are not found in the residue.
     """
-    coords = expansion.ideal_coords.copy()
+    # expansion.ideal_coords is already a copy from _expand_residue()
+    coords = expansion.ideal_coords
     link_def = config.linking
 
     # Position relative to previous residue

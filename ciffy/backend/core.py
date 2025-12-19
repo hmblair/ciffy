@@ -14,6 +14,14 @@ import numpy as np
 if TYPE_CHECKING:
     import torch
 
+# Try to import torch for isinstance checks (more reliable than duck-typing)
+try:
+    import torch as _torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _torch = None
+    _TORCH_AVAILABLE = False
+
 # Type alias for arrays that can be either NumPy or PyTorch
 # Note: Using Union instead of | because this is a runtime type alias, not just an annotation
 Array = Union[np.ndarray, "torch.Tensor"]
@@ -35,8 +43,8 @@ def get_backend(arr: Array) -> Backend:
     Returns:
         Backend.TORCH if arr is a PyTorch tensor, Backend.NUMPY otherwise.
     """
-    # PyTorch tensors have a 'numpy' method, NumPy arrays don't have 'dim'
-    if hasattr(arr, 'dim') and callable(getattr(arr, 'dim')):
+    # Use isinstance when torch is available (reliable)
+    if _TORCH_AVAILABLE and isinstance(arr, _torch.Tensor):
         return Backend.TORCH
     return Backend.NUMPY
 

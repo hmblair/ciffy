@@ -406,6 +406,25 @@ def to_int64(arr: Array) -> Array:
     return arr.astype(np.int64)
 
 
+def isin(arr: Array, values: list | tuple) -> Array:
+    """
+    Check if elements of arr are in values.
+
+    Args:
+        arr: Input array to check.
+        values: List/tuple of values to check against.
+
+    Returns:
+        Boolean array of same shape as arr, True where element is in values.
+    """
+    if is_torch(arr):
+        import torch
+        # Convert values to tensor on same device
+        test_tensor = torch.tensor(values, device=arr.device, dtype=arr.dtype)
+        return torch.isin(arr, test_tensor)
+    return np.isin(arr, values)
+
+
 # =============================================================================
 # Math Operations
 # =============================================================================
@@ -447,6 +466,61 @@ def clamp(arr: Array, min_val: float | None = None, max_val: float | None = None
     if max_val is not None:
         result = np.minimum(result, max_val)
     return result
+
+
+def argsort(arr: Array) -> Array:
+    """
+    Return indices that would sort the array.
+
+    Args:
+        arr: 1D input array.
+
+    Returns:
+        Array of indices that would sort the array.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.argsort(arr)
+    return np.argsort(arr)
+
+
+def diff(arr: Array) -> Array:
+    """
+    Compute differences between consecutive elements.
+
+    Args:
+        arr: 1D input array.
+
+    Returns:
+        Array of differences (length n-1 for input of length n).
+    """
+    if is_torch(arr):
+        import torch
+        return torch.diff(arr)
+    return np.diff(arr)
+
+
+def split_at_indices(arr: Array, split_indices: Array) -> list:
+    """
+    Split array at specified indices.
+
+    Args:
+        arr: Array to split.
+        split_indices: 1D array of indices where splits occur.
+
+    Returns:
+        List of array chunks.
+    """
+    if is_torch(arr):
+        import torch
+        # Convert split_indices to list for torch.tensor_split
+        if len(split_indices) == 0:
+            return [arr]
+        return list(torch.tensor_split(arr, split_indices.cpu().tolist()))
+    # NumPy path
+    if len(split_indices) == 0:
+        return [arr]
+    return list(np.split(arr, split_indices))
 
 
 def topk(arr: Array, k: int, dim: int = -1, largest: bool = True) -> tuple[Array, Array]:

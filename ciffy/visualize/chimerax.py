@@ -6,6 +6,7 @@ per-residue or per-atom values.
 """
 
 from __future__ import annotations
+import atexit
 import os
 import subprocess
 import tempfile
@@ -18,6 +19,23 @@ from .defattr import to_defattr
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
+
+# Track temp files for cleanup on exit
+_temp_files: list[str] = []
+
+
+def _cleanup_temp_files() -> None:
+    """Remove any remaining temp files created by visualize()."""
+    for filepath in _temp_files:
+        try:
+            os.unlink(filepath)
+        except OSError:
+            pass  # File may already be deleted
+    _temp_files.clear()
+
+
+# Register cleanup to run when Python exits
+atexit.register(_cleanup_temp_files)
 
 
 def find_chimerax() -> str:
@@ -175,14 +193,13 @@ def visualize(
         cif_fd, cif_path = tempfile.mkstemp(suffix=".cif")
         os.close(cif_fd)
         polymer.write(cif_path)
-        temp_cif = True
-    else:
-        temp_cif = False
+        _temp_files.append(cif_path)
 
     # Write defattr file
     defattr_fd, defattr_path = tempfile.mkstemp(suffix=".defattr")
     os.close(defattr_fd)
     to_defattr(polymer, values, defattr_path, scale=scale, attr_name=attr_name, chain=chain)
+    _temp_files.append(defattr_path)
 
     # Find ChimeraX
     if chimerax_path is None:
@@ -206,7 +223,5 @@ def visualize(
     cmd = [chimerax_path, "--cmd", script]
     subprocess.run(cmd)
 
-    # Cleanup temp files
-    # Note: We don't delete immediately as ChimeraX needs to read them
-    # ChimeraX copies file contents, so we could delete after a delay,
-    # but it's safer to leave them for the user to clean up
+    # Note: Temp files are cleaned up via atexit handler when Python exits.
+    # We don't delete immediately as ChimeraX may still be reading them.

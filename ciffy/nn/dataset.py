@@ -40,7 +40,8 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
     results = []
     try:
         meta = load_metadata(filepath)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load metadata from {filepath}: {e}")
         return results
 
     # Check exclude_ids
@@ -232,7 +233,8 @@ class PolymerDataset(Dataset):
         for path in cif_files:
             try:
                 meta = load_metadata(str(path))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to load metadata from {path}: {e}")
                 continue
 
             # Check exclude_ids
@@ -298,7 +300,8 @@ class PolymerDataset(Dataset):
                     results = future.result()
                     for filepath_str, chain_idx in results:
                         self._index.append((Path(filepath_str), chain_idx))
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Worker process failed: {e}")
                     continue
 
         # Sort index by filepath for deterministic ordering
@@ -351,20 +354,14 @@ class PolymerDataset(Dataset):
 
     def _filter_by_molecule_type(self, polymer: Polymer) -> Polymer:
         """Filter polymer to only include chains of specified molecule types."""
-        import numpy as np
+        from ..backend import ops
 
-        # Get molecule types as numpy for comparison
-        mol_types = polymer.molecule_type
-        if hasattr(mol_types, 'numpy'):
-            mol_types = mol_types.numpy()
-        mol_types = np.asarray(mol_types)
-
-        # Build mask for matching types
+        # Build mask for matching types (backend-agnostic)
         type_values = [m.value for m in self.molecule_types]
-        mask = np.isin(mol_types, type_values)
+        mask = ops.isin(polymer.molecule_type, type_values)
 
-        # Get matching chain indices
-        matching_indices = np.nonzero(mask)[0]
+        # Get matching chain indices (backend-agnostic)
+        matching_indices = ops.nonzero_1d(mask)
 
         if len(matching_indices) == 0:
             # Return empty polymer (first 0 atoms)

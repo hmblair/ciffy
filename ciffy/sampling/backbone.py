@@ -8,6 +8,7 @@ and nucleic acids (RNA/DNA).
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,52 +24,51 @@ _DATA_DIR = Path(__file__).parent.parent / "data"
 _RAMA_GMM_PATH = _DATA_DIR / "ramachandran_gmm.npz"
 _RNA_GMM_PATH = _DATA_DIR / "rna_dihedrals.npz"
 
-# Lazy-loaded GMMs (loaded on first use)
-_RAMA_GMM: GaussianMixtureModel | None = None
-_RNA_GMMS: dict[str, GaussianMixtureModel] | None = None
 
-
+@lru_cache(maxsize=1)
 def _get_rama_gmm() -> GaussianMixtureModel:
-    """Get the pre-fitted Ramachandran GMM, loading if necessary."""
-    global _RAMA_GMM
-    if _RAMA_GMM is None:
-        if not _RAMA_GMM_PATH.exists():
-            raise FileNotFoundError(
-                f"Ramachandran GMM not found at {_RAMA_GMM_PATH}. "
-                "Run scripts/fit_ramachandran_gmm.py to generate it."
-            )
-        _RAMA_GMM = GaussianMixtureModel.load(_RAMA_GMM_PATH)
-    return _RAMA_GMM
+    """Get the pre-fitted Ramachandran GMM, loading if necessary.
+
+    Thread-safe via lru_cache - only loads once even with concurrent access.
+    """
+    if not _RAMA_GMM_PATH.exists():
+        raise FileNotFoundError(
+            f"Ramachandran GMM not found at {_RAMA_GMM_PATH}. "
+            "Run scripts/fit_ramachandran_gmm.py to generate it."
+        )
+    return GaussianMixtureModel.load(_RAMA_GMM_PATH)
 
 
+@lru_cache(maxsize=1)
 def _get_rna_gmms() -> dict[str, GaussianMixtureModel]:
-    """Get the pre-fitted RNA dihedral GMMs, loading if necessary."""
-    global _RNA_GMMS
-    if _RNA_GMMS is None:
-        if not _RNA_GMM_PATH.exists():
-            raise FileNotFoundError(
-                f"RNA dihedral GMMs not found at {_RNA_GMM_PATH}. "
-                "Run scripts/fit_rna_dihedrals.py to generate it."
+    """Get the pre-fitted RNA dihedral GMMs, loading if necessary.
+
+    Thread-safe via lru_cache - only loads once even with concurrent access.
+    """
+    if not _RNA_GMM_PATH.exists():
+        raise FileNotFoundError(
+            f"RNA dihedral GMMs not found at {_RNA_GMM_PATH}. "
+            "Run scripts/fit_rna_dihedrals.py to generate it."
+        )
+    data = np.load(_RNA_GMM_PATH)
+
+    # Reconstruct GMMs from stored parameters
+    gmms = {}
+    dihedral_names = set()
+    for key in data.files:
+        # Keys are like "alpha_means", "alpha_covariances", "alpha_weights"
+        name = key.rsplit("_", 1)[0]
+        dihedral_names.add(name)
+
+    for name in dihedral_names:
+        if f"{name}_means" in data:
+            gmms[name] = GaussianMixtureModel(
+                means=data[f"{name}_means"],
+                covariances=data[f"{name}_covariances"],
+                weights=data[f"{name}_weights"],
             )
-        data = np.load(_RNA_GMM_PATH)
 
-        # Reconstruct GMMs from stored parameters
-        _RNA_GMMS = {}
-        dihedral_names = set()
-        for key in data.files:
-            # Keys are like "alpha_means", "alpha_covariances", "alpha_weights"
-            name = key.rsplit("_", 1)[0]
-            dihedral_names.add(name)
-
-        for name in dihedral_names:
-            if f"{name}_means" in data:
-                _RNA_GMMS[name] = GaussianMixtureModel(
-                    means=data[f"{name}_means"],
-                    covariances=data[f"{name}_covariances"],
-                    weights=data[f"{name}_weights"],
-                )
-
-    return _RNA_GMMS
+    return gmms
 
 
 # =============================================================================

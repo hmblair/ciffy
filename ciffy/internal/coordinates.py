@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible, has_nan, has_inf, any_abs_greater_than
+from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible, has_nan, has_inf
 from ..backend.dispatch import (
     ZMatrix,
     ConnectedComponents,
@@ -123,6 +123,44 @@ class CoordinateManager:
         # when the bond graph is computed for z-matrix construction
         self._components: "ConnectedComponents | None" = None
 
+    @classmethod
+    def _from_slice(
+        cls,
+        coordinates: Array,
+        is_torch_flag: bool,
+    ) -> "CoordinateManager":
+        """
+        Create a CoordinateManager from sliced coordinates.
+
+        This factory method bypasses __init__ to create a manager with
+        only Cartesian coordinates. Used by __getitem__ for efficient slicing.
+
+        The caller MUST set _topology before internal coordinates can be
+        accessed. This is an internal API with explicit contracts.
+
+        Args:
+            coordinates: (N, 3) sliced Cartesian coordinates.
+            is_torch_flag: Whether coordinates are a PyTorch tensor.
+
+        Returns:
+            CoordinateManager with only Cartesian representation initialized.
+
+        Contract:
+            - _coordinates: Set to provided coordinates
+            - _is_torch: Set to provided flag
+            - _topology: Set to None (caller must set)
+            - _internal: Set to None (lazy computation)
+            - _zmatrix: Set to None (lazy computation)
+            - _components: Set to None (lazy computation)
+        """
+        manager = cls.__new__(cls)
+        manager._coordinates = coordinates
+        manager._is_torch = is_torch_flag
+        manager._topology = None  # Must be set by caller
+        manager._internal = None
+        manager._zmatrix = None
+        manager._components = None
+        return manager
 
     # ─────────────────────────────────────────────────────────────────────
     # Number of atoms
@@ -497,11 +535,6 @@ class CoordinateManager:
             raise ValueError("Invalid coordinates after reconstruction (NaN detected)")
         if has_inf(coords):
             raise ValueError("Invalid coordinates after reconstruction (Inf detected)")
-        if any_abs_greater_than(coords, 10000):
-            raise ValueError(
-                "Coordinates exceed 10000 Angstroms - likely reconstruction error. "
-                "Check that internal coordinates are within reasonable bounds."
-            )
 
     # ─────────────────────────────────────────────────────────────────────
     # Named Dihedral API
@@ -649,7 +682,7 @@ class CoordinateManager:
         )
 
         if self._internal is not None:
-            new_manager._internal = self._internal.numpy()
+            new_manager._internal = to_numpy(self._internal)
 
         # Convert Z-matrix
         if self._zmatrix is not None:
@@ -810,19 +843,5 @@ class CoordinateManager:
         # Slice Cartesian coordinates
         sliced_coords = self._coordinates[mask]
 
-        # Create new manager without calling __init__
-        new_manager = CoordinateManager.__new__(CoordinateManager)
-        new_manager._coordinates = sliced_coords
-        new_manager._is_torch = is_torch(sliced_coords)
-
-        # Topology must be set by caller (sliced topology info)
-        new_manager._topology = None
-
-        # Internal representation starts invalid (lazy recomputation)
-        new_manager._internal = None
-        new_manager._zmatrix = None
-
-        # ConnectedComponents starts empty (rebuilt when internal coords accessed)
-        new_manager._components = None
-
-        return new_manager
+        # Use factory method to create new manager with explicit contract
+        return CoordinateManager._from_slice(sliced_coords, is_torch(sliced_coords))

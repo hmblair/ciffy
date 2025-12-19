@@ -176,12 +176,12 @@ class CartesianToInternalFunction(Function):
             # Use saved device from forward pass
             device = ctx.output_device
 
-            if not coords.is_cpu:
-                # Transfer to CPU if needed (e.g., MPS fallback)
-                coords = coords.cpu()
-                indices = indices.cpu()
-                internal = internal.cpu()
-                grad_internal = grad_internal.cpu()
+            # Transfer ALL tensors to CPU for C extension
+            # (coords/indices may already be CPU from forward, but internal/grad may not be)
+            coords = coords.cpu() if not coords.is_cpu else coords
+            indices = indices.cpu() if not indices.is_cpu else indices
+            internal = internal.cpu() if not internal.is_cpu else internal
+            grad_internal = grad_internal.cpu() if not grad_internal.is_cpu else grad_internal
 
             # Ensure contiguous layout for buffer protocol
             coords_f32 = coords.detach().to(torch.float32).contiguous()
@@ -355,19 +355,15 @@ class NerfReconstructFunction(Function):
             # Use saved device from forward pass
             device = ctx.output_device
 
-            if not coords.is_cpu:
-                # Transfer to CPU if needed (e.g., MPS fallback)
-                coords = coords.cpu()
-                indices = indices.cpu()
-                internal = internal.cpu()
-                grad_coords = grad_coords.cpu()
-                component_offsets = ctx.component_offsets.cpu()
-                anchor_coords = ctx.anchor_coords.cpu()
-                component_ids = ctx.component_ids.cpu()
-            else:
-                component_offsets = ctx.component_offsets
-                anchor_coords = ctx.anchor_coords
-                component_ids = ctx.component_ids
+            # Transfer ALL tensors to CPU for C extension
+            # (some may already be CPU from forward, but others may not be)
+            coords = coords.cpu() if not coords.is_cpu else coords
+            indices = indices.cpu() if not indices.is_cpu else indices
+            internal = internal.cpu() if not internal.is_cpu else internal
+            grad_coords = grad_coords.cpu() if not grad_coords.is_cpu else grad_coords
+            component_offsets = ctx.component_offsets.cpu() if not ctx.component_offsets.is_cpu else ctx.component_offsets
+            anchor_coords = ctx.anchor_coords.cpu() if not ctx.anchor_coords.is_cpu else ctx.anchor_coords
+            component_ids = ctx.component_ids.cpu() if not ctx.component_ids.is_cpu else ctx.component_ids
 
             # Ensure contiguous layout for buffer protocol
             coords_f32 = coords.detach().to(torch.float32).contiguous()

@@ -47,16 +47,53 @@ def scatter_collate(
     """
     Group features by their indices into a list of arrays.
 
+    Uses O(n log n) sort + split instead of O(n * dim_size) boolean masks.
+
     Args:
         features: Values to group.
         indices: Index for each value.
         dim: Dimension to reduce (unused, for API compatibility).
-        dim_size: Number of unique indices (unused, for API compatibility).
+        dim_size: Number of unique indices.
 
     Returns:
         List where each element contains all values for that index.
     """
-    return [features[indices == ix] for ix in range(dim_size)]
+    if len(indices) == 0:
+        return [features[:0] for _ in range(dim_size)]
+
+    # Sort by index: O(n log n)
+    sort_order = backend.argsort(indices)
+    sorted_features = features[sort_order]
+    sorted_indices = indices[sort_order]
+
+    # Find split points where index changes: O(n)
+    diffs = backend.diff(sorted_indices)
+    split_points = backend.nonzero_1d(diffs) + 1
+
+    # Split into groups: O(n)
+    chunks = backend.split_at_indices(sorted_features, split_points)
+
+    # Handle missing indices (indices with no elements)
+    # Get actual indices present in data
+    if len(chunks) == 0:
+        return [features[:0] for _ in range(dim_size)]
+
+    # Build result with empty arrays for missing indices
+    unique_indices = sorted_indices[
+        backend.cat([backend.array([0], like=sorted_indices), split_points])
+    ]
+
+    result = []
+    chunk_idx = 0
+    for i in range(dim_size):
+        if chunk_idx < len(unique_indices) and int(unique_indices[chunk_idx]) == i:
+            result.append(chunks[chunk_idx])
+            chunk_idx += 1
+        else:
+            # Empty array for missing index
+            result.append(features[:0])
+
+    return result
 
 
 def _scatter_sum(features: Array, indices: Array, dim: int, dim_size: int) -> Array:

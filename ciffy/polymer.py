@@ -556,9 +556,11 @@ class Polymer:
         """
         n_chains = self.size(Scale.CHAIN)
 
-        # Sentinel values for masking unknown residues (-1)
-        LARGE_SENTINEL = 9999   # Won't be selected as min
-        SMALL_SENTINEL = -9999  # Won't be selected as max
+        # Sentinel values for masking unknown residues (-1) during min/max reduction.
+        # Values chosen to be outside valid Residue enum range (~0-500), ensuring
+        # unknowns are never selected as min/max when valid residues exist.
+        LARGE_SENTINEL = 9999
+        SMALL_SENTINEL = -9999
 
         # Create masked copies for min/max reduction
         unknown_mask = self.sequence == -1

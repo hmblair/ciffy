@@ -1124,6 +1124,46 @@ class Polymer:
         atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
         return self[atom_mask]
 
+    def by_residue_index(self: Polymer, ix: Array | int) -> Polymer:
+        """
+        Select residues by positional index.
+
+        Unlike by_residue() which selects by residue TYPE (e.g., all adenines),
+        this method selects by positional INDEX (e.g., residue 0, 1, 2...).
+
+        Args:
+            ix: Residue index or indices (0-indexed position in polymer).
+
+        Returns:
+            New Polymer with selected residues.
+
+        Raises:
+            IndexError: If any index is out of range.
+
+        Example:
+            >>> # Select first residue
+            >>> first = polymer.by_residue_index(0)
+            >>> # Select residues 0, 2, 4
+            >>> subset = polymer.by_residue_index([0, 2, 4])
+            >>> # Combine with by_atom to get specific atoms
+            >>> from ciffy.biochemistry import Sugar
+            >>> first_c5 = polymer.by_residue_index(0).by_atom(Sugar.C5p.index())
+        """
+        if isinstance(ix, int):
+            ix = ops.array([ix], like=self.coordinates)
+
+        # Validate indices
+        max_res = self.size(Scale.RESIDUE)
+        ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
+        for j in ix_list:
+            if j < 0 or j >= max_res:
+                raise IndexError(
+                    f"Residue index {j} out of range for Polymer with {max_res} residues"
+                )
+
+        atom_mask = self.mask(ix, Scale.RESIDUE, Scale.ATOM)
+        return self[atom_mask]
+
     def by_type(self: Polymer, mol: Molecule) -> Polymer:
         """
         Select chains by molecule type.

@@ -124,6 +124,180 @@ class TestBiochemistryConstants:
         assert Residue.ALA.O.value not in sidechain_values
 
 
+class TestHierarchicalEnum:
+    """Test HierarchicalEnum and atom group functionality."""
+
+    def test_build_hierarchical_enum(self):
+        """Test basic HierarchicalEnum creation."""
+        import numpy as np
+        from ciffy.utils import build_hierarchical_enum, IndexEnum
+
+        # Create nested structure
+        Inner = IndexEnum("Inner", {"X": 10, "Y": 20})
+        Outer = build_hierarchical_enum("Outer", {"inner": Inner, "leaf": 30})
+
+        # Test attribute access
+        assert Outer.inner is Inner
+        assert Outer.leaf == 30
+
+        # Test index aggregates all values
+        idx = Outer.index()
+        assert set(idx.tolist()) == {10, 20, 30}
+
+        # Test list returns member names
+        assert set(Outer.list()) == {"inner", "leaf"}
+
+    def test_build_atom_group(self):
+        """Test build_atom_group creates correct structure."""
+        import numpy as np
+        from ciffy.utils import build_atom_group
+        from ciffy.biochemistry import Residue
+
+        # Build a simple atom group from purines
+        sources = [("A", Residue.A), ("G", Residue.G)]
+        TestGroup = build_atom_group("TestGroup", sources, {"N1", "N9"})
+
+        # Should have N1 and N9 as attributes
+        assert hasattr(TestGroup, "N1")
+        assert hasattr(TestGroup, "N9")
+
+        # Each should be an IndexEnum with A and G members
+        assert hasattr(TestGroup.N1, "A")
+        assert hasattr(TestGroup.N1, "G")
+        assert TestGroup.N1.A.value == Residue.A.N1.value
+        assert TestGroup.N1.G.value == Residue.G.N1.value
+
+    def test_single_source_of_truth(self):
+        """Test that hierarchical enums reference same values as Residue."""
+        from ciffy.biochemistry import (
+            Residue, PurineBase, PyrimidineBase, Sugar, PhosphateGroup
+        )
+
+        # Purine atoms
+        assert PurineBase.N1.A.value == Residue.A.N1.value
+        assert PurineBase.N1.G.value == Residue.G.N1.value
+        assert PurineBase.N1.DA.value == Residue.DA.N1.value
+        assert PurineBase.N1.DG.value == Residue.DG.N1.value
+
+        assert PurineBase.N9.A.value == Residue.A.N9.value
+        assert PurineBase.C8.G.value == Residue.G.C8.value
+
+        # Pyrimidine atoms
+        assert PyrimidineBase.N1.C.value == Residue.C.N1.value
+        assert PyrimidineBase.N1.U.value == Residue.U.N1.value
+
+        # Sugar atoms
+        assert Sugar.C5p.A.value == Residue.A.C5p.value
+        assert Sugar.C5p.G.value == Residue.G.C5p.value
+        assert Sugar.C5p.C.value == Residue.C.C5p.value
+        assert Sugar.C5p.U.value == Residue.U.C5p.value
+
+        # Phosphate atoms
+        assert PhosphateGroup.P.A.value == Residue.A.P.value
+        assert PhosphateGroup.OP1.G.value == Residue.G.OP1.value
+
+    def test_purine_hierarchy(self):
+        """Test PurineBase = PurineImidazole | PurinePyrimidine."""
+        from ciffy.biochemistry import PurineBase, PurineImidazole, PurinePyrimidine
+
+        imidazole_values = set(PurineImidazole.index().tolist())
+        pyrimidine_values = set(PurinePyrimidine.index().tolist())
+        base_values = set(PurineBase.index().tolist())
+
+        # Union should equal PurineBase
+        assert imidazole_values | pyrimidine_values == base_values
+
+        # Imidazole and pyrimidine share C4 and C5
+        shared = imidazole_values & pyrimidine_values
+        assert len(shared) > 0  # C4 and C5 are shared
+
+    def test_hierarchical_enum_methods(self):
+        """Test all IndexEnum-like methods on HierarchicalEnum."""
+        import numpy as np
+        from ciffy.biochemistry import PurineBase
+
+        # index() returns numpy array
+        idx = PurineBase.index()
+        assert isinstance(idx, np.ndarray)
+        assert idx.dtype == np.int64
+
+        # list() returns list of atom names
+        names = PurineBase.list()
+        assert isinstance(names, list)
+        assert "N1" in names
+        assert "N9" in names
+
+        # dict() returns name -> subenum mapping
+        d = PurineBase.dict()
+        assert isinstance(d, dict)
+        assert "N1" in d
+
+        # Nested IndexEnum has full functionality
+        assert PurineBase.N1.list() == ["A", "G", "DA", "DG"]
+        assert PurineBase.N1.dict() == {
+            "A": PurineBase.N1.A.value,
+            "G": PurineBase.N1.G.value,
+            "DA": PurineBase.N1.DA.value,
+            "DG": PurineBase.N1.DG.value,
+        }
+
+    def test_atom_groups_with_polymer(self):
+        """Test using atom groups with Polymer.by_atom()."""
+        from ciffy import from_sequence
+        from ciffy.biochemistry import Sugar, PurineBase, PyrimidineBase
+
+        polymer = from_sequence("acgu")
+        total_atoms = polymer.coordinates.shape[0]
+
+        # Select sugar atoms - should be present in all 4 residues
+        sugar = polymer.by_atom(Sugar.index())
+        assert sugar.coordinates.shape[0] > 0
+        assert sugar.coordinates.shape[0] < total_atoms
+
+        # Select purine base atoms - only A and G
+        purine = polymer.by_atom(PurineBase.index())
+        assert purine.coordinates.shape[0] > 0
+
+        # Select pyrimidine base atoms - only C and U
+        pyrimidine = polymer.by_atom(PyrimidineBase.index())
+        assert pyrimidine.coordinates.shape[0] > 0
+
+        # Purine + pyrimidine should not overlap (different chemical identity)
+        purine_values = set(PurineBase.index().tolist())
+        pyrimidine_values = set(PyrimidineBase.index().tolist())
+        assert purine_values.isdisjoint(pyrimidine_values)
+
+    def test_specific_atom_selection(self):
+        """Test selecting specific atoms like all C5' or all N1."""
+        from ciffy import from_sequence
+        from ciffy.biochemistry import Sugar, PurineBase
+
+        polymer = from_sequence("acgu")
+
+        # Select all C5' atoms (one per residue)
+        c5p = polymer.by_atom(Sugar.C5p.index())
+        assert c5p.coordinates.shape[0] == 4  # One per residue
+
+        # Select all purine N1 atoms (only A and G have purine N1)
+        n1_purine = polymer.by_atom(PurineBase.N1.index())
+        assert n1_purine.coordinates.shape[0] == 2  # A and G only
+
+    def test_iteration_and_containment(self):
+        """Test __iter__ and __contains__ on HierarchicalEnum."""
+        from ciffy.biochemistry import PurineBase
+
+        # Iteration yields subenums
+        members = list(PurineBase)
+        assert len(members) > 0
+
+        # String containment
+        assert "N1" in PurineBase
+        assert "INVALID" not in PurineBase
+
+        # Subenum containment
+        assert PurineBase.N1 in PurineBase
+
+
 class TestMoleculeEnum:
     """Test Molecule enum functionality."""
 

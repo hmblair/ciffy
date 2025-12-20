@@ -178,6 +178,167 @@ class IndexEnum(Enum):
         return PairEnum(pairs)
 
 
+# =============================================================================
+# Hierarchical Enum System
+# =============================================================================
+
+
+class HierarchicalEnumMeta(type):
+    """
+    Metaclass enabling hierarchical enum behavior with IndexEnum-like methods.
+
+    Members can be either:
+    - Leaf values: integers or enum members with .value
+    - Sub-enums: classes with .index() method (IndexEnum or HierarchicalEnum)
+
+    Provides the same interface as IndexEnum at each level:
+        cls.index()    → array of all leaf values in subtree
+        cls.dict()     → name → value/subenum mapping
+        cls.list()     → list of member names
+        cls.revdict()  → value → name mapping (leaves only)
+
+    Example:
+        >>> PurineBase.N1.A.value  # leaf value (int)
+        >>> PurineBase.N1.index()  # all N1 values [A.N1, G.N1, ...]
+        >>> PurineBase.index()     # all purine base atom values
+    """
+
+    _members: dict[str, any]
+
+    def index(cls) -> np.ndarray:
+        """Return array of all leaf values in this subtree."""
+        values = []
+        for member in cls._members.values():
+            if hasattr(member, 'index') and callable(getattr(member, 'index')):
+                # Sub-enum: recursively get values
+                values.extend(member.index().tolist())
+            elif hasattr(member, 'value'):
+                # Leaf with .value property
+                values.append(member.value)
+            elif isinstance(member, int):
+                # Direct integer value
+                values.append(member)
+        return np.array(sorted(set(values)), dtype=np.int64)
+
+    def dict(cls) -> dict[str, any]:
+        """Return name → value mapping (values for leaves, subenums for branches)."""
+        result = {}
+        for name, member in cls._members.items():
+            if hasattr(member, 'index') and callable(getattr(member, 'index')):
+                result[name] = member  # Sub-enum
+            elif hasattr(member, 'value'):
+                result[name] = member.value
+            else:
+                result[name] = member
+        return result
+
+    def list(cls) -> list[str]:
+        """Return list of member names."""
+        return list(cls._members.keys())
+
+    def revdict(cls) -> dict[int, str]:
+        """Return value → name mapping for leaf members only."""
+        result = {}
+        for name, member in cls._members.items():
+            if hasattr(member, 'value') and not (
+                hasattr(member, 'index') and callable(getattr(member, 'index'))
+            ):
+                result[member.value] = name
+            elif isinstance(member, int):
+                result[member] = name
+        return result
+
+    def __iter__(cls):
+        """Iterate over members."""
+        return iter(cls._members.values())
+
+    def __len__(cls) -> int:
+        """Number of direct members."""
+        return len(cls._members)
+
+    def __getattr__(cls, name: str):
+        """Get member by attribute access."""
+        members = cls.__dict__.get('_members', {})
+        if name in members:
+            return members[name]
+        raise AttributeError(f"'{cls.__name__}' has no member '{name}'")
+
+    def __contains__(cls, item) -> bool:
+        """Check if name or member is in enum."""
+        if isinstance(item, str):
+            return item in cls._members
+        return item in cls._members.values()
+
+    def __repr__(cls) -> str:
+        return f"<HierarchicalEnum '{cls.__name__}' with {len(cls._members)} members>"
+
+
+def build_hierarchical_enum(
+    name: str,
+    members: dict[str, any],
+) -> type:
+    """
+    Create a hierarchical enum class with the given members.
+
+    Args:
+        name: Class name.
+        members: Dict mapping names to values (int, Enum member, or sub-enum).
+
+    Returns:
+        Class with HierarchicalEnumMeta metaclass.
+    """
+    return HierarchicalEnumMeta(name, (), {'_members': members})
+
+
+def build_atom_group(
+    name: str,
+    sources: list[tuple[str, type]],
+    atom_filter: set[str] | None = None,
+) -> type:
+    """
+    Build a hierarchical enum grouping atoms by name across residue types.
+
+    Creates a class where each atom name maps to an IndexEnum containing
+    all residues that have that atom. Uses the same integer values as the
+    source enums to maintain single source of truth.
+
+    Args:
+        name: Name for the created class.
+        sources: List of (residue_name, atom_enum) pairs.
+        atom_filter: Optional set of atom names to include.
+
+    Returns:
+        HierarchicalEnum with nested IndexEnums for each atom position.
+
+    Example:
+        >>> from ciffy.biochemistry._generated_atoms import A, G
+        >>> PurineBase = build_atom_group("PurineBase", [("A", A), ("G", G)], {"N1", "N9"})
+        >>> PurineBase.N1.A.value == A.N1.value  # True - same source value
+        >>> PurineBase.N1.index()  # array of all N1 values
+        >>> PurineBase.index()     # array of all atom values
+    """
+    from collections import defaultdict
+
+    # Collect atoms by name: {atom_name: {residue_name: value}}
+    atoms_by_name: dict[str, dict[str, int]] = defaultdict(dict)
+
+    for residue_name, atom_enum in sources:
+        for member in atom_enum:
+            atom_name = member.name
+            if atom_filter is None or atom_name in atom_filter:
+                # Store the integer value (source of truth)
+                atoms_by_name[atom_name][residue_name] = member.value
+
+    # Build IndexEnum for each atom position
+    members = {}
+    for atom_name, residue_values in sorted(atoms_by_name.items()):
+        # Create IndexEnum with same values as source
+        sub_enum = IndexEnum(atom_name, residue_values)
+        members[atom_name] = sub_enum
+
+    return build_hierarchical_enum(name, members)
+
+
 class ResidueType:
     """
     A residue definition with index, metadata, and atom access.

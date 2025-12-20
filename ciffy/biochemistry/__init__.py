@@ -53,10 +53,18 @@ from ._generated_dihedraltypes import (
     DIHEDRAL_ATOMS,
 )
 from .constants import (
+    # Flat IndexEnums (prefixed atom names)
     Backbone,
     Nucleobase,
     Phosphate,
     Sidechain,
+    # Hierarchical atom groups (chemical identity)
+    Sugar,
+    PhosphateGroup,
+    PurineImidazole,
+    PurinePyrimidine,
+    PurineBase,
+    PyrimidineBase,
 )
 from .linking import (
     LinkingDefinition,
@@ -105,11 +113,18 @@ __all__ = [
     "DeoxyribonucleicAcid",
     "ModifiedNucleotides",
     "AminoAcids",
-    # Atom group constants
+    # Atom group constants (flat IndexEnums with prefixed names)
     "Backbone",
     "Nucleobase",
     "Phosphate",
     "Sidechain",
+    # Hierarchical atom groups (chemical identity, HierarchicalEnum)
+    "Sugar",
+    "PhosphateGroup",
+    "PurineImidazole",
+    "PurinePyrimidine",
+    "PurineBase",
+    "PyrimidineBase",
     # Linking
     "LinkingDefinition",
     "NUCLEIC_ACID_LINK",

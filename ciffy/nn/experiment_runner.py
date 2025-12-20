@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     import torch
@@ -31,10 +32,20 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
+# Check for rich library
+try:
+    from rich.live import Live
+    from rich.table import Table
+    from rich.console import Console
+
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
 from .training import ExperimentResult
 
 if TYPE_CHECKING:
-    pass
+    from multiprocessing import Queue
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +59,39 @@ def _get_num_gpus() -> int:
     return torch.cuda.device_count()
 
 
-def _run_single_experiment(args: tuple) -> ExperimentResult:
+def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
     """
-    Run a single training experiment in a subprocess.
+    Run a single training experiment in a subprocess with progress reporting.
 
     This function is designed to be called by ProcessPoolExecutor.
-    It imports the training script and runs training with the given config.
+    It imports the training script and runs training with the given config,
+    sending progress updates to a queue.
 
     Args:
-        args: Tuple of (config_path, experiment_name, device, scripts_dir)
+        args: Tuple of (config_path, experiment_name, device, scripts_dir, progress_queue)
 
     Returns:
         ExperimentResult with training outcomes.
     """
-    config_path, experiment_name, device, scripts_dir = args
+    config_path, experiment_name, device, scripts_dir, progress_queue = args
 
     start_time = time.time()
+
+    def send_progress(status: str, epoch: int = 0, total_epochs: int = 0, loss: float | None = None):
+        """Send progress update to queue."""
+        if progress_queue is not None:
+            try:
+                progress_queue.put({
+                    "name": experiment_name,
+                    "status": status,
+                    "epoch": epoch,
+                    "total_epochs": total_epochs,
+                    "loss": loss,
+                    "device": device,
+                    "time": time.time() - start_time,
+                })
+            except Exception:
+                pass  # Ignore queue errors
 
     try:
         # Import here to avoid issues with multiprocessing
@@ -79,17 +107,26 @@ def _run_single_experiment(args: tuple) -> ExperimentResult:
         config = load_config(config_path)
         total_epochs = config.training.epochs
 
+        # Send initial status
+        send_progress("running", 0, total_epochs)
+
+        # Create progress callback
+        def progress_callback(epoch: int, total: int, metrics: dict):
+            send_progress("running", epoch, total, metrics.get("loss"))
+
         # Run training
         result = train_vae(
             config_path=config_path,
             device_override=device,
             experiment_name=experiment_name,
             quiet=True,  # Suppress per-experiment progress bars
+            progress_callback=progress_callback,
         )
 
         duration = time.time() - start_time
 
         if result.get("error"):
+            send_progress("failed", 0, total_epochs)
             return ExperimentResult(
                 name=experiment_name,
                 config_path=config_path,
@@ -100,6 +137,7 @@ def _run_single_experiment(args: tuple) -> ExperimentResult:
                 total_epochs=total_epochs,
             )
 
+        send_progress("complete", total_epochs, total_epochs, result.get("best_loss"))
         return ExperimentResult(
             name=experiment_name,
             config_path=config_path,
@@ -118,6 +156,7 @@ def _run_single_experiment(args: tuple) -> ExperimentResult:
 
     except Exception as e:
         duration = time.time() - start_time
+        send_progress("failed", 0, 0)
         return ExperimentResult(
             name=experiment_name,
             config_path=config_path,
@@ -126,6 +165,85 @@ def _run_single_experiment(args: tuple) -> ExperimentResult:
             duration_seconds=duration,
             error=str(e),
         )
+
+
+def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
+    """Create a rich Table showing experiment progress."""
+    table = Table(title="Experiment Progress", show_header=True, header_style="bold")
+    table.add_column("Experiment", style="cyan", width=20)
+    table.add_column("Status", width=10)
+    table.add_column("Progress", width=15)
+    table.add_column("Loss", width=12)
+    table.add_column("Device", width=10)
+    table.add_column("Time", width=10)
+
+    for name, state in experiment_states.items():
+        status = state.get("status", "pending")
+        epoch = state.get("epoch", 0)
+        total = state.get("total_epochs", 0)
+        loss = state.get("loss")
+        device = state.get("device", "")
+        elapsed = state.get("time", 0)
+
+        # Format status with color
+        if status == "complete":
+            status_str = "[green]complete[/green]"
+        elif status == "failed":
+            status_str = "[red]failed[/red]"
+        elif status == "running":
+            status_str = "[yellow]running[/yellow]"
+        else:
+            status_str = "[dim]pending[/dim]"
+
+        # Format progress bar
+        if total > 0:
+            pct = epoch / total
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            progress_str = f"{bar} {epoch}/{total}"
+        else:
+            progress_str = "..."
+
+        # Format loss
+        loss_str = f"{loss:.4f}" if loss is not None else "-"
+
+        # Format time
+        time_str = _format_duration(elapsed)
+
+        table.add_row(name, status_str, progress_str, loss_str, device, time_str)
+
+    return table
+
+
+def _progress_display_thread(
+    progress_queue: "Queue",
+    experiment_names: list[str],
+    stop_event: threading.Event,
+) -> None:
+    """Thread that reads from progress queue and updates the live display."""
+    console = Console()
+
+    # Initialize experiment states
+    experiment_states = {name: {"status": "pending"} for name in experiment_names}
+
+    with Live(_create_progress_table(experiment_states), console=console, refresh_per_second=4) as live:
+        while not stop_event.is_set():
+            # Process all available messages
+            while True:
+                try:
+                    # Non-blocking get with timeout
+                    msg = progress_queue.get(timeout=0.1)
+                    name = msg.get("name")
+                    if name in experiment_states:
+                        experiment_states[name].update(msg)
+                except Exception:
+                    break  # Queue empty or error
+
+            # Update display
+            live.update(_create_progress_table(experiment_states))
+
+        # Final update
+        live.update(_create_progress_table(experiment_states))
 
 
 def run_experiments(
@@ -139,6 +257,9 @@ def run_experiments(
 
     Experiments are distributed across available GPUs in a round-robin
     fashion. Each experiment runs in a separate process for memory isolation.
+
+    A live progress table is displayed showing the status of each experiment
+    (requires the `rich` library).
 
     Args:
         config_paths: List of paths to YAML config files.
@@ -155,7 +276,7 @@ def run_experiments(
         List of ExperimentResult for each config, in the same order as input.
 
     Raises:
-        ImportError: If PyTorch is not available.
+        ImportError: If PyTorch or rich is not available.
         FileNotFoundError: If any config file does not exist.
 
     Example:
@@ -169,6 +290,12 @@ def run_experiments(
     """
     if not TORCH_AVAILABLE:
         raise ImportError("PyTorch is required for run_experiments")
+
+    if not RICH_AVAILABLE:
+        raise ImportError(
+            "rich is required for experiment progress display. "
+            "Install with: pip install rich"
+        )
 
     config_paths = [Path(p) for p in config_paths]
 
@@ -201,10 +328,17 @@ def run_experiments(
     scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
 
     # Prepare experiment arguments
+    experiment_names = []
     experiments = []
+
+    # Create a multiprocessing manager for the queue
+    manager = mp.Manager()
+    progress_queue = manager.Queue()
+
     for i, config_path in enumerate(config_paths):
         # Extract experiment name from filename
         exp_name = config_path.stem
+        experiment_names.append(exp_name)
 
         # Assign device based on strategy
         if device == "cuda" and num_gpus > 0:
@@ -212,48 +346,59 @@ def run_experiments(
         else:
             exp_device = device
 
-        experiments.append((str(config_path), exp_name, exp_device, scripts_dir))
+        experiments.append((str(config_path), exp_name, exp_device, scripts_dir, progress_queue))
 
     results: list[ExperimentResult] = []
 
-    if not parallel or max_workers == 1:
-        # Sequential execution
-        for exp_args in experiments:
-            logger.info(f"Running experiment: {exp_args[1]} on {exp_args[2]}")
-            result = _run_single_experiment(exp_args)
-            results.append(result)
-            _print_experiment_status(result)
-    else:
-        # Parallel execution with ProcessPoolExecutor
-        # Use 'spawn' context for CUDA compatibility
-        ctx = mp.get_context("spawn")
+    # Start progress display thread
+    stop_event = threading.Event()
+    display_thread = threading.Thread(
+        target=_progress_display_thread,
+        args=(progress_queue, experiment_names, stop_event),
+        daemon=True,
+    )
+    display_thread.start()
 
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-            # Submit all experiments
-            future_to_exp = {
-                executor.submit(_run_single_experiment, exp): exp for exp in experiments
-            }
+    try:
+        if not parallel or max_workers == 1:
+            # Sequential execution
+            for exp_args in experiments:
+                result = _run_single_experiment_with_progress(exp_args)
+                results.append(result)
+        else:
+            # Parallel execution with ProcessPoolExecutor
+            # Use 'spawn' context for CUDA compatibility
+            ctx = mp.get_context("spawn")
 
-            # Collect results as they complete
-            for future in as_completed(future_to_exp):
-                exp_args = future_to_exp[future]
-                exp_name = exp_args[1]
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+                # Submit all experiments
+                future_to_exp = {
+                    executor.submit(_run_single_experiment_with_progress, exp): exp
+                    for exp in experiments
+                }
 
-                try:
-                    result = future.result()
-                    results.append(result)
-                    _print_experiment_status(result)
-                except Exception as e:
-                    # Handle unexpected executor errors
-                    result = ExperimentResult(
-                        name=exp_name,
-                        config_path=exp_args[0],
-                        status="failed",
-                        device=exp_args[2],
-                        error=f"Executor error: {e}",
-                    )
-                    results.append(result)
-                    _print_experiment_status(result)
+                # Collect results as they complete
+                for future in as_completed(future_to_exp):
+                    exp_args = future_to_exp[future]
+                    exp_name = exp_args[1]
+
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        # Handle unexpected executor errors
+                        result = ExperimentResult(
+                            name=exp_name,
+                            config_path=exp_args[0],
+                            status="failed",
+                            device=exp_args[2],
+                            error=f"Executor error: {e}",
+                        )
+                        results.append(result)
+    finally:
+        # Stop display thread
+        stop_event.set()
+        display_thread.join(timeout=2.0)
 
     # Sort results to match input order
     name_to_result = {r.name: r for r in results}
@@ -264,23 +409,6 @@ def run_experiments(
             ordered_results.append(name_to_result[exp_name])
 
     return ordered_results
-
-
-def _print_experiment_status(result: ExperimentResult) -> None:
-    """Print single-line status update for an experiment."""
-    status_icon = "+" if result.status == "success" else "X"
-    if result.status == "success":
-        print(
-            f"  [{status_icon}] {result.name}: loss={result.best_loss:.4f} "
-            f"({_format_duration(result.duration_seconds)} on {result.device})"
-        )
-    else:
-        error_short = (
-            result.error[:50] + "..."
-            if result.error and len(result.error) > 50
-            else result.error
-        )
-        print(f"  [{status_icon}] {result.name}: FAILED - {error_short}")
 
 
 def format_results_table(results: list[ExperimentResult]) -> str:

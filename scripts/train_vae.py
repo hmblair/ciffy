@@ -350,6 +350,7 @@ def train_vae(
     resume_path: str | None = None,
     experiment_name: str | None = None,
     quiet: bool = False,
+    progress_callback: Optional[callable] = None,
 ) -> dict[str, any]:
     """
     Train a Polymer VAE with the given configuration.
@@ -364,6 +365,9 @@ def train_vae(
         experiment_name: Name for this experiment. If provided, output
             directories are suffixed with this name.
         quiet: If True, suppress progress bars and reduce logging.
+        progress_callback: Optional callback called after each epoch with
+            signature: callback(epoch, total_epochs, metrics) where metrics
+            is a dict containing 'loss', 'recon_loss', 'kl_loss', etc.
 
     Returns:
         Dict containing:
@@ -494,6 +498,10 @@ def train_vae(
                     f"Samples: {int(metrics.get('n_samples', 0))} | "
                     f"Skipped: {int(metrics.get('n_skipped', 0))}"
                 )
+
+            # Call progress callback if provided
+            if progress_callback is not None:
+                progress_callback(epoch + 1, config.training.epochs, metrics)
 
             # Generate samples at end of epoch (skip if quiet to save time)
             if not quiet:

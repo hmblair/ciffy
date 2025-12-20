@@ -266,28 +266,70 @@ def check_openmp_available():
     import tempfile
 
     if sys.platform == 'darwin':
-        # macOS: need libomp from Homebrew
+        # macOS: need libomp from Homebrew, conda, or torch
         compile_args = ['-Xpreprocessor', '-fopenmp']
         link_args = []
+        libomp_path = None
 
-        # Find libomp
-        libomp_found = False
-        for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
-            if os.path.exists(libomp_path):
-                # Use explicit path with -lomp to avoid conflicting with system/bundled libomp
-                link_args.append(f'-L{libomp_path}')
-                link_args.append('-lomp')
+        # CRITICAL FIX FOR DUAL-LIBOMP CONFLICT:
+        # On macOS, environments often have multiple libomp copies (conda's system + torch's bundled).
+        # When both try to initialize, we get "OMP: Error #15: already initialized".
+        # Solution: Prioritize torch's libomp since torch will load it anyway.
+        # This ensures we use the SAME libomp that torch will load at runtime.
 
-                include_path = libomp_path.replace('/lib', '/include')
-                if os.path.exists(include_path):
-                    compile_args.append(f'-I{include_path}')
+        # Priority 1: Use torch's libomp (avoids conflict with conda's system libomp)
+        # CRITICAL: Use absolute path, not just -L flag, to ensure torch's libomp
+        # is loaded instead of conda's system libomp in the same environment
+        try:
+            import torch
+            torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+            torch_libomp = os.path.join(torch_lib, 'libomp.dylib')
+            if os.path.exists(torch_libomp):
+                # Use absolute path to torch's libomp to ensure it takes precedence
+                # over conda's system libomp in the same environment
+                link_args.append(torch_libomp)  # Link directly to torch's libomp
+                libomp_path = torch_lib
+                print(f"Using torch's libomp (absolute path): {torch_libomp}")
+        except ImportError:
+            pass
 
-                libomp_found = True
-                break
+        # Priority 2: Check target conda environment's libomp (if not using torch)
+        if not libomp_path:
+            target_env_prefix = os.environ.get('CONDA_PREFIX')
+            if target_env_prefix and target_env_prefix != sys.prefix:
+                target_libomp = os.path.join(target_env_prefix, 'lib', 'libomp.dylib')
+                if os.path.exists(target_libomp):
+                    libomp_path = os.path.join(target_env_prefix, 'lib')
+                    print(f"Using target conda environment's libomp: {libomp_path}")
 
-        if not libomp_found:
+        # Priority 3: Use current sys.prefix environment's libomp
+        if not libomp_path:
+            conda_libomp = os.path.join(sys.prefix, 'lib', 'libomp.dylib')
+            if os.path.exists(conda_libomp):
+                libomp_path = os.path.join(sys.prefix, 'lib')
+                print("Using current environment's libomp")
+
+        # Priority 4: Fall back to Homebrew libomp
+        if not libomp_path:
+            for homebrew_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
+                if os.path.exists(homebrew_path):
+                    libomp_path = homebrew_path
+                    print("Using Homebrew libomp")
+                    break
+
+        if not libomp_path:
             # libomp not found
             return None, None
+
+        # Set up linking with explicit path to avoid conflicts
+        # If we already added absolute path (torch case), don't add again
+        if not any(arg.endswith('libomp.dylib') for arg in link_args):
+            link_args.append(f'-L{libomp_path}')
+            link_args.append('-lomp')
+
+        include_path = libomp_path.replace('/lib', '/include')
+        if os.path.exists(include_path):
+            compile_args.append(f'-I{include_path}')
     else:
         # Linux/Windows
         compile_args = ['-fopenmp']
@@ -335,29 +377,53 @@ if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
         extra_compile_args.extend(omp_compile)
         extra_link_args.extend(omp_link)
 
-        # On macOS, configure rpaths to prefer Homebrew's libomp over bundled versions
-        # This avoids conflicts when PyTorch (with its own libomp) is also loaded
+        # On macOS, configure rpaths to use the same libomp as the environment
+        # This avoids conflicts with numpy, torch, and other packages
         if sys.platform == 'darwin':
             # Add header padding for install_name_tool modifications
             extra_link_args.append('-Wl,-headerpad_max_install_names')
 
-            # Add rpaths for libomp discovery (Homebrew FIRST to prefer it)
-            for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
-                if os.path.exists(libomp_path):
-                    # Add Homebrew libomp as primary search path
-                    extra_link_args.append(f'-Wl,-rpath,{libomp_path}')
-                    print(f"  Added primary rpath for Homebrew libomp: {libomp_path}")
-                    break
+            # Determine which libomp we're using and add matching rpaths
+            # This must match the priority order from check_openmp_available()
+            rpath_added = False
 
-            # PyTorch's lib directory as fallback (if available and torch loaded)
+            # Priority 1: torch's libomp (avoids dual-libomp conflict)
             try:
                 import torch
                 torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
-                if os.path.exists(torch_lib):
+                torch_libomp = os.path.join(torch_lib, 'libomp.dylib')
+                if os.path.exists(torch_libomp):
                     extra_link_args.append(f'-Wl,-rpath,{torch_lib}')
-                    print(f"  Added fallback rpath for PyTorch's libomp: {torch_lib}")
+                    print(f"  Added rpath for torch's libomp: {torch_lib}")
+                    rpath_added = True
             except ImportError:
                 pass
+
+            # Priority 2: Target conda environment's libomp
+            if not rpath_added:
+                target_env_prefix = os.environ.get('CONDA_PREFIX')
+                if target_env_prefix and target_env_prefix != sys.prefix:
+                    target_conda_lib = os.path.join(target_env_prefix, 'lib')
+                    if os.path.exists(os.path.join(target_conda_lib, 'libomp.dylib')):
+                        extra_link_args.append(f'-Wl,-rpath,{target_conda_lib}')
+                        print(f"  Added rpath for target conda environment's libomp: {target_conda_lib}")
+                        rpath_added = True
+
+            # Priority 3: Current environment's libomp
+            if not rpath_added:
+                conda_lib = os.path.join(sys.prefix, 'lib')
+                if os.path.exists(os.path.join(conda_lib, 'libomp.dylib')):
+                    extra_link_args.append(f'-Wl,-rpath,{conda_lib}')
+                    print(f"  Added rpath for current environment's libomp: {conda_lib}")
+                    rpath_added = True
+
+            # Priority 4: Homebrew libomp
+            if not rpath_added:
+                for homebrew_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
+                    if os.path.exists(homebrew_path):
+                        extra_link_args.append(f'-Wl,-rpath,{homebrew_path}')
+                        print(f"  Added rpath for Homebrew libomp: {homebrew_path}")
+                        break
 
         print("OpenMP enabled for parallel Z-matrix construction")
     else:

@@ -183,9 +183,13 @@ def _template_command(args):
 
     try:
         # Create polymer from sequence with sampled dihedrals
+        # By default, use clash-free sampling unless --no-clash-free is specified
+        clash_free = not args.no_clash_free
+
         polymer = from_sequence(
             args.sequence,
             sample_dihedrals=True,
+            clash_free=clash_free,
             seed=args.seed,
         )
 
@@ -474,6 +478,13 @@ def main():
         type=int,
         default=None,
         help="Random seed for reproducible sampling (default: None)",
+    )
+    template_parser.add_argument(
+        "--no-clash-free",
+        action="store_true",
+        help="Disable clash-free sampling. By default, backbone sampling uses "
+             "autoregressive sampling with clash detection to avoid steric "
+             "overlaps. Use this flag for faster (but potentially overlapping) sampling.",
     )
 
     # Experiment subcommand

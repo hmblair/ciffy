@@ -22,6 +22,7 @@ from .transformer import (
     SwiGLU,
 )
 from .training import (
+    ExperimentResult,
     set_seed,
     get_device,
     save_checkpoint,
@@ -30,6 +31,10 @@ from .training import (
     polymer_collate_fn,
     get_worker_init_fn,
     BetaScheduler,
+)
+from .experiment_runner import (
+    run_experiments,
+    format_results_table,
 )
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder
 
@@ -54,6 +59,10 @@ __all__ = [
     "polymer_collate_fn",
     "get_worker_init_fn",
     "BetaScheduler",
+    # Experiment running
+    "ExperimentResult",
+    "run_experiments",
+    "format_results_table",
     # VAE
     "PolymerVAE",
     "DihedralEncoder",

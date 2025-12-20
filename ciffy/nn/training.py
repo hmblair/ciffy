@@ -36,6 +36,7 @@ import dataclasses
 import logging
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -71,6 +72,46 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExperimentResult:
+    """Result from a training experiment.
+
+    Stores metrics and metadata from a completed (or failed) training run,
+    enabling comparison across multiple experiments.
+
+    Attributes:
+        name: Experiment identifier (typically config filename without extension).
+        config_path: Path to the YAML configuration file.
+        status: One of 'success', 'failed', or 'running'.
+        final_loss: Loss value from the final epoch.
+        best_loss: Best (lowest) loss achieved during training.
+        recon_loss: Final reconstruction loss component (VAE).
+        kl_loss: Final KL divergence loss component (VAE).
+        epochs_trained: Number of epochs completed.
+        total_epochs: Total epochs configured for training.
+        n_samples: Total samples processed.
+        device: Device used for training (e.g., 'cuda:0', 'cpu').
+        duration_seconds: Total training time in seconds.
+        checkpoint_path: Path to the final/best checkpoint file.
+        error: Error message if status is 'failed', None otherwise.
+    """
+
+    name: str
+    config_path: str
+    status: str  # 'success', 'failed', 'running'
+    final_loss: float | None = None
+    best_loss: float | None = None
+    recon_loss: float | None = None
+    kl_loss: float | None = None
+    epochs_trained: int = 0
+    total_epochs: int = 0
+    n_samples: int = 0
+    device: str = ""
+    duration_seconds: float = 0.0
+    checkpoint_path: str | None = None
+    error: str | None = None
 
 
 def set_seed(seed: int, deterministic: bool = False) -> None:
@@ -602,6 +643,7 @@ class BetaScheduler:
 
 
 __all__ = [
+    "ExperimentResult",
     "set_seed",
     "get_device",
     "save_checkpoint",

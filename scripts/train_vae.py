@@ -340,11 +340,228 @@ def generate_samples(
 
 
 # =============================================================================
-# Main
+# Main Training Function
+# =============================================================================
+
+
+def train_vae(
+    config_path: str,
+    device_override: str | None = None,
+    resume_path: str | None = None,
+    experiment_name: str | None = None,
+    quiet: bool = False,
+) -> dict[str, any]:
+    """
+    Train a Polymer VAE with the given configuration.
+
+    This function can be called programmatically for experiment running,
+    or via the CLI wrapper main().
+
+    Args:
+        config_path: Path to YAML configuration file.
+        device_override: Override device from config (e.g., "cuda:1").
+        resume_path: Path to checkpoint to resume from.
+        experiment_name: Name for this experiment. If provided, output
+            directories are suffixed with this name.
+        quiet: If True, suppress progress bars and reduce logging.
+
+    Returns:
+        Dict containing:
+        - 'final_loss': Loss value from final epoch
+        - 'best_loss': Best loss achieved during training
+        - 'final_recon_loss': Final reconstruction loss
+        - 'final_kl_loss': Final KL loss
+        - 'epochs_trained': Number of epochs completed
+        - 'n_samples': Total samples processed in final epoch
+        - 'device': Device string used
+        - 'checkpoint_path': Path to best checkpoint
+        - 'error': None if successful, error message otherwise
+    """
+    try:
+        # Load configuration
+        config = load_config(config_path)
+        if not quiet:
+            logger.info(f"Loaded config from {config_path}")
+
+        # Override device if specified
+        if device_override:
+            config.training.device = device_override
+
+        # Set random seed
+        if config.training.seed is not None:
+            set_seed(config.training.seed)
+            if not quiet:
+                logger.info(f"Set random seed to {config.training.seed}")
+
+        # Setup device
+        device = get_device(config.training.device)
+        device_str = str(device)
+        if not quiet:
+            logger.info(f"Using device: {device}")
+
+        # Create dataset and dataloader
+        if not quiet:
+            logger.info(f"Loading data from {config.data.data_dir}")
+        dataset = create_dataset(config.data)
+        if not quiet:
+            logger.info(f"Dataset size: {len(dataset)} structures")
+
+        if len(dataset) == 0:
+            return {
+                "error": "No structures found in dataset",
+                "device": device_str,
+            }
+
+        dataloader = create_dataloader(dataset, config.training)
+
+        # Create model
+        model = create_model(config.model, device)
+        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        if not quiet:
+            logger.info(f"Model parameters: {n_params:,}")
+
+        # Create optimizer
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=config.training.lr,
+            weight_decay=config.training.weight_decay,
+        )
+
+        # Resume from checkpoint if specified
+        start_epoch = 0
+        if resume_path:
+            ckpt = load_checkpoint(Path(resume_path), model, optimizer)
+            start_epoch = ckpt["epoch"] + 1
+
+        # Setup output directories (optionally with experiment name suffix)
+        checkpoint_dir = Path(config.output.checkpoint_dir)
+        sample_dir = Path(config.output.sample_dir)
+        if experiment_name:
+            checkpoint_dir = checkpoint_dir / experiment_name
+            sample_dir = sample_dir / experiment_name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create VAE loss function
+        loss_fn = create_vae_loss_fn(device)
+
+        # Create beta scheduler for KL annealing
+        warmup_epochs = config.model.beta_warmup_epochs
+        if warmup_epochs is None:
+            warmup_epochs = config.training.epochs // 2  # Default: half of training
+        beta_scheduler = BetaScheduler(
+            schedule=config.model.beta_schedule,
+            target_beta=config.model.beta,
+            warmup_epochs=warmup_epochs,
+            total_epochs=config.training.epochs,
+            n_cycles=config.model.beta_cycles,
+        )
+        if not quiet:
+            logger.info(f"Beta schedule: {beta_scheduler}")
+
+        # Training loop
+        if not quiet:
+            logger.info("Starting training...")
+        best_loss = float("inf")
+        best_checkpoint_path = checkpoint_dir / "checkpoint_best.pt"
+        metrics = {}
+        total_samples = 0
+
+        for epoch in range(start_epoch, config.training.epochs):
+            # Update beta for this epoch (KL annealing)
+            current_beta = beta_scheduler.get_beta(epoch)
+            model.beta = current_beta
+
+            # Train epoch using shared training utility
+            metrics = train_epoch(
+                model=model,
+                dataloader=dataloader,
+                loss_fn=loss_fn,
+                optimizer=optimizer,
+                grad_clip=config.training.grad_clip,
+                progress_bar=not quiet,
+            )
+            total_samples += int(metrics.get("n_samples", 0))
+
+            # Log metrics
+            if not quiet:
+                logger.info(
+                    f"Epoch {epoch+1}/{config.training.epochs} | "
+                    f"Loss: {metrics.get('loss', float('nan')):.4f} | "
+                    f"Recon: {metrics.get('recon_loss', float('nan')):.4f} | "
+                    f"KL: {metrics.get('kl_loss', float('nan')):.4f} | "
+                    f"Beta: {current_beta:.4f} | "
+                    f"Samples: {int(metrics.get('n_samples', 0))} | "
+                    f"Skipped: {int(metrics.get('n_skipped', 0))}"
+                )
+
+            # Generate samples at end of epoch (skip if quiet to save time)
+            if not quiet:
+                generate_samples(
+                    model, dataset, device, sample_dir, epoch + 1,
+                    n_perturbations=config.output.n_perturbations,
+                    perturbation_scale=config.output.perturbation_scale,
+                )
+
+            # Save checkpoint
+            if (epoch + 1) % config.output.save_every == 0:
+                save_checkpoint(
+                    checkpoint_dir / f"checkpoint_epoch{epoch+1:04d}.pt",
+                    model, optimizer,
+                    epoch=epoch + 1,
+                    metrics=metrics,
+                    config=config,
+                )
+
+            # Save best model
+            if metrics.get("loss", float("inf")) < best_loss:
+                best_loss = metrics["loss"]
+                save_checkpoint(
+                    best_checkpoint_path,
+                    model, optimizer,
+                    epoch=epoch + 1,
+                    metrics=metrics,
+                    config=config,
+                )
+
+        # Save final checkpoint
+        save_checkpoint(
+            checkpoint_dir / "checkpoint_final.pt",
+            model, optimizer,
+            epoch=config.training.epochs,
+            metrics=metrics,
+            config=config,
+        )
+
+        if not quiet:
+            logger.info("Training complete!")
+
+        return {
+            "final_loss": metrics.get("loss"),
+            "best_loss": best_loss,
+            "final_recon_loss": metrics.get("recon_loss"),
+            "final_kl_loss": metrics.get("kl_loss"),
+            "epochs_trained": config.training.epochs - start_epoch,
+            "n_samples": total_samples,
+            "device": device_str,
+            "checkpoint_path": str(best_checkpoint_path),
+            "error": None,
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "device": device_override or "unknown",
+        }
+
+
+# =============================================================================
+# CLI Entry Point
 # =============================================================================
 
 
 def main():
+    """Command-line entry point for training."""
     parser = argparse.ArgumentParser(
         description="Train Polymer VAE on dihedral angles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -369,141 +586,18 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load configuration
-    config = load_config(args.config)
-    logger.info(f"Loaded config from {args.config}")
+    result = train_vae(
+        config_path=args.config,
+        device_override=args.device,
+        resume_path=args.resume,
+        quiet=False,
+    )
 
-    # Override device if specified
-    if args.device:
-        config.training.device = args.device
-
-    # Set random seed
-    if config.training.seed is not None:
-        set_seed(config.training.seed)
-        logger.info(f"Set random seed to {config.training.seed}")
-
-    # Setup device
-    device = get_device(config.training.device)
-    logger.info(f"Using device: {device}")
-
-    # Create dataset and dataloader
-    logger.info(f"Loading data from {config.data.data_dir}")
-    dataset = create_dataset(config.data)
-    logger.info(f"Dataset size: {len(dataset)} structures")
-
-    if len(dataset) == 0:
-        logger.error("No structures found in dataset!")
+    if result.get("error"):
+        logger.error(f"Training failed: {result['error']}")
         sys.exit(1)
 
-    dataloader = create_dataloader(dataset, config.training)
-
-    # Create model
-    model = create_model(config.model, device)
-    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Model parameters: {n_params:,}")
-
-    # Create optimizer
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=config.training.lr,
-        weight_decay=config.training.weight_decay,
-    )
-
-    # Resume from checkpoint if specified
-    start_epoch = 0
-    if args.resume:
-        ckpt = load_checkpoint(Path(args.resume), model, optimizer)
-        start_epoch = ckpt["epoch"] + 1
-
-    # Setup output directories
-    checkpoint_dir = Path(config.output.checkpoint_dir)
-    sample_dir = Path(config.output.sample_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    sample_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create VAE loss function
-    loss_fn = create_vae_loss_fn(device)
-
-    # Create beta scheduler for KL annealing
-    warmup_epochs = config.model.beta_warmup_epochs
-    if warmup_epochs is None:
-        warmup_epochs = config.training.epochs // 2  # Default: half of training
-    beta_scheduler = BetaScheduler(
-        schedule=config.model.beta_schedule,
-        target_beta=config.model.beta,
-        warmup_epochs=warmup_epochs,
-        total_epochs=config.training.epochs,
-        n_cycles=config.model.beta_cycles,
-    )
-    logger.info(f"Beta schedule: {beta_scheduler}")
-
-    # Training loop
-    logger.info("Starting training...")
-    best_loss = float("inf")
-
-    for epoch in range(start_epoch, config.training.epochs):
-        # Update beta for this epoch (KL annealing)
-        current_beta = beta_scheduler.get_beta(epoch)
-        model.beta = current_beta
-
-        # Train epoch using shared training utility
-        metrics = train_epoch(
-            model=model,
-            dataloader=dataloader,
-            loss_fn=loss_fn,
-            optimizer=optimizer,
-            grad_clip=config.training.grad_clip,
-        )
-
-        # Log metrics
-        logger.info(
-            f"Epoch {epoch+1}/{config.training.epochs} | "
-            f"Loss: {metrics.get('loss', float('nan')):.4f} | "
-            f"Recon: {metrics.get('recon_loss', float('nan')):.4f} | "
-            f"KL: {metrics.get('kl_loss', float('nan')):.4f} | "
-            f"Beta: {current_beta:.4f} | "
-            f"Samples: {int(metrics.get('n_samples', 0))} | "
-            f"Skipped: {int(metrics.get('n_skipped', 0))}"
-        )
-
-        # Generate samples at end of epoch
-        generate_samples(
-            model, dataset, device, sample_dir, epoch + 1,
-            n_perturbations=config.output.n_perturbations,
-            perturbation_scale=config.output.perturbation_scale,
-        )
-
-        # Save checkpoint
-        if (epoch + 1) % config.output.save_every == 0:
-            save_checkpoint(
-                checkpoint_dir / f"checkpoint_epoch{epoch+1:04d}.pt",
-                model, optimizer,
-                epoch=epoch + 1,
-                metrics=metrics,
-                config=config,
-            )
-
-        # Save best model
-        if metrics.get("loss", float("inf")) < best_loss:
-            best_loss = metrics["loss"]
-            save_checkpoint(
-                checkpoint_dir / "checkpoint_best.pt",
-                model, optimizer,
-                epoch=epoch + 1,
-                metrics=metrics,
-                config=config,
-            )
-
-    # Save final checkpoint
-    save_checkpoint(
-        checkpoint_dir / "checkpoint_final.pt",
-        model, optimizer,
-        epoch=config.training.epochs,
-        metrics=metrics,
-        config=config,
-    )
-
-    logger.info("Training complete!")
+    logger.info(f"Best loss: {result['best_loss']:.4f}")
 
 
 if __name__ == "__main__":

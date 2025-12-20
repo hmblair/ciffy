@@ -15,6 +15,7 @@ Usage:
 Environment variables:
     CIFFY_CUDA_ARCH: Comma-separated GPU architectures (e.g., "86" or "70,75,80,86")
                     Auto-detects from available GPU if not set.
+    CIFFY_CUDA_THREADS: Number of threads for parallel nvcc compilation (default: nproc)
     CIFFY_CUDA_DEBUG: Set to "1" for debug builds (-g -G)
 """
 
@@ -168,6 +169,15 @@ def main():
 
     # Build nvcc flags
     nvcc_flags = ['-O3', '--expt-relaxed-constexpr']
+
+    # Parallel compilation: use multiple threads for nvcc
+    # Can be overridden with CIFFY_CUDA_THREADS environment variable
+    n_threads = os.environ.get('CIFFY_CUDA_THREADS', '').strip()
+    if not n_threads:
+        import multiprocessing
+        n_threads = str(multiprocessing.cpu_count())
+    nvcc_flags.append(f'--threads={n_threads}')
+    print(f"Using {n_threads} threads for CUDA compilation")
 
     if os.environ.get('CIFFY_CUDA_DEBUG', '').lower() in ('1', 'true', 'yes'):
         nvcc_flags.extend(['-g', '-G', '-lineinfo'])

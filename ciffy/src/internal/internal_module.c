@@ -863,7 +863,8 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    npy_intp n_levels = PyArray_DIM(level_offsets_arr, 0) - 1;
+    /* n_components comes from anchor_coords shape for bounds checking */
+    npy_intp n_components = PyArray_DIM(anchor_coords_arr, 0);
 
     /* Get data pointers */
     const int64_t *indices = (const int64_t *)PyArray_DATA(indices_arr);
@@ -891,7 +892,7 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args) {
         coords, (size_t)n_atoms,
         indices, (size_t)n_entries,
         internal,
-        level_offsets, (int)n_levels,
+        level_offsets, (int)n_components,
         anchor_coords, component_ids
     );
 
@@ -1004,7 +1005,8 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
 
     npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
     npy_intp n_entries = PyArray_DIM(indices_arr, 0);
-    npy_intp n_levels = PyArray_DIM(level_offsets_arr, 0) - 1;
+    /* n_components comes from anchor_coords shape for bounds checking */
+    npy_intp n_components = PyArray_DIM(anchor_coords_arr, 0);
 
     /* Verify array length consistency */
     if (PyArray_DIM(internal_arr, 0) != n_entries ||
@@ -1054,7 +1056,7 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
         internal,
         grad_coords,
         grad_internal,
-        level_offsets, (int)n_levels,
+        level_offsets, (int)n_components,
         anchor_coords, component_ids
     );
 

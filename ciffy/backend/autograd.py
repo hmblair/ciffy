@@ -345,7 +345,8 @@ class NerfReconstructFunction(Function):
 
         if ctx.use_cuda and ANCHORED_NERF_AVAILABLE:
             # GPU path with anchored component-parallel backward
-            grad_internal = cuda_nerf_reconstruct_backward_leveled_anchored(
+            # Returns (grad_coords_accum, grad_internal) - we only need grad_internal
+            _, grad_internal = cuda_nerf_reconstruct_backward_leveled_anchored(
                 coords, indices, internal,
                 grad_coords.contiguous(), ctx.component_offsets,
                 ctx.anchor_coords, ctx.component_ids

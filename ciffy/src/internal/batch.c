@@ -7,6 +7,8 @@
 #include "geometry.h"
 #include "geometry_impl.h"
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -292,7 +294,8 @@ static inline void nerf_place_single_entry_anchored(
     const int64_t *indices,
     const float *internal,
     size_t i,
-    const float *anchor_coords, const int32_t *component_ids
+    const float *anchor_coords, const int32_t *component_ids,
+    int n_components
 ) {
     int64_t atom_idx = indices[i * 4 + 0];
     int64_t dist_ref = indices[i * 4 + 1];
@@ -317,6 +320,14 @@ static inline void nerf_place_single_entry_anchored(
     const float *anchor2 = NULL;
     if (anchor_coords != NULL && component_ids != NULL) {
         int32_t comp_id = component_ids[i];
+        /* Fail-fast bounds check - indicates backend bug if triggered */
+        if (comp_id < 0 || comp_id >= n_components) {
+            fprintf(stderr,
+                "CIFFY FATAL: component_id %d out of bounds [0, %d) at entry %zu\n"
+                "This indicates a mismatch between ZMatrix.component_ids and anchor_coords.\n",
+                comp_id, n_components, i);
+            abort();
+        }
         anchor0 = &anchor_coords[comp_id * 9 + 0];
         anchor1 = &anchor_coords[comp_id * 9 + 3];
         anchor2 = &anchor_coords[comp_id * 9 + 6];
@@ -409,7 +420,7 @@ void batch_nerf_reconstruct_leveled_anchored(
         for (int i = start; i < end; i++) {
             nerf_place_single_entry_anchored(coords, n_atoms, indices,
                 internal, (size_t)i,
-                anchor_coords, component_ids);
+                anchor_coords, component_ids, n_components);
         }
     }
 }
@@ -426,11 +437,18 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
 ) {
     (void)n_entries;
 
-    /* Get anchors helper */
+    /* Get anchors helper with fail-fast bounds check */
     #define GET_ANCHORS(i) \
         const float *anchor0 = NULL, *anchor1 = NULL, *anchor2 = NULL; \
         if (anchor_coords != NULL && component_ids != NULL) { \
             int32_t comp_id = component_ids[i]; \
+            if (comp_id < 0 || comp_id >= n_components) { \
+                fprintf(stderr, \
+                    "CIFFY FATAL: component_id %d out of bounds [0, %d) at entry %zu (backward)\n" \
+                    "This indicates a mismatch between ZMatrix.component_ids and anchor_coords.\n", \
+                    comp_id, n_components, (size_t)(i)); \
+                abort(); \
+            } \
             anchor0 = &anchor_coords[comp_id * 9 + 0]; \
             anchor1 = &anchor_coords[comp_id * 9 + 3]; \
             anchor2 = &anchor_coords[comp_id * 9 + 6]; \

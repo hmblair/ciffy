@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 
 from tests.utils import TORCH_AVAILABLE
+from tests.testing import get_tolerances
 
 
 # =============================================================================
@@ -123,7 +124,8 @@ class TestRoPE:
         score_57 = (q_rot[0, 0, 5] * k_rot[0, 0, 7]).sum()
 
         # These should be approximately equal due to relative position encoding
-        assert torch.allclose(score_02, score_57, atol=1e-5)
+        tol = get_tolerances()
+        assert torch.allclose(score_02, score_57, atol=tol.allclose_atol)
 
 
 # =============================================================================

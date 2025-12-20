@@ -35,7 +35,7 @@ def assert_roundtrip_preserves_structure(
             polymer = from_sequence("acgu")
             assert_roundtrip_preserves_structure(polymer)
     """
-    from ciffy.operations.alignment import kabsch_align
+    from ciffy import kabsch_align
 
     tol = get_tolerances()
 

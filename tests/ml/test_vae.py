@@ -11,6 +11,7 @@ from tests.utils import (
     TORCH_AVAILABLE,
     skip_if_no_torch,
 )
+from tests.testing import get_tolerances
 
 
 # =============================================================================
@@ -32,8 +33,9 @@ class TestDistributions:
         decoded = sincos_decode(encoded)
 
         # Check round-trip accuracy (accounting for periodicity)
+        tol = get_tolerances()
         diff = torch.abs(torch.sin(angles - decoded))
-        assert diff.max() < 1e-5
+        assert diff.max() < tol.allclose_atol
 
     def test_sincos_encode_shape(self):
         """Test sin/cos encoding doubles dimension."""
@@ -64,9 +66,10 @@ class TestDistributions:
         encoded = sincos_encode(angles)
 
         # Each (sin, cos) pair should have norm 1
+        tol = get_tolerances()
         encoded = encoded.view(-1, 2)
         norms = torch.sqrt(encoded[:, 0] ** 2 + encoded[:, 1] ** 2)
-        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
+        assert torch.allclose(norms, torch.ones_like(norms), atol=tol.allclose_atol)
 
     def test_von_mises_nll_positive(self):
         """Test von Mises NLL returns positive values for low concentration."""
@@ -126,13 +129,15 @@ class TestDistributions:
         import torch
         from ciffy.nn.vae.distributions import angular_distance
 
+        tol = get_tolerances()
+
         # Same angle
         dist = angular_distance(torch.tensor([0.0]), torch.tensor([0.0]))
-        assert torch.allclose(dist, torch.tensor([0.0]), atol=1e-6)
+        assert torch.allclose(dist, torch.tensor([0.0]), atol=tol.allclose_atol)
 
         # Opposite angles (pi apart)
         dist = angular_distance(torch.tensor([np.pi]), torch.tensor([0.0]))
-        assert torch.allclose(dist, torch.tensor([np.pi]), atol=1e-6)
+        assert torch.allclose(dist, torch.tensor([np.pi]), atol=tol.allclose_atol)
 
         # Across periodic boundary
         dist = angular_distance(torch.tensor([-np.pi + 0.1]), torch.tensor([np.pi - 0.1]))
@@ -347,9 +352,10 @@ class TestVAELoss:
         # Total differs by KL contribution
         # total = recon + beta * kl
         # Difference should be (10 - 1) * kl = 9 * kl
+        tol = get_tolerances()
         diff = losses_10["loss"] - losses_1["loss"]
         expected_diff = 9 * losses_1["kl_loss"]
-        assert torch.allclose(diff, expected_diff, atol=1e-5)
+        assert torch.allclose(diff, expected_diff, atol=tol.allclose_atol)
 
 
 # =============================================================================

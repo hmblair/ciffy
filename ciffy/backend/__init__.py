@@ -45,6 +45,12 @@ from .ops import (
     multiply,
     sqrt,
     clamp,
+    # Array operations
+    scatter_sum,
+    scatter_mean,
+    cdist,
+    cat,
+    repeat_interleave,
 )
 
 __all__ = [
@@ -71,4 +77,10 @@ __all__ = [
     # Math
     "sqrt",
     "clamp",
+    # Array operations
+    "scatter_sum",
+    "scatter_mean",
+    "cdist",
+    "cat",
+    "repeat_interleave",
 ]

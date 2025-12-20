@@ -42,7 +42,7 @@ from .types import (
 
 # Operations
 from .operations.reduction import Reduction
-from .operations.alignment import kabsch_distance as rmsd, align
+from .operations.alignment import kabsch_distance as rmsd, kabsch_rotation, kabsch_align, align
 from .operations.metrics import tm_score, lddt
 
 # I/O
@@ -110,6 +110,8 @@ __all__ = [
     "randomize_backbone",
     "Ensemble",
     "rmsd",
+    "kabsch_rotation",
+    "kabsch_align",
     "align",
     "tm_score",
     "lddt",

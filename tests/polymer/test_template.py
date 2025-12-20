@@ -5,7 +5,7 @@ import numpy as np
 import warnings
 
 from tests.utils import get_test_cif
-from tests.testing import expected_sequence_values, assert_sequence_matches
+from tests.testing import expected_sequence_values, assert_sequence_matches, get_tolerances
 
 
 class TestFromSequence:
@@ -241,8 +241,9 @@ class TestFromSequenceIntegration:
         reloaded = load(str(output_path))
 
         # Check structure preserved
+        tol = get_tolerances()
         assert reloaded.size() == polymer.size()
-        assert np.allclose(reloaded.coordinates, polymer.coordinates, atol=0.001)
+        assert np.allclose(reloaded.coordinates, polymer.coordinates, atol=tol.coord_roundtrip)
 
 
 class TestFromSequenceEdgeCases:
@@ -669,8 +670,9 @@ class TestBondsAndLinking:
                 break
 
         assert o3p_coord is not None and p_coord is not None
+        tol = get_tolerances()
         dist = np.linalg.norm(p_coord - o3p_coord)
-        assert abs(dist - 1.6) < 0.01  # Within 0.01 A of target
+        assert abs(dist - 1.6) < tol.bond_length  # Within tolerance of target
 
     @pytest.mark.filterwarnings("ignore:Sequence 'AA' contains only nucleotide")
     def test_protein_bond_length(self):
@@ -696,8 +698,9 @@ class TestBondsAndLinking:
                 break
 
         assert c_coord is not None and n_coord is not None
+        tol = get_tolerances()
         dist = np.linalg.norm(n_coord - c_coord)
-        assert abs(dist - 1.33) < 0.01  # Within 0.01 A of target
+        assert abs(dist - 1.33) < tol.bond_length  # Within tolerance of target
 
     def test_dna_bond_length(self):
         """Test that DNA O3'-P bond length is correct (~1.6 A)."""
@@ -724,5 +727,6 @@ class TestBondsAndLinking:
                 break
 
         assert o3p_coord is not None and p_coord is not None
+        tol = get_tolerances()
         dist = np.linalg.norm(p_coord - o3p_coord)
-        assert abs(dist - 1.6) < 0.01  # Within 0.01 A of target
+        assert abs(dist - 1.6) < tol.bond_length  # Within tolerance of target

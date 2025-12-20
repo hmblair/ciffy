@@ -112,7 +112,7 @@ class TestMixedDeviceHandling:
         """Test scatter operations handle CPU index with GPU features."""
         skip_if_no_device(device)
         import torch
-        from ciffy.backend.torch_ops import scatter_sum, scatter_mean
+        from ciffy.backend import scatter_sum, scatter_mean
 
         # Create features on GPU, index on CPU
         features = torch.randn(10, 3, device=device)
@@ -360,7 +360,7 @@ class TestScatterOperations:
         """Test scatter_sum on GPU devices."""
         skip_if_no_device(device)
         import torch
-        from ciffy.backend.torch_ops import scatter_sum
+        from ciffy.backend import scatter_sum
 
         features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device=device)
         index = torch.tensor([0, 0, 1], device=device)
@@ -379,7 +379,7 @@ class TestScatterOperations:
         """Test scatter_mean on GPU devices."""
         skip_if_no_device(device)
         import torch
-        from ciffy.backend.torch_ops import scatter_mean
+        from ciffy.backend import scatter_mean
 
         features = torch.tensor([[1., 2.], [3., 4.], [5., 6.]], device=device)
         index = torch.tensor([0, 0, 1], device=device)

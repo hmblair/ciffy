@@ -368,7 +368,7 @@ class TestKabschAlignment:
 
     def test_kabsch_rotation_returns_3x3(self, backend):
         """kabsch_rotation returns a 3x3 rotation matrix."""
-        from ciffy.operations.alignment import kabsch_rotation
+        from ciffy import kabsch_rotation
 
         if backend == "torch":
             import torch
@@ -384,7 +384,7 @@ class TestKabschAlignment:
 
     def test_kabsch_rotation_is_orthogonal(self, backend):
         """kabsch_rotation returns orthogonal matrix (R @ R.T = I)."""
-        from ciffy.operations.alignment import kabsch_rotation
+        from ciffy import kabsch_rotation
 
         if backend == "torch":
             import torch
@@ -404,7 +404,7 @@ class TestKabschAlignment:
 
     def test_kabsch_rotation_det_positive(self, backend):
         """kabsch_rotation returns proper rotation (det = +1)."""
-        from ciffy.operations.alignment import kabsch_rotation
+        from ciffy import kabsch_rotation
 
         if backend == "torch":
             import torch
@@ -423,7 +423,7 @@ class TestKabschAlignment:
 
     def test_kabsch_align_returns_tuple(self, backend):
         """kabsch_align returns (aligned, rotation, translation)."""
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import kabsch_align
 
         if backend == "torch":
             import torch
@@ -443,7 +443,7 @@ class TestKabschAlignment:
 
     def test_kabsch_align_self_zero_rmsd(self, backend):
         """kabsch_align of coords to itself gives zero RMSD."""
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import kabsch_align
 
         if backend == "torch":
             import torch
@@ -462,7 +462,7 @@ class TestKabschAlignment:
 
     def test_kabsch_align_rotation_only(self, backend):
         """kabsch_align recovers known rotation."""
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import kabsch_align
 
         # Create a known rotation (90 degrees around z-axis)
         theta = np.pi / 2
@@ -499,7 +499,7 @@ class TestKabschAlignment:
 
     def test_kabsch_align_with_translation(self, backend):
         """kabsch_align handles translation correctly."""
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import kabsch_align
 
         if backend == "torch":
             import torch

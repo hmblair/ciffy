@@ -351,8 +351,7 @@ class TestProteinInternalCoordinates:
 
     def test_protein_roundtrip(self):
         """Test round-trip conversion for protein chain."""
-        from ciffy import load
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import load, kabsch_align
 
         polymer = load(get_test_cif("9GCM"))
 
@@ -409,8 +408,7 @@ class TestNumericalEdgeCases:
 
     def test_small_perturbation_roundtrip(self):
         """Test very small dihedral changes preserve structure."""
-        from ciffy import from_sequence
-        from ciffy.operations.alignment import kabsch_align
+        from ciffy import from_sequence, kabsch_align
 
         polymer = from_sequence("acgu")
         orig_coords = polymer.coordinates.copy()

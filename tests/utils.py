@@ -178,8 +178,8 @@ def mps_available() -> bool:
 def cuda_extension_available() -> bool:
     """Check if ciffy CUDA extension is built."""
     try:
-        from ciffy.backend.cuda_ops import HAS_CUDA_EXTENSION
-        return HAS_CUDA_EXTENSION
+        from ciffy.backend.cuda_ops import CUDA_EXTENSION_AVAILABLE
+        return CUDA_EXTENSION_AVAILABLE
     except ImportError:
         return False
 

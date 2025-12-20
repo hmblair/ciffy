@@ -365,7 +365,7 @@ class TestBackendOperations:
         assert np.allclose(np_arr, torch_arr.numpy())
 
     def test_scatter_sum_numpy(self):
-        from ciffy.backend.ops import scatter_sum
+        from ciffy.backend import scatter_sum
 
         src = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         index = np.array([0, 1, 0])
@@ -378,7 +378,7 @@ class TestBackendOperations:
 
     def test_scatter_sum_torch(self):
         import torch
-        from ciffy.backend.ops import scatter_sum
+        from ciffy.backend import scatter_sum
 
         src = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         index = torch.tensor([0, 1, 0])
@@ -390,7 +390,7 @@ class TestBackendOperations:
         assert torch.allclose(result, expected)
 
     def test_scatter_mean_numpy(self):
-        from ciffy.backend.ops import scatter_mean
+        from ciffy.backend import scatter_mean
 
         src = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         index = np.array([0, 1, 0])
@@ -402,7 +402,7 @@ class TestBackendOperations:
 
     def test_scatter_mean_torch(self):
         import torch
-        from ciffy.backend.ops import scatter_mean
+        from ciffy.backend import scatter_mean
 
         src = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         index = torch.tensor([0, 1, 0])
@@ -413,7 +413,7 @@ class TestBackendOperations:
         assert torch.allclose(result, expected)
 
     def test_cdist_numpy(self):
-        from ciffy.backend.ops import cdist
+        from ciffy.backend import cdist
 
         x1 = np.array([[0.0, 0.0], [1.0, 0.0]])
         x2 = np.array([[0.0, 0.0], [0.0, 1.0]])
@@ -427,7 +427,7 @@ class TestBackendOperations:
 
     def test_cdist_torch(self):
         import torch
-        from ciffy.backend.ops import cdist
+        from ciffy.backend import cdist
 
         x1 = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
         x2 = torch.tensor([[0.0, 0.0], [0.0, 1.0]])
@@ -439,7 +439,7 @@ class TestBackendOperations:
         assert torch.allclose(result, expected)
 
     def test_cat_numpy(self):
-        from ciffy.backend.ops import cat
+        from ciffy.backend import cat
 
         a = np.array([1, 2, 3])
         b = np.array([4, 5, 6])
@@ -450,7 +450,7 @@ class TestBackendOperations:
 
     def test_cat_torch(self):
         import torch
-        from ciffy.backend.ops import cat
+        from ciffy.backend import cat
 
         a = torch.tensor([1, 2, 3])
         b = torch.tensor([4, 5, 6])
@@ -460,7 +460,7 @@ class TestBackendOperations:
         assert torch.equal(result, torch.tensor([1, 2, 3, 4, 5, 6]))
 
     def test_repeat_interleave_numpy(self):
-        from ciffy.backend.ops import repeat_interleave
+        from ciffy.backend import repeat_interleave
 
         arr = np.array([[1, 2], [3, 4], [5, 6]])
         repeats = np.array([2, 1, 3])
@@ -472,7 +472,7 @@ class TestBackendOperations:
 
     def test_repeat_interleave_torch(self):
         import torch
-        from ciffy.backend.ops import repeat_interleave
+        from ciffy.backend import repeat_interleave
 
         arr = torch.tensor([[1, 2], [3, 4], [5, 6]])
         repeats = torch.tensor([2, 1, 3])
@@ -483,7 +483,7 @@ class TestBackendOperations:
         assert torch.equal(result, expected)
 
     def test_multiply_numpy(self):
-        from ciffy.backend.ops import multiply
+        from ciffy.backend import multiply
 
         a = np.array([1.0, 2.0, 3.0])
         b = np.array([2.0, 3.0, 4.0])
@@ -494,7 +494,7 @@ class TestBackendOperations:
 
     def test_multiply_torch(self):
         import torch
-        from ciffy.backend.ops import multiply
+        from ciffy.backend import multiply
 
         a = torch.tensor([1.0, 2.0, 3.0])
         b = torch.tensor([2.0, 3.0, 4.0])
@@ -504,8 +504,8 @@ class TestBackendOperations:
         assert torch.allclose(result, torch.tensor([2.0, 6.0, 12.0]))
 
 
-class TestKabschDistance:
-    """Test Kabsch distance (aligned RMSD) computation.
+class TestRMSD:
+    """Test RMSD (aligned Kabsch distance) computation.
 
     Uses parametrized any_cif fixture to run on all test PDBs.
     """
@@ -513,8 +513,7 @@ class TestKabschDistance:
     def test_rotation_zero_rmsd(self, any_cif):
         """Rotating a polymer should give zero RMSD after alignment."""
         import copy
-        from ciffy import load, Scale
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, Scale, rmsd
 
         polymer = load(any_cif)
 
@@ -530,15 +529,14 @@ class TestKabschDistance:
         rotated = copy.deepcopy(polymer)
         rotated.coordinates = polymer.coordinates @ rotation.T
 
-        # Kabsch distance should be ~0 (rotation is aligned out)
-        dist = kabsch_distance(polymer, rotated, Scale.MOLECULE)
+        # RMSD should be ~0 (rotation is aligned out)
+        dist = rmsd(polymer, rotated, Scale.MOLECULE)
         assert np.allclose(dist, 0, atol=1e-3)  # RMSD in Angstroms
 
     def test_translation_zero_rmsd(self, any_cif):
         """Translating a polymer should give zero RMSD after alignment."""
         import copy
-        from ciffy import load, Scale
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, Scale, rmsd
 
         polymer = load(any_cif)
 
@@ -546,15 +544,14 @@ class TestKabschDistance:
         translated = copy.deepcopy(polymer)
         translated.coordinates = polymer.coordinates + np.array([100.0, -50.0, 25.0])
 
-        # Kabsch distance should be ~0 (translation is centered out)
-        dist = kabsch_distance(polymer, translated, Scale.MOLECULE)
+        # RMSD should be ~0 (translation is centered out)
+        dist = rmsd(polymer, translated, Scale.MOLECULE)
         assert np.allclose(dist, 0, atol=1e-3)  # RMSD in Angstroms
 
     def test_flip_nonzero_rmsd(self, any_cif):
         """Flipping/reflecting coordinates should give nonzero RMSD."""
         import copy
-        from ciffy import load, Scale
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, Scale, rmsd
 
         polymer = load(any_cif)
 
@@ -562,45 +559,42 @@ class TestKabschDistance:
         flipped = copy.deepcopy(polymer)
         flipped.coordinates = polymer.coordinates * np.array([1, 1, -1])
 
-        # Kabsch distance should be nonzero (reflection cannot be aligned)
-        dist = kabsch_distance(polymer, flipped, Scale.MOLECULE)
+        # RMSD should be nonzero (reflection cannot be aligned)
+        dist = rmsd(polymer, flipped, Scale.MOLECULE)
         assert dist > 0.1  # Should be significantly nonzero
 
     def test_numpy_backend(self, any_cif):
         """Test RMSD with NumPy backend explicitly."""
-        from ciffy import load
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, rmsd
 
         polymer = load(any_cif, backend="numpy")
         assert polymer.backend == "numpy"
 
         # RMSD of structure with itself should be ~0
         # Tolerance scales with structure size due to float32 accumulation errors
-        dist = kabsch_distance(polymer, polymer)
+        dist = rmsd(polymer, polymer)
         n_atoms = polymer.coordinates.shape[0]
         tolerance = max(1e-6, (n_atoms ** 0.5) * 1e-7 * 100)
         assert np.allclose(dist, 0, atol=tolerance)
 
     def test_default_scale(self, any_cif):
         """Test that rmsd defaults to MOLECULE scale."""
-        from ciffy import load, Scale
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, Scale, rmsd
 
         polymer = load(any_cif)
 
         # These should be equivalent
-        dist_default = kabsch_distance(polymer, polymer)
-        dist_explicit = kabsch_distance(polymer, polymer, Scale.MOLECULE)
+        dist_default = rmsd(polymer, polymer)
+        dist_explicit = rmsd(polymer, polymer, Scale.MOLECULE)
 
         assert np.allclose(dist_default, dist_explicit)
 
     def test_identical_structures(self, any_cif):
         """Test RMSD of identical structures is zero."""
-        from ciffy import load
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, rmsd
 
         polymer = load(any_cif)
-        dist = kabsch_distance(polymer, polymer)
+        dist = rmsd(polymer, polymer)
 
         # Tolerance scales with structure size due to float32 accumulation errors
         n_atoms = polymer.coordinates.shape[0]
@@ -610,8 +604,7 @@ class TestKabschDistance:
     def test_single_chain(self, any_cif):
         """Test RMSD works on single-chain polymers."""
         import copy
-        from ciffy import load
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, rmsd
 
         polymer = load(any_cif)
         # Select first chain only
@@ -621,15 +614,14 @@ class TestKabschDistance:
         perturbed = copy.deepcopy(chain)
         perturbed.coordinates = chain.coordinates + np.random.randn(*chain.coordinates.shape) * 0.1
 
-        dist = kabsch_distance(chain, perturbed)
+        dist = rmsd(chain, perturbed)
         assert dist.shape == (1,)  # Single molecule
         assert dist[0] > 0  # Should be nonzero due to perturbation
 
     def test_chain_scale(self, any_cif):
         """Test RMSD at CHAIN scale."""
         import copy
-        from ciffy import load, Scale
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import load, Scale, rmsd
 
         polymer = load(any_cif)
 
@@ -641,14 +633,14 @@ class TestKabschDistance:
         coords[:n_first_chain] += np.random.randn(n_first_chain, 3) * 1.0
         perturbed.coordinates = coords
 
-        dist = kabsch_distance(polymer, perturbed, Scale.CHAIN)
+        dist = rmsd(polymer, perturbed, Scale.CHAIN)
         assert dist.shape[0] == polymer.size(Scale.CHAIN)
         # First chain should have larger RMSD
         assert dist[0] > dist[1:].mean()
 
 
-class TestKabschDistanceEdgeCases:
-    """Edge case tests for kabsch_distance with small atom counts.
+class TestRMSDEdgeCases:
+    """Edge case tests for rmsd with small atom counts.
 
     The Kabsch algorithm uses SVD on a 3x3 covariance matrix. With fewer than
     3 atoms, the covariance matrix is rank-deficient (degenerate), which can
@@ -701,21 +693,21 @@ class TestKabschDistanceEdgeCases:
         return polymer
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_single_atom_kabsch_distance(self, backend):
-        """kabsch_distance with single atom should return exactly 0.
+    def test_single_atom_rmsd(self, backend):
+        """rmsd with single atom should return exactly 0.
 
         With 1 atom, the centered coordinates are all zero, making the
         covariance matrix all zeros. RMSD is trivially 0.
         """
         skip_if_no_torch(backend)
 
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import rmsd
 
         p = self._create_small_polymer(1, backend)
 
         # Single atom: after centering, coordinates are at origin
         # Covariance is 0, variance is 0, so RMSD should be exactly 0
-        dist = kabsch_distance(p, p)
+        dist = rmsd(p, p)
 
         assert dist.shape == (1,)
         if backend == "torch":
@@ -724,18 +716,18 @@ class TestKabschDistanceEdgeCases:
             assert dist[0] == 0.0
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_two_atom_kabsch_distance(self, backend):
-        """kabsch_distance with two atoms should return ~0 for self-comparison.
+    def test_two_atom_rmsd(self, backend):
+        """rmsd with two atoms should return ~0 for self-comparison.
 
         With 2 atoms, the covariance matrix has rank 1, but self-comparison
         should still give 0 since any 2 points can be perfectly aligned.
         """
         skip_if_no_torch(backend)
 
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import rmsd
 
         p = self._create_small_polymer(2, backend)
-        dist = kabsch_distance(p, p)
+        dist = rmsd(p, p)
 
         assert dist.shape == (1,)
         # Torch's SVD has lower precision on rank-deficient matrices,
@@ -746,18 +738,18 @@ class TestKabschDistanceEdgeCases:
             assert dist[0] < 1e-5
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_three_atom_kabsch_distance(self, backend):
-        """kabsch_distance with three atoms should return ~0 for self-comparison.
+    def test_three_atom_rmsd(self, backend):
+        """rmsd with three atoms should return ~0 for self-comparison.
 
         With 3 atoms, the covariance matrix can be rank-deficient depending
         on the point configuration.
         """
         skip_if_no_torch(backend)
 
-        from ciffy.operations.alignment import kabsch_distance
+        from ciffy import rmsd
 
         p = self._create_small_polymer(3, backend)
-        dist = kabsch_distance(p, p)
+        dist = rmsd(p, p)
 
         assert dist.shape == (1,)
         # Torch's SVD has lower precision on rank-deficient matrices,

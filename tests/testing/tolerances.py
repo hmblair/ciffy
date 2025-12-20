@@ -29,6 +29,7 @@ class ToleranceProfile:
 
     # Coordinate tolerances (Angstroms)
     coord_roundtrip: float = 0.001  # CIF read/write (3 decimal places)
+    bond_length: float = 0.01  # Bond length deviation from ideal
 
     # Gradient tolerances
     gradcheck_eps: float = 1e-4

@@ -295,3 +295,71 @@ def load_polymer(backend):
         return load(get_test_cif(pdb_id), backend=backend)
 
     return _load
+
+
+# =============================================================================
+# Multi-chain and complex structure fixtures
+# =============================================================================
+
+@pytest.fixture
+def multi_chain_rna(backend):
+    """Multi-chain RNA (2 chains)."""
+    from ciffy import from_sequence
+    return from_sequence("acgu/acgu", backend=backend)
+
+
+@pytest.fixture
+def multi_chain_protein(backend):
+    """Multi-chain protein (2 chains)."""
+    from ciffy import from_sequence
+    return from_sequence("MGKLF/ARNDCE", backend=backend)
+
+
+@pytest.fixture
+def rna_protein_complex(backend):
+    """RNA + protein complex (9GCM)."""
+    from ciffy import load
+    return load(get_test_cif("9GCM"), backend=backend)
+
+
+@pytest.fixture
+def structure_with_ligands(backend):
+    """Structure with ligands and ions (3SKW)."""
+    from ciffy import load
+    return load(get_test_cif("3SKW"), backend=backend)
+
+
+# =============================================================================
+# Larger structure fixtures for stress testing
+# =============================================================================
+
+@pytest.fixture
+def large_rna(backend):
+    """16-residue RNA for stress testing."""
+    from ciffy import from_sequence
+    return from_sequence("acguacguacguacgu", backend=backend)
+
+
+@pytest.fixture
+def large_protein(backend):
+    """20-residue protein for stress testing."""
+    from ciffy import from_sequence
+    return from_sequence("MGKLFAGKLFMGKLFAGKLF", backend=backend)
+
+
+# =============================================================================
+# Specialized edge case fixtures
+# =============================================================================
+
+@pytest.fixture
+def all_same_residue_rna(backend):
+    """RNA with all same residues (edge case for reduction)."""
+    from ciffy import from_sequence
+    return from_sequence("aaaa", backend=backend)
+
+
+@pytest.fixture
+def all_same_residue_protein(backend):
+    """Protein with all same residues (edge case for reduction)."""
+    from ciffy import from_sequence
+    return from_sequence("GGGG", backend=backend)

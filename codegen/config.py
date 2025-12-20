@@ -260,3 +260,44 @@ BACKBONE_PYTHON_TO_CIF: dict[str, str] = {
 }
 
 NUM_BACKBONE_NAMES: int = len(BACKBONE_NAMES)
+
+
+# =============================================================================
+# NUCLEOTIDE CLASSIFICATION (Purine vs Pyrimidine)
+# =============================================================================
+# Used to determine which chi angle (CHI_PURINE vs CHI_PYRIMIDINE) applies.
+# Purines have N9 as glycosidic nitrogen, pyrimidines have N1.
+
+PURINE_RESIDUES: set[str] = {
+    # Standard RNA/DNA
+    "A", "G", "DA", "DG",
+    # Modified purines
+    "I",     # Inosine
+    "1MG",   # 1-methylguanosine
+    "2MG",   # 2-methylguanosine
+    "7MG",   # 7-methylguanosine
+    "M2G",   # N2-methylguanosine
+    "OMG",   # 2'-O-methylguanosine
+    "2MA",   # 2-methyladenosine
+    "6MZ",   # N6-methyladenosine
+    "G7M",   # 2'-O-7-methylguanosine
+    "PPU",   # Puromycin (modified adenosine)
+    "GTP",   # Guanosine triphosphate
+    "GNG",   # Guanine
+}
+
+PYRIMIDINE_RESIDUES: set[str] = {
+    # Standard RNA/DNA
+    "C", "U", "DC", "DT",
+    "N",     # Unknown nucleotide (treated as pyrimidine for backbone)
+    # Modified pyrimidines
+    "PSU",   # Pseudouridine
+    "5MU",   # 5-methyluridine
+    "5MC",   # 5-methylcytidine
+    "OMC",   # 2'-O-methylcytidine
+    "OMU",   # 2'-O-methyluridine
+    "H2U",   # Dihydrouridine
+    "4SU",   # 4-thiouridine
+    "FHU",   # 5-fluorohydroxyuridine
+    "CCC",   # Cytidine-5'-monophosphate
+}

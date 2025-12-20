@@ -1072,3 +1072,171 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
 
     return py_grad_internal;
 }
+
+
+/**
+ * Build canonical Z-matrix using natural atom order and precomputed references.
+ *
+ * Python signature:
+ *   _build_canonical_zmatrix(atoms, sequence, res_sizes, chain_lengths,
+ *                            bond_offsets, bond_neighbors) -> (zmatrix, dihedral_types)
+ *
+ * Args:
+ *   atoms: (N,) int32 array of atom type values.
+ *   sequence: (R,) int32 array of residue type indices.
+ *   res_sizes: (R,) int32 array of atoms per residue.
+ *   chain_lengths: (C,) int32 array of residues per chain.
+ *   bond_offsets: (N+1,) int64 CSR offsets for bond graph.
+ *   bond_neighbors: (E,) int64 CSR neighbor indices for bond graph.
+ *
+ * Returns:
+ *   Tuple of (zmatrix, dihedral_types):
+ *     zmatrix: (N, 4) int64 Z-matrix entries [atom, dist_ref, ang_ref, dih_ref].
+ *     dihedral_types: (N,) int8 dihedral type per entry (-1 if not named dihedral).
+ */
+PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_atoms, *py_sequence, *py_res_sizes, *py_chain_lengths;
+    PyObject *py_bond_offsets, *py_bond_neighbors;
+
+    if (!PyArg_ParseTuple(args, "OOOOOO",
+                          &py_atoms, &py_sequence, &py_res_sizes, &py_chain_lengths,
+                          &py_bond_offsets, &py_bond_neighbors)) {
+        return NULL;
+    }
+
+    /* Validate input arrays */
+    PyArrayObject *atoms_arr = require_array_1d(py_atoms, NPY_INT32, "atoms");
+    if (atoms_arr == NULL) return NULL;
+
+    PyArrayObject *sequence_arr = require_array_1d(py_sequence, NPY_INT32, "sequence");
+    if (sequence_arr == NULL) {
+        Py_DECREF(atoms_arr);
+        return NULL;
+    }
+
+    PyArrayObject *res_sizes_arr = require_array_1d(py_res_sizes, NPY_INT32, "res_sizes");
+    if (res_sizes_arr == NULL) {
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        return NULL;
+    }
+
+    PyArrayObject *chain_lengths_arr = require_array_1d(py_chain_lengths, NPY_INT32, "chain_lengths");
+    if (chain_lengths_arr == NULL) {
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        return NULL;
+    }
+
+    PyArrayObject *bond_offsets_arr = require_array_1d(py_bond_offsets, NPY_INT64, "bond_offsets");
+    if (bond_offsets_arr == NULL) {
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        Py_DECREF(chain_lengths_arr);
+        return NULL;
+    }
+
+    PyArrayObject *bond_neighbors_arr = require_array_1d(py_bond_neighbors, NPY_INT64, "bond_neighbors");
+    if (bond_neighbors_arr == NULL) {
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        Py_DECREF(chain_lengths_arr);
+        Py_DECREF(bond_offsets_arr);
+        return NULL;
+    }
+
+    /* Get sizes */
+    npy_intp n_atoms = PyArray_DIM(atoms_arr, 0);
+    npy_intp n_residues = PyArray_DIM(sequence_arr, 0);
+    npy_intp n_chains = PyArray_DIM(chain_lengths_arr, 0);
+
+    /* Verify res_sizes matches sequence */
+    if (PyArray_DIM(res_sizes_arr, 0) != n_residues) {
+        PyErr_SetString(PyExc_ValueError,
+            "res_sizes must have same length as sequence");
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        Py_DECREF(chain_lengths_arr);
+        Py_DECREF(bond_offsets_arr);
+        Py_DECREF(bond_neighbors_arr);
+        return NULL;
+    }
+
+    /* Verify bond_offsets has n_atoms+1 entries */
+    if (PyArray_DIM(bond_offsets_arr, 0) != n_atoms + 1) {
+        PyErr_SetString(PyExc_ValueError,
+            "bond_offsets must have n_atoms+1 entries");
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        Py_DECREF(chain_lengths_arr);
+        Py_DECREF(bond_offsets_arr);
+        Py_DECREF(bond_neighbors_arr);
+        return NULL;
+    }
+
+    /* Get data pointers */
+    const int32_t *atoms = (const int32_t *)PyArray_DATA(atoms_arr);
+    const int32_t *sequence = (const int32_t *)PyArray_DATA(sequence_arr);
+    const int32_t *res_sizes = (const int32_t *)PyArray_DATA(res_sizes_arr);
+    const int32_t *chain_lengths = (const int32_t *)PyArray_DATA(chain_lengths_arr);
+    const int64_t *bond_offsets = (const int64_t *)PyArray_DATA(bond_offsets_arr);
+    const int64_t *bond_neighbors = (const int64_t *)PyArray_DATA(bond_neighbors_arr);
+
+    /* Allocate output arrays */
+    npy_intp zmat_dims[2] = {n_atoms, 4};
+    npy_intp dih_dims[1] = {n_atoms};
+
+    PyObject *py_zmatrix = PyArray_SimpleNew(2, zmat_dims, NPY_INT64);
+    PyObject *py_dihedral_types = PyArray_SimpleNew(1, dih_dims, NPY_INT8);
+
+    if (py_zmatrix == NULL || py_dihedral_types == NULL) {
+        Py_XDECREF(py_zmatrix);
+        Py_XDECREF(py_dihedral_types);
+        Py_DECREF(atoms_arr);
+        Py_DECREF(sequence_arr);
+        Py_DECREF(res_sizes_arr);
+        Py_DECREF(chain_lengths_arr);
+        Py_DECREF(bond_offsets_arr);
+        Py_DECREF(bond_neighbors_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
+    int8_t *dihedral_types = (int8_t *)PyArray_DATA((PyArrayObject *)py_dihedral_types);
+
+    /* Build canonical Z-matrix */
+    int64_t result = build_canonical_zmatrix_c(
+        atoms, sequence, res_sizes, chain_lengths,
+        n_atoms, n_residues, n_chains,
+        bond_offsets, bond_neighbors,
+        zmatrix, dihedral_types
+    );
+
+    /* Clean up input arrays */
+    Py_DECREF(atoms_arr);
+    Py_DECREF(sequence_arr);
+    Py_DECREF(res_sizes_arr);
+    Py_DECREF(chain_lengths_arr);
+    Py_DECREF(bond_offsets_arr);
+    Py_DECREF(bond_neighbors_arr);
+
+    if (result < 0) {
+        Py_DECREF(py_zmatrix);
+        Py_DECREF(py_dihedral_types);
+        return PyErr_NoMemory();
+    }
+
+    /* Build result tuple */
+    PyObject *tuple = PyTuple_Pack(2, py_zmatrix, py_dihedral_types);
+    Py_DECREF(py_zmatrix);
+    Py_DECREF(py_dihedral_types);
+
+    return tuple;
+}

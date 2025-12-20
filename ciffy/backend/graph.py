@@ -36,6 +36,7 @@ from .._c import _build_bond_graph as _build_bond_graph_c
 from .._c import _edges_to_csr as _edges_to_csr_c
 from .._c import _build_zmatrix_parallel as _build_zmatrix_parallel_c
 from .._c import _find_connected_components as _find_connected_components_c
+from .._c import _build_canonical_zmatrix as _build_canonical_zmatrix_c
 
 __all__ = [
     # Data structures
@@ -811,11 +812,20 @@ def _build_zmatrix_indices_from_topology(
     topology: TopologyInfo,
     csr_offsets: np.ndarray | None = None,
     csr_neighbors: np.ndarray | None = None,
+    use_canonical: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
 
     Internal function used by ZMatrix.from_topology().
+
+    Args:
+        topology: TopologyInfo containing structural metadata.
+        csr_offsets: Optional pre-built CSR offsets array.
+        csr_neighbors: Optional pre-built CSR neighbors array.
+        use_canonical: If True (default), use canonical Z-matrix with precomputed
+            references that guarantee correct dihedral type assignment. If False,
+            use BFS-based Z-matrix.
 
     Returns:
         Tuple of (indices, dihedral_types, levels, component_ids).
@@ -832,6 +842,13 @@ def _build_zmatrix_indices_from_topology(
     else:
         offsets, neighbors = csr_offsets, csr_neighbors
 
+    if use_canonical:
+        # Use canonical Z-matrix with precomputed references
+        return _build_canonical_zmatrix_from_topology(
+            topology, offsets, neighbors
+        )
+
+    # Fall back to BFS-based Z-matrix
     # Find all connected components in the bond graph
     comp_atoms, comp_offsets, n_components = find_connected_components(offsets, neighbors, n_atoms)
 
@@ -856,6 +873,66 @@ def _build_zmatrix_indices_from_topology(
         sequence=np.ascontiguousarray(topology.sequence, dtype=np.int32),
         res_sizes=np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),
     )
+
+
+def _build_canonical_zmatrix_from_topology(
+    topology: TopologyInfo,
+    csr_offsets: np.ndarray,
+    csr_neighbors: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build canonical Z-matrix using natural atom order and precomputed references.
+
+    This function uses the canonical Z-matrix algorithm which:
+    1. Processes atoms in their natural order (no BFS reordering)
+    2. Uses precomputed canonical references from codegen for dihedral-owning atoms
+    3. Falls back to bond graph for atoms without canonical references
+
+    This guarantees that dihedral-owning atoms (e.g., the "owner" atom for PHI, PSI,
+    CHI_PURINE, CHI_PYRIMIDINE) always get the correct reference atoms.
+
+    Args:
+        topology: TopologyInfo containing structural metadata.
+        csr_offsets: CSR offsets array for bond graph.
+        csr_neighbors: CSR neighbors array for bond graph.
+
+    Returns:
+        Tuple of (indices, dihedral_types, levels, component_ids).
+    """
+    n_atoms = topology.n_atoms
+    n_residues = topology.n_residues
+
+    if n_atoms == 0:
+        return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
+                np.array([], dtype=np.int32), np.array([], dtype=np.int32))
+
+    # Call canonical Z-matrix C function
+    zmatrix, dihedral_types = _build_canonical_zmatrix_c(
+        np.ascontiguousarray(topology.atoms, dtype=np.int32),
+        np.ascontiguousarray(topology.sequence, dtype=np.int32),
+        np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),
+        np.ascontiguousarray(topology.chain_lengths, dtype=np.int32),
+        np.ascontiguousarray(csr_offsets, dtype=np.int64),
+        np.ascontiguousarray(csr_neighbors, dtype=np.int64),
+    )
+
+    # Compute NERF dependency levels from the Z-matrix
+    levels = _compute_nerf_levels(zmatrix)
+
+    # For canonical Z-matrix, atoms are in natural order so we need to
+    # determine component IDs based on connected components
+    comp_atoms, comp_offsets, n_components = find_connected_components(
+        csr_offsets, csr_neighbors, n_atoms
+    )
+
+    # Build atom -> component mapping
+    component_ids = np.zeros(n_atoms, dtype=np.int32)
+    for comp_idx in range(n_components):
+        start = comp_offsets[comp_idx]
+        end = comp_offsets[comp_idx + 1]
+        component_ids[comp_atoms[start:end]] = comp_idx
+
+    return zmatrix, dihedral_types, levels, component_ids
 
 
 def _compute_nerf_levels(indices: np.ndarray) -> np.ndarray:

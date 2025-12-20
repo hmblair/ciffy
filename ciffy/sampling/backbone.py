@@ -89,6 +89,46 @@ def _get_rna_gmms() -> dict[str, GaussianMixtureModel]:
 
 
 # =============================================================================
+# Purine/Pyrimidine Classification for Chi Angle Selection
+# =============================================================================
+
+# Purine residues use CHI_PURINE (O4'-C1'-N9-C4)
+# Pyrimidine residues use CHI_PYRIMIDINE (O4'-C1'-N1-C2)
+_PURINE_RESIDUE_NAMES: frozenset[str] = frozenset({
+    # Standard RNA/DNA
+    "A", "G", "DA", "DG",
+    # Modified purines
+    "I", "1MG", "2MG", "7MG", "M2G", "OMG", "2MA", "6MZ", "G7M", "PPU", "GTP", "GNG",
+})
+
+
+def _get_chi_dihedral_type(residue_enum_or_name):
+    """
+    Get the correct chi dihedral type for a nucleotide residue.
+
+    Purines (A, G, and derivatives) use CHI_PURINE.
+    Pyrimidines (C, U, T, and derivatives) use CHI_PYRIMIDINE.
+
+    Args:
+        residue_enum_or_name: Either a Residue enum value or residue name string.
+
+    Returns:
+        DihedralType.CHI_PURINE or DihedralType.CHI_PYRIMIDINE
+    """
+    from ..types import DihedralType
+
+    # Handle both enum and string inputs
+    if hasattr(residue_enum_or_name, 'name'):
+        name = residue_enum_or_name.name
+    else:
+        name = str(residue_enum_or_name)
+
+    if name in _PURINE_RESIDUE_NAMES:
+        return DihedralType.CHI_PURINE
+    return DihedralType.CHI_PYRIMIDINE
+
+
+# =============================================================================
 # Clash Detection & Exception Classes
 # =============================================================================
 
@@ -302,12 +342,13 @@ def _sample_single_residue_rna(
             else:
                 result[dtype] = rng.uniform(-np.pi, np.pi)
 
-        # Chi angle
-        if "chi_pyrimidine" in gmms:
-            chi_sample = gmms["chi_pyrimidine"].sample(1, rng)[0, 0]
-            result[DihedralType.CHI_PYRIMIDINE] = chi_sample
-        else:
-            result[DihedralType.CHI_PYRIMIDINE] = rng.uniform(-np.pi, np.pi)
+        # Chi angle - SKIP for nucleotides
+        # Setting chi breaks the base ring structure because only the owner atom
+        # (C4 for purines, C2 for pyrimidines) moves, not the whole rigid base.
+        # The backbone dihedrals (alpha-zeta) control RNA conformation; chi should
+        # remain at its template value to preserve base planarity.
+        # chi_type = _get_chi_dihedral_type(residue_type)
+        # result[chi_type] = ... (skipped)
 
         # Set terminal NaN
         if residue_idx == 0:
@@ -321,6 +362,8 @@ def _sample_single_residue_rna(
     # Sample from 7D GMM
     sample_7d = gmm.sample(1, rng)[0]  # (7,)
 
+    # Only use backbone dihedrals (alpha-zeta), skip chi
+    # Chi breaks base ring structure - see comment above
     result = {
         DihedralType.ALPHA: sample_7d[0],
         DihedralType.BETA: sample_7d[1],
@@ -328,7 +371,7 @@ def _sample_single_residue_rna(
         DihedralType.DELTA: sample_7d[3],
         DihedralType.EPSILON: sample_7d[4],
         DihedralType.ZETA: sample_7d[5],
-        DihedralType.CHI_PYRIMIDINE: sample_7d[6],
+        # chi_type: sample_7d[6],  # Skipped - breaks base ring
     }
 
     # Set terminal NaN
@@ -649,13 +692,14 @@ class RNAEvaluator(PolymerEvaluator):
         self.rng = rng
 
     def apply_angles(self, angles: np.ndarray) -> None:
-        """Apply 7D angles to polymer."""
+        """Apply 7D angles to polymer (backbone only, skip chi)."""
         from ..types import DihedralType
 
         # angles is [alpha, beta, gamma, delta, epsilon, zeta, chi]
-        alpha, beta, gamma, delta, epsilon, zeta, chi = angles
+        # We only use backbone dihedrals; chi is ignored to preserve base planarity
+        alpha, beta, gamma, delta, epsilon, zeta, _chi = angles
 
-        # Build full dihedral lists including current angles
+        # Build full dihedral lists including current angles (backbone only)
         full_dihedrals = {
             DihedralType.ALPHA: self.prev_dihedrals[DihedralType.ALPHA] + [alpha],
             DihedralType.BETA: self.prev_dihedrals[DihedralType.BETA] + [beta],
@@ -663,7 +707,7 @@ class RNAEvaluator(PolymerEvaluator):
             DihedralType.DELTA: self.prev_dihedrals[DihedralType.DELTA] + [delta],
             DihedralType.EPSILON: self.prev_dihedrals[DihedralType.EPSILON] + [epsilon],
             DihedralType.ZETA: self.prev_dihedrals[DihedralType.ZETA] + [zeta],
-            DihedralType.CHI_PYRIMIDINE: self.prev_dihedrals[DihedralType.CHI_PYRIMIDINE] + [chi],
+            # Chi is skipped - setting it breaks base ring structure
         }
 
         # Apply dihedrals using helper function
@@ -860,6 +904,7 @@ if TYPE_CHECKING:
 def sample_rna_dihedrals(
     n_residues: int,
     rng: np.random.Generator | None = None,
+    sequence: np.ndarray | None = None,
 ) -> dict["DihedralTypeHint", np.ndarray]:
     """
     Sample backbone dihedrals for n RNA residues.
@@ -870,13 +915,20 @@ def sample_rna_dihedrals(
     Args:
         n_residues: Number of residues to sample angles for.
         rng: Random number generator for reproducibility.
+        sequence: Optional (n_residues,) array of residue type indices.
+            If provided, chi angles are split between CHI_PURINE and
+            CHI_PYRIMIDINE based on residue type. If None, all chi angles
+            go under CHI_PYRIMIDINE for backward compatibility.
 
     Returns:
-        Dict mapping DihedralType -> (n_residues,) array in radians.
-        Keys: ALPHA, BETA, GAMMA, DELTA, EPSILON, ZETA, CHI_PYRIMIDINE
+        Dict mapping DihedralType -> array in radians.
+        Keys: ALPHA, BETA, GAMMA, DELTA, EPSILON, ZETA, and either
+        CHI_PYRIMIDINE (if no sequence) or both CHI_PURINE and CHI_PYRIMIDINE
+        (if sequence provided, with values only for matching residue types).
         Terminal residues have NaN where the dihedral cannot be defined.
     """
     from ..types import DihedralType
+    from ..biochemistry import Residue
 
     if rng is None:
         rng = np.random.default_rng()
@@ -903,16 +955,10 @@ def sample_rna_dihedrals(
             # Fallback: use uniform distribution if GMM not available
             result[dtype] = rng.uniform(-np.pi, np.pi, n_residues)
 
-    # Chi (glycosidic) - use chi_pyrimidine as it has more data
-    # TODO: Handle purine vs pyrimidine based on residue type
-    if "chi_pyrimidine" in gmms:
-        samples = gmms["chi_pyrimidine"].sample(n_residues, rng)
-        result[DihedralType.CHI_PYRIMIDINE] = samples[:, 0].copy()
-    elif "chi_purine" in gmms:
-        samples = gmms["chi_purine"].sample(n_residues, rng)
-        result[DihedralType.CHI_PYRIMIDINE] = samples[:, 0].copy()
-    else:
-        result[DihedralType.CHI_PYRIMIDINE] = rng.uniform(-np.pi, np.pi, n_residues)
+    # Chi (glycosidic) - SKIP for nucleotides
+    # Setting chi breaks the base ring structure because only the owner atom
+    # moves, not the whole rigid base. Keep chi at template value.
+    # (No chi angles added to result)
 
     # Set terminal NaN values
     # Alpha: requires O3' from previous residue (first residue has no alpha)
@@ -970,7 +1016,7 @@ def sample_rna_autoregressive(
     if n_residues == 0:
         return polymer
 
-    # Initialize dihedral lists
+    # Initialize dihedral lists (backbone only, no chi - chi breaks base rings)
     dihedral_lists = {
         DihedralType.ALPHA: [],
         DihedralType.BETA: [],
@@ -978,7 +1024,6 @@ def sample_rna_autoregressive(
         DihedralType.DELTA: [],
         DihedralType.EPSILON: [],
         DihedralType.ZETA: [],
-        DihedralType.CHI_PYRIMIDINE: [],
     }
 
     for res_idx in range(n_residues):
@@ -991,14 +1036,15 @@ def sample_rna_autoregressive(
 
         # Rejection sampling loop
         for attempt in range(max_attempts):
-            # Sample candidate dihedrals for this residue
+            # Sample candidate dihedrals for this residue (backbone only)
             candidate_dihedrals = _sample_single_residue_rna(
                 _registry, res_idx, n_residues, res_enum, rng
             )
 
             # Temporarily apply angles to check clash
             temp_dihedral_lists = {
-                k: v + [candidate_dihedrals[k]] for k, v in dihedral_lists.items()
+                k: v + ([candidate_dihedrals[k]] if k in candidate_dihedrals else [])
+                for k, v in dihedral_lists.items()
             }
 
             # Apply dihedrals to polymer
@@ -1018,9 +1064,10 @@ def sample_rna_autoregressive(
             if res_idx == 0 or not _has_clash(
                 polymer, res_idx, vdw_reduction=vdw_reduction
             ):
-                # Accept this residue
+                # Accept this residue - only add chi type present in candidate
                 for dtype in dihedral_lists:
-                    dihedral_lists[dtype].append(candidate_dihedrals[dtype])
+                    if dtype in candidate_dihedrals:
+                        dihedral_lists[dtype].append(candidate_dihedrals[dtype])
                 break
         else:
             # Exhausted max_attempts
@@ -1321,7 +1368,7 @@ def _sample_rna_autoregressive_langevin_impl(
 
     n_residues = polymer.size(Scale.RESIDUE)
 
-    # Initialize dihedral lists
+    # Initialize dihedral lists (backbone only, no chi - chi breaks base rings)
     dihedral_lists = {
         DihedralType.ALPHA: [],
         DihedralType.BETA: [],
@@ -1329,7 +1376,6 @@ def _sample_rna_autoregressive_langevin_impl(
         DihedralType.DELTA: [],
         DihedralType.EPSILON: [],
         DihedralType.ZETA: [],
-        DihedralType.CHI_PYRIMIDINE: [],
     }
 
     for res_idx in range(n_residues):
@@ -1372,7 +1418,7 @@ def _sample_rna_autoregressive_langevin_impl(
                 rng=rng,
             )
 
-            # Extract individual dihedral angles
+            # Extract individual dihedral angles (backbone only, skip chi)
             candidate_dihedrals = {
                 DihedralType.ALPHA: refined_angles_7d[0],
                 DihedralType.BETA: refined_angles_7d[1],
@@ -1380,7 +1426,7 @@ def _sample_rna_autoregressive_langevin_impl(
                 DihedralType.DELTA: refined_angles_7d[3],
                 DihedralType.EPSILON: refined_angles_7d[4],
                 DihedralType.ZETA: refined_angles_7d[5],
-                DihedralType.CHI_PYRIMIDINE: refined_angles_7d[6],
+                # Chi skipped - breaks base ring structure
             }
         else:
             # Fallback to independent sampling (e.g., when 7D GMMs not available)
@@ -1391,9 +1437,10 @@ def _sample_rna_autoregressive_langevin_impl(
         # Apply terminal NaN constraints
         _apply_terminal_constraints(candidate_dihedrals, res_idx, n_residues, Molecule.RNA)
 
-        # Accept dihedrals for this residue
+        # Accept dihedrals for this residue - only add chi type present in candidate
         for dtype in dihedral_lists:
-            dihedral_lists[dtype].append(candidate_dihedrals[dtype])
+            if dtype in candidate_dihedrals:
+                dihedral_lists[dtype].append(candidate_dihedrals[dtype])
 
     # Apply final dihedrals to polymer using helper
     _apply_dihedrals(polymer, dihedral_lists)
@@ -1559,8 +1606,11 @@ def randomize_backbone(
         polymer.set_dihedral(DihedralType.OMEGA, omega[~np.isnan(omega)])
 
     elif mol_type in (Molecule.RNA, Molecule.DNA):
-        # Sample RNA/DNA dihedrals (returns dict[DihedralType, np.ndarray])
-        dihedrals = sample_rna_dihedrals(n_residues, rng)
+        # Sample RNA/DNA dihedrals with residue-specific chi types
+        # Pass sequence to enable purine/pyrimidine chi type selection
+        from ..backend import to_numpy
+        sequence = to_numpy(polymer.sequence)
+        dihedrals = sample_rna_dihedrals(n_residues, rng, sequence=sequence)
 
         for dtype, values in dihedrals.items():
             valid = values[~np.isnan(values)]

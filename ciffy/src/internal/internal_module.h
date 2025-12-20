@@ -88,4 +88,11 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args);
  */
 PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject *args);
 
+/**
+ * Build canonical Z-matrix using natural atom order and precomputed references.
+ * Python: _build_canonical_zmatrix(atoms, sequence, res_sizes, chain_lengths,
+ *             bond_offsets, bond_neighbors) -> (zmatrix, dihedral_types)
+ */
+PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

@@ -158,14 +158,14 @@ class GMMRegistry:
             # Purines: A, G (and their deoxy variants DA, DG)
             if residue_type in [Residue.A, Residue.G, Residue.DA, Residue.DG]:
                 return "purine"
-            # Pyrimidines: C, U, T (and their deoxy variants DC, DU, DT)
-            elif residue_type in [Residue.C, Residue.U, Residue.T, Residue.DC, Residue.DU, Residue.DT]:
+            # Pyrimidines: C, U (RNA) and DC, DT (DNA)
+            elif residue_type in [Residue.C, Residue.U, Residue.DC, Residue.DT]:
                 return "pyrimidine"
         elif mol_str == "DNA":
             # DNA is same as RNA for now
             if residue_type in [Residue.DA, Residue.DG]:
                 return "purine"
-            elif residue_type in [Residue.DC, Residue.DT, Residue.DU]:
+            elif residue_type in [Residue.DC, Residue.DT]:
                 return "pyrimidine"
 
         # Future: protein groups (e.g., aromatic, charged, etc.)

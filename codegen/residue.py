@@ -9,7 +9,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from .names import to_class_name, to_python_name
-from .config import DIHEDRAL_TYPE_INDEX, Molecule, BACKBONE_NAMES, BACKBONE_PYTHON_TO_CIF
+from .config import (
+    DIHEDRAL_TYPE_INDEX, Molecule, BACKBONE_NAMES, BACKBONE_PYTHON_TO_CIF,
+    PURINE_RESIDUES, PYRIMIDINE_RESIDUES,
+)
 
 
 @dataclass
@@ -139,11 +142,15 @@ def compute_dihedral_patterns(res: ResidueDefinition) -> dict[int, list[tuple[in
             # zeta: C3'(i-1) - O3'(i-1) - P(i) - O5'(i) - inverted
             # Original was: C3'(i) - O3'(i) - P(i+1) - O5'(i+1) with owner at +1
             "zeta": (("C3p", -1), ("O3p", -1), ("P", 0), ("O5p", 0)),
-            # chi for purines: O4' - C1' - N9 - C4 - all in current residue
-            "chi_purine": (("O4p", 0), ("C1p", 0), ("N9", 0), ("C4", 0)),
-            # chi for pyrimidines: O4' - C1' - N1 - C2 - all in current residue
-            "chi_pyrimidine": (("O4p", 0), ("C1p", 0), ("N1", 0), ("C2", 0)),
         }
+        # Add chi based on residue type - only ONE chi pattern per residue!
+        # Purines (A, G, etc.) use CHI_PURINE: O4' - C1' - N9 - C4
+        # Pyrimidines (C, U, T, etc.) use CHI_PYRIMIDINE: O4' - C1' - N1 - C2
+        if res.name in PURINE_RESIDUES:
+            dihedral_defs["chi_purine"] = (("O4p", 0), ("C1p", 0), ("N9", 0), ("C4", 0))
+        elif res.name in PYRIMIDINE_RESIDUES:
+            dihedral_defs["chi_pyrimidine"] = (("O4p", 0), ("C1p", 0), ("N1", 0), ("C2", 0))
+        # If neither (unknown nucleotide), skip chi - backbone only
     else:
         return {}
 

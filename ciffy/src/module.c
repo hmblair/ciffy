@@ -817,6 +817,21 @@ static PyMethodDef methods[] = {
      "    component_ids (ndarray): (M,) int32 component ID per Z-matrix entry.\n\n"
      "Returns:\n"
      "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
+    {"_build_canonical_zmatrix", py_build_canonical_zmatrix, METH_VARARGS,
+     "Build canonical Z-matrix using natural atom order.\n\n"
+     "Uses precomputed canonical references from codegen instead of BFS.\n"
+     "Guarantees dihedral-owning atoms get correct references.\n\n"
+     "Args:\n"
+     "    atoms (ndarray): (N,) int32 atom type values.\n"
+     "    sequence (ndarray): (R,) int32 residue type indices.\n"
+     "    res_sizes (ndarray): (R,) int32 atoms per residue.\n"
+     "    chain_lengths (ndarray): (C,) int32 residues per chain.\n"
+     "    bond_offsets (ndarray): (N+1,) int64 CSR offsets for bond graph.\n"
+     "    bond_neighbors (ndarray): (E,) int64 CSR neighbor indices.\n\n"
+     "Returns:\n"
+     "    tuple: (zmatrix, dihedral_types)\n"
+     "        zmatrix: (N, 4) int64 [atom, dist_ref, ang_ref, dih_ref]\n"
+     "        dihedral_types: (N,) int8 dihedral type (-1 if not named dihedral)\n"},
     {NULL, NULL, 0, NULL}
 };
 

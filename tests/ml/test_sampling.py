@@ -241,12 +241,16 @@ class TestSampleRNADihedrals:
     """Tests for RNA dihedral sampling."""
 
     def test_sample_rna_dihedrals_keys(self):
-        """Test sample_rna_dihedrals returns correct keys."""
+        """Test sample_rna_dihedrals returns correct keys.
+
+        Note: Chi angles (CHI_PURINE/CHI_PYRIMIDINE) are NOT included because
+        modifying them breaks the base ring structure - only backbone dihedrals
+        are sampled.
+        """
         dihedrals = sample_rna_dihedrals(10)
         expected = {
             DihedralType.ALPHA, DihedralType.BETA, DihedralType.GAMMA,
             DihedralType.DELTA, DihedralType.EPSILON, DihedralType.ZETA,
-            DihedralType.CHI_PYRIMIDINE,
         }
         assert set(dihedrals.keys()) == expected
 

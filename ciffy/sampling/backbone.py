@@ -1143,8 +1143,9 @@ def sample_autoregressive(
 # =============================================================================
 
 
-def sample_protein_autoregressive_langevin(
+def _sample_autoregressive_langevin_unified(
     polymer: "Polymer",
+    molecule_type: "Molecule",
     n_langevin_steps: int = 50,
     step_size: float = 0.01,
     temperature: float = 1.0,
@@ -1153,34 +1154,40 @@ def sample_protein_autoregressive_langevin(
     seed: int | None = None,
 ) -> "Polymer":
     """
-    Sample protein backbone dihedrals using Langevin dynamics with clash avoidance.
+    Unified autoregressive Langevin sampler for proteins and RNA.
 
-    Uses autoregressive Langevin sampling: for each residue, jointly optimizes
-    GMM log-likelihood + clash penalties using Langevin dynamics.
+    Implements the same sampling algorithm for both molecule types:
+    1. For each residue i from 0 to N-1:
+       a. Get residue-type-specific GMM via registry
+       b. Create evaluator (ProteinEvaluator or RNAEvaluator)
+       c. Create energy functions (GMM + clash)
+       d. Sample initial angles from GMM
+       e. Run Langevin dynamics to refine angles
+       f. Apply terminal constraints
+       g. Accept angles and continue to next residue
 
-    This approach efficiently explores the joint space of distributions and
-    constraints, avoiding the rejection sampling failures seen with tight
-    VDW constraints.
+    Differences between molecules are encapsulated in:
+    - Evaluator type (ProteinEvaluator vs RNAEvaluator)
+    - Dihedral initialization and handling
+    - GMM sampling dimensionality (2D vs 7D)
 
     Args:
-        polymer: Protein polymer to sample. Must have valid coordinates.
+        polymer: Polymer to sample (protein or RNA).
+        molecule_type: Molecule.PROTEIN, Molecule.RNA, or Molecule.DNA
         n_langevin_steps: Number of Langevin steps per residue (default 50).
         step_size: Step size for Langevin discretization (default 0.01).
         temperature: Temperature for thermal noise (default 1.0).
         lambda_clash: Weight of clash penalty term (default 1000).
-        vdw_reduction: VDW tolerance in Angstroms (default 0.4).
+        vdw_reduction: VDW tolerance in Angstroms (default 0.4). Unused for Langevin.
         seed: Random seed for reproducibility.
 
     Returns:
-        Protein with sampled backbone dihedrals (clash-minimized).
+        Polymer with sampled backbone dihedrals (clash-minimized).
 
-    Example:
-        >>> import ciffy
-        >>> from ciffy.sampling import sample_protein_autoregressive_langevin
-        >>> protein = ciffy.from_sequence("MGKLF")
-        >>> protein = sample_protein_autoregressive_langevin(protein, seed=42)
+    Raises:
+        ValueError: If molecule_type is not supported.
     """
-    from ..types import Scale, Molecule, DihedralType
+    from ..types import Scale, DihedralType, Molecule
     from ..biochemistry import Residue as ResidueEnum
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
@@ -1191,6 +1198,38 @@ def sample_protein_autoregressive_langevin(
     if n_residues == 0:
         return polymer
 
+    # Dispatch based on molecule type
+    if molecule_type == Molecule.PROTEIN:
+        return _sample_protein_autoregressive_langevin_impl(
+            polymer, n_langevin_steps, step_size, temperature, lambda_clash, rng
+        )
+    elif molecule_type in (Molecule.RNA, Molecule.DNA):
+        return _sample_rna_autoregressive_langevin_impl(
+            polymer, n_langevin_steps, step_size, temperature, lambda_clash, rng
+        )
+    else:
+        raise ValueError(f"Unsupported molecule type for Langevin sampling: {molecule_type}")
+
+
+def _sample_protein_autoregressive_langevin_impl(
+    polymer: "Polymer",
+    n_langevin_steps: int,
+    step_size: float,
+    temperature: float,
+    lambda_clash: float,
+    rng: np.random.Generator,
+) -> "Polymer":
+    """
+    Implementation of protein autoregressive Langevin sampling.
+
+    Handles protein-specific logic: 2D GMM (phi, psi), omega sampling.
+    """
+    from ..types import Scale, Molecule, DihedralType
+    from ..biochemistry import Residue as ResidueEnum
+    from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
+    from .langevin import langevin_dynamics
+
+    n_residues = polymer.size(Scale.RESIDUE)
     phi_list = []
     psi_list = []
     omega_list = []
@@ -1252,52 +1291,25 @@ def sample_protein_autoregressive_langevin(
     return polymer
 
 
-def sample_rna_autoregressive_langevin(
+def _sample_rna_autoregressive_langevin_impl(
     polymer: "Polymer",
-    n_langevin_steps: int = 50,
-    step_size: float = 0.01,
-    temperature: float = 1.0,
-    lambda_clash: float = 1000.0,
-    vdw_reduction: float = 0.4,
-    seed: int | None = None,
+    n_langevin_steps: int,
+    step_size: float,
+    temperature: float,
+    lambda_clash: float,
+    rng: np.random.Generator,
 ) -> "Polymer":
     """
-    Sample RNA backbone dihedrals using Langevin dynamics with clash avoidance.
+    Implementation of RNA autoregressive Langevin sampling.
 
-    Uses autoregressive Langevin sampling for all 7 backbone dihedrals,
-    jointly optimizing GMM likelihood + clash avoidance via energy composition.
-
-    For each residue, samples 7D (alpha, beta, gamma, delta, epsilon, zeta, chi)
-    angles from the joint energy: E = -log(GMM) + λ*Σ(1/r²) for all atom pairs.
-
-    Args:
-        polymer: RNA polymer to sample. Must have valid coordinates.
-        n_langevin_steps: Number of Langevin steps per residue (default 50).
-        step_size: Step size for Langevin discretization (default 0.01).
-        temperature: Temperature for thermal noise (default 1.0).
-        lambda_clash: Weight of clash penalty term (default 1000).
-        vdw_reduction: VDW tolerance in Angstroms (default 0.4).
-        seed: Random seed for reproducibility.
-
-    Returns:
-        RNA with sampled backbone dihedrals (clash-minimized).
-
-    Example:
-        >>> import ciffy
-        >>> from ciffy.sampling import sample_rna_autoregressive_langevin
-        >>> rna = ciffy.from_sequence("acgu")
-        >>> rna = sample_rna_autoregressive_langevin(rna, seed=42)
+    Handles RNA-specific logic: 7D GMM (alpha, beta, gamma, delta, epsilon, zeta, chi).
     """
     from ..types import DihedralType, Scale, Molecule
     from ..biochemistry import Residue as ResidueEnum
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
 
-    rng = np.random.default_rng(seed)
     n_residues = polymer.size(Scale.RESIDUE)
-
-    if n_residues == 0:
-        return polymer
 
     # Initialize dihedral lists
     dihedral_lists = {
@@ -1377,6 +1389,107 @@ def sample_rna_autoregressive_langevin(
     _apply_dihedrals(polymer, dihedral_lists)
 
     return polymer
+
+
+def sample_protein_autoregressive_langevin(
+    polymer: "Polymer",
+    n_langevin_steps: int = 50,
+    step_size: float = 0.01,
+    temperature: float = 1.0,
+    lambda_clash: float = 1000.0,
+    vdw_reduction: float = 0.4,
+    seed: int | None = None,
+) -> "Polymer":
+    """
+    Sample protein backbone dihedrals using Langevin dynamics with clash avoidance.
+
+    Uses autoregressive Langevin sampling: for each residue, jointly optimizes
+    GMM log-likelihood + clash penalties using Langevin dynamics.
+
+    This approach efficiently explores the joint space of distributions and
+    constraints, avoiding the rejection sampling failures seen with tight
+    VDW constraints.
+
+    Args:
+        polymer: Protein polymer to sample. Must have valid coordinates.
+        n_langevin_steps: Number of Langevin steps per residue (default 50).
+        step_size: Step size for Langevin discretization (default 0.01).
+        temperature: Temperature for thermal noise (default 1.0).
+        lambda_clash: Weight of clash penalty term (default 1000).
+        vdw_reduction: VDW tolerance in Angstroms (default 0.4).
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Protein with sampled backbone dihedrals (clash-minimized).
+
+    Example:
+        >>> import ciffy
+        >>> from ciffy.sampling import sample_protein_autoregressive_langevin
+        >>> protein = ciffy.from_sequence("MGKLF")
+        >>> protein = sample_protein_autoregressive_langevin(protein, seed=42)
+    """
+    from ..types import Molecule
+
+    return _sample_autoregressive_langevin_unified(
+        polymer,
+        Molecule.PROTEIN,
+        n_langevin_steps=n_langevin_steps,
+        step_size=step_size,
+        temperature=temperature,
+        lambda_clash=lambda_clash,
+        vdw_reduction=vdw_reduction,
+        seed=seed,
+    )
+
+
+def sample_rna_autoregressive_langevin(
+    polymer: "Polymer",
+    n_langevin_steps: int = 50,
+    step_size: float = 0.01,
+    temperature: float = 1.0,
+    lambda_clash: float = 1000.0,
+    vdw_reduction: float = 0.4,
+    seed: int | None = None,
+) -> "Polymer":
+    """
+    Sample RNA backbone dihedrals using Langevin dynamics with clash avoidance.
+
+    Uses autoregressive Langevin sampling for all 7 backbone dihedrals,
+    jointly optimizing GMM likelihood + clash avoidance via energy composition.
+
+    For each residue, samples 7D (alpha, beta, gamma, delta, epsilon, zeta, chi)
+    angles from the joint energy: E = -log(GMM) + λ*Σ(1/r²) for all atom pairs.
+
+    Args:
+        polymer: RNA polymer to sample. Must have valid coordinates.
+        n_langevin_steps: Number of Langevin steps per residue (default 50).
+        step_size: Step size for Langevin discretization (default 0.01).
+        temperature: Temperature for thermal noise (default 1.0).
+        lambda_clash: Weight of clash penalty term (default 1000).
+        vdw_reduction: VDW tolerance in Angstroms (default 0.4).
+        seed: Random seed for reproducibility.
+
+    Returns:
+        RNA with sampled backbone dihedrals (clash-minimized).
+
+    Example:
+        >>> import ciffy
+        >>> from ciffy.sampling import sample_rna_autoregressive_langevin
+        >>> rna = ciffy.from_sequence("acgu")
+        >>> rna = sample_rna_autoregressive_langevin(rna, seed=42)
+    """
+    from ..types import Molecule
+
+    return _sample_autoregressive_langevin_unified(
+        polymer,
+        Molecule.RNA,
+        n_langevin_steps=n_langevin_steps,
+        step_size=step_size,
+        temperature=temperature,
+        lambda_clash=lambda_clash,
+        vdw_reduction=vdw_reduction,
+        seed=seed,
+    )
 
 
 def randomize_backbone(

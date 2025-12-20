@@ -16,13 +16,17 @@ __all__ = ["DenseNetwork"]
 class DenseNetwork(nn.Module):
     """Multi-layer perceptron with configurable architecture.
 
+    Uses GELU activation by default, following modern best practices from
+    transformer research (BERT, GPT-2, etc.). GELU provides smooth gradients
+    and generally outperforms ReLU in deep networks.
+
     Args:
         in_size: Input feature dimension.
         out_size: Output feature dimension.
         hidden_sizes: List of hidden layer dimensions.
         bias: Whether to use bias in linear layers.
         dropout: Dropout probability.
-        activation: Activation function.
+        activation: Activation function. Defaults to GELU.
 
     Example:
         >>> mlp = DenseNetwork(64, 10, hidden_sizes=[128, 64])
@@ -51,7 +55,7 @@ class DenseNetwork(nn.Module):
         if hidden_sizes is None:
             hidden_sizes = []
         if activation is None:
-            activation = nn.ReLU()
+            activation = nn.GELU()
 
         features = [in_size] + hidden_sizes + [out_size]
 

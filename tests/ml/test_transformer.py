@@ -19,7 +19,7 @@ class TestRMSNorm:
     def test_rmsnorm_shape(self):
         """Test RMSNorm preserves input shape."""
         import torch
-        from ciffy.nn.transformer import RMSNorm
+        from ciffy.nn.layers.transformer import RMSNorm
 
         norm = RMSNorm(dim=64)
         x = torch.randn(2, 10, 64)
@@ -30,7 +30,7 @@ class TestRMSNorm:
     def test_rmsnorm_normalization(self):
         """Test RMSNorm produces unit RMS."""
         import torch
-        from ciffy.nn.transformer import RMSNorm
+        from ciffy.nn.layers.transformer import RMSNorm
 
         norm = RMSNorm(dim=64)
         # Reset weight to 1 for testing
@@ -46,7 +46,7 @@ class TestRMSNorm:
     def test_rmsnorm_gradients(self):
         """Test RMSNorm gradients flow."""
         import torch
-        from ciffy.nn.transformer import RMSNorm
+        from ciffy.nn.layers.transformer import RMSNorm
 
         norm = RMSNorm(dim=64)
         x = torch.randn(2, 10, 64, requires_grad=True)
@@ -71,7 +71,7 @@ class TestRoPE:
     def test_rope_shape(self):
         """Test RoPE preserves input shape."""
         import torch
-        from ciffy.nn.transformer import RotaryPositionEmbedding
+        from ciffy.nn.layers.transformer import RotaryPositionEmbedding
 
         rope = RotaryPositionEmbedding(dim=64, max_seq_len=100)
 
@@ -86,7 +86,7 @@ class TestRoPE:
     def test_rope_different_positions(self):
         """Test RoPE produces different embeddings for different positions."""
         import torch
-        from ciffy.nn.transformer import RotaryPositionEmbedding
+        from ciffy.nn.layers.transformer import RotaryPositionEmbedding
 
         rope = RotaryPositionEmbedding(dim=64, max_seq_len=100)
 
@@ -103,7 +103,7 @@ class TestRoPE:
     def test_rope_equivariance(self):
         """Test RoPE is translation equivariant for relative positions."""
         import torch
-        from ciffy.nn.transformer import RotaryPositionEmbedding
+        from ciffy.nn.layers.transformer import RotaryPositionEmbedding
 
         rope = RotaryPositionEmbedding(dim=64, max_seq_len=100)
 
@@ -140,7 +140,7 @@ class TestSwiGLU:
     def test_swiglu_shape(self):
         """Test SwiGLU preserves input shape."""
         import torch
-        from ciffy.nn.transformer import SwiGLU
+        from ciffy.nn.layers.transformer import SwiGLU
 
         ffn = SwiGLU(d_model=64)
         x = torch.randn(2, 10, 64)
@@ -151,7 +151,7 @@ class TestSwiGLU:
     def test_swiglu_gradients(self):
         """Test SwiGLU gradients flow."""
         import torch
-        from ciffy.nn.transformer import SwiGLU
+        from ciffy.nn.layers.transformer import SwiGLU
 
         ffn = SwiGLU(d_model=64)
         x = torch.randn(2, 10, 64, requires_grad=True)
@@ -177,7 +177,7 @@ class TestMultiHeadAttention:
     def test_attention_shape(self):
         """Test attention output shape."""
         import torch
-        from ciffy.nn.transformer import MultiHeadAttention
+        from ciffy.nn.layers.transformer import MultiHeadAttention
 
         attn = MultiHeadAttention(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64)
@@ -188,7 +188,7 @@ class TestMultiHeadAttention:
     def test_attention_with_mask(self):
         """Test attention respects mask."""
         import torch
-        from ciffy.nn.transformer import MultiHeadAttention
+        from ciffy.nn.layers.transformer import MultiHeadAttention
 
         attn = MultiHeadAttention(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64)
@@ -212,7 +212,7 @@ class TestTransformerBlock:
     def test_block_shape(self):
         """Test block preserves input shape."""
         import torch
-        from ciffy.nn.transformer import TransformerBlock
+        from ciffy.nn.layers.transformer import TransformerBlock
 
         block = TransformerBlock(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64)
@@ -223,7 +223,7 @@ class TestTransformerBlock:
     def test_block_gradients(self):
         """Test block gradients flow."""
         import torch
-        from ciffy.nn.transformer import TransformerBlock
+        from ciffy.nn.layers.transformer import TransformerBlock
 
         block = TransformerBlock(d_model=64, num_heads=8)
         x = torch.randn(2, 10, 64, requires_grad=True)
@@ -247,7 +247,7 @@ class TestTransformer:
     def test_transformer_shape(self):
         """Test transformer output shape."""
         import torch
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         model = Transformer(d_model=64, num_layers=2, num_heads=8)
         x = torch.randn(2, 10, 64)
@@ -258,7 +258,7 @@ class TestTransformer:
     def test_transformer_with_mask(self):
         """Test transformer respects mask."""
         import torch
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         model = Transformer(d_model=64, num_layers=2, num_heads=8)
         x = torch.randn(2, 10, 64)
@@ -272,7 +272,7 @@ class TestTransformer:
     def test_transformer_gradients(self):
         """Test transformer gradients flow through all layers."""
         import torch
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         model = Transformer(d_model=64, num_layers=4, num_heads=8)
         x = torch.randn(2, 10, 64, requires_grad=True)
@@ -291,7 +291,7 @@ class TestTransformer:
     def test_transformer_variable_length(self):
         """Test transformer handles different sequence lengths."""
         import torch
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         model = Transformer(d_model=64, num_layers=2, num_heads=8)
 
@@ -303,7 +303,7 @@ class TestTransformer:
     def test_transformer_device_transfer(self):
         """Test transformer can be moved to different devices via .to()."""
         import torch
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         model = Transformer(d_model=64, num_layers=2, num_heads=8)
 
@@ -330,7 +330,7 @@ class TestTransformerReusability:
         """Test using transformer for a simple classification task."""
         import torch
         import torch.nn as nn
-        from ciffy.nn.transformer import Transformer
+        from ciffy.nn.layers.transformer import Transformer
 
         class SimpleClassifier(nn.Module):
             def __init__(self, vocab_size, d_model, num_classes):
@@ -363,7 +363,7 @@ class TestTransformerReusability:
         """Test that individual components can be composed."""
         import torch
         import torch.nn as nn
-        from ciffy.nn.transformer import (
+        from ciffy.nn.layers.transformer import (
             RMSNorm,
             MultiHeadAttention,
             SwiGLU,

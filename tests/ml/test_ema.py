@@ -11,7 +11,7 @@ import pytest
 import torch
 from torch import nn
 
-from ciffy.nn.ema import EMA, create_ema_model, update_ema_model
+from ciffy.nn.diffusion.ema import EMA, create_ema_model, update_ema_model
 
 
 # ============================================================================

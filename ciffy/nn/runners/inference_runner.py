@@ -6,7 +6,7 @@ with automatic GPU assignment and progress tracking, mirroring the
 experiment_runner infrastructure.
 
 Example:
-    >>> from ciffy.nn.inference_runner import run_inference_jobs
+    >>> from ciffy.nn.runners import run_inference_jobs
     >>>
     >>> results = run_inference_jobs(
     ...     ["config1.yaml", "config2.yaml"],
@@ -22,12 +22,11 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
-import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 try:
     import torch
@@ -37,14 +36,19 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 try:
-    from rich.console import Console
-    from rich.live import Live
     from rich.table import Table
 
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
 
+from .utils import (
+    get_num_gpus,
+    format_duration,
+    format_status,
+    format_progress_bar,
+    ProgressDisplayThread,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +80,6 @@ class InferenceResult:
     output_dir: Optional[str] = None
     error: Optional[str] = None
     log_file: Optional[str] = None
-
-
-def _get_num_gpus() -> int:
-    """Get number of available CUDA GPUs."""
-    if not TORCH_AVAILABLE:
-        return 0
-    if not torch.cuda.is_available():
-        return 0
-    return torch.cuda.device_count()
 
 
 def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
@@ -225,64 +220,13 @@ def _create_progress_table(job_states: dict[str, dict]) -> Table:
         device = state.get("device", "")
         elapsed = state.get("time", 0)
 
-        # Format status with color
-        if status == "complete":
-            status_str = "[green]complete[/green]"
-        elif status == "failed":
-            status_str = "[red]failed[/red]"
-        elif status == "running":
-            status_str = "[yellow]running[/yellow]"
-        else:
-            status_str = "[dim]pending[/dim]"
-
-        # Format progress bar
-        if n_total > 0:
-            pct = n_done / n_total
-            filled = int(pct * 10)
-            bar = "█" * filled + "░" * (10 - filled)
-            progress_str = f"{bar} {n_done}/{n_total}"
-        else:
-            progress_str = "..."
-
-        # Format time
-        time_str = _format_duration(elapsed)
+        status_str = format_status(status)
+        progress_str = format_progress_bar(n_done, n_total)
+        time_str = format_duration(elapsed)
 
         table.add_row(name, status_str, progress_str, device, time_str)
 
     return table
-
-
-def _progress_display_thread(
-    progress_queue,
-    job_names: list[str],
-    stop_event: threading.Event,
-) -> None:
-    """Thread that reads from progress queue and updates the live display."""
-    if not RICH_AVAILABLE:
-        return
-
-    console = Console()
-
-    # Initialize job states
-    job_states = {name: {"status": "pending"} for name in job_names}
-
-    with Live(
-        _create_progress_table(job_states), console=console, refresh_per_second=4
-    ) as live:
-        while not stop_event.is_set():
-            while True:
-                try:
-                    msg = progress_queue.get(timeout=0.1)
-                    name = msg.get("name")
-                    if name in job_states:
-                        job_states[name].update(msg)
-                except Exception:
-                    break
-
-            live.update(_create_progress_table(job_states))
-
-        # Final update
-        live.update(_create_progress_table(job_states))
 
 
 def run_inference_jobs(
@@ -330,7 +274,7 @@ def run_inference_jobs(
             raise FileNotFoundError(f"Config not found: {path}")
 
     # Determine device strategy and worker count
-    num_gpus = _get_num_gpus()
+    num_gpus = get_num_gpus()
 
     if device == "auto":
         if num_gpus > 0:
@@ -374,13 +318,10 @@ def run_inference_jobs(
     results: list[InferenceResult] = []
 
     # Start progress display thread
-    stop_event = threading.Event()
-    display_thread = threading.Thread(
-        target=_progress_display_thread,
-        args=(progress_queue, job_names, stop_event),
-        daemon=True,
+    progress_display = ProgressDisplayThread(
+        progress_queue, job_names, _create_progress_table
     )
-    display_thread.start()
+    progress_display.start()
 
     try:
         if not parallel or max_workers == 1:
@@ -415,8 +356,7 @@ def run_inference_jobs(
                         )
                         results.append(result)
     finally:
-        stop_event.set()
-        display_thread.join(timeout=2.0)
+        progress_display.stop()
 
     # Sort results to match input order
     name_to_result = {r.name: r for r in results}
@@ -468,7 +408,7 @@ def format_inference_results_table(
             str(r.n_structures) if r.n_structures > 0 else "N/A",
             str(r.n_sequences) if r.n_sequences > 0 else "N/A",
             r.device[:8],
-            _format_duration(r.duration_seconds),
+            format_duration(r.duration_seconds),
         ]
 
         row = "  ".join(
@@ -481,7 +421,7 @@ def format_inference_results_table(
     total_structures = sum(r.n_structures for r in results)
     total_time = sum(r.duration_seconds for r in results)
     lines.append(
-        f"Total: {successful}/{len(results)} succeeded, {total_structures} structures in {_format_duration(total_time)}"
+        f"Total: {successful}/{len(results)} succeeded, {total_structures} structures in {format_duration(total_time)}"
     )
 
     if show_errors:
@@ -496,20 +436,6 @@ def format_inference_results_table(
                     lines.append(f"    Log: {r.log_file}")
 
     return "\n".join(lines)
-
-
-def _format_duration(seconds: float) -> str:
-    """Format duration as human-readable string."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins}m{secs}s"
-    else:
-        hours = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        return f"{hours}h{mins}m"
 
 
 __all__ = [

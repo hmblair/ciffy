@@ -5,7 +5,7 @@ Provides utilities for running multiple training configurations in parallel
 with automatic GPU assignment and result comparison.
 
 Example:
-    >>> from ciffy.nn.experiment_runner import run_experiments, format_results_table
+    >>> from ciffy.nn.runners import run_experiments, format_results_table
     >>>
     >>> results = run_experiments(
     ...     ["config1.yaml", "config2.yaml"],
@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
-import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -34,29 +33,25 @@ except ImportError:
 
 # Check for rich library
 try:
-    from rich.live import Live
     from rich.table import Table
-    from rich.console import Console
 
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
 
-from .training import ExperimentResult
+from ..training import ExperimentResult
+from .utils import (
+    get_num_gpus,
+    format_duration,
+    format_status,
+    format_progress_bar,
+    ProgressDisplayThread,
+)
 
 if TYPE_CHECKING:
     from multiprocessing import Queue
 
 logger = logging.getLogger(__name__)
-
-
-def _get_num_gpus() -> int:
-    """Get number of available CUDA GPUs."""
-    if not TORCH_AVAILABLE:
-        return 0
-    if not torch.cuda.is_available():
-        return 0
-    return torch.cuda.device_count()
 
 
 def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
@@ -214,65 +209,14 @@ def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
         device = state.get("device", "")
         elapsed = state.get("time", 0)
 
-        # Format status with color
-        if status == "complete":
-            status_str = "[green]complete[/green]"
-        elif status == "failed":
-            status_str = "[red]failed[/red]"
-        elif status == "running":
-            status_str = "[yellow]running[/yellow]"
-        else:
-            status_str = "[dim]pending[/dim]"
-
-        # Format progress bar
-        if total > 0:
-            pct = epoch / total
-            filled = int(pct * 10)
-            bar = "█" * filled + "░" * (10 - filled)
-            progress_str = f"{bar} {epoch}/{total}"
-        else:
-            progress_str = "..."
-
-        # Format loss
+        status_str = format_status(status)
+        progress_str = format_progress_bar(epoch, total)
         loss_str = f"{loss:.4f}" if loss is not None else "-"
-
-        # Format time
-        time_str = _format_duration(elapsed)
+        time_str = format_duration(elapsed)
 
         table.add_row(name, status_str, progress_str, loss_str, device, time_str)
 
     return table
-
-
-def _progress_display_thread(
-    progress_queue: "Queue",
-    experiment_names: list[str],
-    stop_event: threading.Event,
-) -> None:
-    """Thread that reads from progress queue and updates the live display."""
-    console = Console()
-
-    # Initialize experiment states
-    experiment_states = {name: {"status": "pending"} for name in experiment_names}
-
-    with Live(_create_progress_table(experiment_states), console=console, refresh_per_second=4) as live:
-        while not stop_event.is_set():
-            # Process all available messages
-            while True:
-                try:
-                    # Non-blocking get with timeout
-                    msg = progress_queue.get(timeout=0.1)
-                    name = msg.get("name")
-                    if name in experiment_states:
-                        experiment_states[name].update(msg)
-                except Exception:
-                    break  # Queue empty or error
-
-            # Update display
-            live.update(_create_progress_table(experiment_states))
-
-        # Final update
-        live.update(_create_progress_table(experiment_states))
 
 
 def run_experiments(
@@ -334,7 +278,7 @@ def run_experiments(
             raise FileNotFoundError(f"Config not found: {path}")
 
     # Determine device strategy and worker count
-    num_gpus = _get_num_gpus()
+    num_gpus = get_num_gpus()
 
     if device == "auto":
         if num_gpus > 0:
@@ -380,13 +324,10 @@ def run_experiments(
     results: list[ExperimentResult] = []
 
     # Start progress display thread
-    stop_event = threading.Event()
-    display_thread = threading.Thread(
-        target=_progress_display_thread,
-        args=(progress_queue, experiment_names, stop_event),
-        daemon=True,
+    progress_display = ProgressDisplayThread(
+        progress_queue, experiment_names, _create_progress_table
     )
-    display_thread.start()
+    progress_display.start()
 
     try:
         if not parallel or max_workers == 1:
@@ -426,8 +367,7 @@ def run_experiments(
                         results.append(result)
     finally:
         # Stop display thread
-        stop_event.set()
-        display_thread.join(timeout=2.0)
+        progress_display.stop()
 
     # Sort results to match input order
     name_to_result = {r.name: r for r in results}
@@ -490,7 +430,7 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
             f"{r.kl_loss:.4f}" if r.kl_loss is not None else "N/A",
             f"{r.epochs_trained}/{r.total_epochs}" if r.total_epochs else str(r.epochs_trained),
             r.device[:8],
-            _format_duration(r.duration_seconds),
+            format_duration(r.duration_seconds),
         ]
 
         row = "  ".join(f"{val:<{width}}" for val, (_, width) in zip(row_values, columns))
@@ -500,7 +440,7 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
     lines.append(separator)
     successful = sum(1 for r in results if r.status == "success")
     total_time = sum(r.duration_seconds for r in results)
-    lines.append(f"Total: {successful}/{len(results)} succeeded in {_format_duration(total_time)}")
+    lines.append(f"Total: {successful}/{len(results)} succeeded in {format_duration(total_time)}")
 
     # Show errors for failed experiments
     if show_errors:
@@ -515,20 +455,6 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
                     lines.append(f"    Log: {r.log_file}")
 
     return "\n".join(lines)
-
-
-def _format_duration(seconds: float) -> str:
-    """Format duration as human-readable string."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    elif seconds < 3600:
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins}m{secs}s"
-    else:
-        hours = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        return f"{hours}h{mins}m"
 
 
 __all__ = [

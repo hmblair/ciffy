@@ -24,12 +24,14 @@ Equivariant Primitives:
     - EquivariantBases: Compute bases for multiple product representations
 
 Layers:
+    - MatrixOutput: Full-rank matrix generation from hidden features
+    - LowRankMatrixOutput: Low-rank factorized matrix generation
+    - RadialWeight: Neural network for tensor product weights
     - EquivariantLinear: Linear layer preserving spherical tensor structure
     - EquivariantGating: Norm-based gating for spherical tensors
     - EquivariantTransition: Feed-forward transition layer
     - EquivariantConvolution: SE(3)-equivariant convolution
     - EquivariantLayerNorm: Equivariant layer normalization
-    - RadialWeight: Neural network for tensor product weights
 
 Attention:
     - Attention: k-NN based multi-head attention
@@ -81,6 +83,8 @@ from .equivariant import (
 )
 from .layers import (
     build_knn_graph,
+    MatrixOutput,
+    LowRankMatrixOutput,
     RadialWeight,
     EquivariantLinear,
     EquivariantGating,
@@ -111,6 +115,8 @@ __all__ = [
     "EquivariantBases",
     # Layers
     "build_knn_graph",
+    "MatrixOutput",
+    "LowRankMatrixOutput",
     "RadialWeight",
     "EquivariantLinear",
     "EquivariantGating",

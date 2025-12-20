@@ -4,21 +4,19 @@ Neural network utilities for ciffy.
 Provides PyTorch-compatible modules for deep learning on molecular structures.
 
 Modules:
-    - dataset: PolymerDataset for loading CIF files
-    - embedding: PolymerEmbedding for learnable embeddings
-    - transformer: Modern transformer with Pre-LN, RoPE, SwiGLU
-    - training: Reusable training utilities
+    - layers: Reusable neural network building blocks (DenseNetwork, Transformer, etc.)
+    - diffusion: Noise schedules, diffusion processes, and EMA utilities
+    - runners: Multi-job experiment and inference runners
     - vae: Variational autoencoder for polymer conformations
-    - dense_network: Simple MLP building block
-    - diffusion: Noise schedules and diffusion process utilities
-    - ema: Exponential moving average for model weights
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
 from .dataset import PolymerDataset
-from .dense_network import DenseNetwork
-from .embedding import PolymerEmbedding
-from .transformer import (
+
+# Layers (moved from root to layers/)
+from .layers import (
+    DenseNetwork,
+    PolymerEmbedding,
     Transformer,
     TransformerBlock,
     MultiHeadAttention,
@@ -26,6 +24,7 @@ from .transformer import (
     RotaryPositionEmbedding,
     SwiGLU,
 )
+
 from .training import (
     ExperimentResult,
     set_seed,
@@ -50,16 +49,23 @@ from .loggers import (
     NoOpLogger,
     create_logger,
 )
-from .experiment_runner import (
+
+# Runners (moved from root to runners/)
+from .runners import (
     run_experiments,
     format_results_table,
+    InferenceResult,
+    run_inference_jobs,
+    format_inference_results_table,
 )
+
 from .protocols import PolymerGenerativeModel, PolymerEncoder
 from .model_registry import register_model, get_model_class
 from .inference import load_model_from_checkpoint, load_vae, generate_samples
 from .inference_config import InferenceConfig
-from .inference_runner import InferenceResult, run_inference_jobs, format_inference_results_table
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder, VAETrainer, VAEConfig
+
+# Diffusion (moved from root to diffusion/)
 from .diffusion import (
     FixedSinusoidalEmbedding,
     NoiseSchedule,
@@ -67,17 +73,20 @@ from .diffusion import (
     CosineNoiseSchedule,
     DiffusionProcess,
     TimestepEmbedding,
+    EMA,
+    create_ema_model,
+    update_ema_model,
+    DiffusionConfig,
+    DiffusionTrainer,
 )
-from .ema import EMA, create_ema_model, update_ema_model
 
 __all__ = [
     # Dataset
     "PolymerDataset",
-    # Dense network
+    # Layers (from layers/)
     "DenseNetwork",
-    # Embedding
     "PolymerEmbedding",
-    # Transformer components
+    # Transformer components (from layers/)
     "Transformer",
     "TransformerBlock",
     "MultiHeadAttention",
@@ -104,7 +113,7 @@ __all__ = [
     "WandbLogger",
     "NoOpLogger",
     "create_logger",
-    # Experiment running
+    # Experiment running (from runners/)
     "ExperimentResult",
     "run_experiments",
     "format_results_table",
@@ -113,7 +122,7 @@ __all__ = [
     "PolymerEncoder",
     "register_model",
     "get_model_class",
-    # Inference utilities
+    # Inference utilities (from runners/)
     "load_model_from_checkpoint",
     "load_vae",
     "generate_samples",
@@ -127,17 +136,20 @@ __all__ = [
     "DihedralDecoder",
     "VAETrainer",
     "VAEConfig",
-    # Diffusion utilities
+    # Diffusion utilities (from diffusion/)
     "FixedSinusoidalEmbedding",
     "NoiseSchedule",
     "LinearNoiseSchedule",
     "CosineNoiseSchedule",
     "DiffusionProcess",
     "TimestepEmbedding",
-    # EMA utilities
+    # EMA utilities (from diffusion/)
     "EMA",
     "create_ema_model",
     "update_ema_model",
+    # Diffusion trainer (from diffusion/)
+    "DiffusionConfig",
+    "DiffusionTrainer",
 ]
 
 # Optional geometric deep learning module
@@ -148,6 +160,8 @@ try:
         ProductRepr,
         Irrep,
         ProductIrrep,
+        MatrixOutput,
+        LowRankMatrixOutput,
         EquivariantLinear,
         EquivariantTransformer,
         EquivariantAttention,
@@ -162,6 +176,8 @@ try:
         "ProductRepr",
         "Irrep",
         "ProductIrrep",
+        "MatrixOutput",
+        "LowRankMatrixOutput",
         "EquivariantLinear",
         "EquivariantTransformer",
         "EquivariantAttention",

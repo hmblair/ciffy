@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from ciffy.nn.dense_network import DenseNetwork
+from ciffy.nn.layers.dense_network import DenseNetwork
 from ciffy.nn.geometric.representations import Irrep, ProductIrrep, Repr, ProductRepr
 
 

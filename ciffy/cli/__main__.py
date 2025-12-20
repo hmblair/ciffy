@@ -216,7 +216,7 @@ def _experiment_command(args):
 
     from glob import glob
 
-    from ciffy.nn.experiment_runner import format_results_table, run_experiments
+    from ciffy.nn.runners import format_results_table, run_experiments
 
     # Expand glob patterns in config paths
     config_paths = []
@@ -289,7 +289,7 @@ def _inference_command(args):
 
     from glob import glob
 
-    from ciffy.nn.inference_runner import format_inference_results_table, run_inference_jobs
+    from ciffy.nn.runners import format_inference_results_table, run_inference_jobs
 
     # Expand glob patterns in config paths
     config_paths = []

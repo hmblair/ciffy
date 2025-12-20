@@ -16,8 +16,8 @@ except ImportError:
     nn = None
 
 from .distributions import sincos_encode, MAX_DIHEDRALS_PER_RESIDUE
-from ..transformer import Transformer
-from ..embedding import PolymerEmbedding
+from ..layers.transformer import Transformer
+from ..layers.embedding import PolymerEmbedding
 from ...types import Scale
 
 if TYPE_CHECKING:

@@ -64,7 +64,7 @@ from typing import Tuple
 import torch
 from torch import nn
 
-from .dense_network import DenseNetwork
+from ..layers.dense_network import DenseNetwork
 
 
 class FixedSinusoidalEmbedding(nn.Module):

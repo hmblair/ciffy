@@ -380,6 +380,134 @@ def _apply_protein_dihedrals_partial(
 
 
 # =============================================================================
+# Unified Helper Functions for Langevin Sampling
+# =============================================================================
+
+
+def _get_pairwise_distances(
+    polymer: "Polymer",
+    current_res_idx: int,
+    back_residues: int = 2,
+) -> np.ndarray:
+    """
+    Get pairwise distances for current residue vs previous residues.
+
+    Excludes the immediately adjacent residues (bonded neighbors).
+
+    Args:
+        polymer: Polymer with reconstructed coordinates.
+        current_res_idx: Index of current residue.
+        back_residues: Number of residues to exclude from the back (default 2).
+
+    Returns:
+        Flattened 1D array of pairwise distances, or empty array if no previous residues.
+    """
+    if current_res_idx <= back_residues:
+        return np.array([])
+
+    curr_atoms = polymer.by_residue_index(current_res_idx)
+    prev_indices = list(range(current_res_idx - back_residues))
+    prev_atoms = polymer.by_residue_index(prev_indices)
+
+    return _filter_and_compute_distances(curr_atoms, prev_atoms)
+
+
+def _filter_and_compute_distances(
+    curr_atoms: "Polymer",
+    prev_atoms: "Polymer",
+) -> np.ndarray:
+    """
+    Filter atoms to heavy atoms only and compute pairwise distances.
+
+    Args:
+        curr_atoms: Current residue atom collection.
+        prev_atoms: Previous residue(s) atom collection.
+
+    Returns:
+        Flattened 1D array of pairwise distances, or empty array if no atoms.
+    """
+    from ..biochemistry import Element
+    from ..backend.ops import cdist
+
+    # Filter to heavy atoms only
+    curr_mask = curr_atoms.elements != Element.H
+    prev_mask = prev_atoms.elements != Element.H
+
+    curr_heavy = curr_atoms[curr_mask]
+    prev_heavy = prev_atoms[prev_mask]
+
+    if curr_heavy.size() == 0 or prev_heavy.size() == 0:
+        return np.array([])
+
+    distances = cdist(curr_heavy.coordinates, prev_heavy.coordinates)
+    return distances.flatten()
+
+
+def _apply_dihedrals(
+    polymer: "Polymer",
+    dihedral_dict: dict,
+) -> None:
+    """
+    Apply dihedrals to polymer from a dictionary mapping DihedralType to values.
+
+    Automatically filters NaN values, applies to polymer, and reconstructs coordinates.
+    Works for any number of dihedral types (protein, RNA, or custom).
+
+    Args:
+        polymer: Polymer to modify (in-place).
+        dihedral_dict: Dict mapping DihedralType -> list of angle values (may contain NaN).
+    """
+    from ..types import DihedralType
+
+    for dtype, values in dihedral_dict.items():
+        valid_values = np.array([v for v in values if not np.isnan(v)])
+        if len(valid_values) > 0:
+            try:
+                polymer.set_dihedral(dtype, valid_values)
+            except (ValueError, KeyError):
+                # Dihedral type may not be defined for this polymer
+                pass
+
+    # Force coordinate reconstruction
+    _ = polymer.coordinates
+
+
+def _apply_terminal_constraints(
+    candidate_dihedrals: dict,
+    res_idx: int,
+    n_residues: int,
+    molecule_type: "Molecule",
+) -> None:
+    """
+    Apply terminal NaN constraints based on molecule type.
+
+    Modifies candidate_dihedrals in-place to set terminal dihedrals to NaN
+    where they cannot be defined (N-terminus, C-terminus, etc.).
+
+    Args:
+        candidate_dihedrals: Dict mapping DihedralType -> scalar value.
+        res_idx: Current residue index.
+        n_residues: Total number of residues.
+        molecule_type: Molecule type (PROTEIN, RNA, or DNA).
+    """
+    from ..types import DihedralType, Molecule
+
+    if molecule_type == Molecule.PROTEIN:
+        if res_idx == 0:
+            candidate_dihedrals[DihedralType.PHI] = np.nan
+        if res_idx == n_residues - 1:
+            candidate_dihedrals[DihedralType.PSI] = np.nan
+            candidate_dihedrals[DihedralType.OMEGA] = np.nan
+
+    elif molecule_type in (Molecule.RNA, Molecule.DNA):
+        if res_idx == 0:
+            candidate_dihedrals[DihedralType.ALPHA] = np.nan
+        if res_idx == n_residues - 1:
+            candidate_dihedrals[DihedralType.EPSILON] = np.nan
+            candidate_dihedrals[DihedralType.ZETA] = np.nan
+
+
+# =============================================================================
 # Protein Autoregressive Sampling
 # =============================================================================
 
@@ -906,8 +1034,6 @@ def sample_protein_autoregressive_langevin(
             def evaluator(angles: np.ndarray) -> np.ndarray:
                 """Apply angles to polymer and return pairwise distances for clash energy."""
                 from ..types import DihedralType
-                from ..backend.ops import cdist
-                from ..biochemistry import Element
 
                 # angles is (phi, psi) for this residue
                 phi, psi = float(angles[0]), float(angles[1])
@@ -918,52 +1044,15 @@ def sample_protein_autoregressive_langevin(
                 full_psi = prev_psi + [psi]
                 full_omega = prev_omega + [omega]
 
-                # Set phi (all except first residue)
-                phi_to_set = np.array([v for v in full_phi[1:] if not np.isnan(v)])
-                if len(phi_to_set) > 0:
-                    try:
-                        poly.set_dihedral(DihedralType.PHI, phi_to_set)
-                    except (ValueError, KeyError):
-                        pass
+                # Apply dihedrals using helper function
+                _apply_dihedrals(poly, {
+                    DihedralType.PHI: full_phi[1:],  # Skip first (undefined at N-terminus)
+                    DihedralType.PSI: full_psi[:-1],  # Skip last (undefined at C-terminus)
+                    DihedralType.OMEGA: full_omega[:-1],  # Skip last
+                })
 
-                # Set psi (all except last residue)
-                psi_to_set = np.array([v for v in full_psi[:-1] if not np.isnan(v)])
-                if len(psi_to_set) > 0:
-                    try:
-                        poly.set_dihedral(DihedralType.PSI, psi_to_set)
-                    except (ValueError, KeyError):
-                        pass
-
-                # Set omega (all except last residue)
-                omega_to_set = np.array([v for v in full_omega[:-1] if not np.isnan(v)])
-                if len(omega_to_set) > 0:
-                    try:
-                        poly.set_dihedral(DihedralType.OMEGA, omega_to_set)
-                    except (ValueError, KeyError):
-                        pass
-
-                # Reconstruct coordinates
-                _ = poly.coordinates
-
-                # Return pairwise distances with previous residues
-                if res_idx == 0:
-                    return np.array([])
-
-                curr_atoms = poly.by_residue_index(res_idx)
-                prev_atoms = poly.by_residue_index(list(range(res_idx)))
-
-                # Filter to heavy atoms only
-                curr_mask = curr_atoms.elements != Element.H
-                prev_mask = prev_atoms.elements != Element.H
-
-                curr_atoms_heavy = curr_atoms[curr_mask]
-                prev_atoms_heavy = prev_atoms[prev_mask]
-
-                if curr_atoms_heavy.size() == 0 or prev_atoms_heavy.size() == 0:
-                    return np.array([])
-
-                distances = cdist(curr_atoms_heavy.coordinates, prev_atoms_heavy.coordinates)
-                return distances.flatten()  # Return as 1D array
+                # Return pairwise distances (helper function handles back_residues exclusion)
+                return _get_pairwise_distances(poly, res_idx, back_residues=2)
 
             return evaluator
 
@@ -990,39 +1079,25 @@ def sample_protein_autoregressive_langevin(
         psi = refined_angles[1]
         omega = rng.normal(np.pi, 0.05)
 
-        # Handle terminal constraints
-        if res_idx == 0:
-            phi = np.nan
-        if res_idx == n_residues - 1:
-            psi = np.nan
-            omega = np.nan
+        # Build candidate dihedral dict and apply terminal constraints
+        candidate_dihedrals = {
+            DihedralType.PHI: phi,
+            DihedralType.PSI: psi,
+            DihedralType.OMEGA: omega,
+        }
+        _apply_terminal_constraints(candidate_dihedrals, res_idx, n_residues, Molecule.PROTEIN)
 
         # Accept angles for this residue
-        phi_list.append(phi)
-        psi_list.append(psi)
-        omega_list.append(omega)
+        phi_list.append(candidate_dihedrals[DihedralType.PHI])
+        psi_list.append(candidate_dihedrals[DihedralType.PSI])
+        omega_list.append(candidate_dihedrals[DihedralType.OMEGA])
 
     # Apply final dihedrals to polymer
-    phi_to_set = np.array([v for v in phi_list[1:] if not np.isnan(v)])
-    if len(phi_to_set) > 0:
-        try:
-            polymer.set_dihedral(DihedralType.PHI, phi_to_set)
-        except (ValueError, KeyError):
-            pass
-
-    psi_to_set = np.array([v for v in psi_list[:-1] if not np.isnan(v)])
-    if len(psi_to_set) > 0:
-        try:
-            polymer.set_dihedral(DihedralType.PSI, psi_to_set)
-        except (ValueError, KeyError):
-            pass
-
-    omega_to_set = np.array([v for v in omega_list[:-1] if not np.isnan(v)])
-    if len(omega_to_set) > 0:
-        try:
-            polymer.set_dihedral(DihedralType.OMEGA, omega_to_set)
-        except (ValueError, KeyError):
-            pass
+    _apply_dihedrals(polymer, {
+        DihedralType.PHI: phi_list[1:],  # Skip first (undefined at N-terminus)
+        DihedralType.PSI: psi_list[:-1],  # Skip last (undefined at C-terminus)
+        DihedralType.OMEGA: omega_list[:-1],  # Skip last
+    })
 
     return polymer
 
@@ -1065,8 +1140,6 @@ def sample_rna_autoregressive_langevin(
     """
     from ..types import DihedralType, Scale, Molecule
     from ..biochemistry import Residue as ResidueEnum
-    from ..backend.ops import cdist
-    from ..biochemistry import Element
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
 
@@ -1124,37 +1197,11 @@ def sample_rna_autoregressive_langevin(
                     DihedralType.CHI_PYRIMIDINE: prev_dihedrals[DihedralType.CHI_PYRIMIDINE] + [chi],
                 }
 
-                # Apply all dihedrals
-                for dtype, values in full_dihedrals.items():
-                    valid_values = [v for v in values if not np.isnan(v)]
-                    if valid_values:
-                        try:
-                            poly.set_dihedral(dtype, np.array(valid_values))
-                        except (ValueError, KeyError):
-                            pass
+                # Apply dihedrals using helper function
+                _apply_dihedrals(poly, full_dihedrals)
 
-                # Reconstruct coordinates
-                _ = poly.coordinates
-
-                # Return pairwise distances with previous residues
-                if res_idx == 0:
-                    return np.array([])
-
-                curr_atoms = poly.by_residue_index(res_idx)
-                prev_atoms = poly.by_residue_index(list(range(res_idx)))
-
-                # Filter to heavy atoms only
-                curr_mask = curr_atoms.elements != Element.H
-                prev_mask = prev_atoms.elements != Element.H
-
-                curr_atoms_heavy = curr_atoms[curr_mask]
-                prev_atoms_heavy = prev_atoms[prev_mask]
-
-                if curr_atoms_heavy.size() == 0 or prev_atoms_heavy.size() == 0:
-                    return np.array([])
-
-                distances = cdist(curr_atoms_heavy.coordinates, prev_atoms_heavy.coordinates)
-                return distances.flatten()  # Return as 1D array
+                # Return pairwise distances (helper function handles back_residues exclusion)
+                return _get_pairwise_distances(poly, res_idx, back_residues=2)
 
             return evaluator
 
@@ -1195,25 +1242,15 @@ def sample_rna_autoregressive_langevin(
                 _registry, res_idx, n_residues, res_enum, rng
             )
 
-        # Set terminal NaN
-        if res_idx == 0:
-            candidate_dihedrals[DihedralType.ALPHA] = np.nan
-        if res_idx == n_residues - 1:
-            candidate_dihedrals[DihedralType.EPSILON] = np.nan
-            candidate_dihedrals[DihedralType.ZETA] = np.nan
+        # Apply terminal NaN constraints
+        _apply_terminal_constraints(candidate_dihedrals, res_idx, n_residues, Molecule.RNA)
 
         # Accept dihedrals for this residue
         for dtype in dihedral_lists:
             dihedral_lists[dtype].append(candidate_dihedrals[dtype])
 
-    # Apply final dihedrals to polymer
-    for dtype, values in dihedral_lists.items():
-        valid_values = [v for v in values if not np.isnan(v)]
-        if valid_values:
-            try:
-                polymer.set_dihedral(dtype, np.array(valid_values))
-            except (ValueError, KeyError):
-                pass
+    # Apply final dihedrals to polymer using helper
+    _apply_dihedrals(polymer, dihedral_lists)
 
     return polymer
 

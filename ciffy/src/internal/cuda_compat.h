@@ -89,4 +89,28 @@
 #define CIFFY_PI 3.14159265358979323846f
 #endif
 
+/* ========================================================================= */
+/* CUDA error checking                                                       */
+/* ========================================================================= */
+
+#ifdef __CUDACC__
+#include <stdio.h>
+#include <stdlib.h>
+
+/**
+ * Check for CUDA errors after kernel launches.
+ * Call this immediately after any kernel launch to detect launch failures,
+ * invalid arguments, or device errors.
+ */
+#define CIFFY_CUDA_CHECK_KERNEL() do { \
+    cudaError_t err = cudaGetLastError(); \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CIFFY CUDA error in %s at line %d: %s\n", \
+                __FILE__, __LINE__, cudaGetErrorString(err)); \
+        abort(); \
+    } \
+} while (0)
+
+#endif /* __CUDACC__ */
+
 #endif /* CIFFY_CUDA_COMPAT_H */

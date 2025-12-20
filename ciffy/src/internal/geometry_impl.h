@@ -320,8 +320,31 @@ static inline void nerf_place_in_plane_anchored_impl(
     float perpx = ny*uz - nz*uy;
     float perpy = nz*ux - nx*uz;
     float perpz = nx*uy - ny*ux;
-    float perp_norm = CIFFY_SQRTF(perpx*perpx + perpy*perpy + perpz*perpz) + CIFFY_EPS;
-    perpx /= perp_norm; perpy /= perp_norm; perpz /= perp_norm;
+    float perp_norm = CIFFY_SQRTF(perpx*perpx + perpy*perpy + perpz*perpz);
+
+    if (perp_norm < CIFFY_EPS) {
+        /* plane_normal is parallel to u - use fallback perpendicular.
+         * This occurs when the three anchor points are collinear. */
+        float fx = -uy;
+        float fy = ux;
+        float fz = 0.0f;
+        float fn = CIFFY_SQRTF(fx*fx + fy*fy + fz*fz);
+
+        if (fn < CIFFY_EPS) {
+            /* u is parallel to z-axis, use x-axis cross u */
+            fx = 0.0f;
+            fy = uz;
+            fz = -uy;
+            fn = CIFFY_SQRTF(fx*fx + fy*fy + fz*fz);
+        }
+        fn += CIFFY_EPS;
+        perpx = fx / fn;
+        perpy = fy / fn;
+        perpz = fz / fn;
+    } else {
+        perp_norm += CIFFY_EPS;
+        perpx /= perp_norm; perpy /= perp_norm; perpz /= perp_norm;
+    }
 
     /* Check if perp points toward anchor2; if not, flip it.
      * The cross product can give either direction, so we must ensure
@@ -470,10 +493,21 @@ static inline void compute_dihedral_backward_impl(
     float x = n1hx*n2hx + n1hy*n2hy + n1hz*n2hz;
     float y = m1x*n2hx + m1y*n2hy + m1z*n2hz;
 
-    /* Backward pass */
-    float denom = x*x + y*y + CIFFY_EPS;
-    float grad_y = grad_output * x / denom;
-    float grad_x = grad_output * (-y) / denom;
+    /* Backward pass for atan2(y, x) */
+    float denom = x*x + y*y;
+    float grad_y, grad_x;
+
+    if (denom < CIFFY_EPS * CIFFY_EPS) {
+        /* Near singularity: both x and y are near zero.
+         * This happens with collinear atoms (undefined dihedral).
+         * Return zero gradients - no meaningful direction to optimize. */
+        grad_y = 0.0f;
+        grad_x = 0.0f;
+    } else {
+        denom += CIFFY_EPS;
+        grad_y = grad_output * x / denom;
+        grad_x = grad_output * (-y) / denom;
+    }
 
     float gn1h_x = grad_x * n2hx;
     float gn1h_y = grad_x * n2hy;

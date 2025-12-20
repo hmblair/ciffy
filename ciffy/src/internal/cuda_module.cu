@@ -38,7 +38,7 @@ void cuda_batch_nerf_reconstruct_leveled_anchored(
     float *d_coords, size_t n_atoms,
     const int64_t *d_indices, size_t n_entries,
     const float *d_internal,       /* (n_entries, 3) */
-    const int *component_offsets, int n_components,
+    const int32_t *component_offsets, int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
     cudaStream_t stream);
@@ -49,7 +49,7 @@ void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
     const float *d_internal,       /* (n_entries, 3) */
     float *d_grad_coords,
     float *d_grad_internal,        /* (n_entries, 3) output */
-    const int *component_offsets, int n_components,
+    const int32_t *component_offsets, int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
     cudaStream_t stream);
@@ -218,7 +218,7 @@ torch::Tensor cuda_nerf_reconstruct_leveled_anchored(
         indices.data_ptr<int64_t>(),
         (size_t)n_entries,
         internal.data_ptr<float>(),
-        component_offsets.data_ptr<int>(),
+        component_offsets.data_ptr<int32_t>(),
         n_components,
         anchor_coords.data_ptr<float>(),
         component_ids.data_ptr<int32_t>(),
@@ -289,7 +289,7 @@ std::vector<torch::Tensor> cuda_nerf_reconstruct_backward_leveled_anchored(
         internal.data_ptr<float>(),
         grad_coords_accum.data_ptr<float>(),
         grad_internal.data_ptr<float>(),
-        component_offsets.data_ptr<int>(),
+        component_offsets.data_ptr<int32_t>(),
         n_components,
         anchor_coords.data_ptr<float>(),
         component_ids.data_ptr<int32_t>(),

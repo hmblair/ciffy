@@ -108,13 +108,24 @@ void batch_cartesian_to_internal_backward(
     const float *grad_internal,
     float *grad_coords
 ) {
-    /* Parallel with atomic accumulation since multiple entries reference same atoms */
+    /*
+     * Parallel with atomic accumulation since multiple entries reference same atoms.
+     *
+     * Note: While three separate atomic operations per coordinate could allow
+     * inconsistent intermediate reads, this is safe because:
+     * 1. grad_coords is only written to (accumulated), never read during this loop
+     * 2. OpenMP guarantees a barrier at pragma omp parallel for completion
+     * 3. Caller reads final results only after this function returns
+     */
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static)
 #endif
     for (size_t i = 0; i < n_entries; i++) {
-        /* Thread-local gradient storage */
-        float grad_atom[3], grad_ref1[3], grad_ref2[3], grad_ref3[3];
+        /* Thread-local gradient storage - initialized for safety */
+        float grad_atom[3] = {0.0f, 0.0f, 0.0f};
+        float grad_ref1[3] = {0.0f, 0.0f, 0.0f};
+        float grad_ref2[3] = {0.0f, 0.0f, 0.0f};
+        float grad_ref3[3] = {0.0f, 0.0f, 0.0f};
 
         int64_t atom_idx = indices[i * 4 + 0];
         int64_t dist_ref = indices[i * 4 + 1];

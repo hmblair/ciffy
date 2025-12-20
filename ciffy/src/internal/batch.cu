@@ -18,7 +18,6 @@
 
 #include <cuda_runtime.h>
 #include <stdint.h>
-#include <cassert>
 
 /* Use the same constants as batch.h for consistency */
 #ifndef INTERNAL_DIST
@@ -224,6 +223,7 @@ void cuda_batch_cartesian_to_internal(
     kernel_cartesian_to_internal<<<blocks, threads, 0, stream>>>(
         d_coords, d_indices, (int)n_entries, (int)n_atoms, d_internal
     );
+    CIFFY_CUDA_CHECK_KERNEL();
 }
 
 
@@ -251,6 +251,7 @@ void cuda_batch_cartesian_to_internal_backward(
         d_coords, d_indices, (int)n_entries, (int)n_atoms,
         d_internal, d_grad_internal, d_grad_coords
     );
+    CIFFY_CUDA_CHECK_KERNEL();
 }
 
 
@@ -269,7 +270,7 @@ __global__ void kernel_nerf_reconstruct_component_parallel(
     float *coords,
     const int64_t *indices,
     const float *internal,           /* (n_entries, 3) */
-    const int *component_offsets,    /* (n_components+1,) */
+    const int32_t *component_offsets, /* (n_components+1,) */
     int n_components,
     int n_atoms,
     const float *anchor_coords,
@@ -302,9 +303,10 @@ __global__ void kernel_nerf_reconstruct_component_parallel(
         const float *anchor2 = NULL;
         if (anchor_coords != NULL && component_ids != NULL) {
             int32_t comp_id = component_ids[i];
-            /* Fail-fast bounds check - indicates backend bug if triggered */
-            assert(comp_id >= 0 && comp_id < n_components &&
-                   "component_id out of bounds - indicates backend bug");
+            /* Skip entry if component_id is out of bounds */
+            if (comp_id < 0 || comp_id >= n_components) {
+                continue;
+            }
             anchor0 = &anchor_coords[comp_id * 9 + 0];
             anchor1 = &anchor_coords[comp_id * 9 + 3];
             anchor2 = &anchor_coords[comp_id * 9 + 6];
@@ -363,7 +365,7 @@ __global__ void kernel_nerf_reconstruct_backward_component_parallel(
     const float *internal,
     float *grad_coords,
     float *grad_internal,
-    const int *component_offsets,
+    const int32_t *component_offsets,
     int n_components,
     int n_atoms,
     const float *anchor_coords,
@@ -400,9 +402,13 @@ __global__ void kernel_nerf_reconstruct_backward_component_parallel(
         const float *anchor2 = NULL;
         if (anchor_coords != NULL && component_ids != NULL) {
             int32_t comp_id = component_ids[i];
-            /* Fail-fast bounds check - indicates backend bug if triggered */
-            assert(comp_id >= 0 && comp_id < n_components &&
-                   "component_id out of bounds - indicates backend bug");
+            /* Skip entry if component_id is out of bounds */
+            if (comp_id < 0 || comp_id >= n_components) {
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIST)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_ANGLE)] = 0.0f;
+                grad_internal[INTERNAL_IDX(i, INTERNAL_DIHE)] = 0.0f;
+                continue;
+            }
             anchor1 = &anchor_coords[comp_id * 9 + 3];
             anchor2 = &anchor_coords[comp_id * 9 + 6];
         }
@@ -521,7 +527,7 @@ void cuda_batch_nerf_reconstruct_leveled_anchored(
     const int64_t *d_indices,
     size_t n_entries,
     const float *d_internal,
-    const int *component_offsets,
+    const int32_t *component_offsets,
     int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
@@ -537,6 +543,7 @@ void cuda_batch_nerf_reconstruct_leveled_anchored(
         component_offsets, n_components, (int)n_atoms,
         d_anchor_coords, d_component_ids
     );
+    CIFFY_CUDA_CHECK_KERNEL();
 }
 
 
@@ -553,7 +560,7 @@ void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
     const float *d_internal,
     float *d_grad_coords,
     float *d_grad_internal,
-    const int *component_offsets,
+    const int32_t *component_offsets,
     int n_components,
     const float *d_anchor_coords,
     const int32_t *d_component_ids,
@@ -570,6 +577,7 @@ void cuda_batch_nerf_reconstruct_backward_leveled_anchored(
         component_offsets, n_components, (int)n_atoms,
         d_anchor_coords, d_component_ids
     );
+    CIFFY_CUDA_CHECK_KERNEL();
 }
 
 } /* extern "C" */

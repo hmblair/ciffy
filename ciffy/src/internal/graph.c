@@ -326,6 +326,10 @@ static int64_t find_residue_for_atom(
     const int64_t *residue_starts,
     int64_t n_residues
 ) {
+    /* Guard against empty residue array */
+    if (n_residues <= 0) {
+        return -1;
+    }
     int64_t lo = 0, hi = n_residues;
     while (lo < hi) {
         int64_t mid = lo + (hi - lo) / 2;
@@ -515,6 +519,17 @@ int edges_to_csr(
     int64_t *out_offsets,
     int64_t *out_neighbors
 ) {
+    /* Validate input sizes */
+    if (n_atoms < 0 || n_edges < 0) {
+        return -1;
+    }
+
+    /* Handle edge case of zero atoms */
+    if (n_atoms == 0) {
+        out_offsets[0] = 0;
+        return 0;
+    }
+
     /* Initialize offsets to zero */
     memset(out_offsets, 0, (size_t)(n_atoms + 1) * sizeof(int64_t));
 
@@ -610,6 +625,17 @@ int64_t build_zmatrix_from_csr(
     int64_t *queue = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
     int32_t *level = (int32_t *)calloc((size_t)chain_size, sizeof(int32_t));  /* BFS level */
 
+    /* Check base allocations FIRST before any conditional allocations */
+    if (!parent || !grandparent || !visited || !order || !queue || !level) {
+        free(parent);
+        free(grandparent);
+        free(visited);
+        free(order);
+        free(queue);
+        free(level);
+        return -1;
+    }
+
     /* Placed array for dihedral resolution (indexed by GLOBAL atom index) */
     int8_t *placed = NULL;
     if (dihedral_aware) {
@@ -623,17 +649,6 @@ int64_t build_zmatrix_from_csr(
             free(level);
             return -1;
         }
-    }
-
-    if (!parent || !grandparent || !visited || !order || !queue || !level) {
-        free(parent);
-        free(grandparent);
-        free(visited);
-        free(order);
-        free(queue);
-        free(level);
-        free(placed);
-        return -1;
     }
 
     /* Initialize parent and grandparent to -1 (only chain_size elements) */
@@ -1149,13 +1164,29 @@ int64_t build_canonical_zmatrix_c(
     /* Compute residue start indices (cumulative sum of res_sizes) */
     residue_starts[0] = 0;
     for (int64_t r = 0; r < n_residues; r++) {
-        residue_starts[r + 1] = residue_starts[r] + res_sizes[r];
+        int64_t prev = residue_starts[r];
+        int64_t size = res_sizes[r];
+        /* Check for overflow */
+        if (size > 0 && prev > INT64_MAX - size) {
+            free(residue_starts);
+            free(chain_res_starts);
+            return -1;
+        }
+        residue_starts[r + 1] = prev + size;
     }
 
     /* Compute chain start residue indices (cumulative sum of chain_lengths) */
     chain_res_starts[0] = 0;
     for (int64_t c = 0; c < n_chains; c++) {
-        chain_res_starts[c + 1] = chain_res_starts[c] + chain_lengths[c];
+        int64_t prev = chain_res_starts[c];
+        int64_t len = chain_lengths[c];
+        /* Check for overflow */
+        if (len > 0 && prev > INT64_MAX - len) {
+            free(residue_starts);
+            free(chain_res_starts);
+            return -1;
+        }
+        chain_res_starts[c + 1] = prev + len;
     }
 
     /* Process atoms in natural order */

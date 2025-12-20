@@ -9,9 +9,14 @@ Modules:
     - transformer: Modern transformer with Pre-LN, RoPE, SwiGLU
     - training: Reusable training utilities
     - vae: Variational autoencoder for polymer conformations
+    - dense_network: Simple MLP building block
+    - diffusion: Noise schedules and diffusion process utilities
+    - ema: Exponential moving average for model weights
+    - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
 from .dataset import PolymerDataset
+from .dense_network import DenseNetwork
 from .embedding import PolymerEmbedding
 from .transformer import (
     Transformer,
@@ -55,10 +60,21 @@ from .inference import load_model_from_checkpoint, load_vae, generate_samples
 from .inference_config import InferenceConfig
 from .inference_runner import InferenceResult, run_inference_jobs, format_inference_results_table
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder, VAETrainer, VAEConfig
+from .diffusion import (
+    FixedSinusoidalEmbedding,
+    NoiseSchedule,
+    LinearNoiseSchedule,
+    CosineNoiseSchedule,
+    DiffusionProcess,
+    TimestepEmbedding,
+)
+from .ema import EMA, create_ema_model, update_ema_model
 
 __all__ = [
     # Dataset
     "PolymerDataset",
+    # Dense network
+    "DenseNetwork",
     # Embedding
     "PolymerEmbedding",
     # Transformer components
@@ -111,4 +127,50 @@ __all__ = [
     "DihedralDecoder",
     "VAETrainer",
     "VAEConfig",
+    # Diffusion utilities
+    "FixedSinusoidalEmbedding",
+    "NoiseSchedule",
+    "LinearNoiseSchedule",
+    "CosineNoiseSchedule",
+    "DiffusionProcess",
+    "TimestepEmbedding",
+    # EMA utilities
+    "EMA",
+    "create_ema_model",
+    "update_ema_model",
 ]
+
+# Optional geometric deep learning module
+# Requires sphericart: pip install ciffy[geometric]
+try:
+    from .geometric import (
+        Repr,
+        ProductRepr,
+        Irrep,
+        ProductIrrep,
+        EquivariantLinear,
+        EquivariantTransformer,
+        EquivariantAttention,
+        EquivariantTransformerBlock,
+        SphericalHarmonic,
+        RadialBasisFunctions,
+        build_knn_graph,
+    )
+    GEOMETRIC_AVAILABLE = True
+    __all__.extend([
+        "Repr",
+        "ProductRepr",
+        "Irrep",
+        "ProductIrrep",
+        "EquivariantLinear",
+        "EquivariantTransformer",
+        "EquivariantAttention",
+        "EquivariantTransformerBlock",
+        "SphericalHarmonic",
+        "RadialBasisFunctions",
+        "build_knn_graph",
+        "GEOMETRIC_AVAILABLE",
+    ])
+except ImportError:
+    GEOMETRIC_AVAILABLE = False
+    __all__.append("GEOMETRIC_AVAILABLE")

@@ -26,8 +26,9 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 torch = ["torch"]
+geometric = ["sphericart[torch]"]
 vis = ["matplotlib"]
-dev = ["pytest", "pytest-xdist", "torch", "matplotlib"]
+dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "sphericart[torch]"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"
@@ -47,6 +48,7 @@ packages = [
     "ciffy.io",
     "ciffy.nn",
     "ciffy.nn.vae",
+    "ciffy.nn.geometric",
     "ciffy.visualize",
     "ciffy.cli",
     "ciffy.internal",

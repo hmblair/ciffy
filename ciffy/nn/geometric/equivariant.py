@@ -1,0 +1,541 @@
+"""Equivariant neural network primitives.
+
+This module provides neural network layers and operations that are equivariant to
+3D rotations (SO(3)). These are the building blocks for constructing
+rotation-equivariant networks for 3D data like molecules and point clouds.
+
+Classes:
+    RepNorm: Compute norms of spherical tensor components
+    SphericalHarmonic: Compute spherical harmonics features
+    RadialBasisFunctions: Learnable radial basis function expansion
+    SequencePositionEncoding: Sinusoidal encoding for relative sequence positions
+    EquivariantBasis: Compute equivariant basis matrices for a product representation
+    EquivariantBases: Compute equivariant bases for multiple product representations
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+import torch
+import torch.nn as nn
+
+from .representations import Repr, ProductRepr
+
+# Dimension constants for spherical tensor indexing
+FEATURE_DIM = -2  # Multiplicity dimension
+REPR_DIM = -1     # Representation dimension
+
+# Lazy import for sphericart
+_sphericart: Any = None
+_sphericart_available: bool | None = None
+
+
+def _get_sphericart() -> Any:
+    """Lazily import sphericart and cache the result."""
+    global _sphericart, _sphericart_available
+
+    if _sphericart_available is None:
+        try:
+            import sphericart.torch as sc
+            _sphericart = sc
+            _sphericart_available = True
+        except ImportError:
+            _sphericart_available = False
+
+    return _sphericart
+
+
+class RepNorm(nn.Module):
+    """Compute norms of spherical tensor components.
+
+    For a spherical tensor with multiple irrep components, computes
+    the norm of each component separately. This produces rotation-invariant
+    features that can be used for gating or as input to invariant networks.
+
+    Args:
+        repr: The representation specifying the tensor structure.
+
+    Example:
+        >>> repr = Repr(lvals=[0, 1, 2])  # scalar + vector + rank-2
+        >>> norm = RepNorm(repr)
+        >>> st = torch.randn(32, 9)  # batch of spherical tensors
+        >>> norms = norm(st)  # shape: (32, 3) - one norm per irrep
+    """
+
+    def __init__(self: RepNorm, repr: Repr) -> None:
+        super().__init__()
+        self.nreps = repr.nreps()
+        # Store split sizes for torch.split (compile-friendly)
+        cdims = repr.cumdims()
+        self.split_sizes = [cdims[i + 1] - cdims[i] for i in range(self.nreps)]
+
+    def forward(self: RepNorm, st: torch.Tensor) -> torch.Tensor:
+        """Compute the norm of each irrep component.
+
+        Uses torch.split + explicit squared sum for torch.compile compatibility.
+        Note: .norm(dim=-1) has FakeTensor shape inference issues with compile.
+
+        Args:
+            st: Spherical tensor of shape (..., dim).
+
+        Returns:
+            Norms of shape (..., nreps).
+        """
+        # Split along last dimension into irrep components
+        components = torch.split(st, self.split_sizes, dim=-1)
+        # Compute squared norm of each component (explicit multiply avoids .norm() compile issues)
+        sq_norms = [(c * c).sum(dim=-1) for c in components]
+        # Stack and take sqrt
+        return torch.stack(sq_norms, dim=-1).sqrt()
+
+
+class SphericalHarmonic(nn.Module):
+    """Compute spherical harmonic features for 3D coordinates.
+
+    Spherical harmonics form a complete orthonormal basis for functions
+    on the sphere. They are the natural features for SO(3)-equivariant
+    networks, as they transform predictably under rotations.
+
+    Uses the sphericart library for efficient computation.
+
+    Args:
+        lmax: Maximum degree of spherical harmonics to compute.
+            Total features = (lmax + 1)^2.
+        normalized: If True, compute normalized spherical harmonics.
+
+    Raises:
+        ImportError: If sphericart is not installed.
+
+    Example:
+        >>> sh = SphericalHarmonic(lmax=3)
+        >>> coords = torch.randn(100, 3)
+        >>> features = sh(coords)  # shape: (100, 16)
+    """
+
+    def __init__(
+        self: SphericalHarmonic,
+        lmax: int,
+        normalized: bool = True,
+    ) -> None:
+        super().__init__()
+
+        if not isinstance(lmax, int) or lmax < 0:
+            raise ValueError(f"lmax must be a non-negative integer, got {lmax}")
+
+        sc = _get_sphericart()
+        if sc is None:
+            raise ImportError(
+                "sphericart is required for SphericalHarmonic. "
+                "Install with: pip install sphericart"
+            )
+
+        self.sh = sc.SphericalHarmonics(lmax, normalized)
+        self.lmax = lmax
+
+        # Index permutation for sphericart coordinate convention
+        self.register_buffer('ix', torch.tensor([2, 0, 1], dtype=torch.int64))
+
+    def forward(self: SphericalHarmonic, x: torch.Tensor) -> torch.Tensor:
+        """Compute spherical harmonic features for points.
+
+        Args:
+            x: Coordinates of shape (..., N, 3).
+
+        Returns:
+            Spherical harmonic features of shape (..., N, (lmax+1)^2).
+            NaN values (from zero vectors) are replaced with zeros.
+        """
+        *b, n, _ = x.shape
+        x = x.view(-1, 3)
+
+        # Permute coordinates for sphericart convention
+        x = x[:, self.ix]
+
+        # Handle dtype (sphericart only supports float32/64)
+        dtype = x.dtype
+        if dtype not in [torch.float32, torch.float64]:
+            x = x.to(torch.float32)
+
+        # Compute spherical harmonics
+        sh = self.sh.compute(x)
+
+        # Restore original dtype and handle NaN
+        sh = sh.to(dtype)
+        sh = torch.nan_to_num(sh, nan=0.0)
+
+        return sh.view(*b, n, -1)
+
+    def pairwise(self: SphericalHarmonic, x: torch.Tensor) -> torch.Tensor:
+        """Compute spherical harmonics for pairwise relative positions.
+
+        Args:
+            x: Point cloud of shape (N, 3).
+
+        Returns:
+            Pairwise features of shape (N, N, (lmax+1)^2).
+        """
+        # Compute pairwise relative positions
+        pairwise = x[:, None] - x[None, :]
+
+        # Compute spherical harmonics
+        sh = self(pairwise)
+
+        return torch.nan_to_num(sh, nan=0.0)
+
+
+class RadialBasisFunctions(nn.Module):
+    """Learnable radial basis function expansion.
+
+    Expands scalar distance values into a set of basis functions.
+    Useful for encoding distances in equivariant networks where
+    edge features should be rotation-invariant.
+
+    Supports multiple RBF types:
+        - "gaussian": Standard Gaussian RBFs with learnable centers and widths
+        - "bessel": Spherical Bessel functions (smooth at boundaries)
+        - "polynomial": Polynomial envelope functions
+
+    Args:
+        num_functions: Number of basis functions.
+        r_min: Minimum distance for center initialization.
+        r_max: Maximum distance for center initialization (cutoff for bessel/polynomial).
+        rbf_type: Type of radial basis function ("gaussian", "bessel", "polynomial").
+
+    Attributes:
+        mu: Learnable centers (gaussian only).
+        sigma: Learnable widths (gaussian only).
+
+    Example:
+        >>> rbf = RadialBasisFunctions(16, r_min=0.0, r_max=10.0)
+        >>> distances = torch.rand(100) * 10  # distances in [0, 10]
+        >>> features = rbf(distances)  # shape: (100, 16)
+    """
+
+    def __init__(
+        self: RadialBasisFunctions,
+        num_functions: int,
+        r_min: float = 0.0,
+        r_max: float = 10.0,
+        rbf_type: str = "gaussian",
+    ) -> None:
+        super().__init__()
+
+        if not isinstance(num_functions, int) or num_functions < 1:
+            raise ValueError(f"num_functions must be a positive integer, got {num_functions}")
+        if r_max <= r_min:
+            raise ValueError(f"r_max ({r_max}) must be greater than r_min ({r_min})")
+
+        valid_types = {"gaussian", "bessel", "polynomial"}
+        if rbf_type not in valid_types:
+            raise ValueError(f"rbf_type must be one of {valid_types}, got '{rbf_type}'")
+
+        self.rbf_type = rbf_type
+        self.num_functions = num_functions
+        self.r_min = r_min
+        self.r_max = r_max
+
+        if rbf_type == "gaussian":
+            # Initialize centers evenly spaced in [r_min, r_max]
+            self.mu = nn.Parameter(
+                torch.linspace(r_min, r_max, num_functions),
+                requires_grad=True,
+            )
+
+            # Initialize widths based on spacing between centers
+            spacing = (r_max - r_min) / max(num_functions - 1, 1)
+            self.sigma = nn.Parameter(
+                torch.full((num_functions,), spacing),
+                requires_grad=True,
+            )
+
+        elif rbf_type == "bessel":
+            # Spherical Bessel basis: j_0(n*pi*r/r_max)
+            # Frequencies for each basis function
+            self.register_buffer(
+                "bessel_freqs",
+                torch.arange(1, num_functions + 1, dtype=torch.float32) * math.pi / r_max,
+            )
+
+        elif rbf_type == "polynomial":
+            # Polynomial envelope with smooth cutoff
+            # Each basis function is: (1 - r/r_max)^(p+n) where n is the basis index
+            self.register_buffer(
+                "poly_powers",
+                torch.arange(2, num_functions + 2, dtype=torch.float32),
+            )
+
+    def forward(self: RadialBasisFunctions, x: torch.Tensor) -> torch.Tensor:
+        """Evaluate radial basis functions at input values.
+
+        Args:
+            x: Input distances of shape (...).
+
+        Returns:
+            Basis function values of shape (..., num_functions).
+        """
+        if self.rbf_type == "gaussian":
+            return self._forward_gaussian(x)
+        elif self.rbf_type == "bessel":
+            return self._forward_bessel(x)
+        elif self.rbf_type == "polynomial":
+            return self._forward_polynomial(x)
+        else:
+            raise ValueError(f"Unknown rbf_type: {self.rbf_type}")
+
+    def _forward_gaussian(self: RadialBasisFunctions, x: torch.Tensor) -> torch.Tensor:
+        """Gaussian RBF: exp(-((x - mu) / sigma)^2)."""
+        diff = (x[..., None] - self.mu) / self.sigma.abs().clamp(min=1e-6)
+        return torch.exp(-diff ** 2)
+
+    def _forward_bessel(self: RadialBasisFunctions, x: torch.Tensor) -> torch.Tensor:
+        """Spherical Bessel RBF with smooth cutoff.
+
+        Uses sinc functions (spherical Bessel j_0) multiplied by
+        a smooth envelope that goes to zero at r_max.
+        """
+        # Smooth cutoff envelope: (1 - (r/r_max)^2)^2 for r < r_max, 0 otherwise
+        r_scaled = (x / self.r_max).clamp(max=1.0)
+        envelope = (1 - r_scaled ** 2) ** 2
+
+        # Spherical Bessel j_0(k*r) = sin(k*r) / (k*r)
+        # We use sinc which handles r=0 correctly
+        kr = x[..., None] * self.bessel_freqs
+        # sinc(x) = sin(pi*x) / (pi*x), so we need to adjust
+        bessel = torch.sinc(kr / math.pi)
+
+        return envelope[..., None] * bessel
+
+    def _forward_polynomial(self: RadialBasisFunctions, x: torch.Tensor) -> torch.Tensor:
+        """Polynomial envelope RBF.
+
+        Uses polynomial functions with smooth cutoff at r_max.
+        Each basis: (1 - r/r_max)^p for different powers p.
+        """
+        # Normalize to [0, 1] and clip
+        r_scaled = (x / self.r_max).clamp(min=0.0, max=1.0)
+
+        # (1 - r/r_max)^p for each power p
+        one_minus_r = 1.0 - r_scaled
+        return one_minus_r[..., None] ** self.poly_powers
+
+
+class SequencePositionEncoding(nn.Module):
+    """Sinusoidal encoding for relative sequence positions.
+
+    Encodes the relative distance in sequence space (|i - j|) between
+    nodes using sinusoidal functions, similar to the original transformer
+    positional encoding but applied to relative positions.
+
+    This allows the model to learn patterns based on sequence distance,
+    which is important for polymers where:
+    - Sequential neighbors (|i-j|=1) are covalently bonded
+    - Distant in sequence but close in space = tertiary contacts
+
+    Args:
+        dim: Output dimension for position encoding.
+        max_seq_distance: Maximum sequence distance to encode. Distances
+            beyond this are clipped. Default 128 covers most local patterns.
+        learnable: If True, use learnable embeddings instead of sinusoidal.
+
+    Example:
+        >>> enc = SequencePositionEncoding(dim=16)
+        >>> seq_pos = torch.arange(50)  # residue indices
+        >>> neighbor_idx = torch.randint(0, 50, (50, 16))
+        >>> pos_features = enc(seq_pos, neighbor_idx)  # (50, 16, 16)
+    """
+
+    def __init__(
+        self: SequencePositionEncoding,
+        dim: int,
+        max_seq_distance: int = 128,
+        learnable: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.dim = dim
+        self.max_seq_distance = max_seq_distance
+        self.learnable = learnable
+
+        if learnable:
+            # Learnable embeddings for each distance bucket
+            # Use 2*max + 1 to handle signed distances if needed
+            self.embedding = nn.Embedding(2 * max_seq_distance + 1, dim)
+        else:
+            # Pre-compute sinusoidal encoding
+            # Frequencies: 10000^(-2i/d) for i in [0, d/2)
+            position = torch.arange(max_seq_distance + 1).float().unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, dim, 2).float() * (-math.log(10000.0) / dim)
+            )
+            pe = torch.zeros(max_seq_distance + 1, dim)
+            pe[:, 0::2] = torch.sin(position * div_term)
+            if dim > 1:
+                pe[:, 1::2] = torch.cos(position * div_term[:dim // 2])
+            self.register_buffer("pe", pe)
+
+    def forward(
+        self: SequencePositionEncoding,
+        seq_pos: torch.Tensor,
+        neighbor_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute sequence position encoding for edges.
+
+        Args:
+            seq_pos: Sequence positions for each node, shape (N,).
+                For residue-level: residue index (0, 1, 2, ...).
+                For atom-level: can be residue index or atom index.
+            neighbor_idx: Neighbor indices of shape (N, k).
+
+        Returns:
+            Position encoding of shape (N, k, dim).
+        """
+        N, k = neighbor_idx.shape
+
+        # Get sequence positions for self and neighbors
+        self_pos = seq_pos.unsqueeze(1)  # (N, 1)
+        neighbor_pos = seq_pos[neighbor_idx]  # (N, k)
+
+        # Compute absolute sequence distance
+        seq_dist = (self_pos - neighbor_pos).abs()  # (N, k)
+
+        # Clip to max distance
+        seq_dist = seq_dist.clamp(max=self.max_seq_distance)
+
+        if self.learnable:
+            # Shift to handle embedding index (center at max_seq_distance)
+            signed_dist = self_pos - neighbor_pos
+            signed_dist = signed_dist.clamp(-self.max_seq_distance, self.max_seq_distance)
+            idx = (signed_dist + self.max_seq_distance).long()
+            return self.embedding(idx)
+        else:
+            # Look up pre-computed sinusoidal encoding
+            return self.pe[seq_dist.long()]
+
+
+class EquivariantBasis(nn.Module):
+    """Compute equivariant basis matrices for tensor product operations.
+
+    Given 3D displacement vectors, computes the spherical harmonic coefficients
+    organized as matrices suitable for equivariant convolutions. The output
+    consists of two coefficient tensors that can be used in low-rank
+    tensor product contractions.
+
+    Args:
+        repr: ProductRepr specifying the input and output representations.
+
+    Example:
+        >>> repr = ProductRepr(Repr([0, 1]), Repr([0, 1]))
+        >>> basis = EquivariantBasis(repr)
+        >>> displacements = torch.randn(100, 3)  # 100 edge vectors
+        >>> coeff1, coeff2 = basis(displacements)
+    """
+
+    def __init__(self: EquivariantBasis, repr: ProductRepr) -> None:
+        super().__init__()
+
+        self.outdims1 = (repr.rep1.dim(), repr.rep1.nreps())
+        self.outdims2 = (repr.rep2.nreps(), repr.rep2.dim())
+
+        # Spherical harmonic calculator
+        self.sh = SphericalHarmonic(repr.lmax())
+
+        # Pre-compute slice indices for efficient forward pass
+        # Each tuple: (coeff_slice_start, coeff_slice_end, sh_slice_start, sh_slice_end, irrep_idx)
+        cdims1 = repr.rep1.cumdims()
+        self.slices1 = [
+            (cdims1[j], cdims1[j + 1], l ** 2, (l + 1) ** 2, j)
+            for j, l in enumerate(repr.rep1.lvals)
+        ]
+
+        cdims2 = repr.rep2.cumdims()
+        self.slices2 = [
+            (cdims2[j], cdims2[j + 1], l ** 2, (l + 1) ** 2, j)
+            for j, l in enumerate(repr.rep2.lvals)
+        ]
+
+    def forward(
+        self: EquivariantBasis,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute equivariant basis coefficients.
+
+        Args:
+            x: Displacement vectors of shape (N, 3).
+
+        Returns:
+            Tuple of (coeff1, coeff2) where:
+            - coeff1 has shape (N, rep1.dim(), rep1.nreps())
+            - coeff2 has shape (N, rep2.nreps(), rep2.dim())
+        """
+        # Get spherical harmonic features
+        sh = self.sh(x)
+        sh = torch.nan_to_num(sh, nan=0.0)
+
+        # Build coefficient matrices using pre-computed slices
+        coeff1 = torch.zeros(x.size(0), *self.outdims1, device=x.device, dtype=x.dtype)
+        coeff2 = torch.zeros(x.size(0), *self.outdims2, device=x.device, dtype=x.dtype)
+
+        # Normalize SH values to unit RMS for each l-degree
+        # Standard real SH have: Y_l^m ~ 1/sqrt(4*pi) for l=0, different scales for l>0
+        # We scale by sqrt(4*pi) to make RMS ≈ 1 (exact for uniform directions)
+        sh_normalized = sh * math.sqrt(4 * math.pi)
+
+        for c_low, c_high, sh_low, sh_high, j in self.slices1:
+            coeff1[..., c_low:c_high, j] = sh_normalized[..., sh_low:sh_high]
+
+        for c_low, c_high, sh_low, sh_high, j in self.slices2:
+            coeff2[..., j, c_low:c_high] = sh_normalized[..., sh_low:sh_high]
+
+        return coeff1, coeff2
+
+
+class EquivariantBases(nn.Module):
+    """Compute equivariant bases for multiple product representations.
+
+    Efficiently computes basis matrices for multiple ProductRepr objects,
+    avoiding redundant computation for identical representations.
+
+    Args:
+        *reprs: Variable number of ProductRepr objects.
+
+    Example:
+        >>> repr1 = ProductRepr(Repr([0, 1]), Repr([0, 1]))
+        >>> repr2 = ProductRepr(Repr([0, 1, 2]), Repr([0, 1, 2]))
+        >>> bases = EquivariantBases(repr1, repr2)
+        >>> displacements = torch.randn(100, 3)
+        >>> basis_list = bases(displacements)  # tuple of basis pairs
+    """
+
+    def __init__(self: EquivariantBases, *reprs: ProductRepr) -> None:
+        super().__init__()
+
+        # Deduplicate representations to avoid redundant computation
+        self.unique_reprs: list[ProductRepr] = []
+        self.comps = nn.ModuleList()
+        self.repr_ix: list[int] = []
+
+        repr_count = -1
+        for repr in reprs:
+            if repr not in self.unique_reprs:
+                self.unique_reprs.append(repr)
+                self.comps.append(EquivariantBasis(repr))
+                repr_count += 1
+            self.repr_ix.append(repr_count)
+
+    def forward(
+        self: EquivariantBases,
+        x: torch.Tensor,
+    ) -> tuple[tuple[torch.Tensor, torch.Tensor], ...]:
+        """Compute basis matrices for all representations.
+
+        Args:
+            x: Displacement vectors of shape (N, 3).
+
+        Returns:
+            Tuple of basis pairs, one for each input ProductRepr.
+        """
+        # Compute unique bases
+        ms = [comp(x) for comp in self.comps]
+        # Expand to required outputs without recomputation
+        return tuple(ms[ix] for ix in self.repr_ix)

@@ -127,6 +127,41 @@ class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
             dim += self.element_dim
         return dim
 
+    def _validate_indices(
+        self,
+        indices: torch.Tensor,
+        max_idx: int,
+        name: str,
+    ) -> torch.Tensor:
+        """
+        Validate and clamp embedding indices.
+
+        Args:
+            indices: Tensor of indices to validate.
+            max_idx: Maximum valid index (vocabulary size).
+            name: Name of the index type for error messages.
+
+        Returns:
+            Clamped indices tensor (invalid indices mapped to 0).
+
+        Raises:
+            IndexError: If any indices exceed the vocabulary size.
+        """
+        # Check for out-of-bounds indices
+        invalid_mask = indices >= max_idx
+        if invalid_mask.any():
+            invalid_indices = indices[invalid_mask].unique().tolist()
+            invalid_count = invalid_mask.sum().item()
+            raise IndexError(
+                f"PolymerEmbedding: {invalid_count} {name} indices out of bounds. "
+                f"Valid range: [0, {max_idx}), got values: {invalid_indices[:10]}"
+                f"{'...' if len(invalid_indices) > 10 else ''}. "
+                f"This may indicate corrupted data or unsupported atom/residue types."
+            )
+
+        # Clamp -1 (unknown) to 0
+        return indices.clamp(min=0)
+
     def forward(self, polymer: Polymer) -> torch.Tensor:
         """
         Embed polymer features and concatenate.
@@ -139,19 +174,20 @@ class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
             - N = num_atoms if scale=ATOM
             - N = num_residues if scale=RESIDUE
 
+        Raises:
+            IndexError: If any indices exceed the vocabulary size.
+
         Note:
             Unknown indices (-1) are mapped to index 0 (unknown/padding).
         """
         embeddings = []
 
         if self.atom_embedding is not None:
-            # Clamp -1 (unknown) to 0
-            atom_idx = polymer.atoms.clamp(min=0)
+            atom_idx = self._validate_indices(polymer.atoms, NUM_ATOMS, "atom")
             embeddings.append(self.atom_embedding(atom_idx))
 
         if self.residue_embedding is not None:
-            # Clamp -1 (unknown) to 0
-            res_idx = polymer.sequence.clamp(min=0)
+            res_idx = self._validate_indices(polymer.sequence, NUM_RESIDUES, "residue")
             res_emb = self.residue_embedding(res_idx)
             if self.scale == Scale.ATOM:
                 # Expand to atom level (only covers polymer atoms)
@@ -166,8 +202,7 @@ class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
             embeddings.append(res_emb)
 
         if self.element_embedding is not None:
-            # Clamp -1 (unknown) to 0
-            elem_idx = polymer.elements.clamp(min=0)
+            elem_idx = self._validate_indices(polymer.elements, NUM_ELEMENTS, "element")
             embeddings.append(self.element_embedding(elem_idx))
 
         return torch.cat(embeddings, dim=-1)

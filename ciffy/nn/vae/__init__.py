@@ -34,6 +34,7 @@ from .distributions import (
     angular_distance,
     VonMisesNLL,
 )
+from .trainer import VAEConfig, VAETrainer, VAEModelConfig, DataConfig
 from ...types.dihedral import (
     MAX_DIHEDRALS_PER_RESIDUE,
     NUM_PROTEIN_BACKBONE_DIHEDRALS,
@@ -43,6 +44,11 @@ from ...types.dihedral import (
 __all__ = [
     # Main VAE class
     "PolymerVAE",
+    # Training
+    "VAETrainer",
+    "VAEConfig",
+    "VAEModelConfig",
+    "DataConfig",
     # Components
     "DihedralEncoder",
     "DihedralDecoder",

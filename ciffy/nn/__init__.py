@@ -32,11 +32,24 @@ from .training import (
     get_worker_init_fn,
     BetaScheduler,
 )
+from .base_trainer import (
+    BaseConfig,
+    BaseTrainer,
+    TrainingConfig,
+    OutputConfig,
+    WandbConfig,
+    MetricsLogger,
+)
+from .loggers import (
+    WandbLogger,
+    NoOpLogger,
+    create_logger,
+)
 from .experiment_runner import (
     run_experiments,
     format_results_table,
 )
-from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder
+from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder, VAETrainer, VAEConfig
 
 __all__ = [
     # Dataset
@@ -59,6 +72,17 @@ __all__ = [
     "polymer_collate_fn",
     "get_worker_init_fn",
     "BetaScheduler",
+    # Base trainer framework
+    "BaseConfig",
+    "BaseTrainer",
+    "TrainingConfig",
+    "OutputConfig",
+    "WandbConfig",
+    "MetricsLogger",
+    # Loggers
+    "WandbLogger",
+    "NoOpLogger",
+    "create_logger",
     # Experiment running
     "ExperimentResult",
     "run_experiments",
@@ -67,4 +91,6 @@ __all__ = [
     "PolymerVAE",
     "DihedralEncoder",
     "DihedralDecoder",
+    "VAETrainer",
+    "VAEConfig",
 ]

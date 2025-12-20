@@ -333,11 +333,9 @@ static inline void nerf_place_single_entry_anchored(
         int32_t comp_id = component_ids[i];
         /* Fail-fast bounds check - indicates backend bug if triggered */
         if (comp_id < 0 || comp_id >= n_components) {
-            fprintf(stderr,
-                "CIFFY FATAL: component_id %d out of bounds [0, %d) at entry %zu\n"
-                "This indicates a mismatch between ZMatrix.component_ids and anchor_coords.\n",
-                comp_id, n_components, i);
-            abort();
+            CIFFY_FATAL("component_id %d out of bounds [0, %d) at entry %zu. "
+                        "Mismatch between ZMatrix.component_ids and anchor_coords.",
+                        comp_id, n_components, i);
         }
         anchor0 = &anchor_coords[comp_id * 9 + 0];
         anchor1 = &anchor_coords[comp_id * 9 + 3];
@@ -454,11 +452,9 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
         if (anchor_coords != NULL && component_ids != NULL) { \
             int32_t comp_id = component_ids[i]; \
             if (comp_id < 0 || comp_id >= n_components) { \
-                fprintf(stderr, \
-                    "CIFFY FATAL: component_id %d out of bounds [0, %d) at entry %zu (backward)\n" \
-                    "This indicates a mismatch between ZMatrix.component_ids and anchor_coords.\n", \
-                    comp_id, n_components, (size_t)(i)); \
-                abort(); \
+                CIFFY_FATAL("component_id %d out of bounds [0, %d) at entry %zu (backward). " \
+                            "Mismatch between ZMatrix.component_ids and anchor_coords.", \
+                            comp_id, n_components, (size_t)(i)); \
             } \
             anchor0 = &anchor_coords[comp_id * 9 + 0]; \
             anchor1 = &anchor_coords[comp_id * 9 + 3]; \

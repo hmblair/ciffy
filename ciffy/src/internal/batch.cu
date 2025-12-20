@@ -19,14 +19,7 @@
 #include <cuda_runtime.h>
 #include <stdint.h>
 
-/* Use the same constants as batch.h for consistency */
-#ifndef INTERNAL_DIST
-#define INTERNAL_DIST  0
-#define INTERNAL_ANGLE 1
-#define INTERNAL_DIHE  2
-#define INTERNAL_COLS  3
-#define INTERNAL_IDX(i, col) ((i) * INTERNAL_COLS + (col))
-#endif
+/* INTERNAL_* macros are defined in batch.h (included above) */
 
 
 /* ========================================================================= */

@@ -90,12 +90,29 @@
 #endif
 
 /* ========================================================================= */
-/* CUDA error checking                                                       */
+/* Error handling                                                            */
 /* ========================================================================= */
 
-#ifdef __CUDACC__
 #include <stdio.h>
 #include <stdlib.h>
+
+/**
+ * Report a fatal error and abort.
+ *
+ * Use this for unrecoverable errors that indicate bugs (not user errors).
+ * For user-facing errors in Python bindings, use TORCH_CHECK instead.
+ *
+ * Usage:
+ *   CIFFY_FATAL("component_id %d out of bounds [0, %d)", comp_id, n_components);
+ */
+#define CIFFY_FATAL(...) do { \
+    fprintf(stderr, "CIFFY FATAL [%s:%d]: ", __FILE__, __LINE__); \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+    abort(); \
+} while (0)
+
+#ifdef __CUDACC__
 
 /**
  * Check for CUDA errors after kernel launches.
@@ -105,9 +122,7 @@
 #define CIFFY_CUDA_CHECK_KERNEL() do { \
     cudaError_t err = cudaGetLastError(); \
     if (err != cudaSuccess) { \
-        fprintf(stderr, "CIFFY CUDA error in %s at line %d: %s\n", \
-                __FILE__, __LINE__, cudaGetErrorString(err)); \
-        abort(); \
+        CIFFY_FATAL("CUDA error: %s", cudaGetErrorString(err)); \
     } \
 } while (0)
 

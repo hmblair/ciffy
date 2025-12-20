@@ -687,6 +687,78 @@ output:
 
 At each epoch, the script saves perturbed samples to visualize how the latent space captures conformational variation.
 
+### Running Multiple Experiments
+
+Use the `ciffy experiment` command to run multiple training configurations in parallel across GPUs:
+
+```bash
+# Run all configs in a directory (parallel by default)
+ciffy experiment configs/*.yaml
+
+# Run specific configs
+ciffy experiment configs/vae_small.yaml configs/vae_large.yaml
+
+# Run sequentially (one at a time)
+ciffy experiment configs/*.yaml --sequential
+
+# Force specific device
+ciffy experiment configs/*.yaml --device cpu
+```
+
+Experiments are automatically distributed across available GPUs in round-robin fashion. Each experiment runs in a separate process for memory isolation, so a failed experiment won't affect others.
+
+Example output:
+
+```
+============================================================
+Ciffy Experiment Runner
+============================================================
+Configs: 3
+Parallel: True
+Device: auto
+
+  1. configs/vae_small.yaml
+  2. configs/vae_medium.yaml
+  3. configs/vae_large.yaml
+
+Running experiments...
+------------------------------------------------------------
+  [+] vae_small: loss=0.1234 (45.2s on cuda:0)
+  [+] vae_medium: loss=0.0987 (2m0s on cuda:1)
+  [X] vae_large: FAILED - CUDA out of memory
+
+============================================================
+Results
+============================================================
+Experiment            Status    Best Loss   Recon       KL          Epochs      Device    Time
+--------------------  --------  ----------  ----------  ----------  ----------  --------  ----------
+vae_small             success   0.1234      0.0812      0.0422      100/100     cuda:0    45.2s
+vae_medium            success   0.0987      0.0654      0.0333      100/100     cuda:1    2m0s
+vae_large             failed    N/A         N/A         N/A         0/100       cuda:0    5.3s
+--------------------  --------  ----------  ----------  ----------  ----------  --------  ----------
+Total: 2/3 succeeded in 2m51s
+```
+
+You can also use the experiment runner programmatically:
+
+```python
+from ciffy.nn import run_experiments, format_results_table
+
+results = run_experiments(
+    config_paths=["small.yaml", "medium.yaml", "large.yaml"],
+    parallel=True,
+    device="auto",  # auto, cuda, mps, or cpu
+)
+
+# Access individual results
+for r in results:
+    if r.status == "success":
+        print(f"{r.name}: best_loss={r.best_loss:.4f}")
+
+# Print formatted table
+print(format_results_table(results))
+```
+
 ## Performance Tips
 
 1. **Load once, reuse**: Parse CIF files once and keep polymers in memory

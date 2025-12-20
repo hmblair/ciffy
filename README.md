@@ -184,6 +184,9 @@ ciffy structure.cif --desc
 
 # Multiple files
 ciffy file1.cif file2.cif
+
+# Run multiple training experiments in parallel
+ciffy experiment configs/*.yaml
 ```
 
 Example output:
@@ -203,6 +206,37 @@ Descriptions:
   B: U11/U12 small nuclear ribonucleoprotein 25 kDa protein
   C: U11/U12 small nuclear ribonucleoprotein 35 kDa protein
   D: Programmed cell death protein 7
+```
+
+## Training Neural Networks
+
+ciffy includes PyTorch modules for deep learning on molecular structures. See the [deep learning guide](docs/guides/deep-learning.md) for full documentation.
+
+### Running Experiments
+
+Train multiple models in parallel across GPUs:
+
+```bash
+# Run all configs in parallel (auto-distributes across GPUs)
+ciffy experiment configs/*.yaml
+
+# Run sequentially
+ciffy experiment configs/*.yaml --sequential
+
+# Force CPU
+ciffy experiment configs/*.yaml --device cpu
+```
+
+Results are displayed in a comparison table:
+
+```
+Experiment            Status    Best Loss   Device    Time
+--------------------  --------  ----------  --------  ----------
+vae_small             success   0.1234      cuda:0    45.2s
+vae_medium            success   0.0987      cuda:1    2m0s
+vae_large             failed    N/A         cuda:0    5.3s
+--------------------  --------  ----------  --------  ----------
+Total: 2/3 succeeded in 2m51s
 ```
 
 ## Testing

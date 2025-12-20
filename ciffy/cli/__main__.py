@@ -8,6 +8,7 @@ Usage:
     ciffy <file.cif> --desc       # Show entity descriptions per chain
     ciffy map <file.cif>          # Display contact map
     ciffy split <file.cif>        # Split into per-chain files
+    ciffy template <sequence>     # Create template from sequence with sampled dihedrals
     ciffy experiment configs/*.yaml  # Run multiple training experiments
 """
 
@@ -176,6 +177,31 @@ def _map_command(args):
         plt.show()
 
 
+def _template_command(args):
+    """Handle the template subcommand."""
+    from ciffy import from_sequence
+
+    try:
+        # Create polymer from sequence with sampled dihedrals
+        polymer = from_sequence(
+            args.sequence,
+            sample_dihedrals=True,
+            seed=args.seed,
+        )
+
+        # Write output
+        if args.output:
+            polymer.write(args.output)
+            print(f"Wrote template to {args.output}")
+        else:
+            # Print to stdout
+            print(polymer)
+
+    except Exception as e:
+        print(f"Error creating template: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _experiment_command(args):
     """Handle the experiment subcommand."""
     try:
@@ -252,7 +278,7 @@ def _experiment_command(args):
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "experiment"}
+    subcommands = {"map", "info", "split", "template", "experiment"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command
@@ -356,6 +382,27 @@ def main():
         help="Include all chains (default: polymer chains only)",
     )
 
+    # Template subcommand
+    template_parser = subparsers.add_parser(
+        "template",
+        help="Create a template structure from a sequence",
+        description="Generate a polymer template from a sequence string with sampled backbone dihedrals.",
+    )
+    template_parser.add_argument(
+        "sequence",
+        help="Sequence string (e.g., 'MGKLF' for protein, 'acgu' for RNA)",
+    )
+    template_parser.add_argument(
+        "--output", "-o",
+        help="Output file path (.cif format)",
+    )
+    template_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible sampling (default: None)",
+    )
+
     # Experiment subcommand
     experiment_parser = subparsers.add_parser(
         "experiment",
@@ -387,6 +434,8 @@ def main():
     # Route to appropriate handler
     if args.command == "experiment":
         _experiment_command(args)
+    elif args.command == "template":
+        _template_command(args)
     elif args.command == "map":
         _map_command(args)
     elif args.command == "split":

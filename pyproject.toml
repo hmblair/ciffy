@@ -27,7 +27,7 @@ dependencies = ["numpy"]
 [project.optional-dependencies]
 torch = ["torch"]
 vis = ["matplotlib"]
-dev = ["pytest", "torch", "matplotlib"]
+dev = ["pytest", "pytest-xdist", "torch", "matplotlib"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"
@@ -66,6 +66,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --ignore=tests/profile.py"
+# For parallel execution: pytest -n auto (requires pytest-xdist)
 
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-*"

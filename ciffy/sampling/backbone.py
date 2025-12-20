@@ -8,6 +8,7 @@ and nucleic acids (RNA/DNA).
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -505,6 +506,182 @@ def _apply_terminal_constraints(
         if res_idx == n_residues - 1:
             candidate_dihedrals[DihedralType.EPSILON] = np.nan
             candidate_dihedrals[DihedralType.ZETA] = np.nan
+
+
+# =============================================================================
+# Evaluator Classes for Langevin Sampling
+# =============================================================================
+
+
+class PolymerEvaluator(ABC):
+    """
+    Abstract base class for polymer evaluators used in Langevin sampling.
+
+    Evaluators encapsulate the logic for:
+    1. Applying candidate angles to the polymer
+    2. Computing pairwise distances for clash energy
+    3. Detecting base pairs for stacking energy (RNA only)
+    """
+
+    @abstractmethod
+    def apply_angles(self, angles: np.ndarray) -> None:
+        """
+        Apply candidate angles to polymer and reconstruct coordinates.
+
+        Args:
+            angles: Angle array in appropriate format for molecule type.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_distances(self) -> np.ndarray:
+        """
+        Get pairwise distances for clash energy computation.
+
+        Returns:
+            Flattened 1D array of distances, or empty array if no distances.
+        """
+        raise NotImplementedError
+
+    def get_base_pairs(self) -> list | None:
+        """
+        Get Watson-Crick base pair information for stacking energy (RNA only).
+
+        Default implementation returns None (for proteins).
+        Override in RNAEvaluator for stacking support.
+
+        Returns:
+            List of (atom_i, atom_j) base pair indices, or None.
+        """
+        return None
+
+
+class ProteinEvaluator(PolymerEvaluator):
+    """
+    Evaluator for protein backbone sampling via Langevin dynamics.
+
+    Handles phi/psi/omega dihedral angles and distance computation.
+    """
+
+    def __init__(
+        self,
+        polymer: "Polymer",
+        res_idx: int,
+        prev_phi: list,
+        prev_psi: list,
+        prev_omega: list,
+        rng: np.random.Generator,
+    ):
+        """
+        Initialize protein evaluator.
+
+        Args:
+            polymer: Polymer to evaluate and modify.
+            res_idx: Current residue index being sampled.
+            prev_phi: List of previously sampled phi angles.
+            prev_psi: List of previously sampled psi angles.
+            prev_omega: List of previously sampled omega angles.
+            rng: Random number generator for omega sampling.
+        """
+        self.polymer = polymer
+        self.res_idx = res_idx
+        self.prev_phi = prev_phi
+        self.prev_psi = prev_psi
+        self.prev_omega = prev_omega
+        self.rng = rng
+
+    def apply_angles(self, angles: np.ndarray) -> None:
+        """Apply (phi, psi) angles to polymer."""
+        from ..types import DihedralType
+
+        # angles is (phi, psi) for this residue
+        phi = float(angles[0])
+        psi = float(angles[1])
+        omega = float(self.rng.normal(np.pi, 0.05))
+
+        # Build full angle lists for all residues up to and including current
+        full_phi = self.prev_phi + [phi]
+        full_psi = self.prev_psi + [psi]
+        full_omega = self.prev_omega + [omega]
+
+        # Apply dihedrals using helper function
+        _apply_dihedrals(self.polymer, {
+            DihedralType.PHI: full_phi[1:],  # Skip first (undefined at N-terminus)
+            DihedralType.PSI: full_psi[:-1],  # Skip last (undefined at C-terminus)
+            DihedralType.OMEGA: full_omega[:-1],  # Skip last
+        })
+
+    def get_distances(self) -> np.ndarray:
+        """Get pairwise distances with previous residues."""
+        return _get_pairwise_distances(self.polymer, self.res_idx, back_residues=2)
+
+
+class RNAEvaluator(PolymerEvaluator):
+    """
+    Evaluator for RNA backbone sampling via Langevin dynamics.
+
+    Handles 7D dihedral angles (alpha, beta, gamma, delta, epsilon, zeta, chi)
+    and distance computation. Can also provide base pair information for stacking.
+    """
+
+    def __init__(
+        self,
+        polymer: "Polymer",
+        res_idx: int,
+        prev_dihedrals: dict,
+        rng: np.random.Generator,
+    ):
+        """
+        Initialize RNA evaluator.
+
+        Args:
+            polymer: Polymer to evaluate and modify.
+            res_idx: Current residue index being sampled.
+            prev_dihedrals: Dict mapping DihedralType to list of previous angles.
+            rng: Random number generator (for future use).
+        """
+        self.polymer = polymer
+        self.res_idx = res_idx
+        self.prev_dihedrals = prev_dihedrals
+        self.rng = rng
+
+    def apply_angles(self, angles: np.ndarray) -> None:
+        """Apply 7D angles to polymer."""
+        from ..types import DihedralType
+
+        # angles is [alpha, beta, gamma, delta, epsilon, zeta, chi]
+        alpha, beta, gamma, delta, epsilon, zeta, chi = angles
+
+        # Build full dihedral lists including current angles
+        full_dihedrals = {
+            DihedralType.ALPHA: self.prev_dihedrals[DihedralType.ALPHA] + [alpha],
+            DihedralType.BETA: self.prev_dihedrals[DihedralType.BETA] + [beta],
+            DihedralType.GAMMA: self.prev_dihedrals[DihedralType.GAMMA] + [gamma],
+            DihedralType.DELTA: self.prev_dihedrals[DihedralType.DELTA] + [delta],
+            DihedralType.EPSILON: self.prev_dihedrals[DihedralType.EPSILON] + [epsilon],
+            DihedralType.ZETA: self.prev_dihedrals[DihedralType.ZETA] + [zeta],
+            DihedralType.CHI_PYRIMIDINE: self.prev_dihedrals[DihedralType.CHI_PYRIMIDINE] + [chi],
+        }
+
+        # Apply dihedrals using helper function
+        _apply_dihedrals(self.polymer, full_dihedrals)
+
+    def get_distances(self) -> np.ndarray:
+        """Get pairwise distances with previous residues."""
+        return _get_pairwise_distances(self.polymer, self.res_idx, back_residues=2)
+
+    def get_base_pairs(self) -> list | None:
+        """
+        Detect Watson-Crick base pairs for stacking energy.
+
+        TODO: Implement base pair detection.
+
+        Returns:
+            List of (atom_i, atom_j) base pair indices, or empty list if none.
+        """
+        # Placeholder: return empty list for now
+        # TODO: Implement Watson-Crick base pair detection
+        return []
 
 
 # =============================================================================
@@ -1029,37 +1206,10 @@ def sample_protein_autoregressive_langevin(
         # Get residue-specific GMM via registry
         gmm = _registry.get_gmm(Molecule.PROTEIN, res_enum)
 
-        # Define polymer evaluator: applies candidate angles and returns pairwise distances
-        def make_protein_evaluator(poly, res_idx, prev_phi, prev_psi, prev_omega, rng):
-            def evaluator(angles: np.ndarray) -> np.ndarray:
-                """Apply angles to polymer and return pairwise distances for clash energy."""
-                from ..types import DihedralType
-
-                # angles is (phi, psi) for this residue
-                phi, psi = float(angles[0]), float(angles[1])
-                omega = float(rng.normal(np.pi, 0.05))
-
-                # Build full angle lists for all residues up to and including current
-                full_phi = prev_phi + [phi]
-                full_psi = prev_psi + [psi]
-                full_omega = prev_omega + [omega]
-
-                # Apply dihedrals using helper function
-                _apply_dihedrals(poly, {
-                    DihedralType.PHI: full_phi[1:],  # Skip first (undefined at N-terminus)
-                    DihedralType.PSI: full_psi[:-1],  # Skip last (undefined at C-terminus)
-                    DihedralType.OMEGA: full_omega[:-1],  # Skip last
-                })
-
-                # Return pairwise distances (helper function handles back_residues exclusion)
-                return _get_pairwise_distances(poly, res_idx, back_residues=2)
-
-            return evaluator
-
-        # Create energy functions: GMM + clash (1/r²)
+        # Create evaluator and energy functions: GMM + clash (1/r²)
+        evaluator = ProteinEvaluator(polymer, res_idx, phi_list, psi_list, omega_list, rng)
         gmm_energy = GMMEnergy(gmm)
-        polymer_evaluator = make_protein_evaluator(polymer, res_idx, phi_list, psi_list, omega_list, rng)
-        clash_energy = ClashEnergy(polymer_evaluator, lambda_clash=lambda_clash, r_min=0.5)
+        clash_energy = ClashEnergy(evaluator, lambda_clash=lambda_clash, r_min=0.5)
         composite_energy = CompositeEnergy([gmm_energy, clash_energy])
 
         # Sample initial angles from GMM
@@ -1179,38 +1329,12 @@ def sample_rna_autoregressive_langevin(
         except (ValueError, FileNotFoundError, KeyError):
             gmm = None
 
-        # Define RNA evaluator: applies candidate 7D angles and returns pairwise distances
-        def make_rna_evaluator(poly, res_idx, prev_dihedrals, rng):
-            def evaluator(angles_7d: np.ndarray) -> np.ndarray:
-                """Apply 7D angles to polymer and return pairwise distances for clash energy."""
-                # angles_7d is [alpha, beta, gamma, delta, epsilon, zeta, chi]
-                alpha, beta, gamma, delta, epsilon, zeta, chi = angles_7d
-
-                # Build full dihedral lists including current angles
-                full_dihedrals = {
-                    DihedralType.ALPHA: prev_dihedrals[DihedralType.ALPHA] + [alpha],
-                    DihedralType.BETA: prev_dihedrals[DihedralType.BETA] + [beta],
-                    DihedralType.GAMMA: prev_dihedrals[DihedralType.GAMMA] + [gamma],
-                    DihedralType.DELTA: prev_dihedrals[DihedralType.DELTA] + [delta],
-                    DihedralType.EPSILON: prev_dihedrals[DihedralType.EPSILON] + [epsilon],
-                    DihedralType.ZETA: prev_dihedrals[DihedralType.ZETA] + [zeta],
-                    DihedralType.CHI_PYRIMIDINE: prev_dihedrals[DihedralType.CHI_PYRIMIDINE] + [chi],
-                }
-
-                # Apply dihedrals using helper function
-                _apply_dihedrals(poly, full_dihedrals)
-
-                # Return pairwise distances (helper function handles back_residues exclusion)
-                return _get_pairwise_distances(poly, res_idx, back_residues=2)
-
-            return evaluator
-
         # Use Langevin dynamics if 7D GMM available, else use independent sampling
         if gmm is not None:
-            # Create energy functions: GMM + clash (1/r²)
+            # Create evaluator and energy functions: GMM + clash (1/r²)
+            evaluator = RNAEvaluator(polymer, res_idx, dihedral_lists, rng)
             gmm_energy = GMMEnergy(gmm)
-            polymer_evaluator = make_rna_evaluator(polymer, res_idx, dihedral_lists, rng)
-            clash_energy = ClashEnergy(polymer_evaluator, lambda_clash=lambda_clash, r_min=0.5)
+            clash_energy = ClashEnergy(evaluator, lambda_clash=lambda_clash, r_min=0.5)
             composite_energy = CompositeEnergy([gmm_energy, clash_energy])
 
             # Sample initial 7D angles from GMM

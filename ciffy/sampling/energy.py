@@ -170,12 +170,12 @@ class ClashEnergy(EnergyFunction):
     - Is infinitely differentiable (perfect for Langevin)
 
     Args:
-        polymer_evaluator: Callable that applies angles and returns distances
+        polymer_evaluator: PolymerEvaluator object with apply_angles() and get_distances() methods
         lambda_clash: Weight of clash penalty (default 100)
         r_min: Minimum distance cutoff to prevent divergence (default 0.5 Å)
 
-    The evaluator should be a function: distances = f(angles_array)
-    returning shape (N_atom_pairs,) array of pairwise distances
+    The evaluator's apply_angles(state) applies candidate angles and reconstructs
+    coordinates, while get_distances() returns pairwise distances for clash checking.
     """
 
     def __init__(
@@ -188,7 +188,7 @@ class ClashEnergy(EnergyFunction):
         Initialize clash energy with 1/r² repulsion.
 
         Args:
-            polymer_evaluator: Callable(angles) -> distances array
+            polymer_evaluator: PolymerEvaluator with apply_angles() and get_distances()
             lambda_clash: Weight coefficient for clash penalty
             r_min: Minimum distance cutoff (Angstroms)
         """
@@ -208,7 +208,11 @@ class ClashEnergy(EnergyFunction):
         Returns:
             λ * sum_of_inverse_squares
         """
-        distances = self.polymer_evaluator(state)
+        # Apply angles using evaluator's apply_angles method
+        self.polymer_evaluator.apply_angles(state)
+
+        # Get distances from evaluator
+        distances = self.polymer_evaluator.get_distances()
 
         if distances is None or len(distances) == 0:
             return 0.0

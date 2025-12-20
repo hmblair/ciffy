@@ -411,12 +411,13 @@ def run_experiments(
     return ordered_results
 
 
-def format_results_table(results: list[ExperimentResult]) -> str:
+def format_results_table(results: list[ExperimentResult], show_errors: bool = True) -> str:
     """
     Format experiment results as an ASCII table.
 
     Args:
         results: List of ExperimentResult objects.
+        show_errors: If True, show error messages for failed experiments.
 
     Returns:
         Formatted table string suitable for terminal output.
@@ -471,6 +472,15 @@ def format_results_table(results: list[ExperimentResult]) -> str:
     successful = sum(1 for r in results if r.status == "success")
     total_time = sum(r.duration_seconds for r in results)
     lines.append(f"Total: {successful}/{len(results)} succeeded in {_format_duration(total_time)}")
+
+    # Show errors for failed experiments
+    if show_errors:
+        failed = [r for r in results if r.status == "failed" and r.error]
+        if failed:
+            lines.append("")
+            lines.append("Errors:")
+            for r in failed:
+                lines.append(f"  {r.name}: {r.error}")
 
     return "\n".join(lines)
 

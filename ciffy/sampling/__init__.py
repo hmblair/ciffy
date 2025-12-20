@@ -19,7 +19,7 @@ from .backbone import (
     sample_rna_autoregressive_langevin,
     sample_rna_dihedrals,
 )
-from .energy import ClashEnergy, CompositeEnergy, EnergyFunction, GMMEnergy
+from .energy import ClashEnergy, CompositeEnergy, EnergyFunction, GMMEnergy, StackingEnergy
 from .langevin import langevin_dynamics, langevin_dynamics_with_adaptation
 
 __all__ = [
@@ -38,6 +38,7 @@ __all__ = [
     "GMMEnergy",
     "ClashEnergy",
     "CompositeEnergy",
+    "StackingEnergy",
     # Langevin dynamics
     "langevin_dynamics",
     "langevin_dynamics_with_adaptation",

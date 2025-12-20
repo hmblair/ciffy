@@ -543,15 +543,18 @@ class PolymerEvaluator(ABC):
         """
         raise NotImplementedError
 
-    def get_base_pairs(self) -> list | None:
+    def get_stacking_pairs(self) -> list[tuple[int, int]] | None:
         """
-        Get Watson-Crick base pair information for stacking energy (RNA only).
+        Get consecutive base stacking pairs for stacking energy (RNA only).
+
+        Returns indices of consecutive bases that stack on each other along
+        the same strand. Used by StackingEnergy to compute stacking penalties.
 
         Default implementation returns None (for proteins).
-        Override in RNAEvaluator for stacking support.
+        Override in RNAEvaluator to return stacking pair indices.
 
         Returns:
-            List of (atom_i, atom_j) base pair indices, or None.
+            List of (base_i, base_i+1) tuples for consecutive bases, or None.
         """
         return None
 
@@ -670,17 +673,24 @@ class RNAEvaluator(PolymerEvaluator):
         """Get pairwise distances with previous residues."""
         return _get_pairwise_distances(self.polymer, self.res_idx, back_residues=2)
 
-    def get_base_pairs(self) -> list | None:
+    def get_stacking_pairs(self) -> list[tuple[int, int]]:
         """
-        Detect Watson-Crick base pairs for stacking energy.
+        Detect consecutive base stacking pairs for stacking energy.
 
-        TODO: Implement base pair detection.
+        Returns indices of consecutive bases along the same strand that should
+        stack on top of each other. For a strand of N bases, this returns
+        [(0,1), (1,2), (2,3), ..., (N-2, N-1)].
+
+        Stacking geometry is computed in StackingEnergy:
+        - Distance between base plane centroids (ideal: ~3.4 Å for RNA)
+        - Angle between base planes (ideal: parallel, ~0° offset)
+        - Lateral offset between bases (ideal: minimal centering)
 
         Returns:
-            List of (atom_i, atom_j) base pair indices, or empty list if none.
+            List of (base_i, base_i+1) tuples for consecutive bases.
         """
-        # Placeholder: return empty list for now
-        # TODO: Implement Watson-Crick base pair detection
+        # TODO: Implement consecutive base pair detection
+        # For now, return empty list. Will be implemented with full stacking energy.
         return []
 
 

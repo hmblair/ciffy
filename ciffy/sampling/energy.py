@@ -286,3 +286,116 @@ class CompositeEnergy(EnergyFunction):
         for e in self.energy_funcs:
             grad = grad + e.gradient(state)
         return grad
+
+
+class StackingEnergy(EnergyFunction):
+    """
+    Energy function for base stacking in RNA/DNA (scaffold for future implementation).
+
+    Base stacking is an important structural feature where consecutive bases along
+    the same strand stack on top of each other, providing structural stability.
+
+    ## Integration with Langevin Sampling
+
+    StackingEnergy follows the same pattern as ClashEnergy and integrates seamlessly
+    into the autoregressive Langevin sampling framework:
+
+    1. **Energy Composition:**
+       For RNA sampling, stack energies with other terms:
+       ```python
+       energy = CompositeEnergy([
+           GMMEnergy(gmm),              # Prefer GMM distribution
+           ClashEnergy(evaluator, ...),  # Avoid atom clashes
+           StackingEnergy(evaluator, ...) # Encourage proper stacking
+       ])
+       ```
+
+    2. **Evaluator Interface:**
+       - Evaluator's `apply_angles(state)` applies dihedral angles and reconstructs
+       - Evaluator's `get_stacking_pairs()` returns consecutive base indices [(0,1), (1,2), ...]
+       - StackingEnergy uses these to compute geometry-based penalties
+
+    3. **Geometry Computation (to be implemented):**
+       For each consecutive base pair (i, i+1):
+       - Get 3D coordinates of base atoms after angle application
+       - Compute base plane centroids (center of aromatic ring atoms)
+       - Distance penalty: E_dist = λ * (d - d_ideal)² where d_ideal ≈ 3.4 Å for RNA
+       - Orientation penalty: E_angle = λ * (θ - θ_ideal)² where θ_ideal ≈ 0° (parallel)
+       - Offset penalty: E_offset = λ * offset² (bases should be vertically aligned)
+       - Total: E = Σ(E_dist + E_angle + E_offset) over all stacking pairs
+
+    4. **Gradient Computation:**
+       - Use numerical gradients (finite differences) like ClashEnergy
+       - Future: analytical gradients for efficiency
+
+    ## Usage in sample_rna_autoregressive_langevin_with_stacking()
+
+    ```python
+    def sample_rna_autoregressive_langevin_with_stacking(
+        polymer, lambda_stacking=100.0, ...
+    ):
+        evaluator = RNAEvaluator(...)
+        energy_func = CompositeEnergy([
+            GMMEnergy(gmm),
+            ClashEnergy(evaluator, ...),
+            StackingEnergy(evaluator, lambda_stacking=lambda_stacking),  # NEW
+        ])
+        # Langevin dynamics automatically optimizes all three terms
+    ```
+
+    ## Args:
+        polymer_evaluator: RNAEvaluator with apply_angles() and get_stacking_pairs()
+        lambda_stacking: Weight of stacking penalty (default 100.0)
+    """
+
+    def __init__(
+        self,
+        polymer_evaluator,
+        lambda_stacking: float = 100.0,
+    ):
+        """
+        Initialize stacking energy (scaffold).
+
+        Args:
+            polymer_evaluator: RNAEvaluator with apply_angles() and get_stacking_pairs()
+            lambda_stacking: Weight coefficient for stacking penalty
+        """
+        self.polymer_evaluator = polymer_evaluator
+        self.lambda_stacking = lambda_stacking
+
+    def energy(self, state: np.ndarray) -> float:
+        """
+        Compute stacking penalty for candidate angles.
+
+        Args:
+            state: Dihedral angles to evaluate
+
+        Returns:
+            λ * sum_of_stacking_penalties
+
+        TODO: Implement full stacking geometry computation:
+        1. Apply angles using evaluator.apply_angles(state)
+        2. Get stacking pairs from evaluator.get_stacking_pairs()
+        3. For each (base_i, base_i+1) pair:
+           - Extract base ring atom coordinates
+           - Compute centroid and plane normal for each base
+           - Distance penalty: (distance - 3.4)²
+           - Orientation penalty: (angle_offset)²
+           - Lateral offset penalty: (xy_offset)²
+        4. Return λ * Σ(penalties)
+        """
+        # Placeholder: return 0 for now
+        # Will be implemented with full stacking energy
+        return 0.0
+
+    def gradient(self, state: np.ndarray) -> np.ndarray:
+        """
+        Compute gradient of stacking energy w.r.t. angles.
+
+        Uses numerical gradients (finite differences).
+
+        TODO: Implement numerical gradient computation for stacking.
+        """
+        # Placeholder: return zeros
+        state = np.atleast_1d(state)
+        return np.zeros_like(state)

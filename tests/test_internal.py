@@ -676,6 +676,267 @@ class TestRingPreservation:
                         err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
                     )
 
+    def _measure_ring_planarity(self, polymer, ring_atom_names, residue_idx=0):
+        """Measure how planar a ring is by computing RMS deviation from best-fit plane.
+
+        Args:
+            polymer: Polymer structure
+            ring_atom_names: List of ring atom names
+            residue_idx: Which residue to measure
+
+        Returns:
+            RMS deviation from best-fit plane in Angstroms
+        """
+        from ciffy import Scale
+        from ciffy.biochemistry import Residue
+
+        coords = polymer.coordinates
+        if hasattr(coords, 'numpy'):
+            coords = coords.numpy()
+
+        # Get residue boundaries
+        res_sizes = polymer.sizes(Scale.RESIDUE)
+        if hasattr(res_sizes, 'numpy'):
+            res_sizes = res_sizes.numpy()
+        residue_starts = np.concatenate([[0], np.cumsum(res_sizes)])
+        start = int(residue_starts[residue_idx])
+
+        # Get residue type
+        res_type = int(polymer.sequence[residue_idx])
+        res = Residue(res_type)
+
+        # Map atom names to local indices
+        atom_name_to_local = {}
+        for local_idx, atom in enumerate(res.atoms):
+            py_name = atom.name.replace("'", "p").replace('"', "pp")
+            atom_name_to_local[py_name] = local_idx
+
+        # Collect ring atom coordinates
+        ring_coords = []
+        for name in ring_atom_names:
+            local_idx = atom_name_to_local.get(name)
+            if local_idx is not None:
+                ring_coords.append(coords[start + local_idx])
+
+        if len(ring_coords) < 3:
+            return 0.0  # Can't measure planarity with < 3 atoms
+
+        ring_coords = np.array(ring_coords)
+
+        # Fit plane using SVD: find normal vector to plane
+        centroid = ring_coords.mean(axis=0)
+        centered = ring_coords - centroid
+        _, _, vh = np.linalg.svd(centered)
+        normal = vh[-1]  # Last row is normal to best-fit plane
+
+        # Compute signed distances from plane
+        distances = centered @ normal
+
+        # Return RMS deviation
+        return float(np.sqrt(np.mean(distances ** 2)))
+
+    @pytest.mark.xfail(reason="Ring deformation during CHI modification - Z-matrix ring dihedrals not yet implemented")
+    def test_pyrimidine_ring_preserved_on_chi_rotation(self):
+        """Test pyrimidine ring geometry preserved when CHI (glycosidic) angle changes.
+
+        CHI_PYRIMIDINE = O4' - C1' - N1 - C2 defines rotation around the glycosidic bond.
+        When CHI rotates, the entire nucleobase should rotate as a rigid body.
+        Ring internal distances must remain constant.
+
+        This is a critical test: if ring dihedrals are not properly included in the
+        Z-matrix, modifying CHI will implicitly change them, deforming the ring.
+        """
+        from ciffy import from_sequence, DihedralType
+
+        # Create uracil (pyrimidine)
+        polymer = from_sequence("u")
+
+        # Pyrimidine ring: N1, C2, N3, C4, C5, C6
+        ring_atoms = ["N1", "C2", "N3", "C4", "C5", "C6"]
+
+        # Get initial ring distances
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms)
+        initial_planarity = self._measure_ring_planarity(polymer, ring_atoms)
+
+        # Rotate CHI by a significant amount (90 degrees)
+        chi = polymer.dihedral(DihedralType.CHI_PYRIMIDINE)
+        assert len(chi) > 0, "No CHI_PYRIMIDINE dihedrals found"
+        assert not np.isnan(chi[0]), "CHI_PYRIMIDINE is NaN"
+
+        new_chi = chi.copy()
+        new_chi[0] = chi[0] + np.pi / 2  # Rotate by 90 degrees
+        polymer.set_dihedral(DihedralType.CHI_PYRIMIDINE, new_chi)
+
+        # Get ring distances after CHI rotation
+        final_distances = self._measure_ring_distances(polymer, ring_atoms)
+        final_planarity = self._measure_ring_planarity(polymer, ring_atoms)
+
+        # Ring distances should be unchanged (rigid body rotation)
+        for pair, initial_dist in initial_distances.items():
+            final_dist = final_distances.get(pair)
+            if final_dist is not None:
+                np.testing.assert_allclose(
+                    initial_dist,
+                    final_dist,
+                    atol=1e-4,
+                    err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f} after CHI rotation"
+                )
+
+        # Ring planarity should be preserved
+        np.testing.assert_allclose(
+            initial_planarity,
+            final_planarity,
+            atol=1e-4,
+            err_msg=f"Ring planarity changed from {initial_planarity:.4f} to {final_planarity:.4f} after CHI rotation"
+        )
+
+    @pytest.mark.xfail(reason="Ring deformation during CHI modification - Z-matrix ring dihedrals not yet implemented")
+    def test_purine_ring_preserved_on_chi_rotation(self):
+        """Test purine ring geometry preserved when CHI (glycosidic) angle changes.
+
+        CHI_PURINE = O4' - C1' - N9 - C4 defines rotation around the glycosidic bond.
+        Purines have fused 5+6 membered rings that must remain planar.
+        """
+        from ciffy import from_sequence, DihedralType
+
+        # Create adenine (purine)
+        polymer = from_sequence("a")
+
+        # Purine has fused rings: 5-membered (N9, C8, N7, C5, C4) + 6-membered (C4, C5, C6, N1, C2, N3)
+        ring_atoms = ["N9", "C8", "N7", "C5", "C4", "C6", "N1", "C2", "N3"]
+
+        # Get initial ring distances
+        initial_distances = self._measure_ring_distances(polymer, ring_atoms)
+        initial_planarity = self._measure_ring_planarity(polymer, ring_atoms)
+
+        # Rotate CHI by a significant amount (90 degrees)
+        chi = polymer.dihedral(DihedralType.CHI_PURINE)
+        assert len(chi) > 0, "No CHI_PURINE dihedrals found"
+        assert not np.isnan(chi[0]), "CHI_PURINE is NaN"
+
+        new_chi = chi.copy()
+        new_chi[0] = chi[0] + np.pi / 2  # Rotate by 90 degrees
+        polymer.set_dihedral(DihedralType.CHI_PURINE, new_chi)
+
+        # Get ring distances after CHI rotation
+        final_distances = self._measure_ring_distances(polymer, ring_atoms)
+        final_planarity = self._measure_ring_planarity(polymer, ring_atoms)
+
+        # Ring distances should be unchanged
+        for pair, initial_dist in initial_distances.items():
+            final_dist = final_distances.get(pair)
+            if final_dist is not None:
+                np.testing.assert_allclose(
+                    initial_dist,
+                    final_dist,
+                    atol=1e-4,
+                    err_msg=f"Ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f} after CHI rotation"
+                )
+
+        # Ring planarity should be preserved
+        np.testing.assert_allclose(
+            initial_planarity,
+            final_planarity,
+            atol=1e-4,
+            err_msg=f"Ring planarity changed from {initial_planarity:.4f} to {final_planarity:.4f} after CHI rotation"
+
+        )
+
+    @pytest.mark.xfail(reason="Ring deformation during CHI modification - Z-matrix ring dihedrals not yet implemented")
+    def test_multi_residue_chi_rotation_preserves_rings(self):
+        """Test CHI rotation in multi-residue RNA preserves all ring geometries.
+
+        This tests that modifying CHI for one residue doesn't affect rings
+        in other residues (which could happen if Z-matrix dependencies are wrong).
+        """
+        from ciffy import from_sequence, DihedralType
+
+        # Create 4-mer with both purines and pyrimidines
+        polymer = from_sequence("acgu")
+
+        # Measure initial ring distances for all residues
+        purine_atoms = ["N9", "C8", "N7", "C5", "C4", "C6", "N1", "C2", "N3"]
+        pyrimidine_atoms = ["N1", "C2", "N3", "C4", "C5", "C6"]
+
+        initial_distances = {
+            0: self._measure_ring_distances(polymer, purine_atoms, residue_idx=0),      # A
+            1: self._measure_ring_distances(polymer, pyrimidine_atoms, residue_idx=1),  # C
+            2: self._measure_ring_distances(polymer, purine_atoms, residue_idx=2),      # G
+            3: self._measure_ring_distances(polymer, pyrimidine_atoms, residue_idx=3),  # U
+        }
+
+        # Rotate CHI for the first residue (A, purine)
+        chi_purine = polymer.dihedral(DihedralType.CHI_PURINE)
+        if len(chi_purine) > 0 and not np.isnan(chi_purine[0]):
+            new_chi = chi_purine.copy()
+            new_chi[0] = chi_purine[0] + np.pi / 3  # Rotate by 60 degrees
+            polymer.set_dihedral(DihedralType.CHI_PURINE, new_chi)
+
+        # All ring distances should be unchanged
+        final_distances = {
+            0: self._measure_ring_distances(polymer, purine_atoms, residue_idx=0),
+            1: self._measure_ring_distances(polymer, pyrimidine_atoms, residue_idx=1),
+            2: self._measure_ring_distances(polymer, purine_atoms, residue_idx=2),
+            3: self._measure_ring_distances(polymer, pyrimidine_atoms, residue_idx=3),
+        }
+
+        for res_idx in range(4):
+            for pair, initial_dist in initial_distances[res_idx].items():
+                final_dist = final_distances[res_idx].get(pair)
+                if final_dist is not None:
+                    np.testing.assert_allclose(
+                        initial_dist,
+                        final_dist,
+                        atol=1e-4,
+                        err_msg=f"Residue {res_idx} ring bond {pair} changed from {initial_dist:.4f} to {final_dist:.4f}"
+                    )
+
+    def test_sugar_ring_preserved_on_chi_rotation(self):
+        """Test that the ribose sugar ring is preserved when CHI rotates.
+
+        The sugar ring (C1'-C2'-C3'-C4'-O4') should not be affected by
+        CHI rotation since CHI only rotates atoms attached to C1' (the base).
+        This test passes because sugar atoms are upstream of CHI in the Z-matrix.
+        """
+        from ciffy import from_sequence, DihedralType
+
+        polymer = from_sequence("a")
+
+        # Ribose sugar ring atoms
+        sugar_atoms = ["C1p", "C2p", "C3p", "C4p", "O4p"]
+
+        initial_distances = self._measure_ring_distances(polymer, sugar_atoms)
+        initial_planarity = self._measure_ring_planarity(polymer, sugar_atoms)
+
+        # Rotate CHI
+        chi = polymer.dihedral(DihedralType.CHI_PURINE)
+        if len(chi) > 0 and not np.isnan(chi[0]):
+            new_chi = chi.copy()
+            new_chi[0] = chi[0] + np.pi / 2
+            polymer.set_dihedral(DihedralType.CHI_PURINE, new_chi)
+
+        final_distances = self._measure_ring_distances(polymer, sugar_atoms)
+        final_planarity = self._measure_ring_planarity(polymer, sugar_atoms)
+
+        # Sugar ring distances should be unchanged
+        for pair, initial_dist in initial_distances.items():
+            final_dist = final_distances.get(pair)
+            if final_dist is not None:
+                np.testing.assert_allclose(
+                    initial_dist,
+                    final_dist,
+                    atol=1e-4,
+                    err_msg=f"Sugar ring bond {pair} changed after CHI rotation"
+                )
+
+        # Sugar ring planarity should be preserved (note: sugar is puckered, not planar)
+        # We just check it doesn't change, not that it's flat
+        np.testing.assert_allclose(
+            initial_planarity,
+            final_planarity,
+            atol=1e-4,
+            err_msg=f"Sugar ring geometry changed after CHI rotation"
+        )
 
 
 # =============================================================================

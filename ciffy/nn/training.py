@@ -356,6 +356,7 @@ def train_epoch(
     progress_bar: bool = True,
     rank: Optional[int] = None,
     world_size: Optional[int] = None,
+    diagnostics: Optional[Any] = None,
 ) -> dict[str, float]:
     """
     Train model for one epoch with flexible loss function.
@@ -382,6 +383,9 @@ def train_epoch(
         rank: Process rank for distributed training. Progress bar only
             shown on rank 0.
         world_size: Total number of processes for distributed training.
+        diagnostics: Optional TrainingDiagnostics instance for tracking
+            gradient norms, parameter statistics, etc. If provided, diagnostic
+            metrics are computed after backward pass and included in results.
 
     Returns:
         Dict of averaged metrics over the epoch. Always includes:
@@ -402,6 +406,7 @@ def train_epoch(
 
     model.train()
     metrics_accum: dict[str, float] = defaultdict(float)
+    diag_snapshot: dict[str, float] = {}  # Diagnostic metrics (not averaged)
     n_samples = 0
     n_skipped = 0
 
@@ -435,6 +440,12 @@ def train_epoch(
 
             # Backward pass
             loss.backward()
+
+            # Compute diagnostics after backward, before optimizer step
+            if diagnostics is not None:
+                diag_metrics = diagnostics.compute(optimizer, scheduler)
+                # Diagnostics are snapshot values, keep latest (not averaged)
+                diag_snapshot.update(diag_metrics)
 
             # Gradient clipping
             if grad_clip is not None:
@@ -478,6 +489,9 @@ def train_epoch(
             result[key] = value / n_samples
     result["n_samples"] = float(n_samples)
     result["n_skipped"] = float(n_skipped)
+
+    # Add diagnostic snapshot (not averaged, latest values)
+    result.update(diag_snapshot)
 
     return result
 

@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from torch.utils.data import DataLoader
 
 from .training import get_device, load_checkpoint, save_checkpoint, set_seed, train_epoch
+from .diagnostics import DiagnosticsConfig, TrainingDiagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -130,16 +131,32 @@ class BaseConfig:
 
     Subclass this to add model-specific and data-specific configuration.
 
+    Attributes:
+        training: Training hyperparameters (epochs, lr, etc.).
+        output: Checkpoint and output directory settings.
+        wandb: Weights & Biases logging configuration.
+        diagnostics: Training diagnostics configuration. If None (default),
+            diagnostics are disabled. When enabled, gradient norms, parameter
+            statistics, and learning rates are tracked and logged automatically.
+
     Example:
         >>> @dataclass
         >>> class VAEConfig(BaseConfig):
         ...     model: VAEModelConfig = field(default_factory=VAEModelConfig)
         ...     data: DataConfig = field(default_factory=DataConfig)
+
+    Example with diagnostics:
+        >>> config = VAEConfig.from_yaml("config.yaml")
+        >>> config.diagnostics = DiagnosticsConfig(
+        ...     track_gradients=True,
+        ...     track_parameters=True,
+        ... )
     """
 
     training: TrainingConfig = field(default_factory=TrainingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
+    diagnostics: DiagnosticsConfig | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "BaseConfig":
@@ -238,6 +255,12 @@ class BaseTrainer(ABC):
         - on_epoch_end(epoch, metrics): Called after each epoch
         - create_loss_fn(): Return loss function (default uses model.compute_loss)
 
+    Diagnostics:
+        When config.diagnostics is set to a DiagnosticsConfig, the trainer
+        automatically tracks gradient norms, parameter statistics, and learning
+        rates. These metrics are included in the metrics dict passed to the
+        logger (wandb, etc.) each epoch.
+
     Example:
         >>> class VAETrainer(BaseTrainer):
         ...     def create_optimizer(self):
@@ -248,6 +271,11 @@ class BaseTrainer(ABC):
         ...
         ...     def on_epoch_start(self, epoch):
         ...         self.model.beta = self.beta_scheduler.get_beta(epoch)
+
+    Example with diagnostics:
+        >>> config.diagnostics = DiagnosticsConfig(track_gradients=True)
+        >>> trainer = VAETrainer(config, model, dataset, logger=wandb_logger)
+        >>> trainer.train()  # Gradient norms logged to wandb automatically
     """
 
     def __init__(
@@ -308,6 +336,12 @@ class BaseTrainer(ABC):
         self.current_epoch = 0
         self.best_loss = float("inf")
         self.best_checkpoint_path = self.checkpoint_dir / "checkpoint_best.pt"
+
+        # Initialize diagnostics if configured
+        if config.diagnostics is not None:
+            self.diagnostics = TrainingDiagnostics(self.model, config.diagnostics)
+        else:
+            self.diagnostics = None
 
     @abstractmethod
     def create_optimizer(self) -> "optim.Optimizer":
@@ -418,6 +452,7 @@ class BaseTrainer(ABC):
                     optimizer=self.optimizer,
                     grad_clip=self.config.training.grad_clip,
                     progress_bar=not self.quiet,
+                    diagnostics=self.diagnostics,
                 )
                 total_samples += int(metrics.get("n_samples", 0))
 
@@ -456,6 +491,9 @@ class BaseTrainer(ABC):
             # Ensure logger is closed
             if self.metrics_logger is not None:
                 self.metrics_logger.finish()
+            # Clean up diagnostics (remove activation hooks)
+            if self.diagnostics is not None:
+                self.diagnostics.cleanup()
 
         return {
             "final_loss": metrics.get("loss"),

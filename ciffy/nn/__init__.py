@@ -49,6 +49,15 @@ from .loggers import (
     NoOpLogger,
     create_logger,
 )
+from .diagnostics import (
+    GradientTracker,
+    ParameterTracker,
+    ActivationTracker,
+    LearningRateTracker,
+    TrainingDiagnostics,
+    DiagnosticsConfig,
+    diagnose_gradients,
+)
 
 # Runners (moved from root to runners/)
 from .runners import (
@@ -113,6 +122,14 @@ __all__ = [
     "WandbLogger",
     "NoOpLogger",
     "create_logger",
+    # Training diagnostics
+    "GradientTracker",
+    "ParameterTracker",
+    "ActivationTracker",
+    "LearningRateTracker",
+    "TrainingDiagnostics",
+    "DiagnosticsConfig",
+    "diagnose_gradients",
     # Experiment running (from runners/)
     "ExperimentResult",
     "run_experiments",

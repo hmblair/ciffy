@@ -759,12 +759,251 @@ for r in results:
 print(format_results_table(results))
 ```
 
+## Inference
+
+After training a model, use ciffy's inference system to generate structures from sequences.
+
+### Loading Trained Models
+
+```python
+from ciffy.nn import load_vae
+
+# Load a trained VAE from checkpoint
+vae = load_vae("checkpoints/vae_best.pt", device="cuda")
+print(f"Latent dimension: {vae.latent_dim}")
+```
+
+### Sampling from Sequences
+
+Generate new structures for a given sequence:
+
+```python
+import ciffy
+from ciffy.nn import load_vae, generate_samples
+
+# Load trained model
+vae = load_vae("checkpoints/vae_best.pt", device="cuda")
+
+# Generate structures from a sequence
+samples = generate_samples(
+    vae,
+    sequence="MGKLF",      # Protein sequence
+    n_samples=10,          # Generate 10 conformations
+    temperature=1.0,       # Sampling temperature
+    output_dir="./generated",  # Save to disk
+    prefix="gen_",         # Filename prefix
+)
+
+print(f"Generated {len(samples)} structures")
+```
+
+### Multiple Sequences and Multi-chain Complexes
+
+```python
+# Generate for multiple sequences
+samples = generate_samples(
+    vae,
+    sequence=["MGKLF", "acgu"],  # Protein and RNA
+    n_samples=5,
+    output_dir="./complexes",
+)
+
+# Or load from FASTA file
+with open("sequences.fasta", "w") as f:
+    f.write(">protein1\nMGKLF\n>rna1\nacgu\n")
+
+samples = generate_samples(
+    vae,
+    sequence=[],  # Not used when loading from file
+    n_samples=5,
+    output_dir="./complexes",
+)
+```
+
+### Reconstruction and Interpolation
+
+```python
+from ciffy.nn.vae import reconstruct_polymer, interpolate_structures
+
+# Load existing structure
+p1 = ciffy.load("structure1.cif", backend="torch").to("cuda")
+
+# Reconstruct through VAE
+recon = reconstruct_polymer(vae, p1, sample_latent=False)
+recon.numpy().write("reconstructed.cif")
+
+# Interpolate between two structures in latent space
+p2 = ciffy.load("structure2.cif", backend="torch").to("cuda")
+frames = interpolate_structures(
+    vae, p1, p2,
+    n_steps=20,
+    output_dir="./interpolation"
+)
+
+print(f"Generated {len(frames)} interpolation frames")
+```
+
+### Batch Inference via CLI
+
+Run inference on multiple sequences with a YAML configuration file:
+
+**Config file** (`configs/inference_example.yaml`):
+
+```yaml
+model:
+  checkpoint_path: ./checkpoints/vae_best.pt
+  model_type: vae
+  device: auto
+
+input:
+  # Option 1: Inline sequences
+  sequences:
+    - MGKLF
+    - acgu
+
+  # Option 2: Load from FASTA file
+  # sequence_file: sequences.fasta
+
+sampling:
+  n_samples: 10
+  temperature: 1.0
+  seed: 42
+
+output:
+  output_dir: ./inference_output
+  id_prefix: gen_
+```
+
+**Run inference**:
+
+```bash
+# Single config
+ciffy inference configs/inference_example.yaml
+
+# Multiple configs (parallel across GPUs)
+ciffy inference configs/inference*.yaml
+
+# Sequential execution
+ciffy inference configs/*.yaml --sequential
+
+# Specific device
+ciffy inference configs/*.yaml --device cpu
+```
+
+**Results**:
+
+```
+============================================================
+Ciffy Inference Runner
+============================================================
+Configs: 2
+Parallel: True
+Device: auto
+
+  1. configs/inference_small.yaml
+  2. configs/inference_large.yaml
+
+Running inference...
+------------------------------------------------------------
+
+============================================================
+Results
+============================================================
+Job              Status     Structures  Sequences  Device    Time
+-----------      --------   ----------  ---------  --------  ----------
+inference_small  success    100         10         cuda:0    5.2s
+inference_large  success    500         50         cuda:1    12.3s
+-----------      --------   ----------  ---------  --------  ----------
+Total: 2/2 succeeded, 600 structures in 17.5s
+```
+
+### Using FASTA Files for Sequences
+
+Create a FASTA file with sequences:
+
+```fasta
+>protein1
+MGKLF
+>rna1
+acgu
+>protein2
+ARNDCEQGHILKMFPSTWYV
+```
+
+Use in inference config:
+
+```yaml
+input:
+  sequence_file: sequences.fasta  # Auto-detects format
+```
+
+The sequence IDs (lines starting with '>') are used for output filenames.
+
+### Protocol and Extension
+
+The inference system is built on protocols, making it easy to add new model types:
+
+```python
+from ciffy.nn import PolymerGenerativeModel
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ciffy import Polymer
+
+# Any model implementing this protocol works with the inference system:
+class MyModel:
+    def sample(
+        self,
+        template: Polymer,
+        n_samples: int = 1,
+        temperature: float = 1.0,
+        **kwargs,
+    ) -> list[Polymer]:
+        """Generate conformations from template."""
+        ...
+
+# Then use with generate_samples:
+from ciffy.nn import generate_samples
+
+samples = generate_samples(
+    MyModel(),
+    sequence="MGKLF",
+    n_samples=10,
+    output_dir="./outputs",
+)
+```
+
+### Programmatic Inference
+
+```python
+from ciffy.nn import load_model_from_checkpoint, generate_samples
+
+# Load any registered model
+model, checkpoint_info = load_model_from_checkpoint(
+    "checkpoints/vae_best.pt",
+    device="cuda"
+)
+
+print(f"Model: {model.__class__.__name__}")
+print(f"Trained for {checkpoint_info['epoch']} epochs")
+print(f"Best loss: {checkpoint_info['best_loss']:.4f}")
+
+# Generate samples
+samples = generate_samples(
+    model,
+    sequence="MGKLF",
+    n_samples=10,
+    output_dir="./outputs",
+)
+```
+
 ## Performance Tips
 
 1. **Load once, reuse**: Parse CIF files once and keep polymers in memory
 2. **Use GPU**: Move to CUDA for large structures
 3. **Mixed precision**: Use `torch.float16` or `torch.bfloat16` for large batches
 4. **Avoid repeated conversions**: Stay in one backend throughout training
+5. **Parallel inference**: Use `ciffy inference` with multiple GPUs for batch generation
 
 ```python
 # Good: Load once
@@ -773,4 +1012,7 @@ polymers = [ciffy.load(f, backend="torch").to("cuda") for f in files]
 # Bad: Load repeatedly
 for epoch in range(100):
     polymer = ciffy.load(file, backend="torch")  # Slow!
+
+# Parallel inference via CLI (auto-distributes across GPUs)
+# ciffy inference configs/*.yaml
 ```

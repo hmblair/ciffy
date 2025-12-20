@@ -187,6 +187,9 @@ ciffy file1.cif file2.cif
 
 # Run multiple training experiments in parallel
 ciffy experiment configs/*.yaml
+
+# Run inference to generate structures from sequences
+ciffy inference configs/inference*.yaml
 ```
 
 Example output:

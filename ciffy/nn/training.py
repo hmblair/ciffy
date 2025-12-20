@@ -95,6 +95,7 @@ class ExperimentResult:
         device: Device used for training (e.g., 'cuda:0', 'cpu').
         duration_seconds: Total training time in seconds.
         checkpoint_path: Path to the final/best checkpoint file.
+        log_file: Path to log file containing stdout/stderr from the experiment.
         error: Error message if status is 'failed', None otherwise.
     """
 
@@ -111,6 +112,7 @@ class ExperimentResult:
     device: str = ""
     duration_seconds: float = 0.0
     checkpoint_path: str | None = None
+    log_file: str | None = None
     error: str | None = None
 
 

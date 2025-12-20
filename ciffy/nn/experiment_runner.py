@@ -65,7 +65,7 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
 
     This function is designed to be called by ProcessPoolExecutor.
     It imports the training script and runs training with the given config,
-    sending progress updates to a queue.
+    sending progress updates to a queue. All stdout/stderr is captured to a temp log file.
 
     Args:
         args: Tuple of (config_path, experiment_name, device, scripts_dir, progress_queue)
@@ -73,9 +73,19 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
     Returns:
         ExperimentResult with training outcomes.
     """
+    import io
+    import sys
+    import tempfile
+    import traceback
+
     config_path, experiment_name, device, scripts_dir, progress_queue = args
 
     start_time = time.time()
+
+    # Create temp log file (deleted=False so it persists for user to inspect)
+    log_fd, log_file = tempfile.mkstemp(prefix=f"ciffy_{experiment_name}_", suffix=".log")
+    import os
+    os.close(log_fd)  # Close the file descriptor, we'll write via StringIO
 
     def send_progress(status: str, epoch: int = 0, total_epochs: int = 0, loss: float | None = None):
         """Send progress update to queue."""
@@ -93,9 +103,14 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
             except Exception:
                 pass  # Ignore queue errors
 
+    # Capture stdout/stderr to log file
+    log_buffer = io.StringIO()
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+
     try:
-        # Import here to avoid issues with multiprocessing
-        import sys
+        # Redirect output to buffer
+        sys.stdout = log_buffer
+        sys.stderr = log_buffer
 
         # Add scripts directory to path for importing train_vae
         if scripts_dir and scripts_dir not in sys.path:
@@ -135,6 +150,7 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
                 duration_seconds=duration,
                 error=result["error"],
                 total_epochs=total_epochs,
+                log_file=log_file,
             )
 
         send_progress("complete", total_epochs, total_epochs, result.get("best_loss"))
@@ -152,9 +168,12 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
             device=device or result.get("device", "unknown"),
             duration_seconds=duration,
             checkpoint_path=result.get("checkpoint_path"),
+            log_file=log_file,
         )
 
     except Exception as e:
+        # Capture the full traceback
+        traceback.print_exc()
         duration = time.time() - start_time
         send_progress("failed", 0, 0)
         return ExperimentResult(
@@ -164,7 +183,17 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
             device=device or "unknown",
             duration_seconds=duration,
             error=str(e),
+            log_file=log_file,
         )
+
+    finally:
+        # Restore stdout/stderr
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+
+        # Write captured output to log file
+        if log_file:
+            with open(log_file, "w") as f:
+                f.write(log_buffer.getvalue())
 
 
 def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
@@ -386,7 +415,7 @@ def run_experiments(
                         result = future.result()
                         results.append(result)
                     except Exception as e:
-                        # Handle unexpected executor errors
+                        # Handle unexpected executor errors (log file may not exist)
                         result = ExperimentResult(
                             name=exp_name,
                             config_path=exp_args[0],
@@ -475,12 +504,15 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
 
     # Show errors for failed experiments
     if show_errors:
-        failed = [r for r in results if r.status == "failed" and r.error]
+        failed = [r for r in results if r.status == "failed"]
         if failed:
             lines.append("")
             lines.append("Errors:")
             for r in failed:
-                lines.append(f"  {r.name}: {r.error}")
+                error_msg = r.error or "Unknown error"
+                lines.append(f"  {r.name}: {error_msg}")
+                if r.log_file:
+                    lines.append(f"    Log: {r.log_file}")
 
     return "\n".join(lines)
 

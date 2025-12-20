@@ -67,8 +67,10 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
     atoms: list[str] = []
     ideal_coords: dict[str, tuple[float, float, float]] = {}
     bonds: list[tuple[str, str]] = []
+    torsions: dict[str, tuple[str, str, str, str]] = {}
     in_atom_loop = False
     in_bond_loop = False
+    in_torsion_loop = False
     # Column indices for atom loop parsing
     atom_columns: list[str] = []
     atom_id_col = -1
@@ -79,6 +81,13 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
     bond_columns: list[str] = []
     bond_atom1_col = -1
     bond_atom2_col = -1
+    # Column indices for torsion loop parsing
+    torsion_columns: list[str] = []
+    tor_id_col = -1
+    tor_atom1_col = -1
+    tor_atom2_col = -1
+    tor_atom3_col = -1
+    tor_atom4_col = -1
 
     def make_residue() -> ResidueDefinition | None:
         """Create ResidueDefinition from current state if valid."""
@@ -94,6 +103,7 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
             atoms=atoms.copy(),
             ideal_coords=ideal_coords.copy(),
             bonds=bonds.copy(),
+            torsions=torsions.copy() if torsions else None,
         )
 
     def _parse_float(s: str) -> float | None:
@@ -122,8 +132,10 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                 atoms = []
                 ideal_coords = {}
                 bonds = []
+                torsions = {}
                 in_atom_loop = False
                 in_bond_loop = False
+                in_torsion_loop = False
                 atom_columns = []
                 atom_id_col = -1
                 x_ideal_col = -1
@@ -132,6 +144,12 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                 bond_columns = []
                 bond_atom1_col = -1
                 bond_atom2_col = -1
+                torsion_columns = []
+                tor_id_col = -1
+                tor_atom1_col = -1
+                tor_atom2_col = -1
+                tor_atom3_col = -1
+                tor_atom4_col = -1
                 continue
 
             if not comp_id:
@@ -159,8 +177,10 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
             elif line.startswith('loop_'):
                 in_atom_loop = False
                 in_bond_loop = False
+                in_torsion_loop = False
                 atom_columns = []
                 bond_columns = []
+                torsion_columns = []
             elif line.startswith('_chem_comp_atom.'):
                 col_name = line.strip().split()[0]  # e.g., "_chem_comp_atom.atom_id"
                 field = col_name.split('.')[-1]  # e.g., "atom_id"
@@ -254,9 +274,47 @@ def parse_ccd(filepath: str, whitelist: set[str] | None = None) -> Iterator[Resi
                         atom2 = clean_atom_name(parts[bond_atom2_col])
                         bonds.append((atom1, atom2))
 
+            # Detect torsion definitions
+            elif line.startswith('_chem_comp_tor.'):
+                col_name = line.strip().split()[0]
+                field = col_name.split('.')[-1]
+                parts = line.split()
+
+                if len(parts) == 1:
+                    # Loop header format - track column position
+                    torsion_columns.append(field)
+                    col_idx = len(torsion_columns) - 1
+                    if field == 'id':
+                        tor_id_col = col_idx
+                    elif field == 'atom_id_1':
+                        tor_atom1_col = col_idx
+                    elif field == 'atom_id_2':
+                        tor_atom2_col = col_idx
+                    elif field == 'atom_id_3':
+                        tor_atom3_col = col_idx
+                    elif field == 'atom_id_4':
+                        tor_atom4_col = col_idx
+                    in_torsion_loop = True
+            elif in_torsion_loop and line.startswith('_'):
+                pass
+            elif in_torsion_loop and line.strip() and not line.startswith('#'):
+                parts = line.split()
+                if len(parts) >= 5 and parts[0] == comp_id:
+                    # Parse torsion definition
+                    if (tor_id_col >= 0 and tor_atom1_col >= 0 and tor_atom2_col >= 0 and
+                        tor_atom3_col >= 0 and tor_atom4_col >= 0 and
+                        tor_id_col < len(parts) and tor_atom4_col < len(parts)):
+                        tor_id = parts[tor_id_col].lower()
+                        a1 = clean_atom_name(parts[tor_atom1_col])
+                        a2 = clean_atom_name(parts[tor_atom2_col])
+                        a3 = clean_atom_name(parts[tor_atom3_col])
+                        a4 = clean_atom_name(parts[tor_atom4_col])
+                        torsions[tor_id] = (a1, a2, a3, a4)
+
             elif line.startswith('#'):
                 in_atom_loop = False
                 in_bond_loop = False
+                in_torsion_loop = False
 
     # Yield last component
     if res := make_residue():

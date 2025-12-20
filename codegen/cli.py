@@ -15,6 +15,10 @@ from pathlib import Path
 
 from .config import CCD_URL
 
+# Additional data sources
+PUBCHEM_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/periodictable/CSV"
+MONLIB_URL = "https://raw.githubusercontent.com/MonomerLibrary/monomers/master/links_and_mods.cif"
+
 
 def download_ccd(dest_path: Path) -> bool:
     """Download and decompress the CCD file."""
@@ -34,6 +38,30 @@ def download_ccd(dest_path: Path) -> bool:
         print(f"Failed to download CCD: {e}")
         if gz_path.exists():
             gz_path.unlink()
+        return False
+
+
+def download_elements(dest_path: Path) -> bool:
+    """Download PubChem periodic table CSV."""
+    print(f"Downloading periodic table from {PUBCHEM_URL}...")
+    try:
+        urllib.request.urlretrieve(PUBCHEM_URL, dest_path)
+        print(f"Elements downloaded to {dest_path}")
+        return True
+    except Exception as e:
+        print(f"Failed to download elements: {e}")
+        return False
+
+
+def download_monlib(dest_path: Path) -> bool:
+    """Download MonomerLibrary links_and_mods.cif."""
+    print(f"Downloading MonomerLibrary from {MONLIB_URL}...")
+    try:
+        urllib.request.urlretrieve(MONLIB_URL, dest_path)
+        print(f"MonomerLibrary downloaded to {dest_path}")
+        return True
+    except Exception as e:
+        print(f"Failed to download MonomerLibrary: {e}")
         return False
 
 
@@ -61,6 +89,42 @@ def get_ccd_path() -> Path:
     raise FileNotFoundError(
         f"CCD file not found and download failed. "
         f"Set CIFFY_CCD_PATH or download manually from {CCD_URL}"
+    )
+
+
+def get_elements_path() -> Path:
+    """Get path to PubChem elements CSV, downloading if necessary."""
+    cache_dir = Path.home() / ".cache" / "ciffy"
+    elements_path = cache_dir / "elements.csv"
+
+    if elements_path.exists():
+        return elements_path
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if download_elements(elements_path):
+        return elements_path
+
+    raise FileNotFoundError(
+        f"Elements file not found and download failed. "
+        f"Download manually from {PUBCHEM_URL}"
+    )
+
+
+def get_monlib_path() -> Path:
+    """Get path to MonomerLibrary links_and_mods.cif, downloading if necessary."""
+    cache_dir = Path.home() / ".cache" / "ciffy"
+    monlib_path = cache_dir / "links_and_mods.cif"
+
+    if monlib_path.exists():
+        return monlib_path
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if download_monlib(monlib_path):
+        return monlib_path
+
+    raise FileNotFoundError(
+        f"MonomerLibrary file not found and download failed. "
+        f"Download manually from {MONLIB_URL}"
     )
 
 

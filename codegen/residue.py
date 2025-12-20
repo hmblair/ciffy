@@ -25,6 +25,7 @@ class ResidueDefinition:
     atoms: list[str]  # Ordered list of atom names
     ideal_coords: dict[str, tuple[float, float, float]]  # Atom name -> (x, y, z)
     bonds: list[tuple[str, str]]  # List of (atom1, atom2) bonded pairs
+    torsions: dict[str, tuple[str, str, str, str]] | None = None  # Torsion name -> (a1,a2,a3,a4)
     class_name: str = ""  # Python class name
 
     def __post_init__(self):
@@ -122,8 +123,16 @@ def compute_dihedral_patterns(res: ResidueDefinition) -> dict[int, list[tuple[in
         }
         # Add sidechain chi dihedrals if this residue has them
         # All sidechain dihedrals are intra-residue (offset 0)
-        if res.name in SIDECHAIN_CHI_DEFS:
-            for chi_name, atoms in SIDECHAIN_CHI_DEFS[res.name].items():
+        # First try CCD-parsed torsions, then fall back to hard-coded definitions
+        chi_source = None
+        if res.torsions:
+            # Use CCD-parsed chi angles (preferred)
+            chi_source = {k: v for k, v in res.torsions.items() if k.startswith("chi")}
+        if not chi_source and res.name in SIDECHAIN_CHI_DEFS:
+            # Fall back to hard-coded definitions
+            chi_source = SIDECHAIN_CHI_DEFS[res.name]
+        if chi_source:
+            for chi_name, atoms in chi_source.items():
                 # Convert (a1, a2, a3, a4) to ((a1, 0), (a2, 0), (a3, 0), (a4, 0))
                 dihedral_defs[chi_name] = tuple((atom, 0) for atom in atoms)
     elif res.molecule_type in (Molecule.RNA, Molecule.DNA, Molecule.HYBRID):

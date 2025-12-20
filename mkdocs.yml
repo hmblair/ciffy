@@ -65,6 +65,10 @@ nav:
   - Getting Started: getting-started.md
   - Guides:
     - Selection & Filtering: guides/selection.md
+    - Input/Output: guides/io.md
     - Structural Analysis: guides/analysis.md
+    - Protein Analysis: guides/protein.md
+    - RNA Analysis: guides/rna.md
+    - Visualization: guides/visualization.md
     - Deep Learning: guides/deep-learning.md
   - API Reference: api.md

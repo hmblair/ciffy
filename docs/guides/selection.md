@@ -116,15 +116,15 @@ alanines = polymer.by_residue(Residue.ALA)
 Use `by_atom()` to select atoms by their type index:
 
 ```python
-from ciffy.biochemistry import Adenosine, Guanosine
+from ciffy.biochemistry import Residue
 
 # Get all N1 atoms from adenosines
-n1_atoms = polymer.by_atom(Adenosine.N1)
+n1_atoms = polymer.by_atom(Residue.A.N1)
 
 # Get multiple atom types
 c1_prime = polymer.by_atom([
-    Adenosine.C1p,
-    Guanosine.C1p,
+    Residue.A.C1p,
+    Residue.G.C1p,
 ])
 ```
 
@@ -142,18 +142,21 @@ print(f"Backbone atoms: {backbone.size()}")
 ciffy provides enums for all standard atoms:
 
 ```python
-from ciffy.biochemistry import (
-    Adenosine,   # A nucleotide atoms
-    Cytosine,    # C nucleotide atoms
-    Guanosine,   # G nucleotide atoms
-    Uridine,     # U nucleotide atoms
-)
+from ciffy.biochemistry import Residue
+
+# Access nucleotide atoms via Residue enum
+# Residue.A = Adenosine, Residue.G = Guanosine, etc.
 
 # Examples of available atoms
-Adenosine.N1   # N1 atom
-Adenosine.N3   # N3 atom
-Adenosine.C1p  # C1' sugar atom
-Adenosine.P    # Phosphate
+Residue.A.N1   # N1 atom in adenosine
+Residue.A.N3   # N3 atom in adenosine
+Residue.A.C1p  # C1' sugar atom
+Residue.A.P    # Phosphate
+
+# Same pattern for other nucleotides
+Residue.G.N1   # N1 in guanosine
+Residue.C.N1   # N1 in cytosine
+Residue.U.N1   # N1 in uridine
 ```
 
 ### Specialized Selection Methods

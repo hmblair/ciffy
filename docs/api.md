@@ -85,6 +85,22 @@
 
 ::: ciffy.DihedralType
 
+### kabsch_rotation
+
+::: ciffy.kabsch_rotation
+
+### kabsch_align
+
+::: ciffy.kabsch_align
+
+### tm_score
+
+::: ciffy.tm_score
+
+### lddt
+
+::: ciffy.lddt
+
 ---
 
 ## I/O
@@ -93,9 +109,31 @@
 
 ::: ciffy.write_cif
 
+### load_metadata
+
+::: ciffy.load_metadata
+
 ### from_sequence
 
 ::: ciffy.from_sequence
+
+### from_extract
+
+::: ciffy.from_extract
+
+---
+
+## Sampling
+
+### randomize_backbone
+
+::: ciffy.randomize_backbone
+
+---
+
+## Ensemble
+
+::: ciffy.Ensemble
 
 ---
 
@@ -159,3 +197,31 @@
 ::: ciffy.NUM_RESIDUES
 
 ::: ciffy.NUM_ATOMS
+
+### Dihedral Constants
+
+::: ciffy.PROTEIN_BACKBONE
+
+::: ciffy.RNA_BACKBONE
+
+::: ciffy.RNA_GLYCOSIDIC
+
+::: ciffy.DIHEDRAL_ATOMS
+
+::: ciffy.DIHEDRAL_NAME_TO_TYPE
+
+---
+
+## Visualization (ciffy.visualize)
+
+### to_defattr
+
+::: ciffy.to_defattr
+
+### plot_profile
+
+::: ciffy.plot_profile
+
+### contact_map
+
+::: ciffy.contact_map

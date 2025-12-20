@@ -100,11 +100,15 @@ print(f"Sidechain atoms: {sidechains.size()}")
 Extract alpha-carbon coordinates:
 
 ```python
-from ciffy.biochemistry import AminoAcids
+from ciffy.biochemistry import Residue
 
-# Get CA atoms using the atom enum
-ca_atoms = protein.by_atom(AminoAcids.ALA_CA)  # Works for all residues
-ca_coords = ca_atoms.coordinates
+# Get CA atoms for a specific residue type using .value
+ala_ca = protein.by_atom(Residue.ALA.CA.value)
+
+# For all CA atoms, use reduce to get one coordinate per residue
+# The backbone already includes CA for proteins
+backbone = protein.backbone()
+ca_coords = protein.reduce(protein.coordinates, ciffy.RESIDUE)
 
 print(f"CA trace: {ca_coords.shape}")  # (num_residues, 3)
 ```

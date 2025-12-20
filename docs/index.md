@@ -32,7 +32,7 @@ coords = polymer.coordinates  # (N, 3) tensor
 centroids = polymer.reduce(coords, ciffy.CHAIN)  # Per-chain centroids
 
 # Filter by molecule type
-rna_only = polymer.subset(ciffy.RNA)
+rna_only = polymer.by_type(ciffy.RNA)
 
 # Compute RMSD between structures
 rmsd = ciffy.rmsd(polymer1, polymer2)

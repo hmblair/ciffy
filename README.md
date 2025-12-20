@@ -107,7 +107,7 @@ aligned, Q = polymer.align(ciffy.CHAIN)
 distances = polymer.pairwise_distances(ciffy.RESIDUE)
 
 # Selection
-rna_chains = polymer.subset(ciffy.RNA)
+rna_chains = polymer.by_type(ciffy.RNA)
 backbone = polymer.backbone()
 
 # Molecule type per chain (parsed from CIF _entity_poly block)

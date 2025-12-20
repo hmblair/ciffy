@@ -19,6 +19,7 @@ Example:
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 try:
@@ -31,6 +32,50 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = None
     F = None
+
+logger = logging.getLogger(__name__)
+
+
+def _check_tensor(
+    tensor: "torch.Tensor",
+    name: str,
+    expected_dims: Optional[int] = None,
+    check_nan: bool = True,
+    check_inf: bool = True,
+) -> None:
+    """
+    Validate tensor for common issues that cause CUDA errors.
+
+    Args:
+        tensor: Tensor to validate.
+        name: Name for error messages.
+        expected_dims: Expected number of dimensions, or None to skip.
+        check_nan: Whether to check for NaN values.
+        check_inf: Whether to check for Inf values.
+
+    Raises:
+        ValueError: If tensor has wrong dimensions.
+        RuntimeError: If tensor contains NaN or Inf values.
+    """
+    if expected_dims is not None and tensor.dim() != expected_dims:
+        raise ValueError(
+            f"{name}: expected {expected_dims}D tensor, got {tensor.dim()}D "
+            f"with shape {tuple(tensor.shape)}"
+        )
+
+    if check_nan and torch.isnan(tensor).any():
+        nan_count = torch.isnan(tensor).sum().item()
+        raise RuntimeError(
+            f"{name}: tensor contains {nan_count} NaN values. "
+            f"Shape: {tuple(tensor.shape)}, dtype: {tensor.dtype}"
+        )
+
+    if check_inf and torch.isinf(tensor).any():
+        inf_count = torch.isinf(tensor).sum().item()
+        raise RuntimeError(
+            f"{name}: tensor contains {inf_count} Inf values. "
+            f"Shape: {tuple(tensor.shape)}, dtype: {tensor.dtype}"
+        )
 
 
 class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
@@ -50,6 +95,26 @@ class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        """
+        Apply RMS normalization.
+
+        Args:
+            x: Input tensor of any shape, normalized along last dimension.
+
+        Returns:
+            Normalized tensor with same shape as input.
+
+        Raises:
+            RuntimeError: If input contains NaN values.
+        """
+        # Check for NaN (would propagate through normalization)
+        if torch.isnan(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            raise RuntimeError(
+                f"RMSNorm: input contains {nan_count} NaN values. "
+                f"Shape: {tuple(x.shape)}"
+            )
+
         rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
         return x / rms * self.weight
 
@@ -89,8 +154,48 @@ class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
     def forward(
         self, q: "torch.Tensor", k: "torch.Tensor", seq_len: Optional[int] = None
     ) -> tuple["torch.Tensor", "torch.Tensor"]:
+        """
+        Apply rotary embeddings to query and key tensors.
+
+        Args:
+            q: Query tensor of shape (batch, heads, seq, head_dim)
+            k: Key tensor of shape (batch, heads, seq, head_dim)
+            seq_len: Sequence length (defaults to q.shape[2])
+
+        Returns:
+            Rotated (q, k) tensors.
+
+        Raises:
+            ValueError: If seq_len is invalid or tensors have wrong shape.
+        """
+        # Validate tensor shapes FIRST (before accessing shape indices)
+        if q.dim() != 4:
+            raise ValueError(
+                f"RoPE: query must be 4D (batch, heads, seq, head_dim), "
+                f"got {q.dim()}D with shape {tuple(q.shape)}"
+            )
+        if k.dim() != 4:
+            raise ValueError(
+                f"RoPE: key must be 4D (batch, heads, seq, head_dim), "
+                f"got {k.dim()}D with shape {tuple(k.shape)}"
+            )
+
+        # Now safe to access shape indices
         if seq_len is None:
             seq_len = q.shape[2]
+
+        # Validate sequence length
+        if seq_len <= 0:
+            raise ValueError(
+                f"RoPE: seq_len must be positive, got {seq_len}"
+            )
+
+        # Validate head dimension matches RoPE dimension
+        if q.shape[-1] != self.dim:
+            raise ValueError(
+                f"RoPE: head_dim mismatch. RoPE initialized with dim={self.dim}, "
+                f"but query has head_dim={q.shape[-1]}"
+            )
 
         if seq_len > self.cos_cached.shape[0]:
             self._update_cache(seq_len)
@@ -165,7 +270,60 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         self.rope = RotaryPositionEmbedding(self.head_dim, max_seq_len)
 
     def forward(self, x: "torch.Tensor", mask: Optional["torch.Tensor"] = None) -> "torch.Tensor":
-        B, L, _ = x.shape
+        """
+        Apply multi-head attention.
+
+        Args:
+            x: Input tensor of shape (batch, seq, d_model)
+            mask: Padding mask of shape (batch, seq) where True = masked
+
+        Returns:
+            Output tensor of shape (batch, seq, d_model)
+
+        Raises:
+            ValueError: If input shapes are invalid.
+            RuntimeError: If tensors contain NaN/Inf values.
+        """
+        # Validate input shape
+        if x.dim() != 3:
+            raise ValueError(
+                f"MultiHeadAttention: input must be 3D (batch, seq, d_model), "
+                f"got {x.dim()}D with shape {tuple(x.shape)}"
+            )
+
+        B, L, D = x.shape
+
+        if D != self.d_model:
+            raise ValueError(
+                f"MultiHeadAttention: input d_model mismatch. "
+                f"Expected {self.d_model}, got {D}. Input shape: {tuple(x.shape)}"
+            )
+
+        if L <= 0:
+            raise ValueError(
+                f"MultiHeadAttention: sequence length must be positive, got {L}"
+            )
+
+        # Validate mask if provided
+        if mask is not None:
+            if mask.dim() != 2:
+                raise ValueError(
+                    f"MultiHeadAttention: mask must be 2D (batch, seq), "
+                    f"got {mask.dim()}D with shape {tuple(mask.shape)}"
+                )
+            if mask.shape[0] != B or mask.shape[1] != L:
+                raise ValueError(
+                    f"MultiHeadAttention: mask shape {tuple(mask.shape)} "
+                    f"doesn't match input batch/seq ({B}, {L})"
+                )
+
+        # Check for NaN in input (common cause of CUDA errors)
+        if torch.isnan(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            raise RuntimeError(
+                f"MultiHeadAttention: input contains {nan_count} NaN values. "
+                f"This often indicates numerical instability in earlier layers."
+            )
 
         qkv = self.qkv_proj(x).view(B, L, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)
@@ -189,6 +347,14 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
             if mask is not None:
                 attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2), float("-inf"))
             attn = F.softmax(attn, dim=-1)
+
+            # Check for NaN after softmax (can happen with all-masked sequences)
+            if torch.isnan(attn).any():
+                raise RuntimeError(
+                    f"MultiHeadAttention: NaN in attention weights after softmax. "
+                    f"This typically occurs when all positions are masked in a sequence."
+                )
+
             attn = self.dropout(attn)
             out = torch.matmul(attn, v)
 
@@ -275,13 +441,104 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
 
     def forward(self, x: "torch.Tensor", mask: Optional["torch.Tensor"] = None) -> "torch.Tensor":
         """
+        Process input through transformer layers.
+
         Args:
             x: Input tensor (batch, seq, d_model)
             mask: Padding mask (batch, seq) where True = masked/ignored
 
         Returns:
             Output tensor (batch, seq, d_model)
+
+        Raises:
+            ValueError: If input shapes are invalid.
+            RuntimeError: If tensors contain NaN/Inf values.
         """
-        for layer in self.layers:
+        # Validate input tensor
+        if x.dim() != 3:
+            raise ValueError(
+                f"Transformer: input must be 3D (batch, seq, d_model), "
+                f"got {x.dim()}D with shape {tuple(x.shape)}"
+            )
+
+        B, L, D = x.shape
+
+        if D != self.d_model:
+            raise ValueError(
+                f"Transformer: input d_model mismatch. "
+                f"Expected {self.d_model}, got {D}. "
+                f"Input shape: {tuple(x.shape)}"
+            )
+
+        if L <= 0:
+            raise ValueError(
+                f"Transformer: sequence length must be positive, got {L}. "
+                f"This may indicate empty input data."
+            )
+
+        if B <= 0:
+            raise ValueError(
+                f"Transformer: batch size must be positive, got {B}."
+            )
+
+        # Validate mask if provided
+        if mask is not None:
+            if mask.dim() != 2:
+                raise ValueError(
+                    f"Transformer: mask must be 2D (batch, seq), "
+                    f"got {mask.dim()}D with shape {tuple(mask.shape)}"
+                )
+            if mask.shape[0] != B:
+                raise ValueError(
+                    f"Transformer: mask batch size {mask.shape[0]} "
+                    f"doesn't match input batch size {B}"
+                )
+            if mask.shape[1] != L:
+                raise ValueError(
+                    f"Transformer: mask sequence length {mask.shape[1]} "
+                    f"doesn't match input sequence length {L}"
+                )
+
+            # Check if all positions are masked (would cause NaN in attention)
+            if mask.all():
+                raise ValueError(
+                    f"Transformer: all positions are masked. "
+                    f"At least one position must be unmasked per sequence."
+                )
+
+            # Check per-sequence: warn if any sequence is fully masked
+            fully_masked = mask.all(dim=1)
+            if fully_masked.any():
+                n_fully_masked = fully_masked.sum().item()
+                raise ValueError(
+                    f"Transformer: {n_fully_masked} sequence(s) have all positions masked. "
+                    f"This will cause NaN in attention weights."
+                )
+
+        # Check for NaN/Inf in input
+        if torch.isnan(x).any():
+            nan_count = torch.isnan(x).sum().item()
+            raise RuntimeError(
+                f"Transformer: input contains {nan_count} NaN values. "
+                f"Check your data preprocessing and embedding layers."
+            )
+
+        if torch.isinf(x).any():
+            inf_count = torch.isinf(x).sum().item()
+            raise RuntimeError(
+                f"Transformer: input contains {inf_count} Inf values. "
+                f"This may indicate exploding gradients or invalid operations."
+            )
+
+        # Process through layers
+        for i, layer in enumerate(self.layers):
             x = layer(x, mask=mask)
+
+            # Check for NaN propagation after each layer (debug mode only)
+            if logger.isEnabledFor(logging.DEBUG) and torch.isnan(x).any():
+                nan_count = torch.isnan(x).sum().item()
+                logger.debug(
+                    f"Transformer layer {i}: output contains {nan_count} NaN values"
+                )
+
         return self.final_norm(x)

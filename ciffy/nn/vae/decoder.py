@@ -125,8 +125,51 @@ class DihedralDecoder(nn.Module if TORCH_AVAILABLE else object):
         Returns:
             mu: (L, D) predicted mean angles in radians
             kappa: (L, D) predicted concentration parameters (> 0)
+
+        Raises:
+            ValueError: If input shapes are invalid.
+            RuntimeError: If tensors contain NaN values.
         """
+        # Validate latent vector
+        if z.dim() != 1:
+            raise ValueError(
+                f"DihedralDecoder: z must be 1D (latent_dim,), "
+                f"got {z.dim()}D with shape {tuple(z.shape)}"
+            )
+
+        if z.shape[0] != self.latent_dim:
+            raise ValueError(
+                f"DihedralDecoder: z dimension {z.shape[0]} "
+                f"doesn't match latent_dim {self.latent_dim}"
+            )
+
+        # Check for NaN in latent
+        if torch.isnan(z).any():
+            nan_count = torch.isnan(z).sum().item()
+            raise RuntimeError(
+                f"DihedralDecoder: latent vector contains {nan_count} NaN values. "
+                f"This indicates a problem in the encoder or reparameterization."
+            )
+
+        # Validate mask shape
+        if dihedral_mask.dim() != 2:
+            raise ValueError(
+                f"DihedralDecoder: dihedral_mask must be 2D (seq, num_dihedrals), "
+                f"got {dihedral_mask.dim()}D with shape {tuple(dihedral_mask.shape)}"
+            )
+
         L = dihedral_mask.shape[0]
+
+        if L <= 0:
+            raise ValueError(
+                f"DihedralDecoder: sequence length must be positive, got {L}"
+            )
+
+        if L > self.max_seq_len:
+            raise ValueError(
+                f"DihedralDecoder: sequence length {L} exceeds max_seq_len {self.max_seq_len}. "
+                f"Increase max_seq_len in model config."
+            )
 
         # Get residue embeddings: (L, residue_dim)
         res_emb = self.residue_embedding(polymer)

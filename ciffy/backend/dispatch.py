@@ -315,6 +315,23 @@ def _torch_nerf_reconstruct(
     else:
         comp_off_tensor = torch.from_numpy(np.asarray(component_offsets)).to(device)
 
+    # Validate component IDs are within anchor_coords bounds
+    # This catches indexing errors before they cause cryptic CUDA errors
+    n_anchor_components = anchor_tensor.shape[0]
+    if len(comp_ids_tensor) > 0:
+        max_comp_id = int(comp_ids_tensor.max().item())
+        if max_comp_id >= n_anchor_components:
+            raise IndexError(
+                f"Component ID out of bounds: max component_id={max_comp_id} "
+                f"but anchor_coords has only {n_anchor_components} components. "
+                f"This indicates a mismatch between ZMatrix.component_ids and "
+                f"ConnectedComponents.anchor_coords."
+            )
+        if max_comp_id < 0:
+            raise IndexError(
+                f"Invalid negative component ID: {max_comp_id}"
+            )
+
     # Autograd path for gradient computation
     if internal.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf

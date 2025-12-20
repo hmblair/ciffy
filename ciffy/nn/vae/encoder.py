@@ -125,8 +125,51 @@ class DihedralEncoder(nn.Module if TORCH_AVAILABLE else object):
         Returns:
             mu: (latent_dim,) mean of latent distribution
             logvar: (latent_dim,) log-variance of latent distribution
+
+        Raises:
+            ValueError: If input shapes are invalid.
+            RuntimeError: If tensors contain NaN values.
         """
+        # Validate input shapes
+        if dihedrals.dim() != 2:
+            raise ValueError(
+                f"DihedralEncoder: dihedrals must be 2D (seq, num_dihedrals), "
+                f"got {dihedrals.dim()}D with shape {tuple(dihedrals.shape)}"
+            )
+
         L, D = dihedrals.shape
+
+        if L <= 0:
+            raise ValueError(
+                f"DihedralEncoder: sequence length must be positive, got {L}"
+            )
+
+        if L > self.max_seq_len:
+            raise ValueError(
+                f"DihedralEncoder: sequence length {L} exceeds max_seq_len {self.max_seq_len}. "
+                f"Increase max_seq_len in model config."
+            )
+
+        if D != MAX_DIHEDRALS_PER_RESIDUE:
+            raise ValueError(
+                f"DihedralEncoder: expected {MAX_DIHEDRALS_PER_RESIDUE} dihedrals per residue, "
+                f"got {D}. Input shape: {tuple(dihedrals.shape)}"
+            )
+
+        # Validate mask shape
+        if dihedral_mask.shape != dihedrals.shape:
+            raise ValueError(
+                f"DihedralEncoder: dihedral_mask shape {tuple(dihedral_mask.shape)} "
+                f"doesn't match dihedrals shape {tuple(dihedrals.shape)}"
+            )
+
+        # Check for NaN in input
+        if torch.isnan(dihedrals).any():
+            nan_count = torch.isnan(dihedrals).sum().item()
+            raise RuntimeError(
+                f"DihedralEncoder: dihedrals contain {nan_count} NaN values. "
+                f"Check your dihedral computation or data loading."
+            )
 
         # Sin/cos encode: (L, D) -> (L, 2*D)
         encoded = sincos_encode(dihedrals)

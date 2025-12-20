@@ -28,6 +28,7 @@ from ...types.dihedral import (
     RNA_BACKBONE_EXTENDED,
     MAX_DIHEDRALS_PER_RESIDUE,
 )
+from ..model_registry import register_model
 
 if TYPE_CHECKING:
     from ...polymer import Polymer
@@ -42,6 +43,7 @@ MOLECULE_TO_INDEX = {
 }
 
 
+@register_model("PolymerVAE")
 class PolymerVAE(nn.Module if TORCH_AVAILABLE else object):
     """
     Variational Autoencoder for polymer backbone conformations.

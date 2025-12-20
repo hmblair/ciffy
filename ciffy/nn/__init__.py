@@ -49,6 +49,11 @@ from .experiment_runner import (
     run_experiments,
     format_results_table,
 )
+from .protocols import PolymerGenerativeModel, PolymerEncoder
+from .model_registry import register_model, get_model_class
+from .inference import load_model_from_checkpoint, load_vae, generate_samples
+from .inference_config import InferenceConfig
+from .inference_runner import InferenceResult, run_inference_jobs, format_inference_results_table
 from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder, VAETrainer, VAEConfig
 
 __all__ = [
@@ -87,6 +92,19 @@ __all__ = [
     "ExperimentResult",
     "run_experiments",
     "format_results_table",
+    # Inference protocols and models
+    "PolymerGenerativeModel",
+    "PolymerEncoder",
+    "register_model",
+    "get_model_class",
+    # Inference utilities
+    "load_model_from_checkpoint",
+    "load_vae",
+    "generate_samples",
+    "InferenceConfig",
+    "InferenceResult",
+    "run_inference_jobs",
+    "format_inference_results_table",
     # VAE
     "PolymerVAE",
     "DihedralEncoder",

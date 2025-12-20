@@ -1,0 +1,29 @@
+# Example: Generate structures from a FASTA file
+#
+# This config reads sequences from a FASTA file instead of inline definitions.
+# Useful for larger scale inference runs with many sequences.
+#
+# Usage:
+#   ciffy inference configs/inference_from_fasta.yaml
+
+model:
+  checkpoint_path: ./checkpoints/vae/checkpoint_best.pt
+  model_type: vae
+  device: null
+
+# Load sequences from FASTA file
+input:
+  # Path to FASTA file with sequences
+  # Format: standard FASTA with headers starting with '>'
+  # Headers are extracted as sequence IDs
+  sequence_file: sequences.fasta
+
+sampling:
+  n_samples: 5
+  temperature: 1.2  # Slightly higher for more diversity
+  seed: null
+
+output:
+  output_dir: ./fasta_generated
+  id_prefix: ""  # Empty prefix to use FASTA IDs directly
+  save_latents: false

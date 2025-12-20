@@ -35,6 +35,11 @@ from .distributions import (
     VonMisesNLL,
 )
 from .trainer import VAEConfig, VAETrainer, VAEModelConfig, DataConfig
+from .inference import (
+    reconstruct_polymer,
+    interpolate_structures,
+    sample_from_sequence,
+)
 from ...types.dihedral import (
     MAX_DIHEDRALS_PER_RESIDUE,
     NUM_PROTEIN_BACKBONE_DIHEDRALS,
@@ -55,6 +60,10 @@ __all__ = [
     # Losses
     "VAELoss",
     "VonMisesNLL",
+    # Inference
+    "reconstruct_polymer",
+    "interpolate_structures",
+    "sample_from_sequence",
     # Utilities
     "sincos_encode",
     "sincos_decode",

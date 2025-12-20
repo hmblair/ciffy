@@ -249,10 +249,83 @@ def _experiment_command(args):
         sys.exit(1)
 
 
+def _inference_command(args):
+    """Handle the inference subcommand."""
+    try:
+        import torch
+    except ImportError:
+        print(
+            "Error: PyTorch is required for inference runner.\n"
+            "Install with: pip install torch",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    from glob import glob
+
+    from ciffy.nn.inference_runner import format_inference_results_table, run_inference_jobs
+
+    # Expand glob patterns in config paths
+    config_paths = []
+    for pattern in args.configs:
+        expanded = glob(pattern)
+        if not expanded:
+            print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
+        config_paths.extend(sorted(expanded))
+
+    if not config_paths:
+        print("Error: No config files found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Display inference plan
+    print()
+    print("=" * 60)
+    print("Ciffy Inference Runner")
+    print("=" * 60)
+    print(f"Configs: {len(config_paths)}")
+    print(f"Parallel: {not args.sequential}")
+    print(f"Device: {args.device}")
+    print()
+
+    for i, path in enumerate(config_paths, 1):
+        print(f"  {i}. {path}")
+    print()
+
+    # Run inference jobs
+    print("Running inference...")
+    print("-" * 60)
+
+    try:
+        results = run_inference_jobs(
+            config_paths=config_paths,
+            parallel=not args.sequential,
+            device=args.device,
+        )
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error running inference: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Print results table
+    print()
+    print("=" * 60)
+    print("Results")
+    print("=" * 60)
+    print(format_inference_results_table(results))
+    print()
+
+    # Exit with error code if any jobs failed
+    failed = sum(1 for r in results if r.status != "success")
+    if failed > 0:
+        sys.exit(1)
+
+
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "experiment"}
+    subcommands = {"map", "info", "split", "experiment", "inference"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command
@@ -382,11 +455,39 @@ def main():
         help="Device strategy (default: auto)",
     )
 
+    # Inference subcommand
+    inference_parser = subparsers.add_parser(
+        "inference",
+        help="Run inference to generate structures",
+        description=(
+            "Generate polymer structures from sequences using trained VAE models.\n"
+            "Supports parallel execution across GPUs."
+        ),
+    )
+    inference_parser.add_argument(
+        "configs",
+        nargs="+",
+        help="Config file paths or glob patterns (e.g., configs/*.yaml)",
+    )
+    inference_parser.add_argument(
+        "--sequential", "-s",
+        action="store_true",
+        help="Run inference jobs sequentially (default: parallel)",
+    )
+    inference_parser.add_argument(
+        "--device", "-d",
+        default="auto",
+        choices=["auto", "cuda", "mps", "cpu"],
+        help="Device strategy (default: auto)",
+    )
+
     args = parser.parse_args()
 
     # Route to appropriate handler
     if args.command == "experiment":
         _experiment_command(args)
+    elif args.command == "inference":
+        _inference_command(args)
     elif args.command == "map":
         _map_command(args)
     elif args.command == "split":

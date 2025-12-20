@@ -1,0 +1,62 @@
+# Example configuration for VAE inference (structure generation)
+#
+# Usage:
+#   ciffy inference configs/inference_example.yaml
+#
+# Or directly:
+#   python scripts/run_inference.py configs/inference_example.yaml
+
+# Model configuration
+model:
+  # Path to trained VAE checkpoint
+  checkpoint_path: ./checkpoints/vae/checkpoint_best.pt
+
+  # Model type (vae for now, extensible for diffusion/flow models later)
+  model_type: vae
+
+  # Device override (null = auto-detect based on availability)
+  # Options: null, "cuda", "cuda:0", "mps", "cpu"
+  device: null
+
+# Input configuration - choose ONE:
+input:
+  # Option 1: Provide sequences directly (simpler for small runs)
+  sequences:
+    - MGKLF                       # Small protein
+    - acgu                        # Small RNA
+    - ARNDCEQGHILKMFPSTWYV        # All standard amino acids
+
+  # Option 2: Load from file (uncomment to use)
+  # sequence_file: sequences.fasta
+
+  # Optional: Custom IDs for sequences (used in output filenames)
+  # If omitted, uses seq_0, seq_1, seq_2, etc.
+  # sequence_ids:
+  #   - small_protein
+  #   - small_rna
+  #   - all_aa
+
+# Sampling configuration
+sampling:
+  # Number of independent samples to generate per sequence
+  n_samples: 10
+
+  # Sampling temperature (higher = more diverse)
+  # For VAE: 1.0 = standard prior sampling
+  # Typical range: 0.5-2.0
+  temperature: 1.0
+
+  # Random seed for reproducibility (null for random)
+  seed: 42
+
+# Output configuration
+output:
+  # Directory to save .cif files
+  output_dir: ./inference_output
+
+  # Prefix for output filenames
+  # Format: {prefix}_{sequence_id}_{sample_index}.cif
+  id_prefix: gen_
+
+  # Save latent vectors as .npz files (for analysis)
+  save_latents: false

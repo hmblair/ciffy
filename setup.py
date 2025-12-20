@@ -268,17 +268,24 @@ def check_openmp_available():
     if sys.platform == 'darwin':
         # macOS: need libomp from Homebrew
         compile_args = ['-Xpreprocessor', '-fopenmp']
-        link_args = ['-lomp']
+        link_args = []
 
         # Find libomp
+        libomp_found = False
         for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
             if os.path.exists(libomp_path):
+                # Use explicit path with -lomp to avoid conflicting with system/bundled libomp
                 link_args.append(f'-L{libomp_path}')
+                link_args.append('-lomp')
+
                 include_path = libomp_path.replace('/lib', '/include')
                 if os.path.exists(include_path):
                     compile_args.append(f'-I{include_path}')
+
+                libomp_found = True
                 break
-        else:
+
+        if not libomp_found:
             # libomp not found
             return None, None
     else:
@@ -328,30 +335,29 @@ if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
         extra_compile_args.extend(omp_compile)
         extra_link_args.extend(omp_link)
 
-        # On macOS, use @rpath linking to avoid conflicts with PyTorch's bundled libomp
-        # This allows the runtime linker to find libomp from either:
-        # 1. PyTorch's lib directory (if torch is imported)
-        # 2. Homebrew's libomp (fallback)
+        # On macOS, configure rpaths to prefer Homebrew's libomp over bundled versions
+        # This avoids conflicts when PyTorch (with its own libomp) is also loaded
         if sys.platform == 'darwin':
             # Add header padding for install_name_tool modifications
             extra_link_args.append('-Wl,-headerpad_max_install_names')
 
-            # Add rpaths for libomp discovery
-            # PyTorch's lib directory (try to detect)
+            # Add rpaths for libomp discovery (Homebrew FIRST to prefer it)
+            for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
+                if os.path.exists(libomp_path):
+                    # Add Homebrew libomp as primary search path
+                    extra_link_args.append(f'-Wl,-rpath,{libomp_path}')
+                    print(f"  Added primary rpath for Homebrew libomp: {libomp_path}")
+                    break
+
+            # PyTorch's lib directory as fallback (if available and torch loaded)
             try:
                 import torch
                 torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
                 if os.path.exists(torch_lib):
                     extra_link_args.append(f'-Wl,-rpath,{torch_lib}')
-                    print(f"  Added rpath for PyTorch's libomp: {torch_lib}")
+                    print(f"  Added fallback rpath for PyTorch's libomp: {torch_lib}")
             except ImportError:
                 pass
-
-            # Homebrew libomp as fallback
-            for libomp_path in ['/opt/homebrew/opt/libomp/lib', '/usr/local/opt/libomp/lib']:
-                if os.path.exists(libomp_path):
-                    extra_link_args.append(f'-Wl,-rpath,{libomp_path}')
-                    break
 
         print("OpenMP enabled for parallel Z-matrix construction")
     else:

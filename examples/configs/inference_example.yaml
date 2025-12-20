@@ -1,10 +1,13 @@
 # Example configuration for VAE inference (structure generation)
 #
+# Copy this to configs/ and customize for your setup:
+#   cp examples/configs/inference_example.yaml configs/inference.yaml
+#
 # Usage:
-#   ciffy inference configs/inference_example.yaml
+#   ciffy inference configs/inference.yaml
 #
 # Or directly:
-#   python scripts/run_inference.py configs/inference_example.yaml
+#   python scripts/run_inference.py configs/inference.yaml
 
 # Model configuration
 model:

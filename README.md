@@ -189,7 +189,9 @@ ciffy file1.cif file2.cif
 ciffy experiment configs/*.yaml
 
 # Run inference to generate structures from sequences
-ciffy inference configs/inference*.yaml
+# Copy example config and customize for your setup:
+# cp examples/configs/inference_example.yaml configs/inference.yaml
+ciffy inference configs/inference.yaml
 ```
 
 Example output:

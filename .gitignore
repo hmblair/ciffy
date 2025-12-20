@@ -19,6 +19,10 @@ tests/data/
 # Generated documentation (mkdocs output)
 site/
 
-# Model training outputs
+# Model training and inference outputs
 checkpoints/
 samples/
+inference_output/
+
+# Personal config files (use examples/configs as templates)
+configs/

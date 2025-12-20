@@ -847,7 +847,7 @@ print(f"Generated {len(frames)} interpolation frames")
 
 Run inference on multiple sequences with a YAML configuration file:
 
-**Config file** (`configs/inference_example.yaml`):
+**Config file** (`examples/configs/inference_example.yaml`):
 
 ```yaml
 model:
@@ -877,11 +877,14 @@ output:
 **Run inference**:
 
 ```bash
+# Copy example config to personal directory first:
+cp examples/configs/inference_example.yaml configs/inference.yaml
+
 # Single config
-ciffy inference configs/inference_example.yaml
+ciffy inference configs/inference.yaml
 
 # Multiple configs (parallel across GPUs)
-ciffy inference configs/inference*.yaml
+ciffy inference configs/*.yaml
 
 # Sequential execution
 ciffy inference configs/*.yaml --sequential
@@ -930,7 +933,18 @@ acgu
 ARNDCEQGHILKMFPSTWYV
 ```
 
-Use in inference config:
+Copy and use the FASTA example config:
+
+```bash
+# Copy FASTA example config
+cp examples/configs/inference_from_fasta.yaml configs/inference_fasta.yaml
+
+# Edit with your FASTA file path
+# Then run:
+ciffy inference configs/inference_fasta.yaml
+```
+
+Or create your own config with:
 
 ```yaml
 input:

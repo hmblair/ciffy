@@ -23,7 +23,7 @@ CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 # =============================================================================
 
 # Element symbol -> atomic number
-# NOTE: This can be loaded from PubChem using load_elements_from_pubchem()
+# NOTE: Full periodic table available from PubChem via codegen.elements.load_elements()
 # The hard-coded values here are for backward compatibility and offline use.
 ELEMENTS: dict[str, int] = {
     "H": 1, "LI": 3, "C": 6, "N": 7, "O": 8, "F": 9, "NA": 11, "MG": 12,
@@ -32,17 +32,6 @@ ELEMENTS: dict[str, int] = {
     "RB": 37, "SR": 38, "MO": 42, "AG": 47, "CD": 48, "I": 53, "CS": 55,
     "BA": 56, "W": 74, "PT": 78, "AU": 79, "HG": 80, "PB": 82,
 }
-
-
-def load_elements_from_pubchem() -> dict[str, int]:
-    """
-    Load elements from PubChem periodic table.
-
-    Returns all 118 elements with symbol -> atomic number mapping.
-    Downloads data if not cached.
-    """
-    from .elements import load_elements
-    return load_elements()
 
 # Single-atom ions (used for classification and gperf generation)
 IONS: set[str] = {
@@ -222,45 +211,6 @@ DIHEDRAL_TYPE_INDEX: dict[str, int] = {
 DIHEDRAL_ATOMS: dict[str, tuple[str, str, str, str]] = {
     d.name.lower(): d.atoms for d in DIHEDRAL_TYPES
 }
-
-
-def load_backbone_dihedrals_from_monlib() -> dict[str, tuple[tuple[str, int], ...]]:
-    """
-    Load backbone dihedral definitions from MonomerLibrary.
-
-    Returns a dict mapping dihedral name to atoms with residue offsets.
-    Each atom is (atom_name, offset) where offset is -1 (previous) or 0 (current).
-
-    Downloads data if not cached.
-    """
-    from .monlib import load_backbone_dihedrals, convert_to_residue_offset
-
-    dihedrals = load_backbone_dihedrals()
-    result = {}
-
-    # Protein backbone
-    if dihedrals.phi:
-        result["phi"] = convert_to_residue_offset(dihedrals.phi)
-    if dihedrals.psi:
-        result["psi"] = convert_to_residue_offset(dihedrals.psi)
-    if dihedrals.omega:
-        result["omega"] = convert_to_residue_offset(dihedrals.omega)
-
-    # Nucleic acid backbone
-    if dihedrals.alpha:
-        result["alpha"] = convert_to_residue_offset(dihedrals.alpha)
-    if dihedrals.beta:
-        result["beta"] = convert_to_residue_offset(dihedrals.beta)
-    if dihedrals.gamma:
-        result["gamma"] = convert_to_residue_offset(dihedrals.gamma)
-    if dihedrals.delta:
-        result["delta"] = convert_to_residue_offset(dihedrals.delta)
-    if dihedrals.epsilon:
-        result["epsilon"] = convert_to_residue_offset(dihedrals.epsilon)
-    if dihedrals.zeta:
-        result["zeta"] = convert_to_residue_offset(dihedrals.zeta)
-
-    return result
 
 
 # =============================================================================

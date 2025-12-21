@@ -26,40 +26,8 @@ Note: The actual implementation is in the codegen submodules:
 
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
-
-# Codegen is now at project root - no sys.path manipulation needed
-from . import generate_all
-from .c_codegen import find_gperf, run_gperf
-from .cli import get_ccd_path
-
-
-def main() -> None:
-    """CLI entry point for code generation."""
-    parser = argparse.ArgumentParser(
-        description="Generate hash tables from PDB Chemical Component Dictionary"
-    )
-    parser.add_argument(
-        "ccd_path",
-        nargs="?",
-        help="Path to components.cif file (auto-downloaded if not provided)"
-    )
-    parser.add_argument("--gperf-path", help="Path to gperf executable")
-    parser.add_argument("--skip-gperf", action="store_true", help="Skip running gperf")
-    args = parser.parse_args()
-
-    # Get CCD path (auto-download if not provided)
-    ccd_path = Path(args.ccd_path) if args.ccd_path else get_ccd_path()
-
-    hash_dir, _ = generate_all(str(ccd_path))
-
-    if not args.skip_gperf:
-        gperf_path = args.gperf_path or find_gperf()
-        run_gperf(gperf_path, hash_dir)
-
-    print("Generation complete!")
-
+# Delegate to cli.main() - single source of truth for CLI
+from .cli import main
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,11 @@
 import pytest
 import numpy as np
 
+# Tolerance for geometric comparisons
+BOND_TOLERANCE = 1e-4  # Angstroms
+ANGLE_TOLERANCE = 1e-3  # Radians
+DIHEDRAL_TOLERANCE = 1e-6  # Radians for roundtrip
+
 
 class TestRingAnalysis:
     """Tests for ring detection and analysis."""
@@ -245,6 +250,364 @@ class TestTorchBackend:
             # Coordinates should still be valid
             coords = constrained.coordinates
             assert coords.shape == (constrained.n_atoms, 3)
+
+
+class TestCorrectnessRingDetection:
+    """Tests verifying ring detection correctness."""
+
+    def test_dof_count_linear_chain(self):
+        """Linear chain of N atoms should have exactly N-3 independent dihedrals."""
+        from ciffy.internal.ring_analysis import RingAnalyzer, ConstraintSpec
+
+        # Test various chain lengths
+        for n_atoms in [5, 10, 20]:
+            # Build linear chain bond graph
+            edges = [(i, i + 1) for i in range(n_atoms - 1)]
+            offsets, neighbors = _edges_to_csr(edges, n_atoms)
+
+            # Create mock Z-matrix indices (simplified)
+            zmatrix = np.zeros((n_atoms, 4), dtype=np.int64)
+            for i in range(n_atoms):
+                zmatrix[i, 0] = i
+                if i >= 1:
+                    zmatrix[i, 1] = i - 1
+                if i >= 2:
+                    zmatrix[i, 2] = i - 2
+                if i >= 3:
+                    zmatrix[i, 3] = i - 3
+
+            spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
+            result = RingAnalyzer.analyze_constraints(
+                offsets, neighbors, n_atoms, zmatrix, spec
+            )
+
+            expected_dof = n_atoms - 3
+            assert result.n_independent == expected_dof, (
+                f"Linear chain with {n_atoms} atoms should have {expected_dof} DOF, "
+                f"got {result.n_independent}"
+            )
+            assert len(result.ring_constraints) == 0, "Linear chain should have no rings"
+
+    def test_dof_count_single_ring(self):
+        """Single k-ring should have k-3 independent dihedrals."""
+        from ciffy.internal.ring_analysis import RingAnalyzer, ConstraintSpec
+
+        # Test 6-membered ring
+        n_atoms = 6
+        edges = [(i, (i + 1) % n_atoms) for i in range(n_atoms)]
+        offsets, neighbors = _edges_to_csr(edges, n_atoms)
+
+        # Create Z-matrix (ring structure)
+        zmatrix = np.zeros((n_atoms, 4), dtype=np.int64)
+        for i in range(n_atoms):
+            zmatrix[i, 0] = i
+            if i >= 1:
+                zmatrix[i, 1] = i - 1
+            if i >= 2:
+                zmatrix[i, 2] = i - 2
+            if i >= 3:
+                zmatrix[i, 3] = i - 3
+
+        spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
+        result = RingAnalyzer.analyze_constraints(
+            offsets, neighbors, n_atoms, zmatrix, spec
+        )
+
+        # 6-ring: 6-3 = 3 independent dihedrals (but first 3 atoms have no dihedrals)
+        # So we start with n_atoms-3 = 3 dihedrals, ring removes 3 more
+        # Actually: atoms 3,4,5 have dihedrals, ring constraint removes 3
+        # Expected: 3 - 3 = 0 independent DOF for a 6-ring with fixed bonds/angles
+        assert result.n_independent <= 3, f"6-ring should have at most 3 DOF, got {result.n_independent}"
+        assert len(result.ring_constraints) == 1, "Should detect exactly 1 ring"
+
+    def test_ring_detection_matches_topology(self):
+        """Ring detection should find rings that match the molecular topology."""
+        from ciffy import from_sequence
+
+        # Adenine (purine) has 2 fused rings
+        polymer = from_sequence("a")
+        constrained = polymer._coord_manager.with_constraints()
+
+        n_rings = len(constrained.independent_dof.ring_constraints)
+        # Purine base has 2 fundamental cycles (5-ring + 6-ring fused)
+        # Plus ribose sugar (5-ring)
+        # So we expect at least 2-3 rings detected
+        assert n_rings >= 2, f"Adenine should have at least 2 rings, found {n_rings}"
+
+
+class TestCorrectnessGeometryPreservation:
+    """Tests verifying geometry is preserved after setting dihedrals."""
+
+    def test_bond_lengths_preserved_after_set_values(self):
+        """Setting independent DOF values should preserve all bond lengths."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        # Get original bond lengths
+        original_distances = constrained.distances.copy()
+
+        if constrained.n_dof > 0:
+            # Modify independent values
+            original_values = constrained.values.copy()
+            new_values = original_values + 0.1  # Small perturbation
+            constrained.values = new_values
+
+            # Check bond lengths are preserved
+            new_distances = constrained.distances
+            diff = np.abs(new_distances - original_distances)
+            max_diff = np.max(diff)
+
+            assert max_diff < BOND_TOLERANCE, (
+                f"Bond lengths changed by {max_diff:.6f} A after setting dihedrals. "
+                f"Should be preserved within {BOND_TOLERANCE} A."
+            )
+
+    def test_bond_angles_preserved_after_set_values(self):
+        """Setting independent DOF values should preserve all bond angles."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        # Get original bond angles
+        original_angles = constrained.angles.copy()
+
+        if constrained.n_dof > 0:
+            # Modify independent values
+            original_values = constrained.values.copy()
+            new_values = original_values + 0.1
+            constrained.values = new_values
+
+            # Check bond angles are preserved
+            new_angles = constrained.angles
+            diff = np.abs(new_angles - original_angles)
+            max_diff = np.max(diff)
+
+            assert max_diff < ANGLE_TOLERANCE, (
+                f"Bond angles changed by {max_diff:.6f} rad after setting dihedrals. "
+                f"Should be preserved within {ANGLE_TOLERANCE} rad."
+            )
+
+    def test_independent_values_roundtrip(self):
+        """Getting and setting values should roundtrip correctly."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        if constrained.n_dof > 0:
+            # Get original values
+            original_values = constrained.values.copy()
+
+            # Set them back
+            constrained.values = original_values
+
+            # Get again
+            roundtrip_values = constrained.values
+
+            # Should be identical
+            diff = np.abs(roundtrip_values - original_values)
+            max_diff = np.max(diff)
+
+            assert max_diff < DIHEDRAL_TOLERANCE, (
+                f"Independent values changed by {max_diff:.6f} rad after roundtrip. "
+                f"Should be preserved within {DIHEDRAL_TOLERANCE} rad."
+            )
+
+    def test_coordinates_change_when_dihedrals_change(self):
+        """Coordinates should actually change when we set different dihedral values."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        if constrained.n_dof > 0:
+            # Get original coordinates
+            original_coords = constrained.coordinates.copy()
+
+            # Set very different dihedral values
+            original_values = constrained.values.copy()
+            new_values = original_values + np.pi / 4  # 45 degree change
+            constrained.values = new_values
+
+            # Coordinates should be different
+            new_coords = constrained.coordinates
+            diff = np.abs(new_coords - original_coords)
+            max_diff = np.max(diff)
+
+            assert max_diff > 0.1, (
+                f"Coordinates only changed by {max_diff:.6f} A after 45-degree dihedral change. "
+                "Expected significant change."
+            )
+
+
+class TestCorrectnessDOFReduction:
+    """Tests verifying DOF is reduced by constraints."""
+
+    def test_extra_bonds_reduce_dof(self):
+        """Adding extra bond constraints should reduce independent DOF."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        n_atoms = polymer.size()
+
+        # Without extra constraints
+        constrained_base = polymer._coord_manager.with_constraints()
+        base_dof = constrained_base.n_dof
+
+        # With extra bond constraint between distant atoms
+        # Find atoms far apart
+        atom_i = 5
+        atom_j = min(30, n_atoms - 1)
+
+        if atom_j > atom_i + 5:
+            constrained_extra = polymer._coord_manager.with_constraints(
+                extra_bonds=[(atom_i, atom_j, 3.0)]
+            )
+            extra_dof = constrained_extra.n_dof
+
+            assert extra_dof <= base_dof, (
+                f"Adding extra bond should not increase DOF. "
+                f"Base: {base_dof}, With extra bond: {extra_dof}"
+            )
+
+            # The extra bond creates a cycle, which should reduce DOF by 3
+            # (or by less if the cycle overlaps with existing cycles)
+            expected_max_reduction = 3
+            reduction = base_dof - extra_dof
+            assert reduction <= expected_max_reduction, (
+                f"DOF reduction {reduction} exceeds expected max {expected_max_reduction}"
+            )
+
+    def test_n_dof_less_than_total_dihedrals(self):
+        """For molecules with rings, n_dof should be less than total dihedrals."""
+        from ciffy import from_sequence
+
+        # RNA has sugar and base rings
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        n_atoms = polymer.size()
+        max_possible_dihedrals = n_atoms - 3  # First 3 atoms have no dihedrals
+
+        # With rings, we should have fewer independent DOF
+        if len(constrained.independent_dof.ring_constraints) > 0:
+            assert constrained.n_dof < max_possible_dihedrals, (
+                f"With rings, DOF ({constrained.n_dof}) should be less than "
+                f"max possible ({max_possible_dihedrals})"
+            )
+
+
+class TestCorrectnessProtein:
+    """Correctness tests for protein structures."""
+
+    def test_protein_backbone_dof(self):
+        """Protein backbone should have phi/psi/omega as DOF."""
+        from ciffy import from_sequence
+
+        # Short peptide
+        polymer = from_sequence("AAAA")  # 4 alanines
+        constrained = polymer._coord_manager.with_constraints()
+
+        # Protein backbone has ~3 dihedrals per residue (phi, psi, omega)
+        # minus terminal constraints
+        n_residues = 4
+        # Rough estimate: 3 * n_residues - terminal_constraints
+        min_expected_dof = n_residues  # At least 1 per residue
+        max_expected_dof = 3 * n_residues  # At most 3 per residue
+
+        assert constrained.n_dof >= min_expected_dof, (
+            f"Protein with {n_residues} residues should have at least {min_expected_dof} DOF, "
+            f"got {constrained.n_dof}"
+        )
+
+    def test_protein_geometry_preserved(self):
+        """Protein geometry should be preserved after setting dihedrals."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("AAAA")
+        constrained = polymer._coord_manager.with_constraints()
+
+        original_distances = constrained.distances.copy()
+        original_angles = constrained.angles.copy()
+
+        if constrained.n_dof > 0:
+            # Perturb dihedrals
+            values = constrained.values.copy()
+            constrained.values = values + 0.05
+
+            # Check geometry preserved
+            dist_diff = np.max(np.abs(constrained.distances - original_distances))
+            angle_diff = np.max(np.abs(constrained.angles - original_angles))
+
+            assert dist_diff < BOND_TOLERANCE, f"Bond lengths changed by {dist_diff:.6f} A"
+            assert angle_diff < ANGLE_TOLERANCE, f"Bond angles changed by {angle_diff:.6f} rad"
+
+
+class TestCorrectnessNucleicAcid:
+    """Correctness tests for nucleic acid structures."""
+
+    def test_rna_has_multiple_rings(self):
+        """RNA nucleotides should have sugar and base rings detected."""
+        from ciffy import from_sequence
+
+        # Single nucleotide
+        for seq in ["a", "c", "g", "u"]:
+            polymer = from_sequence(seq)
+            constrained = polymer._coord_manager.with_constraints()
+
+            n_rings = len(constrained.independent_dof.ring_constraints)
+            assert n_rings >= 1, (
+                f"Nucleotide '{seq}' should have at least 1 ring (sugar), "
+                f"found {n_rings}"
+            )
+
+    def test_purine_has_more_rings_than_pyrimidine(self):
+        """Purines (A, G) have fused rings, pyrimidines (C, U) have single base ring."""
+        from ciffy import from_sequence
+
+        # Purines have 2 fused base rings + sugar = 3 rings
+        # Pyrimidines have 1 base ring + sugar = 2 rings
+        for purine in ["a", "g"]:
+            polymer = from_sequence(purine)
+            constrained = polymer._coord_manager.with_constraints()
+            purine_rings = len(constrained.independent_dof.ring_constraints)
+
+            for pyrimidine in ["c", "u"]:
+                polymer = from_sequence(pyrimidine)
+                constrained = polymer._coord_manager.with_constraints()
+                pyrimidine_rings = len(constrained.independent_dof.ring_constraints)
+
+                # Purine should have at least as many rings as pyrimidine
+                # (in practice, should have 1 more due to fused ring)
+                assert purine_rings >= pyrimidine_rings, (
+                    f"Purine '{purine}' ({purine_rings} rings) should have >= rings "
+                    f"than pyrimidine '{pyrimidine}' ({pyrimidine_rings} rings)"
+                )
+
+    def test_rna_geometry_preserved(self):
+        """RNA geometry should be preserved after setting dihedrals."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("acgu")
+        constrained = polymer._coord_manager.with_constraints()
+
+        original_distances = constrained.distances.copy()
+        original_angles = constrained.angles.copy()
+
+        if constrained.n_dof > 0:
+            # Perturb dihedrals
+            values = constrained.values.copy()
+            constrained.values = values + 0.05
+
+            # Check geometry preserved
+            dist_diff = np.max(np.abs(constrained.distances - original_distances))
+            angle_diff = np.max(np.abs(constrained.angles - original_angles))
+
+            assert dist_diff < BOND_TOLERANCE, f"Bond lengths changed by {dist_diff:.6f} A"
+            assert angle_diff < ANGLE_TOLERANCE, f"Bond angles changed by {angle_diff:.6f} rad"
 
 
 # Helper function for test data

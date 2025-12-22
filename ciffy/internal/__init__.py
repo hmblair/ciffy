@@ -30,7 +30,14 @@ Note: Dihedral type definitions and atom mappings are now in:
 """
 
 from .coordinates import CoordinateManager
+from .constrained import ConstrainedCoordinateManager
+from .ring_analysis import ConstraintSpec, IndependentDOF, RingConstraint, RingAnalyzer
 
 __all__ = [
     "CoordinateManager",
+    "ConstrainedCoordinateManager",
+    "ConstraintSpec",
+    "IndependentDOF",
+    "RingConstraint",
+    "RingAnalyzer",
 ]

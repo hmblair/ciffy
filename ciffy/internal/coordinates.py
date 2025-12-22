@@ -845,3 +845,74 @@ class CoordinateManager:
 
         # Use factory method to create new manager with explicit contract
         return CoordinateManager._from_slice(sliced_coords, is_torch(sliced_coords))
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Constrained Coordinate Interface
+    # ─────────────────────────────────────────────────────────────────────
+
+    def with_constraints(
+        self,
+        fixed_bonds: str | np.ndarray = "all",
+        fixed_angles: str | np.ndarray = "all",
+        extra_bonds: list | None = None,
+        extra_angles: list | None = None,
+    ) -> "ConstrainedCoordinateManager":
+        """
+        Create a constrained view with minimal independent DOF.
+
+        Given fixed bonds and angles, identifies independent dihedrals
+        and returns a ConstrainedCoordinateManager that exposes only
+        those degrees of freedom.
+
+        This is useful for:
+        - ML applications where you want to predict/sample minimal DOF
+        - Dimensionality reduction in structure prediction
+        - Ensuring geometric constraints are always satisfied
+
+        Args:
+            fixed_bonds: Which bonds to fix.
+                - "all": Fix all covalent bonds (default)
+                - "none": No fixed bonds
+                - np.ndarray: Boolean mask for selective fixing
+            fixed_angles: Which angles to fix.
+                - "all": Fix all bond angles (default)
+                - "none": No fixed angles
+                - np.ndarray: Boolean mask for selective fixing
+            extra_bonds: Additional bond constraints beyond topology.
+                List of (atom_i, atom_j, distance) tuples.
+                Use for hydrogen bonds or other long-range constraints.
+            extra_angles: Additional angle constraints beyond topology.
+                List of (atom_i, atom_j, atom_k, angle) tuples.
+
+        Returns:
+            ConstrainedCoordinateManager with minimal independent DOF.
+
+        Example:
+            >>> # Fix all covalent geometry (most common case)
+            >>> constrained = coord_manager.with_constraints()
+            >>> print(f"Independent DOF: {constrained.n_dof}")
+            >>>
+            >>> # Get/set only independent dihedrals
+            >>> values = constrained.values
+            >>> constrained.values = new_values
+            >>> coords = constrained.coordinates
+            >>>
+            >>> # Add hydrogen bond constraint
+            >>> constrained = coord_manager.with_constraints(
+            ...     extra_bonds=[(10, 50, 2.9)]  # H-bond distance
+            ... )
+
+        Note:
+            For molecules with rings, some dihedrals become dependent
+            through ring closure constraints. The system automatically
+            identifies and handles these dependencies.
+        """
+        from .constrained import ConstrainedCoordinateManager, ConstraintSpec
+
+        spec = ConstraintSpec(
+            fixed_bonds=fixed_bonds,
+            fixed_angles=fixed_angles,
+            extra_bonds=extra_bonds,
+            extra_angles=extra_angles,
+        )
+        return ConstrainedCoordinateManager(self, spec)

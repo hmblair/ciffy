@@ -31,6 +31,7 @@ References
 
 from __future__ import annotations
 
+from collections import deque
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -365,11 +366,11 @@ def _group_fused_rings(ring_constraints: list) -> list[list]:
 
         # BFS to find all rings fused with ring i
         group = []
-        queue = [i]
+        queue = deque([i])
         visited[i] = True
 
         while queue:
-            curr = queue.pop(0)
+            curr = queue.popleft()
             group.append(curr)
 
             # Add all rings fused with current ring

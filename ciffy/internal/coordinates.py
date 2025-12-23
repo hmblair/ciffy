@@ -415,10 +415,7 @@ class MolecularGeometry:
 
             # Compute fixed coords (centered if centering was used)
             if center_offsets is not None:
-                fixed_coords = coords_np.copy()
-                for comp_idx in range(self._tree.n_components):
-                    mask = self._tree.component_id == comp_idx
-                    fixed_coords[mask] -= center_offsets[comp_idx]
+                fixed_coords = coords_np - center_offsets[self._tree.component_id]
             else:
                 fixed_coords = coords_np.copy()
 

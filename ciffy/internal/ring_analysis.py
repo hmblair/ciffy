@@ -23,7 +23,7 @@ Ring classification determines flexibility:
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Literal
@@ -59,6 +59,20 @@ class RingType(Enum):
 class ClassifiedRing:
     """
     A ring with its chemistry-based type classification.
+
+    This dataclass captures the CHEMICAL properties of a ring - whether it's
+    aromatic, what elements it contains, and whether it can pucker. This is
+    distinct from RingConstraint which captures the DOF GEOMETRY.
+
+    Design Note - Separation from RingConstraint:
+        ClassifiedRing and RingConstraint serve different purposes:
+        - ClassifiedRing: Chemistry (aromatic? which elements? can it pucker?)
+        - RingConstraint: Geometry (which dihedrals close the ring?)
+
+        A flexible ClassifiedRing still has a RingConstraint - the ring can
+        pucker, but its dihedrals are still coupled through closure. These
+        are intentionally separate dataclasses to avoid conflating chemistry
+        with coordinate constraints.
 
     Attributes:
         atoms: Atom indices in the ring, in cyclic order.
@@ -216,6 +230,15 @@ class RingConstraint:
     A k-membered ring with fixed bonds and angles has k-3 independent
     dihedrals. The remaining 3 are determined by ring closure (analogous
     to a 6-DOF robotic arm reaching a target position).
+
+    Design Note - Separation from ClassifiedRing:
+        RingConstraint captures DOF GEOMETRY while ClassifiedRing captures
+        CHEMISTRY. Both are needed:
+        - RingConstraint: Used by ring_closure.py to solve dependent dihedrals
+        - ClassifiedRing: Used for puckering analysis and flexible ring detection
+
+        The same physical ring may appear in both: as a RingConstraint for DOF
+        reduction and as a ClassifiedRing for chemistry classification.
 
     Attributes:
         ring_atoms: (k,) array of atom indices forming the ring, in order.
@@ -540,12 +563,12 @@ class RingAnalyzer:
                 continue
 
             # BFS from this start node
-            queue = [start]
+            queue = deque([start])
             visited[start] = True
             depth[start] = 0
 
             while queue:
-                node = queue.pop(0)
+                node = queue.popleft()
                 for neighbor in adj[node]:
                     if not visited[neighbor]:
                         visited[neighbor] = True
@@ -710,15 +733,33 @@ class RingAnalyzer:
 
     @staticmethod
     def _compute_levels(parent: np.ndarray, n_atoms: int) -> np.ndarray:
-        """Compute tree depth for each atom from parent array."""
-        level = np.zeros(n_atoms, dtype=np.int32)
+        """
+        Compute tree depth for each atom from parent array.
+
+        Uses O(n) BFS from roots instead of O(n × depth) parent traversal.
+        """
+        level = np.full(n_atoms, -1, dtype=np.int32)
+
+        # Build children list from parent array (O(n))
+        children: list[list[int]] = [[] for _ in range(n_atoms)]
+        roots = []
         for k in range(n_atoms):
-            depth = 0
-            curr = k
-            while parent[curr] >= 0:
-                depth += 1
-                curr = int(parent[curr])
-            level[k] = depth
+            p = int(parent[k])
+            if p >= 0:
+                children[p].append(k)
+            else:
+                roots.append(k)
+                level[k] = 0
+
+        # BFS from roots (O(n) total)
+        queue = deque(roots)
+        while queue:
+            node = queue.popleft()
+            child_level = level[node] + 1
+            for child in children[node]:
+                level[child] = child_level
+                queue.append(child)
+
         return level
 
     @staticmethod
@@ -782,11 +823,11 @@ class RingAnalyzer:
 
         visited = np.zeros(n_atoms, dtype=bool)
         parent = np.full(n_atoms, -1, dtype=np.int64)
-        queue = [start]
+        queue = deque([start])
         visited[start] = True
 
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             if node == end:
                 # Reconstruct path
                 path = []

@@ -98,6 +98,13 @@ class ReconstructionData:
 
     All arrays are NumPy. Use to_torch() to convert for GPU operations.
 
+    Design Note - Parent Duplication:
+        Both SpanningTree and ReconstructionData contain a `parent` array.
+        This is intentional: ReconstructionData is a frozen, serializable bundle
+        that can be passed to autograd functions without carrying the full tree.
+        SpanningTree is mutable during construction and provides tree operations
+        (get_descendants, find_reference) not needed during reconstruction.
+
     Attributes:
         parent: (N,) int64 parent of each atom (-1 for roots)
         component_ids: (N,) int32 component ID for each atom
@@ -110,7 +117,7 @@ class ReconstructionData:
         center_offsets: (n_components, 3) float32 or None - per-component centering
     """
 
-    # Tree structure (replaces zmatrix_indices)
+    # Tree structure - intentionally duplicates SpanningTree.parent for autograd isolation
     parent: np.ndarray  # (N,) int64 - parent[k] is parent of atom k
 
     # Component information
@@ -209,6 +216,8 @@ class SpanningTree:
         level: (N,) int32 array of depth levels (root = 0, children = 1, etc).
         component_id: (N,) int32 array mapping each atom to its connected component.
         n_components: Number of connected components.
+        _children: Precomputed children list (tuple of tuples for immutability).
+        _atoms_by_level: Atoms indexed by level for fast reference lookup.
 
     Example:
         >>> tree = SpanningTree.from_bond_graph(csr_offsets, csr_neighbors, n_atoms)
@@ -220,6 +229,9 @@ class SpanningTree:
     level: np.ndarray         # (N,) int32
     component_id: np.ndarray  # (N,) int32
     n_components: int
+    # Cached for O(1) lookups instead of O(n)
+    _children: tuple[tuple[int, ...], ...] = field(default=(), compare=False, repr=False)
+    _atoms_by_level: tuple[tuple[int, ...], ...] = field(default=(), compare=False, repr=False)
 
     @classmethod
     def from_bond_graph(
@@ -257,6 +269,8 @@ class SpanningTree:
                 level=np.array([], dtype=np.int32),
                 component_id=np.array([], dtype=np.int32),
                 n_components=0,
+                _children=(),
+                _atoms_by_level=(),
             )
 
         # Initialize arrays
@@ -293,11 +307,30 @@ class SpanningTree:
 
             comp_idx += 1
 
+        # Build children cache: children[k] = tuple of atoms whose parent is k
+        children_lists: list[list[int]] = [[] for _ in range(n_atoms)]
+        for k in range(n_atoms):
+            p = int(parent[k])
+            if p >= 0:
+                children_lists[p].append(k)
+        children_tuples = tuple(tuple(c) for c in children_lists)
+
+        # Build atoms_by_level cache: atoms_by_level[lvl] = tuple of atoms at that level
+        max_level = int(level.max()) if n_atoms > 0 else -1
+        level_lists: list[list[int]] = [[] for _ in range(max_level + 1)]
+        for k in range(n_atoms):
+            lvl = int(level[k])
+            if lvl >= 0:
+                level_lists[lvl].append(k)
+        atoms_by_level = tuple(tuple(atoms) for atoms in level_lists)
+
         return cls(
             parent=parent,
             level=level,
             component_id=component_id,
             n_components=comp_idx,
+            _children=children_tuples,
+            _atoms_by_level=atoms_by_level,
         )
 
     @property
@@ -367,6 +400,8 @@ class SpanningTree:
         - Is in the same component
         - Is not in the exclude list
 
+        Uses precomputed _atoms_by_level for O(level) instead of O(n) search.
+
         Args:
             atom: The atom we're finding references for.
             exclude1: First atom to exclude (dist_ref).
@@ -377,25 +412,22 @@ class SpanningTree:
         Returns:
             Valid reference atom index, or -1 if none found.
         """
-        # Search atoms in order of decreasing level (prefer closer atoms)
-        # This is a simple linear search; could be optimized with level indexing
-        best_ref = -1
-        best_level = -1
+        # Search from highest valid level down (prefer closer atoms)
+        # Use level index for O(level) instead of O(n)
+        atoms_by_level = self._atoms_by_level
 
-        for k in range(self.n_atoms):
-            if k == atom or k == exclude1 or k == exclude2:
+        for lvl in range(max_level - 1, -1, -1):
+            if lvl >= len(atoms_by_level):
                 continue
-            if self.component_id[k] != component:
-                continue
-            if self.level[k] >= max_level:
-                continue
+            for k in atoms_by_level[lvl]:
+                if k == atom or k == exclude1 or k == exclude2:
+                    continue
+                if self.component_id[k] != component:
+                    continue
+                # Found a valid reference at this level
+                return k
 
-            # Prefer higher level (closer in tree to atom)
-            if self.level[k] > best_level:
-                best_level = self.level[k]
-                best_ref = k
-
-        return best_ref
+        return -1
 
     def get_descendants(self, atom: int) -> np.ndarray:
         """
@@ -403,6 +435,8 @@ class SpanningTree:
 
         This is used for partial reconstruction: when a dihedral at `atom`
         is rotated, only its descendants need to be reconstructed.
+
+        Uses precomputed _children cache for O(k) instead of O(n) per call.
 
         Args:
             atom: Root atom to find descendants of.
@@ -415,13 +449,8 @@ class SpanningTree:
         if n == 0:
             return np.array([], dtype=np.int64)
 
-        # Build children list (inverse of parent)
-        # children[k] = list of atoms whose parent is k
-        children = [[] for _ in range(n)]
-        for k in range(n):
-            p = self.parent[k]
-            if p >= 0:
-                children[p].append(k)
+        # Use cached children list
+        children = self._children
 
         # BFS from atom to find all descendants
         descendants = [atom]
@@ -504,21 +533,19 @@ class SpanningTree:
         coords = np.asarray(coords, dtype=np.float32)
 
         if center and self.n_components > 0:
-            # Compute per-component centers
+            # Compute per-component centers using vectorized bincount
+            comp_sizes = np.bincount(self.component_id, minlength=self.n_components)
             offsets = np.zeros((self.n_components, 3), dtype=np.float32)
-            coords_centered = coords.copy()
+            for dim in range(3):
+                offsets[:, dim] = np.bincount(
+                    self.component_id, weights=coords[:, dim], minlength=self.n_components
+                )
+            # Avoid division by zero for empty components
+            safe_sizes = np.maximum(comp_sizes, 1).astype(np.float32)[:, np.newaxis]
+            offsets = (offsets / safe_sizes).astype(np.float32)
 
-            for comp_idx in range(self.n_components):
-                # Find atoms in this component
-                mask = self.component_id == comp_idx
-                comp_coords = coords[mask]
-
-                # Compute component center and store offset
-                center_offset = comp_coords.mean(axis=0)
-                offsets[comp_idx] = center_offset
-
-                # Center this component's atoms
-                coords_centered[mask] = comp_coords - center_offset
+            # Center all atoms at once using advanced indexing
+            coords_centered = (coords - offsets[self.component_id]).astype(np.float32)
 
             internal = _cartesian_to_internal_parent(coords_centered, self.parent)
             return internal, offsets
@@ -571,9 +598,7 @@ class SpanningTree:
 
         # Add per-component offsets if provided
         if offsets is not None:
-            for comp_idx in range(self.n_components):
-                mask = self.component_id == comp_idx
-                coords[mask] += offsets[comp_idx]
+            coords += offsets[self.component_id]
 
         return coords
 

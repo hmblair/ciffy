@@ -195,9 +195,7 @@ def _numpy_nerf_reconstruct(
 
     # Apply per-component center offsets if provided
     if center_offsets is not None and component_ids is not None:
-        for comp_idx in range(len(center_offsets)):
-            mask = component_ids == comp_idx
-            coords[mask] += center_offsets[comp_idx]
+        coords += center_offsets[component_ids]
 
     return coords
 
@@ -369,11 +367,9 @@ def _torch_nerf_reconstruct(
             anchor_tensor.to(torch.float32).contiguous(),
             comp_ids_tensor.to(torch.int32).contiguous(),
         )
-        # Apply center offsets
+        # Apply center offsets using advanced indexing
         if center_offsets_tensor is not None and comp_ids_tensor is not None:
-            for comp_idx in range(len(center_offsets_tensor)):
-                mask = comp_ids_tensor == comp_idx
-                coords[mask] += center_offsets_tensor[comp_idx]
+            coords += center_offsets_tensor[comp_ids_tensor]
         return coords.to(dtype)
 
     # CPU path: use parent-based C extension via buffer protocol
@@ -416,12 +412,11 @@ def _torch_nerf_reconstruct(
 
     coords = torch.from_numpy(coords_np).to(device=device, dtype=dtype)
 
-    # Apply center offsets
+    # Apply center offsets using advanced indexing
     if center_offsets_tensor is not None and comp_ids_tensor is not None:
-        comp_ids_np = comp_ids_tensor.numpy() if comp_ids_tensor.is_cpu else comp_ids_tensor.cpu().numpy()
-        center_np = center_offsets_tensor.numpy() if center_offsets_tensor.is_cpu else center_offsets_tensor.cpu().numpy()
-        for comp_idx in range(len(center_np)):
-            mask = comp_ids_np == comp_idx
-            coords[mask] += torch.from_numpy(center_np[comp_idx]).to(device=device, dtype=dtype)
+        # Convert offset array to tensor once, then index by component IDs
+        offsets_on_device = center_offsets_tensor.to(device=device, dtype=dtype)
+        comp_ids_on_device = comp_ids_tensor.to(device=device)
+        coords += offsets_on_device[comp_ids_on_device]
 
     return coords

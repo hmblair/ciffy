@@ -39,6 +39,8 @@ class RingConstraint:
         independent_dihedrals: (k-3,) indices of dihedrals that are independent.
         dependent_dihedrals: (3,) indices of dihedrals determined by ring closure.
         closure_bond: (i, j) atom pair forming the "closing" bond.
+        is_fused: True if this ring shares atoms with another ring.
+        fused_with: List of indices of rings this one is fused with.
     """
 
     ring_atoms: np.ndarray
@@ -46,12 +48,19 @@ class RingConstraint:
     independent_dihedrals: np.ndarray
     dependent_dihedrals: np.ndarray
     closure_bond: tuple[int, int]
+    is_fused: bool = False
+    fused_with: list[int] | None = None
+
+    def __post_init__(self):
+        if self.fused_with is None:
+            self.fused_with = []
 
     def __repr__(self) -> str:
+        fused_str = ", fused" if self.is_fused else ""
         return (
             f"RingConstraint(size={self.ring_size}, "
             f"independent={len(self.independent_dihedrals)}, "
-            f"dependent={len(self.dependent_dihedrals)})"
+            f"dependent={len(self.dependent_dihedrals)}{fused_str})"
         )
 
 
@@ -144,6 +153,11 @@ class RingAnalyzer:
 
     The algorithm is based on finding a spanning tree and identifying
     non-tree edges, each of which creates one fundamental cycle.
+
+    Key insight for ring closure:
+    - The Z-matrix represents atoms as a tree (each atom has ONE parent via dist_ref)
+    - In a ring, one bond is NOT represented in this tree - this is the "closure bond"
+    - We identify this bond and select dependent dihedrals that can close it
     """
 
     @staticmethod
@@ -331,10 +345,20 @@ class RingAnalyzer:
             )
             cycles.extend(extra_cycles)
 
-        # Start with all dihedrals as independent (for atoms >= 3)
-        # In Z-matrix, first 3 atoms don't have full dihedral definitions
+        # Build atom -> row mapping for Z-matrix
+        # With BFS ordering, atoms may not be in natural order
+        atom_to_row = {}
+        for row in range(len(zmatrix_indices)):
+            atom = int(zmatrix_indices[row, 0])
+            atom_to_row[atom] = row
+
+        # Start with dihedrals as independent for atoms at Z-matrix rows >= 3
+        # (first 3 rows don't have full dihedral definitions)
         independent_mask = np.zeros(n_atoms, dtype=bool)
-        independent_mask[3:] = True  # Atoms 3+ have dihedrals
+        for atom_idx in range(n_atoms):
+            row = atom_to_row.get(atom_idx, -1)
+            if row >= 3:
+                independent_mask[atom_idx] = True
 
         # Process each ring to mark dependent dihedrals
         ring_constraints = []
@@ -348,9 +372,14 @@ class RingAnalyzer:
                 for dep_idx in ring_constraint.dependent_dihedrals:
                     independent_mask[dep_idx] = False
 
-        # Extract indices
+        # Detect fused rings (rings sharing atoms)
+        ring_constraints = RingAnalyzer.detect_fused_rings(ring_constraints)
+
+        # Extract indices - atoms whose Z-matrix row >= 3 and are independent
         independent_indices = np.where(independent_mask)[0].astype(np.int64)
-        dependent_indices = np.where(~independent_mask & (np.arange(n_atoms) >= 3))[0].astype(np.int64)
+        # Dependent = atoms with Z-matrix row >= 3 that are NOT independent
+        has_dihedral = np.array([atom_to_row.get(i, -1) >= 3 for i in range(n_atoms)])
+        dependent_indices = np.where(~independent_mask & has_dihedral)[0].astype(np.int64)
 
         return IndependentDOF(
             independent_mask=independent_mask,
@@ -448,6 +477,165 @@ class RingAnalyzer:
         return None  # Not connected
 
     @staticmethod
+    def identify_closure_bond(
+        cycle: np.ndarray,
+        zmatrix_indices: np.ndarray,
+    ) -> tuple[int, int]:
+        """
+        Find which bond in the cycle is NOT represented in the Z-matrix.
+
+        The Z-matrix is a tree: each atom has exactly one parent (dist_ref).
+        In a ring, one bond must be "missing" from this tree - this is the
+        closure bond that we need to satisfy through CCD.
+
+        Args:
+            cycle: (k,) atom indices forming the ring in order.
+            zmatrix_indices: (M, 4) Z-matrix indices [atom, dist_ref, ang_ref, dih_ref].
+                Note: With BFS Z-matrix, atoms may not be in natural order.
+
+        Returns:
+            (atom_i, atom_j) - the closure bond endpoints (sorted).
+
+        Example:
+            For cycle [4, 5, 6, 7, 8] where Z-matrix has:
+            - 5 → 4 (bond 4-5)
+            - 6 → 5 (bond 5-6)
+            - 7 → 6 (bond 6-7)
+            - 8 → 7 (bond 7-8)
+            The closure bond is (4, 8) since there's no 8→4 or 4→8 in Z-matrix.
+        """
+        cycle_set = set(int(a) for a in cycle)
+        k = len(cycle)
+
+        # Build set of Z-matrix bonds within the cycle
+        # Iterate through ALL Z-matrix entries to find bonds (handles BFS ordering)
+        zmatrix_bonds = set()
+        for row in range(len(zmatrix_indices)):
+            atom = int(zmatrix_indices[row, 0])
+            dist_ref = int(zmatrix_indices[row, 1])
+            if atom in cycle_set and dist_ref >= 0 and dist_ref in cycle_set:
+                # This is a Z-matrix bond within the cycle
+                bond = tuple(sorted([atom, dist_ref]))
+                zmatrix_bonds.add(bond)
+
+        # Check each adjacent pair in the cycle to find the missing bond
+        for i in range(k):
+            atom_a = int(cycle[i])
+            atom_b = int(cycle[(i + 1) % k])  # Next atom (wraps around)
+            bond = tuple(sorted([atom_a, atom_b]))
+
+            if bond not in zmatrix_bonds:
+                return bond
+
+        # Fallback: if all bonds are in Z-matrix (shouldn't happen for rings),
+        # use the bond between first and last atoms
+        return (int(cycle[0]), int(cycle[-1]))
+
+    @staticmethod
+    def find_affected_atoms(
+        zmatrix_indices: np.ndarray,
+        dihedral_atom: int,
+        n_atoms: int,
+    ) -> set[int]:
+        """
+        Find all atoms whose position is affected by rotating a dihedral.
+
+        When we rotate the dihedral at atom `dihedral_atom`, all atoms that
+        depend (directly or transitively) on this atom in the Z-matrix will move.
+
+        In NERF reconstruction, atom k's position depends on its dist_ref, ang_ref,
+        and dih_ref. If any of these move, atom k also moves.
+
+        Args:
+            zmatrix_indices: (M, 4) Z-matrix indices [atom, dist_ref, ang_ref, dih_ref].
+                Note: With BFS Z-matrix, atoms may not be in natural order.
+            dihedral_atom: Atom index whose dihedral is being rotated.
+            n_atoms: Total number of atoms.
+
+        Returns:
+            Set of atom indices affected by rotating this dihedral.
+        """
+        # Find which row the dihedral_atom is at
+        dihedral_row = -1
+        for row in range(len(zmatrix_indices)):
+            if int(zmatrix_indices[row, 0]) == dihedral_atom:
+                dihedral_row = row
+                break
+
+        if dihedral_row < 0:
+            return set()  # Atom not found in Z-matrix
+
+        affected = set()
+        affected.add(dihedral_atom)
+
+        # Process Z-matrix rows AFTER the dihedral's row (in Z-matrix order)
+        # Atoms placed later may depend on the dihedral atom
+        for row in range(dihedral_row + 1, len(zmatrix_indices)):
+            atom = int(zmatrix_indices[row, 0])
+            # Check if any of this atom's references are in the affected set
+            for ref_idx in [1, 2, 3]:  # dist_ref, ang_ref, dih_ref
+                ref = int(zmatrix_indices[row, ref_idx])
+                if ref >= 0 and ref in affected:
+                    affected.add(atom)
+                    break
+
+        return affected
+
+    @staticmethod
+    def find_effective_dihedrals(
+        zmatrix_indices: np.ndarray,
+        closure_bond: tuple[int, int],
+        cycle: np.ndarray,
+        n_atoms: int,
+    ) -> list[tuple[int, bool, bool]]:
+        """
+        Find dihedrals that can effectively close the ring.
+
+        A dihedral is "effective" for ring closure if rotating it moves
+        EXACTLY ONE of the closure bond atoms. If both atoms move together
+        (or neither moves), the distance between them doesn't change.
+
+        Args:
+            zmatrix_indices: (M, 4) Z-matrix indices.
+                Note: With BFS Z-matrix, atoms may not be in natural order.
+            closure_bond: (atom_i, atom_j) - the closure bond endpoints.
+            cycle: (k,) atom indices forming the ring.
+            n_atoms: Total number of atoms.
+
+        Returns:
+            List of (dihedral_atom, moves_i, moves_j) tuples where:
+            - dihedral_atom: Atom index of an effective dihedral
+            - moves_i: Whether rotating this dihedral moves closure_bond[0]
+            - moves_j: Whether rotating this dihedral moves closure_bond[1]
+            Only returns dihedrals where exactly one of (moves_i, moves_j) is True.
+        """
+        closure_i, closure_j = closure_bond
+        effective = []
+
+        # Build atom -> row mapping for quick lookup
+        atom_to_row = {}
+        for row in range(len(zmatrix_indices)):
+            atom = int(zmatrix_indices[row, 0])
+            atom_to_row[atom] = row
+
+        # Check each atom in the cycle
+        for atom_idx in cycle:
+            atom_idx = int(atom_idx)
+            row = atom_to_row.get(atom_idx, -1)
+            if row < 3:  # First 3 rows don't have full dihedral definitions
+                continue
+
+            affected = RingAnalyzer.find_affected_atoms(zmatrix_indices, atom_idx, n_atoms)
+            i_affected = closure_i in affected
+            j_affected = closure_j in affected
+
+            # Effective if exactly one closure atom moves
+            if i_affected != j_affected:
+                effective.append((atom_idx, i_affected, j_affected))
+
+        return effective
+
+    @staticmethod
     def _create_ring_constraint(
         cycle: np.ndarray,
         zmatrix_indices: np.ndarray,
@@ -460,8 +648,9 @@ class RingAnalyzer:
         - k-3 dihedrals are independent
         - 3 dihedrals are dependent (determined by ring closure)
 
-        We choose the 3 dependent dihedrals to be those closest to
-        the "closing" bond, as this minimizes the closure computation.
+        The dependent dihedrals are chosen from those that can EFFECTIVELY
+        close the ring - i.e., dihedrals where rotating them moves exactly
+        one of the closure bond atoms.
 
         Args:
             cycle: (k,) array of atom indices in ring.
@@ -475,27 +664,63 @@ class RingAnalyzer:
         if k < 4:
             return None  # Need at least 4 atoms for a dihedral constraint
 
-        # Find which atoms in the cycle have dihedrals in Z-matrix
-        cycle_set = set(cycle)
-        cycle_dihedrals = []
-        for atom_idx in cycle:
-            # Check if this atom has a valid dihedral in Z-matrix
-            if atom_idx >= 3:  # First 3 atoms don't have dihedrals
-                # Check if this dihedral is still marked as independent
-                if current_independent[atom_idx]:
-                    cycle_dihedrals.append(atom_idx)
+        n_atoms = len(zmatrix_indices)
 
-        if len(cycle_dihedrals) < 3:
-            # Not enough dihedrals to constrain
+        # Find the closure bond (the one NOT in Z-matrix)
+        closure_bond = RingAnalyzer.identify_closure_bond(cycle, zmatrix_indices)
+
+        # Find effective dihedrals (those that move exactly one closure atom)
+        effective = RingAnalyzer.find_effective_dihedrals(
+            zmatrix_indices, closure_bond, cycle, n_atoms
+        )
+
+        # Filter to only currently independent dihedrals
+        effective_independent = [
+            (d, mi, mj) for d, mi, mj in effective
+            if current_independent[d]
+        ]
+
+        if len(effective_independent) < 1:
+            # No effective dihedrals available
             return None
 
-        # Choose last 3 dihedrals as dependent (arbitrary but consistent choice)
-        # In practice, these should be near the "closing" point of the ring
-        dependent = np.array(cycle_dihedrals[-3:], dtype=np.int64)
-        independent = np.array(cycle_dihedrals[:-3], dtype=np.int64)
+        # Build atom -> row mapping
+        atom_to_row = {}
+        for row in range(len(zmatrix_indices)):
+            atom = int(zmatrix_indices[row, 0])
+            atom_to_row[atom] = row
 
-        # The closure bond is between first and last atom in cycle
-        closure_bond = (int(cycle[0]), int(cycle[-1]))
+        # Find all dihedrals in the cycle that are currently independent
+        cycle_dihedrals = []
+        for atom_idx in cycle:
+            atom_idx = int(atom_idx)
+            row = atom_to_row.get(atom_idx, -1)
+            # Check Z-matrix row (not atom index) for dihedral validity
+            if row >= 3 and current_independent[atom_idx]:
+                cycle_dihedrals.append(atom_idx)
+
+        if len(cycle_dihedrals) < 3:
+            return None
+
+        # Select dependent dihedrals: prefer effective ones
+        # We need up to 3 dependent dihedrals for ring closure
+        effective_indices = [d for d, _, _ in effective_independent]
+
+        # Take effective dihedrals as dependent (up to 3)
+        dependent_list = effective_indices[:3]
+
+        # If we don't have 3 effective dihedrals, that's okay - CCD can still work
+        # with fewer (especially for small rings)
+        if not dependent_list:
+            # Fallback: use the last dihedrals in the cycle
+            dependent_list = cycle_dihedrals[-3:] if len(cycle_dihedrals) >= 3 else cycle_dihedrals
+
+        # Independent dihedrals: all cycle dihedrals except the dependent ones
+        dependent_set = set(dependent_list)
+        independent_list = [d for d in cycle_dihedrals if d not in dependent_set]
+
+        dependent = np.array(dependent_list, dtype=np.int64)
+        independent = np.array(independent_list, dtype=np.int64)
 
         return RingConstraint(
             ring_atoms=cycle,
@@ -504,3 +729,47 @@ class RingAnalyzer:
             dependent_dihedrals=dependent,
             closure_bond=closure_bond,
         )
+
+    @staticmethod
+    def detect_fused_rings(
+        ring_constraints: list[RingConstraint],
+    ) -> list[RingConstraint]:
+        """
+        Detect and mark fused rings (rings that share atoms).
+
+        Two rings are fused if they share at least 2 atoms (i.e., share an edge).
+        This is common in purines (adenine, guanine) which have a 5-member
+        imidazole ring fused with a 6-member pyrimidine ring.
+
+        Fused rings require special handling during ring closure because
+        closing one ring may affect the geometry of the fused ring.
+
+        Args:
+            ring_constraints: List of RingConstraint objects
+
+        Returns:
+            Same list with is_fused and fused_with fields updated
+        """
+        n_rings = len(ring_constraints)
+
+        if n_rings < 2:
+            return ring_constraints
+
+        # Build sets of ring atoms for fast intersection
+        ring_atom_sets = [
+            set(int(a) for a in rc.ring_atoms)
+            for rc in ring_constraints
+        ]
+
+        # Check each pair of rings for fusion
+        for i in range(n_rings):
+            for j in range(i + 1, n_rings):
+                shared = ring_atom_sets[i] & ring_atom_sets[j]
+                if len(shared) >= 2:
+                    # Rings share an edge - they are fused
+                    ring_constraints[i].is_fused = True
+                    ring_constraints[j].is_fused = True
+                    ring_constraints[i].fused_with.append(j)
+                    ring_constraints[j].fused_with.append(i)
+
+        return ring_constraints

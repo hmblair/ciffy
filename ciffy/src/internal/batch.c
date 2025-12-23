@@ -675,3 +675,167 @@ void batch_nerf_reconstruct_backward_leveled_anchored(
 
     #undef GET_ANCHORS
 }
+
+
+/* ========================================================================= */
+/* Parent-based NERF functions                                               */
+/* ========================================================================= */
+
+
+void batch_cartesian_to_internal_parent(
+    const float *coords, size_t n_atoms,
+    const int64_t *parent,
+    float *internal
+) {
+    /* Parallel: each atom reads independently from coords */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
+    for (size_t k = 0; k < n_atoms; k++) {
+        int64_t dist_ref = parent[k];
+        int64_t ang_ref = (dist_ref >= 0) ? parent[dist_ref] : -1;
+        int64_t dih_ref = (ang_ref >= 0) ? parent[ang_ref] : -1;
+
+        const float *atom = &coords[k * 3];
+
+        /* Bond length */
+        if (dist_ref >= 0) {
+            const float *ref1 = &coords[dist_ref * 3];
+            internal[INTERNAL_IDX(k, INTERNAL_DIST)] = compute_distance(atom, ref1);
+        } else {
+            internal[INTERNAL_IDX(k, INTERNAL_DIST)] = 0.0f;
+        }
+
+        /* Bond angle */
+        if (ang_ref >= 0 && dist_ref >= 0) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[ang_ref * 3];
+            internal[INTERNAL_IDX(k, INTERNAL_ANGLE)] = compute_angle(atom, ref1, ref2);
+        } else {
+            internal[INTERNAL_IDX(k, INTERNAL_ANGLE)] = 0.0f;
+        }
+
+        /* Dihedral angle */
+        if (dih_ref >= 0 && ang_ref >= 0 && dist_ref >= 0) {
+            const float *ref1 = &coords[dist_ref * 3];
+            const float *ref2 = &coords[ang_ref * 3];
+            const float *ref3 = &coords[dih_ref * 3];
+            internal[INTERNAL_IDX(k, INTERNAL_DIHE)] = compute_dihedral(ref3, ref2, ref1, atom);
+        } else {
+            internal[INTERNAL_IDX(k, INTERNAL_DIHE)] = 0.0f;
+        }
+    }
+}
+
+
+/* Helper: place single atom using parent chain references */
+static inline void nerf_place_atom_parent(
+    float *coords, size_t n_atoms,
+    const int64_t *parent,
+    const float *internal,
+    int64_t k,
+    const float *anchor_coords,
+    const int32_t *component_id,
+    int n_components
+) {
+    int64_t dist_ref = parent[k];
+    int64_t ang_ref = (dist_ref >= 0) ? parent[dist_ref] : -1;
+    int64_t dih_ref = (ang_ref >= 0) ? parent[ang_ref] : -1;
+
+    float *result = &coords[k * 3];
+    float distance = internal[INTERNAL_IDX(k, INTERNAL_DIST)];
+    float angle = internal[INTERNAL_IDX(k, INTERNAL_ANGLE)];
+    float dihedral = internal[INTERNAL_IDX(k, INTERNAL_DIHE)];
+
+    /* Get anchors if available */
+    const float *anchor0 = NULL;
+    const float *anchor1 = NULL;
+    const float *anchor2 = NULL;
+    if (anchor_coords != NULL && component_id != NULL) {
+        int32_t comp = component_id[k];
+        if (comp >= 0 && comp < n_components) {
+            anchor0 = &anchor_coords[comp * 9 + 0];
+            anchor1 = &anchor_coords[comp * 9 + 3];
+            anchor2 = &anchor_coords[comp * 9 + 6];
+        }
+    }
+
+    if (dist_ref < 0) {
+        /* Root atom: place at anchor or origin */
+        if (anchor0 != NULL) {
+            result[0] = anchor0[0];
+            result[1] = anchor0[1];
+            result[2] = anchor0[2];
+        } else {
+            result[0] = 0.0f;
+            result[1] = 0.0f;
+            result[2] = 0.0f;
+        }
+    } else if (ang_ref < 0) {
+        /* Level 1: place along anchor direction */
+        const float *ref = &coords[dist_ref * 3];
+        if (anchor1 != NULL) {
+            nerf_place_along_direction_impl(ref, anchor1, distance, result);
+        } else {
+            nerf_place_along_x_impl(ref, distance, result);
+        }
+    } else if (dih_ref < 0) {
+        /* Level 2: place in anchored plane */
+        const float *ref1 = &coords[dist_ref * 3];
+        const float *ref2 = &coords[ang_ref * 3];
+        if (anchor2 != NULL) {
+            nerf_place_in_plane_anchored_impl(ref1, ref2, anchor2, distance, angle, result);
+        } else {
+            nerf_place_in_plane_impl(ref1, ref2, distance, angle, result);
+        }
+    } else {
+        /* Level 3+: full NERF placement */
+        const float *p1 = &coords[dih_ref * 3];
+        const float *p2 = &coords[ang_ref * 3];
+        const float *p3 = &coords[dist_ref * 3];
+        nerf_place_atom_impl(p1, p2, p3, distance, angle, dihedral, result);
+    }
+}
+
+
+void batch_nerf_reconstruct_parent(
+    float *coords, size_t n_atoms,
+    const int64_t *parent,
+    const int32_t *level,
+    const float *internal,
+    const int32_t *level_offsets,
+    const int64_t *level_atoms,
+    int n_levels,
+    const float *fixed_coords,
+    const float *anchor_coords,
+    const int32_t *component_id,
+    int n_components
+) {
+    /* Process level by level (sequential between levels, parallel within) */
+    for (int lvl = 0; lvl < n_levels; lvl++) {
+        int start = level_offsets[lvl];
+        int end = level_offsets[lvl + 1];
+
+        /* Atoms at same level can be placed in parallel */
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+#endif
+        for (int i = start; i < end; i++) {
+            int64_t k = level_atoms[i];
+            int32_t atom_level = level[k];
+
+            /* Atoms at levels 0-2 have insufficient parent chain for full NERF.
+             * Copy from fixed_coords if provided, else use anchor-based placement. */
+            if (atom_level < 3 && fixed_coords != NULL) {
+                coords[k * 3 + 0] = fixed_coords[k * 3 + 0];
+                coords[k * 3 + 1] = fixed_coords[k * 3 + 1];
+                coords[k * 3 + 2] = fixed_coords[k * 3 + 2];
+            } else {
+                nerf_place_atom_parent(
+                    coords, n_atoms, parent, internal, k,
+                    anchor_coords, component_id, n_components
+                );
+            }
+        }
+    }
+}

@@ -66,6 +66,7 @@
 
 #include <math.h>
 
+/* Single-precision (float32) math functions */
 #define CIFFY_SQRTF  sqrtf
 #define CIFFY_COSF   cosf
 #define CIFFY_SINF   sinf
@@ -75,6 +76,16 @@
 #define CIFFY_FMINF  fminf
 #define CIFFY_FMAXF  fmaxf
 
+/* Double-precision (float64) math functions */
+#define CIFFY_SQRT   sqrt
+#define CIFFY_COS    cos
+#define CIFFY_SIN    sin
+#define CIFFY_ACOS   acos
+#define CIFFY_ATAN2  atan2
+#define CIFFY_FABS   fabs
+#define CIFFY_FMIN   fmin
+#define CIFFY_FMAX   fmax
+
 /* ========================================================================= */
 /* Numeric constants                                                         */
 /* ========================================================================= */
@@ -82,6 +93,11 @@
 /* Small epsilon for numerical stability in divisions and normalizations */
 #ifndef CIFFY_EPS
 #define CIFFY_EPS 1e-6f
+#endif
+
+/* Double-precision epsilon */
+#ifndef CIFFY_EPS_D
+#define CIFFY_EPS_D 1e-12
 #endif
 
 /* Pi constant */

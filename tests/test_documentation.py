@@ -218,5 +218,3 @@ class TestPolymerMethods:
         assert hasattr(polymer, "distances")
         assert hasattr(polymer, "angles")
         assert hasattr(polymer, "dihedrals")
-        assert hasattr(polymer, "dihedral")
-        assert hasattr(polymer, "set_dihedral")

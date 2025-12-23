@@ -129,6 +129,75 @@ static inline float compute_dihedral_impl(const float *a, const float *b,
 
 
 /**
+ * Place a new atom D using NERF with double precision internally.
+ *
+ * This version uses float64 for all intermediate calculations to minimize
+ * error accumulation in deep trees. Input/output remain float32.
+ *
+ * Given three reference atoms A, B, C and internal coordinates (distance, angle, dihedral),
+ * computes the position of atom D such that:
+ *   - |CD| = distance
+ *   - angle(BCD) = angle
+ *   - dihedral(ABCD) = dihedral
+ */
+CIFFY_HOST_DEVICE
+static inline void nerf_place_atom_impl_f64(const float *a, const float *b, const float *c,
+                                             float distance, float angle, float dihedral,
+                                             float *result) {
+    /* Build local coordinate system at c using double precision */
+
+    /* z = direction from c to b (normalized) */
+    double zx = (double)b[0] - (double)c[0];
+    double zy = (double)b[1] - (double)c[1];
+    double zz = (double)b[2] - (double)c[2];
+    double z_len = CIFFY_SQRT(zx*zx + zy*zy + zz*zz) + CIFFY_EPS_D;
+    zx /= z_len;
+    zy /= z_len;
+    zz /= z_len;
+
+    /* v = direction from c to a (normalized) */
+    double vx = (double)a[0] - (double)c[0];
+    double vy = (double)a[1] - (double)c[1];
+    double vz = (double)a[2] - (double)c[2];
+    double v_len = CIFFY_SQRT(vx*vx + vy*vy + vz*vz) + CIFFY_EPS_D;
+    vx /= v_len;
+    vy /= v_len;
+    vz /= v_len;
+
+    /* y = z cross v (normal to plane, right-handed) */
+    double yx = zy*vz - zz*vy;
+    double yy = zz*vx - zx*vz;
+    double yz = zx*vy - zy*vx;
+    double y_len = CIFFY_SQRT(yx*yx + yy*yy + yz*yz) + CIFFY_EPS_D;
+    yx /= y_len;
+    yy /= y_len;
+    yz /= y_len;
+
+    /* x = y cross z (in plane, perpendicular to z) */
+    double xx = yy*zz - yz*zy;
+    double xy = yz*zx - yx*zz;
+    double xz = yx*zy - yy*zx;
+
+    /* Place new atom D at distance from c (using double precision trig) */
+    double cos_a = CIFFY_COS((double)angle);
+    double sin_a = CIFFY_SIN((double)angle);
+    double cos_d = CIFFY_COS((double)dihedral);
+    double sin_d = CIFFY_SIN((double)dihedral);
+
+    double dist_d = (double)distance;
+    double d_z = dist_d * cos_a;
+    double d_perp = dist_d * sin_a;
+    double d_x = d_perp * cos_d;
+    double d_y = d_perp * sin_d;
+
+    /* Write result back as float */
+    result[0] = (float)((double)c[0] + d_z * zx + d_x * xx + d_y * yx);
+    result[1] = (float)((double)c[1] + d_z * zy + d_x * xy + d_y * yy);
+    result[2] = (float)((double)c[2] + d_z * zz + d_x * xz + d_y * yz);
+}
+
+
+/**
  * Place a new atom D using NERF (Natural Extension Reference Frame).
  *
  * Given three reference atoms A, B, C and internal coordinates (distance, angle, dihedral),

@@ -368,61 +368,6 @@ class Polymer:
         """
         self._coord_manager.dihedrals = value
 
-    def dihedral(
-        self,
-        dtype: "DihedralType | list[DihedralType] | tuple[DihedralType, ...]",
-    ) -> Array:
-        """
-        Get specific named dihedral angles.
-
-        Returns the dihedral values for atoms that "own" the specified dihedral
-        type(s) in the Z-matrix representation. Uses the same mechanism as
-        set_dihedral() for symmetric get/set behavior.
-
-        Args:
-            dtype: Type(s) of dihedral to retrieve. Can be a single DihedralType
-                or a list/tuple of DihedralTypes. For multiple types, values are
-                concatenated in the order specified.
-
-        Returns:
-            Array of dihedral values in radians. Length depends on number of
-            atoms that own the specified dihedral type(s).
-
-        Example:
-            >>> from ciffy import DihedralType
-            >>> phi = polymer.dihedral(DihedralType.PHI)
-            >>> # Get multiple types at once
-            >>> backbone = polymer.dihedral([DihedralType.PHI, DihedralType.PSI])
-        """
-        return self._coord_manager.get_dihedral(dtype)
-
-    def set_dihedral(
-        self,
-        dtype: "DihedralType | list[DihedralType] | tuple[DihedralType, ...]",
-        values: Array,
-    ) -> None:
-        """
-        Set specific named dihedral angles.
-
-        Args:
-            dtype: Type(s) of dihedral to set. Can be a single DihedralType
-                or a list/tuple of DihedralTypes.
-            values: New dihedral values in radians. For multiple types, values
-                should be concatenated in the same order as the dtype list.
-
-        Raises:
-            ValueError: If the specified dihedral type is not found.
-
-        Example:
-            >>> from ciffy import DihedralType
-            >>> import numpy as np
-            >>> # Set all phi angles to -60 degrees
-            >>> polymer.set_dihedral(DihedralType.PHI, np.full(n_phi, -np.pi/3))
-            >>> # Set multiple types at once
-            >>> polymer.set_dihedral([DihedralType.PHI, DihedralType.PSI], backbone_values)
-        """
-        self._coord_manager.set_dihedral(dtype, values)
-
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
     # ─────────────────────────────────────────────────────────────────────────

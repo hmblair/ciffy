@@ -95,4 +95,43 @@ PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject
  */
 PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
 
+/**
+ * Place a single atom using NERF algorithm.
+ * Python: _nerf_place_atom(a, b, c, distance, angle, dihedral) -> result
+ *
+ * Places atom D given reference atoms A (dihedral), B (angle), C (distance)
+ * and internal coordinates (distance, angle, dihedral in radians).
+ */
+PyObject *py_nerf_place_atom(PyObject *self, PyObject *args);
+
+/**
+ * Build atom-indexed Z-matrix for all chains in parallel.
+ * Row k corresponds to atom k (natural ordering).
+ *
+ * Python: _build_atom_indexed_zmatrix_parallel(offsets, neighbors, n_atoms,
+ *             chain_starts, chain_sizes, roots) -> (zmatrix, levels, counts)
+ */
+PyObject *py_build_atom_indexed_zmatrix_parallel(PyObject *self, PyObject *args);
+
+/**
+ * Convert Cartesian to internal coordinates using parent array.
+ * Python: _cartesian_to_internal_parent(coords, parent) -> internal
+ *
+ * References are derived from parent chain:
+ *   dist_ref[k] = parent[k]
+ *   ang_ref[k] = parent[parent[k]]
+ *   dih_ref[k] = parent[parent[parent[k]]]
+ */
+PyObject *py_cartesian_to_internal_parent(PyObject *self, PyObject *args);
+
+/**
+ * NERF reconstruction using parent array from spanning tree.
+ * Python: _nerf_reconstruct_parent(parent, level, internal, level_offsets,
+ *             level_atoms, n_levels, fixed_coords=None) -> coords
+ *
+ * Atoms at levels 0-2 are copied from fixed_coords (required for accurate
+ * reconstruction). Atoms at level 3+ are placed via NERF using parent chain.
+ */
+PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args);
+
 #endif /* CIFFY_INTERNAL_MODULE_H */

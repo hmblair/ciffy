@@ -266,11 +266,10 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
 
     sync = get_sync_fn(device)
 
-    # Initialize Z-matrix by triggering first computation
+    # Initialize internal coordinates by triggering first computation
     _ = polymer.dihedrals
-    zmatrix = polymer._coord_manager.zmatrix
-    results["zmatrix_size"] = len(zmatrix)
-    results["n_components"] = polymer._coord_manager._components.n_components
+    results["n_atoms"] = polymer.size()
+    results["n_components"] = polymer._coord_manager._tree.n_components
 
     # Cache original coordinates
     original_coords = polymer.coordinates.clone()
@@ -308,10 +307,8 @@ def print_results(results: dict) -> None:
     print(f"Structure: {results['file']} | Device: {results['device']}")
     print(f"{'='*80}")
     print(f"  Atoms: {results['atoms']:,} | Residues: {results.get('residues', '?'):,} | "
-          f"Chains: {results.get('chains', '?')}")
-    if 'zmatrix_size' in results:
-        print(f"  Z-matrix entries: {results['zmatrix_size']:,} | "
-              f"Components: {results['n_components']:,}")
+          f"Chains: {results.get('chains', '?')} | "
+          f"Components: {results.get('n_components', '?')}")
     print()
 
     # Print timing table

@@ -905,6 +905,262 @@ int64_t build_zmatrix_parallel(
 }
 
 
+/* ========================================================================== */
+/* ATOM-INDEXED Z-MATRIX CONSTRUCTION                                         */
+/* ========================================================================== */
+
+int64_t build_atom_indexed_zmatrix_from_csr(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    int64_t chain_start,
+    int64_t chain_size,
+    int64_t root,
+    int64_t *out_zmatrix,
+    int32_t *out_levels
+) {
+    if (chain_size == 0) return 0;
+
+    /* Validate root is in bounds */
+    if (root < chain_start || root >= chain_start + chain_size) {
+        return -1;
+    }
+
+    int64_t chain_end = chain_start + chain_size;
+
+    /* Allocate working arrays (indexed by local atom index: atom - chain_start) */
+    int64_t *parent = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+    int32_t *level = (int32_t *)malloc((size_t)chain_size * sizeof(int32_t));
+    int8_t *visited = (int8_t *)calloc((size_t)chain_size, sizeof(int8_t));
+    int64_t *queue = (int64_t *)malloc((size_t)chain_size * sizeof(int64_t));
+
+    if (!parent || !level || !visited || !queue) {
+        free(parent);
+        free(level);
+        free(visited);
+        free(queue);
+        return -1;
+    }
+
+    /* Initialize parent to -1 (no parent) */
+    for (int64_t i = 0; i < chain_size; i++) {
+        parent[i] = -1;
+        level[i] = -1;  /* -1 indicates unreachable */
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 1: BFS to build parent tree and compute levels                 */
+    /* ------------------------------------------------------------------ */
+
+    int64_t queue_head = 0, queue_tail = 0;
+    int64_t root_local = root - chain_start;
+
+    queue[queue_tail++] = root;
+    visited[root_local] = 1;
+    level[root_local] = 0;
+
+    while (queue_head < queue_tail) {
+        int64_t current = queue[queue_head++];
+        int64_t current_local = current - chain_start;
+
+        /* Get neighbors from CSR */
+        int64_t start = offsets[current];
+        int64_t end = offsets[current + 1];
+
+        for (int64_t i = start; i < end; i++) {
+            int64_t neighbor = neighbors[i];
+
+            /* Only process atoms in this chain */
+            if (neighbor < chain_start || neighbor >= chain_end) continue;
+
+            int64_t neighbor_local = neighbor - chain_start;
+            if (visited[neighbor_local]) continue;
+
+            visited[neighbor_local] = 1;
+            parent[neighbor_local] = current;  /* Store global index as parent */
+            level[neighbor_local] = level[current_local] + 1;
+            queue[queue_tail++] = neighbor;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 2: Build Z-matrix entries in NATURAL ATOM ORDER                */
+    /* ------------------------------------------------------------------ */
+
+    for (int64_t local_idx = 0; local_idx < chain_size; local_idx++) {
+        int64_t atom = chain_start + local_idx;  /* Global atom index */
+        int64_t *entry = &out_zmatrix[local_idx * 4];
+
+        /* Store BFS level if output array provided */
+        if (out_levels) {
+            out_levels[local_idx] = level[local_idx];
+        }
+
+        /* Check if atom is connected (was reached by BFS) */
+        if (level[local_idx] < 0) {
+            /* Unreachable atom - isolated or in different component */
+            entry[0] = atom;
+            entry[1] = -1;
+            entry[2] = -1;
+            entry[3] = -1;
+            continue;
+        }
+
+        int64_t p = parent[local_idx];  /* Parent (global index), -1 for root */
+
+        if (p < 0) {
+            /* Root atom: no references */
+            entry[0] = atom;
+            entry[1] = -1;
+            entry[2] = -1;
+            entry[3] = -1;
+        }
+        else {
+            /* Derive references from parent chain */
+            int64_t p_local = p - chain_start;
+            int64_t gp = parent[p_local];  /* Grandparent */
+
+            if (gp < 0) {
+                /* Only have parent, no grandparent */
+                entry[0] = atom;
+                entry[1] = p;
+                entry[2] = -1;
+                entry[3] = -1;
+            }
+            else {
+                int64_t gp_local = gp - chain_start;
+                int64_t ggp = parent[gp_local];  /* Great-grandparent */
+
+                /* Validate great-grandparent: must not be atom itself or any ref */
+                if (ggp == atom || ggp == p || ggp == gp) {
+                    ggp = -1;
+                }
+
+                /* If no valid great-grandparent, try to find alternative */
+                if (ggp < 0) {
+                    /* Look for a sibling of p (another child of gp) */
+                    int64_t gp_start = offsets[gp];
+                    int64_t gp_end = offsets[gp + 1];
+                    for (int64_t i = gp_start; i < gp_end && ggp < 0; i++) {
+                        int64_t neighbor = neighbors[i];
+                        if (neighbor < chain_start || neighbor >= chain_end) continue;
+                        int64_t neighbor_local = neighbor - chain_start;
+                        if (parent[neighbor_local] == gp &&
+                            neighbor != p && neighbor != atom) {
+                            ggp = neighbor;
+                        }
+                    }
+                }
+
+                /* If still no valid ggp, try any bonded neighbor of gp */
+                if (ggp < 0) {
+                    int64_t gp_start = offsets[gp];
+                    int64_t gp_end = offsets[gp + 1];
+                    for (int64_t i = gp_start; i < gp_end && ggp < 0; i++) {
+                        int64_t neighbor = neighbors[i];
+                        if (neighbor < chain_start || neighbor >= chain_end) continue;
+                        if (neighbor != atom && neighbor != p && neighbor != gp) {
+                            ggp = neighbor;
+                        }
+                    }
+                }
+
+                entry[0] = atom;
+                entry[1] = p;
+                entry[2] = gp;
+                entry[3] = ggp;
+            }
+        }
+    }
+
+    /* Cleanup */
+    free(parent);
+    free(level);
+    free(visited);
+    free(queue);
+
+    return chain_size;
+}
+
+
+int64_t build_atom_indexed_zmatrix_parallel(
+    const int64_t *offsets,
+    const int64_t *neighbors,
+    int64_t n_atoms,
+    const int64_t *chain_starts,
+    const int64_t *chain_sizes,
+    const int64_t *roots,
+    int64_t n_chains,
+    int64_t *out_zmatrix,
+    int32_t *out_levels,
+    int64_t *out_counts
+) {
+    if (n_chains == 0) return 0;
+
+    /* Compute output offsets for each chain */
+    int64_t *output_offsets = (int64_t *)malloc((size_t)(n_chains + 1) * sizeof(int64_t));
+    if (output_offsets == NULL) return -1;
+
+    output_offsets[0] = 0;
+    for (int64_t i = 0; i < n_chains; i++) {
+        output_offsets[i + 1] = output_offsets[i] + chain_sizes[i];
+    }
+
+    int error_flag = 0;
+
+    /* Process chains in parallel */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int64_t c = 0; c < n_chains; c++) {
+        if (error_flag) continue;
+
+        int64_t chain_start = chain_starts[c];
+        int64_t chain_size = chain_sizes[c];
+        int64_t root = roots[c];
+
+        if (chain_size == 0) {
+            out_counts[c] = 0;
+            continue;
+        }
+
+        /* Output location for this chain */
+        int64_t *chain_output = &out_zmatrix[output_offsets[c] * 4];
+        int32_t *chain_levels = out_levels ?
+            &out_levels[output_offsets[c]] : NULL;
+
+        /* Build atom-indexed Z-matrix for this chain */
+        int64_t count = build_atom_indexed_zmatrix_from_csr(
+            offsets, neighbors, n_atoms,
+            chain_start, chain_size, root,
+            chain_output, chain_levels
+        );
+
+        if (count < 0) {
+#ifdef _OPENMP
+            #pragma omp atomic write
+#endif
+            error_flag = 1;
+            out_counts[c] = 0;
+        } else {
+            out_counts[c] = count;
+        }
+    }
+
+    free(output_offsets);
+
+    if (error_flag) return -1;
+
+    /* Compute total entries */
+    int64_t total = 0;
+    for (int64_t c = 0; c < n_chains; c++) {
+        total += out_counts[c];
+    }
+
+    return total;
+}
+
+
 int64_t find_connected_components_c(
     const int64_t *offsets,
     const int64_t *neighbors,

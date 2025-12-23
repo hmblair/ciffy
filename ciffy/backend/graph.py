@@ -36,7 +36,6 @@ from .._c import _build_bond_graph as _build_bond_graph_c
 from .._c import _edges_to_csr as _edges_to_csr_c
 from .._c import _build_zmatrix_parallel as _build_zmatrix_parallel_c
 from .._c import _find_connected_components as _find_connected_components_c
-from .._c import _build_canonical_zmatrix as _build_canonical_zmatrix_c
 
 __all__ = [
     # Data structures
@@ -451,12 +450,10 @@ class ZMatrix:
         csr_neighbors: np.ndarray | None = None,
     ) -> "ZMatrix":
         """
-        Build Z-matrix from topology info using BFS traversal.
+        Build Z-matrix from topology info.
 
-        Processes each chain independently with its own spanning tree.
-        Returns entries in BFS order so references always point to
-        earlier (already placed) atoms. The C extension performs
-        dihedral-aware reference selection in a single pass.
+        Builds an atom-indexed Z-matrix where row k corresponds to atom k.
+        Uses SpanningTree with DFS traversal for optimal NERF reconstruction.
 
         Args:
             topology: TopologyInfo containing structural metadata.
@@ -464,9 +461,9 @@ class ZMatrix:
             csr_neighbors: Optional pre-built CSR neighbors array. If None, built from topology.
 
         Returns:
-            ZMatrix with entries in placement order, dihedral type annotations, BFS levels, and component IDs.
+            ZMatrix with entries, levels, and component IDs.
         """
-        # Build Z-matrix with dihedral-aware refs in single C pass
+        # Build Z-matrix using SpanningTree
         indices, dihedral_types, levels, component_ids = _build_zmatrix_indices_from_topology(
             topology, csr_offsets, csr_neighbors
         )
@@ -812,26 +809,20 @@ def _build_zmatrix_indices_from_topology(
     topology: TopologyInfo,
     csr_offsets: np.ndarray | None = None,
     csr_neighbors: np.ndarray | None = None,
-    use_canonical: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Build Z-matrix as (M, 4) int64 array from topology info.
 
-    Internal function used by ZMatrix.from_topology().
+    Uses SpanningTree with DFS traversal for optimal NERF reconstruction.
 
     Args:
         topology: TopologyInfo containing structural metadata.
         csr_offsets: Optional pre-built CSR offsets array.
         csr_neighbors: Optional pre-built CSR neighbors array.
-        use_canonical: If True (default), use canonical Z-matrix with precomputed
-            references that guarantee correct dihedral type assignment. If False,
-            use BFS-based Z-matrix.
 
     Returns:
         Tuple of (indices, dihedral_types, levels, component_ids).
     """
-    n_atoms = topology.n_atoms
-
     # Build CSR if not provided
     if csr_offsets is None or csr_neighbors is None:
         edges, n_atoms = build_bond_graph_from_topology(topology)
@@ -842,54 +833,23 @@ def _build_zmatrix_indices_from_topology(
     else:
         offsets, neighbors = csr_offsets, csr_neighbors
 
-    if use_canonical:
-        # Use canonical Z-matrix with precomputed references
-        return _build_canonical_zmatrix_from_topology(
-            topology, offsets, neighbors
-        )
-
-    # Fall back to BFS-based Z-matrix
-    # Find all connected components in the bond graph
-    comp_atoms, comp_offsets, n_components = find_connected_components(offsets, neighbors, n_atoms)
-
-    if n_components == 0:
-        return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
-                np.array([], dtype=np.int32), np.array([], dtype=np.int32))
-
-    # Extract component info for Z-matrix construction
-    component_sizes = np.diff(comp_offsets).astype(np.int64)
-    component_starts = comp_atoms[comp_offsets[:-1]].astype(np.int64)
-    roots = component_starts.copy()
-
-    # Build Z-matrix with dihedral-aware reference selection
-    return build_zmatrix_from_components(
-        np.asarray(offsets, dtype=np.int64),
-        np.asarray(neighbors, dtype=np.int64),
-        n_atoms,
-        component_starts,
-        component_sizes,
-        roots,
-        atoms=np.ascontiguousarray(topology.atoms, dtype=np.int32),
-        sequence=np.ascontiguousarray(topology.sequence, dtype=np.int32),
-        res_sizes=np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),
+    # Build atom-indexed Z-matrix using SpanningTree
+    return _build_atom_indexed_zmatrix_from_topology(
+        topology, offsets, neighbors
     )
 
 
-def _build_canonical_zmatrix_from_topology(
+def _build_atom_indexed_zmatrix_from_topology(
     topology: TopologyInfo,
     csr_offsets: np.ndarray,
     csr_neighbors: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Build canonical Z-matrix using natural atom order and precomputed references.
+    Build atom-indexed Z-matrix where row k corresponds to atom k.
 
-    This function uses the canonical Z-matrix algorithm which:
-    1. Processes atoms in their natural order (no BFS reordering)
-    2. Uses precomputed canonical references from codegen for dihedral-owning atoms
-    3. Falls back to bond graph for atoms without canonical references
-
-    This guarantees that dihedral-owning atoms (e.g., the "owner" atom for PHI, PSI,
-    CHI_PURINE, CHI_PYRIMIDINE) always get the correct reference atoms.
+    Uses SpanningTree with DFS traversal to build parent relationships.
+    DFS creates chain-like paths (0→1→2→3) which are optimal for NERF
+    reconstruction since most atoms have valid parent chains.
 
     Args:
         topology: TopologyInfo containing structural metadata.
@@ -899,38 +859,32 @@ def _build_canonical_zmatrix_from_topology(
     Returns:
         Tuple of (indices, dihedral_types, levels, component_ids).
     """
+    from ..internal.tree import SpanningTree
+
     n_atoms = topology.n_atoms
-    n_residues = topology.n_residues
 
     if n_atoms == 0:
         return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
                 np.array([], dtype=np.int32), np.array([], dtype=np.int32))
 
-    # Call canonical Z-matrix C function
-    zmatrix, dihedral_types = _build_canonical_zmatrix_c(
-        np.ascontiguousarray(topology.atoms, dtype=np.int32),
-        np.ascontiguousarray(topology.sequence, dtype=np.int32),
-        np.ascontiguousarray(topology.residue_sizes, dtype=np.int32),
-        np.ascontiguousarray(topology.chain_lengths, dtype=np.int32),
-        np.ascontiguousarray(csr_offsets, dtype=np.int64),
-        np.ascontiguousarray(csr_neighbors, dtype=np.int64),
-    )
+    # Build spanning tree via DFS
+    tree = SpanningTree.from_bond_graph(csr_offsets, csr_neighbors, n_atoms)
 
-    # Compute NERF dependency levels from the Z-matrix
-    levels = _compute_nerf_levels(zmatrix)
+    if tree.n_components == 0:
+        return (np.zeros((0, 4), dtype=np.int64), np.array([], dtype=np.int8),
+                np.array([], dtype=np.int32), np.array([], dtype=np.int32))
 
-    # For canonical Z-matrix, atoms are in natural order so we need to
-    # determine component IDs based on connected components
-    comp_atoms, comp_offsets, n_components = find_connected_components(
-        csr_offsets, csr_neighbors, n_atoms
-    )
+    # Get Z-matrix indices from spanning tree
+    # Each row k is [k, dist_ref, ang_ref, dih_ref]
+    zmatrix = tree.to_zmatrix_indices()
 
-    # Build atom -> component mapping
-    component_ids = np.zeros(n_atoms, dtype=np.int32)
-    for comp_idx in range(n_components):
-        start = comp_offsets[comp_idx]
-        end = comp_offsets[comp_idx + 1]
-        component_ids[comp_atoms[start:end]] = comp_idx
+    # Use tree's level and component_id arrays directly
+    levels = tree.level.astype(np.int32)
+    component_ids = tree.component_id.astype(np.int32)
+
+    # Dihedral types not computed for atom-indexed Z-matrix (would need separate pass)
+    # For now, return -1 (unknown) for all entries
+    dihedral_types = np.full(n_atoms, -1, dtype=np.int8)
 
     return zmatrix, dihedral_types, levels, component_ids
 

@@ -9,6 +9,7 @@
 #include "../pyutils.h"
 #include "batch.h"
 #include "graph.h"
+#include "geometry.h"
 
 /* Helpers to normalize array-like inputs (NumPy, Torch tensor, etc.) to
  * contiguous NumPy arrays with shape checks.
@@ -1239,4 +1240,463 @@ PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args) {
     Py_DECREF(py_dihedral_types);
 
     return tuple;
+}
+
+
+/**
+ * Build atom-indexed Z-matrix for all chains in parallel.
+ *
+ * Key difference from py_build_zmatrix_parallel: output is in NATURAL ATOM ORDER,
+ * not BFS traversal order. This means zmatrix[k] corresponds to atom (chain_start + k),
+ * eliminating the need for atom<->row index mappings.
+ *
+ * Python signature:
+ *   _build_atom_indexed_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots)
+ *       -> (zmatrix, levels, counts)
+ *
+ * Args:
+ *   offsets: (n_atoms+1,) int64 array of CSR offsets.
+ *   neighbors: (E,) int64 array of neighbor indices.
+ *   n_atoms: Total number of atoms (int).
+ *   chain_starts: (n_chains,) int64 array of first atom index per chain.
+ *   chain_sizes: (n_chains,) int64 array of atoms per chain.
+ *   roots: (n_chains,) int64 array of root atom index per chain.
+ *
+ * Returns:
+ *   Tuple of (zmatrix, levels, counts):
+ *     zmatrix: (total_atoms, 4) int64 Z-matrix entries in natural atom order.
+ *     levels: (total_atoms,) int32 BFS level per entry.
+ *     counts: (n_chains,) int64 entries written per chain.
+ */
+PyObject *py_build_atom_indexed_zmatrix_parallel(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_offsets, *py_neighbors, *py_chain_starts, *py_chain_sizes, *py_roots;
+    int n_atoms;
+
+    if (!PyArg_ParseTuple(args, "OOiOOO",
+                          &py_offsets, &py_neighbors, &n_atoms,
+                          &py_chain_starts, &py_chain_sizes, &py_roots)) {
+        return NULL;
+    }
+
+    /* Validate required arrays */
+    PyArrayObject *offsets_arr = require_array_1d(py_offsets, NPY_INT64, "offsets");
+    if (offsets_arr == NULL) return NULL;
+
+    PyArrayObject *neighbors_arr = require_array_1d(py_neighbors, NPY_INT64, "neighbors");
+    if (neighbors_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        return NULL;
+    }
+
+    PyArrayObject *chain_starts_arr = require_array_1d(py_chain_starts, NPY_INT64, "chain_starts");
+    if (chain_starts_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        return NULL;
+    }
+
+    PyArrayObject *chain_sizes_arr = require_array_1d(py_chain_sizes, NPY_INT64, "chain_sizes");
+    if (chain_sizes_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        return NULL;
+    }
+
+    PyArrayObject *roots_arr = require_array_1d(py_roots, NPY_INT64, "roots");
+    if (roots_arr == NULL) {
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        return NULL;
+    }
+
+    /* Get array sizes */
+    npy_intp n_chains = PyArray_DIM(chain_starts_arr, 0);
+
+    /* Verify all chain arrays have same length */
+    if (PyArray_DIM(chain_sizes_arr, 0) != n_chains ||
+        PyArray_DIM(roots_arr, 0) != n_chains) {
+        PyErr_SetString(PyExc_ValueError,
+            "chain_starts, chain_sizes, and roots must have same length");
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        Py_DECREF(roots_arr);
+        return NULL;
+    }
+
+    /* Get data pointers */
+    const int64_t *offsets = (const int64_t *)PyArray_DATA(offsets_arr);
+    const int64_t *neighbors = (const int64_t *)PyArray_DATA(neighbors_arr);
+    const int64_t *chain_starts = (const int64_t *)PyArray_DATA(chain_starts_arr);
+    const int64_t *chain_sizes = (const int64_t *)PyArray_DATA(chain_sizes_arr);
+    const int64_t *roots = (const int64_t *)PyArray_DATA(roots_arr);
+
+    /* Compute total output size */
+    int64_t total_size = 0;
+    for (npy_intp i = 0; i < n_chains; i++) {
+        total_size += chain_sizes[i];
+    }
+
+    /* Allocate output arrays */
+    npy_intp zmat_dims[2] = {total_size, 4};
+    npy_intp level_dims[1] = {total_size};
+    npy_intp counts_dims[1] = {n_chains};
+
+    PyObject *py_zmatrix = PyArray_SimpleNew(2, zmat_dims, NPY_INT64);
+    PyObject *py_levels = PyArray_SimpleNew(1, level_dims, NPY_INT32);
+    PyObject *py_counts = PyArray_SimpleNew(1, counts_dims, NPY_INT64);
+
+    if (py_zmatrix == NULL || py_levels == NULL || py_counts == NULL) {
+        Py_XDECREF(py_zmatrix);
+        Py_XDECREF(py_levels);
+        Py_XDECREF(py_counts);
+        Py_DECREF(offsets_arr);
+        Py_DECREF(neighbors_arr);
+        Py_DECREF(chain_starts_arr);
+        Py_DECREF(chain_sizes_arr);
+        Py_DECREF(roots_arr);
+        return PyErr_NoMemory();
+    }
+
+    int64_t *zmatrix = (int64_t *)PyArray_DATA((PyArrayObject *)py_zmatrix);
+    int32_t *levels = (int32_t *)PyArray_DATA((PyArrayObject *)py_levels);
+    int64_t *counts = (int64_t *)PyArray_DATA((PyArrayObject *)py_counts);
+
+    /* Build atom-indexed Z-matrices in parallel */
+    int64_t result = build_atom_indexed_zmatrix_parallel(
+        offsets, neighbors, n_atoms,
+        chain_starts, chain_sizes, roots,
+        n_chains,
+        zmatrix, levels, counts
+    );
+
+    /* Cleanup input arrays */
+    Py_DECREF(offsets_arr);
+    Py_DECREF(neighbors_arr);
+    Py_DECREF(chain_starts_arr);
+    Py_DECREF(chain_sizes_arr);
+    Py_DECREF(roots_arr);
+
+    if (result < 0) {
+        Py_DECREF(py_zmatrix);
+        Py_DECREF(py_levels);
+        Py_DECREF(py_counts);
+        return PyErr_NoMemory();
+    }
+
+    /* Build result tuple */
+    PyObject *tuple = PyTuple_Pack(3, py_zmatrix, py_levels, py_counts);
+    Py_DECREF(py_zmatrix);
+    Py_DECREF(py_levels);
+    Py_DECREF(py_counts);
+
+    return tuple;
+}
+
+
+/**
+ * Place a single atom using NERF algorithm.
+ *
+ * Python signature:
+ *   _nerf_place_atom(a, b, c, distance, angle, dihedral) -> result
+ *
+ * Args:
+ *   a: (3,) float32 array - dihedral reference atom
+ *   b: (3,) float32 array - angle reference atom
+ *   c: (3,) float32 array - distance reference atom (bonded to new atom)
+ *   distance: float - bond length to new atom
+ *   angle: float - bond angle (radians)
+ *   dihedral: float - dihedral angle (radians)
+ *
+ * Returns:
+ *   result: (3,) float32 array - position of new atom
+ */
+PyObject *py_nerf_place_atom(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_a, *py_b, *py_c;
+    float distance, angle, dihedral;
+
+    if (!PyArg_ParseTuple(args, "OOOfff", &py_a, &py_b, &py_c,
+                          &distance, &angle, &dihedral)) {
+        return NULL;
+    }
+
+    /* Convert inputs to contiguous float32 arrays */
+    PyArrayObject *a_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_a, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *b_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_b, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *c_arr = (PyArrayObject *)PyArray_FROM_OTF(
+        py_c, NPY_FLOAT32, NPY_ARRAY_IN_ARRAY);
+
+    if (a_arr == NULL || b_arr == NULL || c_arr == NULL) {
+        Py_XDECREF(a_arr);
+        Py_XDECREF(b_arr);
+        Py_XDECREF(c_arr);
+        return NULL;
+    }
+
+    /* Verify shapes are (3,) */
+    if (PyArray_NDIM(a_arr) != 1 || PyArray_DIM(a_arr, 0) != 3 ||
+        PyArray_NDIM(b_arr) != 1 || PyArray_DIM(b_arr, 0) != 3 ||
+        PyArray_NDIM(c_arr) != 1 || PyArray_DIM(c_arr, 0) != 3) {
+        Py_DECREF(a_arr);
+        Py_DECREF(b_arr);
+        Py_DECREF(c_arr);
+        PyErr_SetString(PyExc_ValueError, "a, b, c must each have shape (3,)");
+        return NULL;
+    }
+
+    /* Get data pointers */
+    const float *a = (const float *)PyArray_DATA(a_arr);
+    const float *b = (const float *)PyArray_DATA(b_arr);
+    const float *c = (const float *)PyArray_DATA(c_arr);
+
+    /* Allocate output */
+    npy_intp dims[1] = {3};
+    PyObject *py_result = PyArray_SimpleNew(1, dims, NPY_FLOAT32);
+    if (py_result == NULL) {
+        Py_DECREF(a_arr);
+        Py_DECREF(b_arr);
+        Py_DECREF(c_arr);
+        return PyErr_NoMemory();
+    }
+
+    float *result = (float *)PyArray_DATA((PyArrayObject *)py_result);
+
+    /* Call NERF placement */
+    nerf_place_atom(a, b, c, distance, angle, dihedral, result);
+
+    /* Clean up */
+    Py_DECREF(a_arr);
+    Py_DECREF(b_arr);
+    Py_DECREF(c_arr);
+
+    return py_result;
+}
+
+
+/**
+ * Convert Cartesian to internal coordinates using parent array.
+ *
+ * Python signature:
+ *   _cartesian_to_internal_parent(coords, parent) -> internal
+ *
+ * Args:
+ *   coords: (N, 3) float32 array of Cartesian coordinates.
+ *   parent: (N,) int64 array where parent[k] is parent of atom k (-1 for roots).
+ *
+ * Returns:
+ *   internal: (N, 3) float32 array where each row is [distance, angle, dihedral].
+ */
+PyObject *py_cartesian_to_internal_parent(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_coords, *py_parent;
+    if (!PyArg_ParseTuple(args, "OO", &py_coords, &py_parent)) {
+        return NULL;
+    }
+
+    PyArrayObject *coords_arr = require_array_2d(py_coords, NPY_FLOAT32, 3, "coords");
+    if (coords_arr == NULL) return NULL;
+
+    PyArrayObject *parent_arr = require_array_1d(py_parent, NPY_INT64, "parent");
+    if (parent_arr == NULL) {
+        Py_DECREF(coords_arr);
+        return NULL;
+    }
+
+    npy_intp n_atoms = PyArray_DIM(coords_arr, 0);
+
+    /* Verify sizes match */
+    if (PyArray_DIM(parent_arr, 0) != n_atoms) {
+        PyErr_SetString(PyExc_ValueError, "coords and parent must have same length");
+        Py_DECREF(coords_arr);
+        Py_DECREF(parent_arr);
+        return NULL;
+    }
+
+    /* Get data pointers */
+    const float *coords = (const float *)PyArray_DATA(coords_arr);
+    const int64_t *parent = (const int64_t *)PyArray_DATA(parent_arr);
+
+    /* Allocate output */
+    npy_intp dims[2] = {n_atoms, 3};
+    PyObject *py_internal = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
+    if (py_internal == NULL) {
+        Py_DECREF(coords_arr);
+        Py_DECREF(parent_arr);
+        return PyErr_NoMemory();
+    }
+
+    float *internal = (float *)PyArray_DATA((PyArrayObject *)py_internal);
+
+    /* Call batch function */
+    batch_cartesian_to_internal_parent(coords, (size_t)n_atoms, parent, internal);
+
+    /* Clean up */
+    Py_DECREF(coords_arr);
+    Py_DECREF(parent_arr);
+
+    return py_internal;
+}
+
+
+/**
+ * NERF reconstruction using parent array from spanning tree.
+ *
+ * Python signature:
+ *   _nerf_reconstruct_parent(parent, level, internal, level_offsets,
+ *       level_atoms, n_levels, fixed_coords=None) -> coords
+ *
+ * Args:
+ *   parent: (N,) int64 array where parent[k] is parent of atom k.
+ *   level: (N,) int32 array of depth levels.
+ *   internal: (N, 3) float32 array of [distance, angle, dihedral] per atom.
+ *   level_offsets: (n_levels+1,) int32 CSR-style offsets for level groups.
+ *   level_atoms: (N,) int64 atoms sorted by level.
+ *   n_levels: int, number of levels.
+ *   fixed_coords: Optional (N, 3) float32 original coordinates. Atoms at
+ *                 levels 0-2 are copied from here (required for accuracy).
+ *
+ * Returns:
+ *   coords: (N, 3) float32 array of reconstructed coordinates.
+ */
+PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args) {
+    (void)self;
+
+    PyObject *py_parent, *py_level, *py_internal;
+    PyObject *py_level_offsets, *py_level_atoms;
+    int n_levels;
+    PyObject *py_fixed_coords = Py_None;
+
+    if (!PyArg_ParseTuple(args, "OOOOOi|O",
+                          &py_parent, &py_level, &py_internal,
+                          &py_level_offsets, &py_level_atoms, &n_levels,
+                          &py_fixed_coords)) {
+        return NULL;
+    }
+
+    /* Parse required arrays */
+    PyArrayObject *parent_arr = require_array_1d(py_parent, NPY_INT64, "parent");
+    if (parent_arr == NULL) return NULL;
+
+    PyArrayObject *level_arr = require_array_1d(py_level, NPY_INT32, "level");
+    if (level_arr == NULL) {
+        Py_DECREF(parent_arr);
+        return NULL;
+    }
+
+    PyArrayObject *internal_arr = require_array_2d(py_internal, NPY_FLOAT32, 3, "internal");
+    if (internal_arr == NULL) {
+        Py_DECREF(parent_arr);
+        Py_DECREF(level_arr);
+        return NULL;
+    }
+
+    PyArrayObject *level_offsets_arr = require_array_1d(py_level_offsets, NPY_INT32, "level_offsets");
+    if (level_offsets_arr == NULL) {
+        Py_DECREF(parent_arr);
+        Py_DECREF(level_arr);
+        Py_DECREF(internal_arr);
+        return NULL;
+    }
+
+    PyArrayObject *level_atoms_arr = require_array_1d(py_level_atoms, NPY_INT64, "level_atoms");
+    if (level_atoms_arr == NULL) {
+        Py_DECREF(parent_arr);
+        Py_DECREF(level_arr);
+        Py_DECREF(internal_arr);
+        Py_DECREF(level_offsets_arr);
+        return NULL;
+    }
+
+    npy_intp n_atoms = PyArray_DIM(parent_arr, 0);
+
+    /* Verify sizes */
+    if (PyArray_DIM(level_arr, 0) != n_atoms ||
+        PyArray_DIM(internal_arr, 0) != n_atoms ||
+        PyArray_DIM(level_atoms_arr, 0) != n_atoms) {
+        PyErr_SetString(PyExc_ValueError,
+            "parent, level, internal, level_atoms must have same length");
+        Py_DECREF(parent_arr);
+        Py_DECREF(level_arr);
+        Py_DECREF(internal_arr);
+        Py_DECREF(level_offsets_arr);
+        Py_DECREF(level_atoms_arr);
+        return NULL;
+    }
+
+    /* Parse optional fixed_coords */
+    PyArrayObject *fixed_arr = NULL;
+    if (py_fixed_coords != Py_None) {
+        fixed_arr = require_array_2d(py_fixed_coords, NPY_FLOAT32, 3, "fixed_coords");
+        if (fixed_arr == NULL) {
+            Py_DECREF(parent_arr);
+            Py_DECREF(level_arr);
+            Py_DECREF(internal_arr);
+            Py_DECREF(level_offsets_arr);
+            Py_DECREF(level_atoms_arr);
+            return NULL;
+        }
+        if (PyArray_DIM(fixed_arr, 0) != n_atoms) {
+            PyErr_SetString(PyExc_ValueError, "fixed_coords must have same length as parent");
+            Py_DECREF(fixed_arr);
+            Py_DECREF(parent_arr);
+            Py_DECREF(level_arr);
+            Py_DECREF(internal_arr);
+            Py_DECREF(level_offsets_arr);
+            Py_DECREF(level_atoms_arr);
+            return NULL;
+        }
+    }
+
+    /* Get data pointers */
+    const int64_t *parent = (const int64_t *)PyArray_DATA(parent_arr);
+    const int32_t *level = (const int32_t *)PyArray_DATA(level_arr);
+    const float *internal = (const float *)PyArray_DATA(internal_arr);
+    const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
+    const int64_t *level_atoms = (const int64_t *)PyArray_DATA(level_atoms_arr);
+    const float *fixed_coords = fixed_arr ? (const float *)PyArray_DATA(fixed_arr) : NULL;
+
+    /* Allocate output */
+    npy_intp dims[2] = {n_atoms, 3};
+    PyObject *py_coords = PyArray_SimpleNew(2, dims, NPY_FLOAT32);
+    if (py_coords == NULL) {
+        Py_XDECREF(fixed_arr);
+        Py_DECREF(parent_arr);
+        Py_DECREF(level_arr);
+        Py_DECREF(internal_arr);
+        Py_DECREF(level_offsets_arr);
+        Py_DECREF(level_atoms_arr);
+        return PyErr_NoMemory();
+    }
+
+    float *coords = (float *)PyArray_DATA((PyArrayObject *)py_coords);
+
+    /* Call batch function */
+    batch_nerf_reconstruct_parent(
+        coords, (size_t)n_atoms,
+        parent, level, internal,
+        level_offsets, level_atoms, n_levels,
+        fixed_coords,
+        NULL, NULL, 0  /* No anchor-based placement */
+    );
+
+    /* Clean up */
+    Py_XDECREF(fixed_arr);
+    Py_DECREF(parent_arr);
+    Py_DECREF(level_arr);
+    Py_DECREF(internal_arr);
+    Py_DECREF(level_offsets_arr);
+    Py_DECREF(level_atoms_arr);
+
+    return py_coords;
 }

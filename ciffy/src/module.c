@@ -832,6 +832,60 @@ static PyMethodDef methods[] = {
      "    tuple: (zmatrix, dihedral_types)\n"
      "        zmatrix: (N, 4) int64 [atom, dist_ref, ang_ref, dih_ref]\n"
      "        dihedral_types: (N,) int8 dihedral type (-1 if not named dihedral)\n"},
+    {"_build_atom_indexed_zmatrix_parallel", py_build_atom_indexed_zmatrix_parallel, METH_VARARGS,
+     "Build atom-indexed Z-matrix for all chains in parallel.\n\n"
+     "Row k corresponds to atom k (natural ordering), eliminating need for\n"
+     "atom-to-row index mappings. Uses BFS for reference computation.\n\n"
+     "Args:\n"
+     "    offsets (ndarray): (n_atoms+1,) int64 CSR offsets.\n"
+     "    neighbors (ndarray): (E,) int64 neighbor indices.\n"
+     "    n_atoms (int): Total number of atoms.\n"
+     "    chain_starts (ndarray): (n_chains,) int64 first atom per chain.\n"
+     "    chain_sizes (ndarray): (n_chains,) int64 atoms per chain.\n"
+     "    roots (ndarray): (n_chains,) int64 root atom per chain.\n\n"
+     "Returns:\n"
+     "    tuple: (zmatrix, levels, counts)\n"
+     "        zmatrix: (N, 4) int64 [atom, dist_ref, ang_ref, dih_ref]\n"
+     "        levels: (N,) int32 BFS level per atom\n"
+     "        counts: (n_chains,) int64 atoms written per chain\n"},
+    {"_nerf_place_atom", py_nerf_place_atom, METH_VARARGS,
+     "Place a single atom using NERF algorithm.\n\n"
+     "Given three reference atoms and internal coordinates, computes the\n"
+     "position of a new atom using Natural Extension Reference Frame.\n\n"
+     "Args:\n"
+     "    a (ndarray): (3,) float32 dihedral reference position.\n"
+     "    b (ndarray): (3,) float32 angle reference position.\n"
+     "    c (ndarray): (3,) float32 distance reference position (bonded atom).\n"
+     "    distance (float): Bond length to new atom.\n"
+     "    angle (float): Bond angle in radians.\n"
+     "    dihedral (float): Dihedral angle in radians.\n\n"
+     "Returns:\n"
+     "    ndarray: (3,) float32 position of new atom.\n"},
+    {"_cartesian_to_internal_parent", py_cartesian_to_internal_parent, METH_VARARGS,
+     "Convert Cartesian to internal coordinates using parent array.\n\n"
+     "References are derived from parent chain:\n"
+     "  dist_ref[k] = parent[k]\n"
+     "  ang_ref[k] = parent[parent[k]]\n"
+     "  dih_ref[k] = parent[parent[parent[k]]]\n\n"
+     "Args:\n"
+     "    coords (ndarray): (N, 3) float32 Cartesian coordinates.\n"
+     "    parent (ndarray): (N,) int64 parent indices (-1 for roots).\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float32 [distance, angle, dihedral] per atom.\n"},
+    {"_nerf_reconstruct_parent", py_nerf_reconstruct_parent, METH_VARARGS,
+     "NERF reconstruction using parent array from spanning tree.\n\n"
+     "Atoms at levels 0-2 are copied from fixed_coords (required for accuracy).\n"
+     "Atoms at level 3+ are placed via NERF using parent chain references.\n\n"
+     "Args:\n"
+     "    parent (ndarray): (N,) int64 parent indices.\n"
+     "    level (ndarray): (N,) int32 depth levels.\n"
+     "    internal (ndarray): (N, 3) float32 internal coordinates.\n"
+     "    level_offsets (ndarray): (n_levels+1,) int32 CSR offsets.\n"
+     "    level_atoms (ndarray): (N,) int64 atoms sorted by level.\n"
+     "    n_levels (int): Number of levels.\n"
+     "    fixed_coords (ndarray, optional): (N, 3) float32 original coordinates.\n\n"
+     "Returns:\n"
+     "    ndarray: (N, 3) float32 reconstructed coordinates.\n"},
     {NULL, NULL, 0, NULL}
 };
 

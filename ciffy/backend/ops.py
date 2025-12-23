@@ -372,6 +372,57 @@ def array(data: list, *, like: Array, dtype: str = 'int64') -> Array:
     return np.array(data, dtype=np_dtype)
 
 
+def empty(size: int | tuple, *, like: Array) -> Array:
+    """
+    Create an empty (uninitialized) array matching dtype/device of 'like'.
+
+    Args:
+        size: Shape of the array (int for 1D, tuple for nD).
+        like: Template array to match dtype and device.
+
+    Returns:
+        Empty array in the same backend/dtype/device as 'like'.
+    """
+    if is_torch(like):
+        import torch
+        return torch.empty(size, dtype=like.dtype, device=getattr(like, 'device', None))
+    return np.empty(size, dtype=like.dtype)
+
+
+def empty_like(arr: Array) -> Array:
+    """
+    Create an empty array with same shape/dtype/device as input.
+
+    Args:
+        arr: Template array.
+
+    Returns:
+        Empty array with same properties as input.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.empty_like(arr)
+    return np.empty_like(arr)
+
+
+def clone(arr: Array) -> Array:
+    """
+    Create a copy of an array, detached from any computation graph.
+
+    For PyTorch tensors, this returns a detached clone.
+    For NumPy arrays, this returns a copy.
+
+    Args:
+        arr: Array to clone.
+
+    Returns:
+        Independent copy of the array.
+    """
+    if is_torch(arr):
+        return arr.detach().clone()
+    return arr.copy()
+
+
 # =============================================================================
 # Utility Operations
 # =============================================================================

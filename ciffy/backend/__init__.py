@@ -51,6 +51,14 @@ from .ops import (
     cdist,
     cat,
     repeat_interleave,
+    # Array creation/manipulation
+    clone,
+    empty,
+    empty_like,
+    zeros,
+    ones,
+    to_backend,
+    convert_backend,
 )
 
 __all__ = [
@@ -83,4 +91,12 @@ __all__ = [
     "cdist",
     "cat",
     "repeat_interleave",
+    # Array creation/manipulation
+    "clone",
+    "empty",
+    "empty_like",
+    "zeros",
+    "ones",
+    "to_backend",
+    "convert_backend",
 ]

@@ -10,7 +10,18 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..backend import Array, is_torch, to_numpy, to_torch, check_compatible, has_nan, has_inf
+from ..backend import (
+    Array,
+    is_torch,
+    to_numpy,
+    to_torch,
+    check_compatible,
+    has_nan,
+    has_inf,
+    clone,
+    empty,
+    to_backend,
+)
 from ..backend.dispatch import (
     TopologyInfo,
     build_bond_graph_csr,
@@ -272,11 +283,7 @@ class MolecularGeometry:
         atom_indices = self._independent_dof.independent_indices
 
         if len(atom_indices) == 0:
-            if self._is_torch:
-                import torch
-                return torch.tensor([], dtype=self._internal.dtype,
-                                    device=self._internal.device if hasattr(self._internal, 'device') else 'cpu')
-            return np.array([], dtype=self._internal.dtype)
+            return empty(0, like=self._internal)
 
         # Get all dihedrals
         all_dihedrals = self._internal[:, 2]
@@ -307,12 +314,8 @@ class MolecularGeometry:
         row_indices = atom_to_row[atom_indices]
 
         # Clone internal coordinates
-        if is_torch(self._internal):
-            internal = self._internal.clone()
-            internal[row_indices, 2] = new_values
-        else:
-            internal = self._internal.copy()
-            internal[row_indices, 2] = new_values
+        internal = clone(self._internal)
+        internal[row_indices, 2] = new_values
 
         # Solve ring closure for dependent dihedrals
         if self._independent_dof.ring_constraints:
@@ -373,13 +376,8 @@ class MolecularGeometry:
         else:
             self._fixed_coords = coords_np.copy()
 
-        # Convert back to torch if needed
-        if self._is_torch:
-            import torch
-            device = coords.device if hasattr(coords, 'device') else 'cpu'
-            self._internal = torch.from_numpy(internal).to(device)
-        else:
-            self._internal = internal
+        # Convert back to original backend
+        self._internal = to_backend(internal, like=coords)
 
     def _recompute_cartesian(self) -> None:
         """Recompute Cartesian coordinates from internal."""
@@ -391,23 +389,15 @@ class MolecularGeometry:
             raise RuntimeError("Cannot reconstruct: fixed_coords is None")
 
         internal = self._internal
-        was_torch = is_torch(internal)
-        if was_torch:
-            device = internal.device if hasattr(internal, 'device') else 'cpu'
-            internal_np = to_numpy(internal).astype(np.float32)
-        else:
-            internal_np = internal.astype(np.float32)
+        internal_np = to_numpy(internal).astype(np.float32)
 
         # NERF reconstruction
         coords = self._tree.internal_to_cartesian(
             internal_np, self._fixed_coords, offsets=self._center_offset
         )
 
-        if was_torch:
-            import torch
-            coords = torch.from_numpy(coords).to(device)
-
-        self._coordinates = coords
+        # Convert back to original backend
+        self._coordinates = to_backend(coords, like=internal)
         self._validate_coordinates()
 
     def _recompute_dof_from_coordinates(self) -> None:
@@ -553,10 +543,7 @@ class MolecularGeometry:
     def dihedrals(self, value: Array) -> None:
         """Set all dihedrals (compatibility)."""
         self._ensure_internal()
-        if is_torch(self._internal):
-            new_internal = self._internal.detach().clone()
-        else:
-            new_internal = self._internal.copy()
+        new_internal = clone(self._internal)
         new_internal[:, 2] = value
         self._internal = new_internal
         self._coords_dirty = True
@@ -572,10 +559,7 @@ class MolecularGeometry:
     def angles(self, value: Array) -> None:
         """Set all angles (compatibility)."""
         self._ensure_internal()
-        if is_torch(self._internal):
-            new_internal = self._internal.detach().clone()
-        else:
-            new_internal = self._internal.copy()
+        new_internal = clone(self._internal)
         new_internal[:, 1] = value
         self._internal = new_internal
         self._coords_dirty = True
@@ -590,10 +574,7 @@ class MolecularGeometry:
     def distances(self, value: Array) -> None:
         """Set all distances (compatibility)."""
         self._ensure_internal()
-        if is_torch(self._internal):
-            new_internal = self._internal.detach().clone()
-        else:
-            new_internal = self._internal.copy()
+        new_internal = clone(self._internal)
         new_internal[:, 0] = value
         self._internal = new_internal
         self._coords_dirty = True

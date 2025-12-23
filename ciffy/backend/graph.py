@@ -11,7 +11,7 @@ coordinate representation:
 
 .. note::
     This is an **internal backend module**. For coordinate operations, use
-    the higher-level ``ciffy.internal.CoordinateManager`` or ``Polymer`` APIs.
+    the higher-level ``ciffy.internal.MolecularGeometry`` or ``Polymer`` APIs.
     The ``backend.dispatch`` module provides the coordinate conversion functions.
 """
 

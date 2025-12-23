@@ -39,7 +39,7 @@ _ = polymer.dihedrals
 original_coords = polymer.coordinates.clone()
 
 # Get components info
-mgr = polymer._coord_manager
+mgr = polymer._geometry
 n_components = mgr._components.n_components
 print(f"Components: {n_components}")
 
@@ -73,9 +73,9 @@ print(f"coords.clone(): {clone_time:.2f}ms")
 
 # 2. Setting coordinates (includes validation)
 def set_coords():
-    polymer._coord_manager._coordinates = original_coords.clone()
-    polymer._coord_manager._cartesian_valid = True
-    polymer._coord_manager._internal_valid = False
+    polymer._geometry._coordinates = original_coords.clone()
+    polymer._geometry._cartesian_valid = True
+    polymer._geometry._internal_valid = False
 
 set_coords_time = time_fn(set_coords)
 print(f"Setting coordinates: {set_coords_time:.2f}ms")
@@ -92,7 +92,7 @@ print(f"get_anchor_coords (vectorized): {anchor_time:.2f}ms")
 
 # 4. cartesian_to_internal alone (the actual CUDA kernel)
 from ciffy.backend.dispatch import cartesian_to_internal
-zmatrix_indices = polymer._coord_manager._zmatrix.indices
+zmatrix_indices = polymer._geometry._zmatrix.indices
 
 # Ensure indices are on correct device
 if device == "cuda" and not zmatrix_indices.is_cuda:

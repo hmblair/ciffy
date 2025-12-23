@@ -1,7 +1,7 @@
 """
 Coordinate management with dual representation and constraint support.
 
-Provides the CoordinateManager class that manages both Cartesian and internal
+Provides the MolecularGeometry class that manages both Cartesian and internal
 coordinate representations with lazy evaluation, automatic conversion, and
 constraint-aware minimal DOF representation.
 """
@@ -19,13 +19,13 @@ from .tree import SpanningTree
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoordinateManager Class
+# MolecularGeometry Class
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class CoordinateManager:
+class MolecularGeometry:
     """
-    Molecular coordinates with minimal DOF representation.
+    Molecular geometry with minimal DOF representation.
 
     Provides a clean interface for ML applications where users interact only
     with Cartesian coordinates and degrees of freedom (DOF). All internal
@@ -39,13 +39,13 @@ class CoordinateManager:
     Public API:
         coordinates: (N, 3) Cartesian XYZ positions (get/set)
         dof: (K,) degrees of freedom in radians (get/set)
+        bonds: (B, 2) bonded atom pairs (read-only)
         n_dof: Number of degrees of freedom
-        n_atoms: Number of atoms
 
     Example:
-        >>> manager = polymer.coordinates_manager
-        >>> manager.dof = model_output     # Set K DOF values
-        >>> coords = manager.coordinates   # Get N×3 coordinates
+        >>> geom = polymer.geometry
+        >>> geom.dof = model_output     # Set K DOF values
+        >>> coords = geom.coordinates   # Get N×3 coordinates
     """
 
     __slots__ = (
@@ -62,6 +62,7 @@ class CoordinateManager:
 
         # Structural metadata
         '_topology',
+        '_bonds',  # Cached (B, 2) bond array
 
         # Constraint analysis (private)
         '_independent_dof',  # IndependentDOF result
@@ -90,6 +91,7 @@ class CoordinateManager:
         self._topology = topology
         self._coordinates: Array | None = coordinates
         self._is_torch = is_torch(coordinates) if coordinates is not None else False
+        self._bonds: np.ndarray | None = None
 
         # Internal representation (computed lazily)
         self._internal: Array | None = None
@@ -173,13 +175,31 @@ class CoordinateManager:
         self._ensure_constraint_analysis()
         return self._independent_dof.n_independent
 
+    @property
+    def bonds(self) -> np.ndarray:
+        """
+        (B, 2) array of bonded atom pairs.
+
+        Each row [i, j] represents a covalent bond between atoms i and j,
+        where i < j. Computed lazily from topology and cached.
+
+        Returns:
+            (B, 2) int64 array of unique bond pairs.
+        """
+        if self._bonds is None:
+            from ..backend.graph import build_bond_graph_from_topology
+            edges, _ = build_bond_graph_from_topology(self._topology)
+            # Deduplicate: edges are symmetric, keep only i < j
+            self._bonds = edges[edges[:, 0] < edges[:, 1]]
+        return self._bonds
+
     def _get_n_atoms(self) -> int:
         """Get number of atoms (internal use)."""
         if self._coordinates is not None:
             return len(self._coordinates)
         if self._internal is not None:
             return len(self._internal)
-        raise ValueError("Invalid CoordinateManager.")
+        raise ValueError("Invalid MolecularGeometry.")
 
     # ─────────────────────────────────────────────────────────────────────
     # String Representation
@@ -191,8 +211,8 @@ class CoordinateManager:
         # Avoid triggering constraint analysis just for repr
         if self._independent_dof is not None:
             n_dof = self._independent_dof.n_independent
-            return f"CoordinateManager(n_atoms={n_atoms}, n_dof={n_dof})"
-        return f"CoordinateManager(n_atoms={n_atoms})"
+            return f"MolecularGeometry(n_atoms={n_atoms}, n_dof={n_dof})"
+        return f"MolecularGeometry(n_atoms={n_atoms})"
 
     # ─────────────────────────────────────────────────────────────────────
     # Private: Constraint Analysis
@@ -414,14 +434,15 @@ class CoordinateManager:
     # Backend Conversion
     # ─────────────────────────────────────────────────────────────────────
 
-    def numpy(self) -> "CoordinateManager":
+    def numpy(self) -> "MolecularGeometry":
         """Convert to NumPy backend."""
-        new_manager = CoordinateManager(
+        new_manager = MolecularGeometry(
             to_numpy(self._coordinates) if self._coordinates is not None else None,
             self._topology,
         )
         if self._internal is not None:
             new_manager._internal = to_numpy(self._internal)
+        new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._center_offset = self._center_offset
         new_manager._fixed_coords = self._fixed_coords
@@ -432,14 +453,15 @@ class CoordinateManager:
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
 
-    def torch(self) -> "CoordinateManager":
+    def torch(self) -> "MolecularGeometry":
         """Convert to PyTorch backend."""
-        new_manager = CoordinateManager(
+        new_manager = MolecularGeometry(
             to_torch(self._coordinates) if self._coordinates is not None else None,
             self._topology,
         )
         if self._internal is not None:
             new_manager._internal = to_torch(self._internal)
+        new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._center_offset = self._center_offset
         new_manager._fixed_coords = self._fixed_coords
@@ -450,7 +472,7 @@ class CoordinateManager:
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
 
-    def to(self, device: str = None, dtype=None) -> "CoordinateManager":
+    def to(self, device: str = None, dtype=None) -> "MolecularGeometry":
         """Move tensors to specified device/dtype (PyTorch only)."""
         if not is_torch(self._coordinates if self._coordinates is not None else self._internal):
             raise RuntimeError("Cannot move to device: not PyTorch tensors")
@@ -464,9 +486,10 @@ class CoordinateManager:
                 t = t.to(dtype)
             return t
 
-        new_manager = CoordinateManager(convert(self._coordinates), self._topology)
+        new_manager = MolecularGeometry(convert(self._coordinates), self._topology)
         if self._internal is not None:
             new_manager._internal = convert(self._internal)
+        new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._center_offset = self._center_offset
         new_manager._fixed_coords = self._fixed_coords
@@ -477,7 +500,7 @@ class CoordinateManager:
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
 
-    def detach(self) -> "CoordinateManager":
+    def detach(self) -> "MolecularGeometry":
         """Detach tensors from computation graphs (PyTorch only)."""
         if self._coordinates is not None and is_torch(self._coordinates):
             if self._coordinates.requires_grad:
@@ -491,20 +514,21 @@ class CoordinateManager:
     # Slicing
     # ─────────────────────────────────────────────────────────────────────
 
-    def __getitem__(self, mask: Array) -> "CoordinateManager":
+    def __getitem__(self, mask: Array) -> "MolecularGeometry":
         """Slice by boolean atom mask."""
         if self._coordinates is None:
             self._recompute_cartesian()
         sliced_coords = self._coordinates[mask]
-        return CoordinateManager._from_slice(sliced_coords, is_torch(sliced_coords))
+        return MolecularGeometry._from_slice(sliced_coords, is_torch(sliced_coords))
 
     @classmethod
-    def _from_slice(cls, coordinates: Array, is_torch_flag: bool) -> "CoordinateManager":
+    def _from_slice(cls, coordinates: Array, is_torch_flag: bool) -> "MolecularGeometry":
         """Create from sliced coordinates (internal factory)."""
         manager = cls.__new__(cls)
         manager._coordinates = coordinates
         manager._is_torch = is_torch_flag
         manager._topology = None
+        manager._bonds = None
         manager._internal = None
         manager._tree = None
         manager._center_offset = None

@@ -171,7 +171,7 @@ def _numpy_nerf_reconstruct(
     if component_offsets is None or anchor_coords is None or component_ids is None:
         raise ValueError(
             "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
-            "Use CoordinateManager for automatic setup of these parameters."
+            "Use MolecularGeometry for automatic setup of these parameters."
         )
 
     n_atoms = len(indices)
@@ -277,7 +277,7 @@ def _torch_nerf_reconstruct(
     if component_offsets is None or anchor_coords is None or component_ids is None:
         raise ValueError(
             "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
-            "Use CoordinateManager for automatic setup of these parameters."
+            "Use MolecularGeometry for automatic setup of these parameters."
         )
 
     n_atoms = len(indices)

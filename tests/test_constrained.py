@@ -99,7 +99,7 @@ class TestIndependentDOF:
         polymer = from_sequence("AAA")  # 3 alanines
 
         # Get coordinate manager (now has DOF directly)
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # For a linear molecule, all dihedrals (for atoms >= 3) should be independent
         n_atoms = polymer.size()
@@ -110,15 +110,15 @@ class TestIndependentDOF:
         assert manager.n_dof <= expected_max_dof, f"DOF should be <= {expected_max_dof}"
 
 
-class TestCoordinateManager:
-    """Tests for CoordinateManager with constraints."""
+class TestMolecularGeometry:
+    """Tests for MolecularGeometry with constraints."""
 
     def test_basic_creation(self):
         """Test creating a coordinate manager."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")  # lowercase for RNA
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         assert polymer.size() > 0
         assert manager.n_dof >= 0
@@ -128,7 +128,7 @@ class TestCoordinateManager:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         dof = manager.dof
         assert len(dof) == manager.n_dof
@@ -140,7 +140,7 @@ class TestCoordinateManager:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         if manager.n_dof > 0:
             # Get current values
@@ -162,7 +162,7 @@ class TestCoordinateManager:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         coords = manager.coordinates
         assert coords.shape == (polymer.size(), 3)
@@ -172,7 +172,7 @@ class TestCoordinateManager:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Get original DOF (triggers computation)
         original_dof = manager.dof.copy()
@@ -192,7 +192,7 @@ class TestCoordinateManager:
 
         # Single adenine has purine ring (2 fused rings)
         polymer = from_sequence("a")  # lowercase for RNA
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Access internal state to check rings
         manager._ensure_constraint_analysis()
@@ -205,13 +205,13 @@ class TestCoordinateManager:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Force constraint analysis for complete repr
         _ = manager.n_dof
 
         repr_str = repr(manager)
-        assert "CoordinateManager" in repr_str
+        assert "MolecularGeometry" in repr_str
         assert str(polymer.size()) in repr_str
 
 
@@ -224,7 +224,7 @@ class TestTorchBackend:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # DOF should be torch tensors
         dof = manager.dof
@@ -238,7 +238,7 @@ class TestTorchBackend:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend="torch")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         if manager.n_dof > 0:
             # Create new values as torch tensor
@@ -324,7 +324,7 @@ class TestCorrectnessRingDetection:
 
         # Adenine (purine) has 2 fused rings
         polymer = from_sequence("a")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
         n_rings = len(manager._independent_dof.ring_constraints)
@@ -345,7 +345,7 @@ class TestCorrectnessGeometryPreservation:
 
         for seq in ["acgu", "AAAA"]:  # Test both RNA and protein
             polymer = from_sequence(seq)
-            manager = polymer._coord_manager
+            manager = polymer._geometry
 
             # Get original (fixed) bond lengths
             original_distances = manager.distances.copy()
@@ -374,7 +374,7 @@ class TestCorrectnessGeometryPreservation:
 
         for seq in ["acgu", "AAAA"]:
             polymer = from_sequence(seq)
-            manager = polymer._coord_manager
+            manager = polymer._geometry
 
             # Get original (fixed) bond angles
             original_angles = manager.angles.copy()
@@ -403,7 +403,7 @@ class TestCorrectnessGeometryPreservation:
         n_samples = 10
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         original_distances = manager.distances.copy()
         original_angles = manager.angles.copy()
@@ -440,7 +440,7 @@ class TestCorrectnessGeometryPreservation:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Get original bond lengths
         original_distances = manager.distances.copy()
@@ -466,7 +466,7 @@ class TestCorrectnessGeometryPreservation:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Get original bond angles
         original_angles = manager.angles.copy()
@@ -492,7 +492,7 @@ class TestCorrectnessGeometryPreservation:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         if manager.n_dof > 0:
             # Get original values
@@ -518,7 +518,7 @@ class TestCorrectnessGeometryPreservation:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         if manager.n_dof > 0:
             # Get original coordinates
@@ -553,7 +553,7 @@ class TestCorrectnessGeometryPreservation:
         np.random.seed(42)
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Get the bond graph to know which atoms are bonded
         topology = TopologyInfo.from_polymer(polymer)
@@ -634,7 +634,7 @@ class TestCorrectnessDOFReduction:
 
         # RNA has sugar and base rings
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         n_atoms = polymer.size()
         max_possible_dihedrals = n_atoms - 3  # First 3 atoms have no dihedrals
@@ -658,7 +658,7 @@ class TestCorrectnessProtein:
 
         # Short peptide
         polymer = from_sequence("AAAA")  # 4 alanines
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         # Protein backbone has ~3 dihedrals per residue (phi, psi, omega)
         # minus terminal constraints
@@ -677,7 +677,7 @@ class TestCorrectnessProtein:
         from ciffy import from_sequence
 
         polymer = from_sequence("AAAA")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         original_distances = manager.distances.copy()
         original_angles = manager.angles.copy()
@@ -705,7 +705,7 @@ class TestCorrectnessNucleicAcid:
         # Single nucleotide
         for seq in ["a", "c", "g", "u"]:
             polymer = from_sequence(seq)
-            manager = polymer._coord_manager
+            manager = polymer._geometry
             manager._ensure_constraint_analysis()
 
             n_rings = len(manager._independent_dof.ring_constraints)
@@ -722,13 +722,13 @@ class TestCorrectnessNucleicAcid:
         # Pyrimidines have 1 base ring + sugar = 2 rings
         for purine in ["a", "g"]:
             polymer = from_sequence(purine)
-            manager = polymer._coord_manager
+            manager = polymer._geometry
             manager._ensure_constraint_analysis()
             purine_rings = len(manager._independent_dof.ring_constraints)
 
             for pyrimidine in ["c", "u"]:
                 polymer = from_sequence(pyrimidine)
-                manager = polymer._coord_manager
+                manager = polymer._geometry
                 manager._ensure_constraint_analysis()
                 pyrimidine_rings = len(manager._independent_dof.ring_constraints)
 
@@ -744,7 +744,7 @@ class TestCorrectnessNucleicAcid:
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
-        manager = polymer._coord_manager
+        manager = polymer._geometry
 
         original_distances = manager.distances.copy()
         original_angles = manager.angles.copy()

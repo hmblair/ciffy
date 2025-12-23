@@ -4,21 +4,19 @@ Internal coordinate representation for molecular structures.
 This module provides the public API for internal coordinate operations.
 
 Main Class:
-    CoordinateManager: Manages dual Cartesian/internal representation with lazy evaluation.
+    MolecularGeometry: Manages dual Cartesian/internal representation with lazy evaluation.
 
 For users, the primary interaction is through the Polymer class, which uses
-CoordinateManager internally. Direct use of CoordinateManager is rarely needed.
+MolecularGeometry internally. Direct use of MolecularGeometry is rarely needed.
 
 Example:
     >>> import ciffy
     >>> polymer = ciffy.load("structure.cif", backend="torch")
     >>>
-    >>> # Access internal coordinates (computed lazily)
-    >>> dihedrals = polymer.dihedrals  # (N,) dihedral angles
-    >>> phi = polymer.dihedral(ciffy.DihedralType.PHI)  # Backbone phi angles
-    >>>
-    >>> # Modify dihedrals (triggers Cartesian reconstruction)
-    >>> polymer.dihedrals = modified_dihedrals
+    >>> # Access geometry and DOF
+    >>> geom = polymer.geometry
+    >>> geom.dof = new_dihedrals  # Set independent dihedrals
+    >>> coords = geom.coordinates  # Get reconstructed coordinates
 
 For backend operations (coordinate conversion, graph building, Z-matrix construction),
 use ``ciffy.backend.dispatch``. This is an internal API and should not be needed
@@ -29,11 +27,11 @@ Note: Dihedral type definitions and atom mappings are now in:
     - ciffy.biochemistry (DIHEDRAL_ATOMS, DIHEDRAL_NAME_TO_TYPE)
 """
 
-from .coordinates import CoordinateManager
+from .coordinates import MolecularGeometry
 from .ring_analysis import ConstraintSpec, IndependentDOF, RingConstraint, RingAnalyzer
 
 __all__ = [
-    "CoordinateManager",
+    "MolecularGeometry",
     "ConstraintSpec",
     "IndependentDOF",
     "RingConstraint",

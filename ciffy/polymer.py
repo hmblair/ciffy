@@ -178,8 +178,8 @@ class Polymer:
         self._topology = TopologyInfo.from_polymer(self)
 
         # Initialize coordinate manager with Cartesian coordinates
-        from .internal.coordinates import CoordinateManager
-        self._coord_manager = CoordinateManager(coordinates, self._topology)
+        from .internal.coordinates import MolecularGeometry
+        self._geometry = MolecularGeometry(coordinates, self._topology)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
@@ -236,7 +236,7 @@ class Polymer:
 
         Automatically reconstructed from internal coordinates if needed.
         """
-        return self._coord_manager.coordinates
+        return self._geometry.coordinates
 
     @coordinates.setter
     def coordinates(self, value: Array) -> None:
@@ -246,9 +246,9 @@ class Polymer:
         Invalidates internal coordinate representation.
         """
         # Validate backend compatibility
-        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
-            check_compatible(self._coord_manager._coordinates, value, "coordinates")
-        self._coord_manager.coordinates = value
+        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
+            check_compatible(self._geometry._coordinates, value, "coordinates")
+        self._geometry.coordinates = value
 
     @property
     def atoms(self) -> Array:
@@ -258,8 +258,8 @@ class Polymer:
     @atoms.setter
     def atoms(self, value: Array) -> None:
         """Set atoms with backend/device validation."""
-        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
-            check_compatible(self._coord_manager._coordinates, value, "atoms")
+        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
+            check_compatible(self._geometry._coordinates, value, "atoms")
         self._atoms = value
 
     @property
@@ -270,8 +270,8 @@ class Polymer:
     @elements.setter
     def elements(self, value: Array) -> None:
         """Set elements with backend/device validation."""
-        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
-            check_compatible(self._coord_manager._coordinates, value, "elements")
+        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
+            check_compatible(self._geometry._coordinates, value, "elements")
         self._elements = value
 
     @property
@@ -282,8 +282,8 @@ class Polymer:
     @sequence.setter
     def sequence(self, value: Array) -> None:
         """Set sequence with backend/device validation."""
-        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
-            check_compatible(self._coord_manager._coordinates, value, "sequence")
+        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
+            check_compatible(self._geometry._coordinates, value, "sequence")
         self._sequence = value
 
     @property
@@ -294,8 +294,8 @@ class Polymer:
     @lengths.setter
     def lengths(self, value: Array) -> None:
         """Set lengths with backend/device validation."""
-        if hasattr(self, '_coord_manager') and self._coord_manager._coordinates is not None:
-            check_compatible(self._coord_manager._coordinates, value, "lengths")
+        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
+            check_compatible(self._geometry._coordinates, value, "lengths")
         self._lengths = value
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -313,7 +313,7 @@ class Polymer:
         Note:
             Automatically computed from Cartesian coordinates if needed.
         """
-        return self._coord_manager.distances
+        return self._geometry.distances
 
     @distances.setter
     def distances(self, value: Array) -> None:
@@ -322,7 +322,7 @@ class Polymer:
 
         Invalidates Cartesian coordinate representation.
         """
-        self._coord_manager.distances = value
+        self._geometry.distances = value
 
     @property
     def angles(self) -> Array:
@@ -335,7 +335,7 @@ class Polymer:
         Note:
             Automatically computed from Cartesian coordinates if needed.
         """
-        return self._coord_manager.angles
+        return self._geometry.angles
 
     @angles.setter
     def angles(self, value: Array) -> None:
@@ -344,7 +344,7 @@ class Polymer:
 
         Invalidates Cartesian coordinate representation.
         """
-        self._coord_manager.angles = value
+        self._geometry.angles = value
 
     @property
     def dihedrals(self) -> Array:
@@ -357,7 +357,7 @@ class Polymer:
         Note:
             Automatically computed from Cartesian coordinates if needed.
         """
-        return self._coord_manager.dihedrals
+        return self._geometry.dihedrals
 
     @dihedrals.setter
     def dihedrals(self, value: Array) -> None:
@@ -366,7 +366,22 @@ class Polymer:
 
         Invalidates Cartesian coordinate representation.
         """
-        self._coord_manager.dihedrals = value
+        self._geometry.dihedrals = value
+
+    @property
+    def bonds(self) -> np.ndarray:
+        """
+        Covalent bonds as atom index pairs.
+
+        Returns:
+            (B, 2) int64 array where each row [i, j] represents a bond
+            between atoms i and j (with i < j).
+
+        Note:
+            Computed lazily from topology and cached. Includes both
+            intra-residue bonds and inter-residue linkages.
+        """
+        return self._geometry.bonds
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -717,8 +732,8 @@ class Polymer:
 
         centered = copy(self)
         # Create a new coordinate manager for the copy (reuse topology from copy)
-        from .internal.coordinates import CoordinateManager
-        centered._coord_manager = CoordinateManager(coordinates, centered._topology)
+        from .internal.coordinates import MolecularGeometry
+        centered._geometry = MolecularGeometry(coordinates, centered._topology)
 
         return centered, means
 
@@ -938,7 +953,7 @@ class Polymer:
         mask = key
 
         # Slice coordinate manager (ensures Cartesian valid, marks internal dirty)
-        sliced_manager = self._coord_manager[mask]
+        sliced_manager = self._geometry[mask]
         coordinates = sliced_manager._coordinates
 
         atoms = self.atoms[mask]
@@ -974,7 +989,7 @@ class Polymer:
         )
 
         # Replace default coord manager with sliced one and set topology
-        result._coord_manager = sliced_manager
+        result._geometry = sliced_manager
         sliced_manager._topology = result._topology
 
         return result
@@ -1390,8 +1405,8 @@ class Polymer:
         )
 
         # Replace coordinate manager with converted one
-        result._coord_manager = self._coord_manager.numpy()
-        result._coord_manager._topology = result._topology
+        result._geometry = self._geometry.numpy()
+        result._geometry._topology = result._topology
 
         return result
 
@@ -1425,8 +1440,8 @@ class Polymer:
         )
 
         # Replace coordinate manager with converted one
-        result._coord_manager = self._coord_manager.torch()
-        result._coord_manager._topology = result._topology
+        result._geometry = self._geometry.torch()
+        result._geometry._topology = result._topology
 
         return result
 
@@ -1485,7 +1500,7 @@ class Polymer:
             polymer_count=self.polymer_count,
         )
 
-        result._coord_manager = self._coord_manager.to(device, dtype)
+        result._geometry = self._geometry.to(device, dtype)
 
         return result
 
@@ -1559,7 +1574,7 @@ class Polymer:
             For NumPy arrays, this is a no-op since NumPy doesn't have
             computation graphs.
         """
-        self._coord_manager.detach()
+        self._geometry.detach()
         return self
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1617,6 +1632,6 @@ class Polymer:
 
         result = copy(self)
         # Create a new coordinate manager for the copy (to avoid sharing state, reuse topology)
-        from .internal.coordinates import CoordinateManager
-        result._coord_manager = CoordinateManager(coordinates, result._topology)
+        from .internal.coordinates import MolecularGeometry
+        result._geometry = MolecularGeometry(coordinates, result._topology)
         return result

@@ -269,7 +269,7 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
     # Initialize internal coordinates by triggering first computation
     _ = polymer.dihedrals
     results["n_atoms"] = polymer.size()
-    results["n_components"] = polymer._coord_manager._tree.n_components
+    results["n_components"] = polymer._geometry._tree.n_components
 
     # Cache original coordinates
     original_coords = polymer.coordinates.clone()

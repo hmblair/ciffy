@@ -74,15 +74,12 @@ class MolecularGeometry:
 
         # Constraint analysis (private)
         '_independent_dof',  # IndependentDOF result
-        '_flexible_rings',   # ClassifiedRing list for Cremer-Pople
+        '_flexible_rings',   # ClassifiedRing list (for puckering analysis)
         '_rigid_rings',      # ClassifiedRing list (planar)
 
         # Dirty flags
         '_coords_dirty',  # True if coordinates need recomputation from dof
         '_dof_dirty',     # True if dof needs recomputation from coordinates
-
-        # Pending puckering values (set during DOF assignment, applied during reconstruction)
-        '_pending_puckering',
 
         '_is_torch',
     )
@@ -117,9 +114,6 @@ class MolecularGeometry:
         # Dirty flags - initially coordinates are valid, dof is dirty
         self._coords_dirty = False
         self._dof_dirty = True
-
-        # Pending puckering values
-        self._pending_puckering = None
 
     # ─────────────────────────────────────────────────────────────────────
     # Public API: coordinates
@@ -184,11 +178,16 @@ class MolecularGeometry:
 
     @property
     def n_dof(self) -> int:
-        """Number of degrees of freedom (dihedrals + puckering)."""
+        """
+        Number of degrees of freedom (independent torsions).
+
+        All DOF are generalized torsions (angles in radians). For molecules
+        with rings, ring closure constraints reduce the number of independent
+        DOF. Ring puckering emerges naturally from the ring geometry after
+        closure - it is not a separate DOF.
+        """
         self._ensure_constraint_analysis()
-        n_dihedral = self._independent_dof.n_independent
-        n_puckering = sum(ring.n_dof for ring in self._flexible_rings)
-        return n_dihedral + n_puckering
+        return self._independent_dof.n_independent
 
     @property
     def bonds(self) -> np.ndarray:
@@ -301,96 +300,77 @@ class MolecularGeometry:
         return np.arange(n_atoms, dtype=np.int64)
 
     def _get_dof_values(self) -> Array:
-        """Get current values of independent DOF (dihedrals + puckering)."""
+        """
+        Get current values of independent DOF (all torsions).
+
+        All DOF are generalized torsions (angles in radians). Ring puckering
+        emerges from the ring geometry - it is not a separate DOF.
+        """
         self._ensure_constraint_analysis()
         self._ensure_internal()
 
-        dof_parts = []
-
-        # Part 1: Dihedral DOF
         atom_indices = self._independent_dof.independent_indices
-        if len(atom_indices) > 0:
-            all_dihedrals = self._internal[:, 2]
-            atom_to_row = self._get_atom_to_row_mapping()
-            row_indices = atom_to_row[atom_indices]
-            dihedral_dof = all_dihedrals[row_indices]
-            dof_parts.append(to_numpy(dihedral_dof))
-
-        # Part 2: Puckering DOF for flexible rings
-        if self._flexible_rings and self._coordinates is not None:
-            from .puckering import compute_puckering_5ring, compute_puckering_6ring
-
-            coords_np = to_numpy(self._coordinates)
-            for ring in self._flexible_rings:
-                ring_coords = coords_np[ring.atoms]
-                if len(ring.atoms) == 5:
-                    q2, phi2 = compute_puckering_5ring(ring_coords)
-                    dof_parts.append(np.array([q2, phi2]))
-                elif len(ring.atoms) == 6:
-                    Q, theta, phi = compute_puckering_6ring(ring_coords)
-                    dof_parts.append(np.array([Q, theta, phi]))
-
-        # Combine all DOF
-        if not dof_parts:
+        if len(atom_indices) == 0:
             return empty(0, like=self._internal)
 
-        combined = np.concatenate(dof_parts)
-        return to_backend(combined, like=self._internal)
+        # Extract independent dihedrals
+        all_dihedrals = self._internal[:, 2]
+        atom_to_row = self._get_atom_to_row_mapping()
+        row_indices = atom_to_row[atom_indices]
+        dihedral_dof = all_dihedrals[row_indices]
+
+        return clone(dihedral_dof)
 
     def _set_dof_values(self, new_values: Array) -> None:
-        """Set independent DOF (dihedrals + puckering) and solve ring closure."""
+        """
+        Set independent DOF (all torsions) and solve ring closure.
+
+        All DOF are generalized torsions (angles in radians). After setting
+        independent dihedrals, ring closure analytically computes dependent
+        dihedrals to maintain ring geometry.
+        """
         self._ensure_constraint_analysis()
         self._ensure_internal()
 
         new_values_np = to_numpy(new_values)
+        n_dof = len(self._independent_dof.independent_indices)
 
-        # Compute expected DOF layout
-        n_dihedral = len(self._independent_dof.independent_indices)
-        n_puckering = sum(ring.n_dof for ring in self._flexible_rings)
-        expected_len = n_dihedral + n_puckering
+        if len(new_values_np) != n_dof:
+            raise ValueError(f"Expected {n_dof} DOF values, got {len(new_values_np)}")
 
-        if len(new_values_np) != expected_len:
-            raise ValueError(f"Expected {expected_len} DOF values, got {len(new_values_np)}")
-
-        # Split into dihedral and puckering parts
-        dihedral_values = new_values_np[:n_dihedral]
-        puckering_values = new_values_np[n_dihedral:]
-
-        # Part 1: Set dihedral DOF
         atom_indices = self._independent_dof.independent_indices
-        if len(atom_indices) > 0:
-            atom_to_row = self._get_atom_to_row_mapping()
-            row_indices = atom_to_row[atom_indices]
+        if len(atom_indices) == 0:
+            return
 
-            internal = clone(self._internal)
-            internal[row_indices, 2] = to_backend(dihedral_values, like=self._internal)
+        # Set independent dihedrals
+        atom_to_row = self._get_atom_to_row_mapping()
+        row_indices = atom_to_row[atom_indices]
 
-            # Solve ring closure for dependent dihedrals (rigid rings only)
-            if self._independent_dof.ring_constraints:
-                from .ring_closure import solve_ring_closure
+        internal = clone(self._internal)
+        internal[row_indices, 2] = to_backend(new_values_np, like=self._internal)
 
-                # Need current coordinates for ring closure
-                if self._coordinates is None:
-                    self._recompute_cartesian()
+        # Solve ring closure for dependent dihedrals
+        if self._independent_dof.ring_constraints:
+            from .ring_closure import solve_ring_closure
 
-                recon = self._recon_data
-                internal = solve_ring_closure(
-                    internal=internal,
-                    parent=self._tree.parent,
-                    coords=self._coordinates,
-                    ring_constraints=self._independent_dof.ring_constraints,
-                    tree=self._tree,
-                    fixed_coords=recon.fixed_coords if recon else None,
-                    offsets=recon.center_offsets if recon else None,
-                    max_iterations=100,
-                    tolerance=0.01,
-                )
+            # Need current coordinates for ring closure
+            if self._coordinates is None:
+                self._recompute_cartesian()
 
-            self._internal = internal
+            recon = self._recon_data
+            internal = solve_ring_closure(
+                internal=internal,
+                parent=self._tree.parent,
+                coords=self._coordinates,
+                ring_constraints=self._independent_dof.ring_constraints,
+                tree=self._tree,
+                fixed_coords=recon.fixed_coords if recon else None,
+                offsets=recon.center_offsets if recon else None,
+                max_iterations=100,
+                tolerance=0.01,
+            )
 
-        # Part 2: Store puckering values for application during Cartesian recomputation
-        # Puckering is applied in _recompute_cartesian after NERF reconstruction
-        self._pending_puckering = puckering_values if len(puckering_values) > 0 else None
+        self._internal = internal
 
     # ─────────────────────────────────────────────────────────────────────
     # Private: Recomputation Methods
@@ -449,7 +429,14 @@ class MolecularGeometry:
             self._internal = to_backend(internal, like=coords)
 
     def _recompute_cartesian(self) -> None:
-        """Recompute Cartesian coordinates from internal, then apply puckering."""
+        """
+        Recompute Cartesian coordinates from internal.
+
+        Uses NERF (Natural Extension Reference Frame) to place atoms based on
+        internal coordinates (distances, angles, dihedrals). Ring closure has
+        already set dependent dihedrals, so ring geometry (including puckering)
+        emerges naturally.
+        """
         if self._internal is None:
             raise RuntimeError("Cannot reconstruct: internal is None")
         if self._tree is None:
@@ -493,43 +480,7 @@ class MolecularGeometry:
             # Convert back to original backend
             self._coordinates = to_backend(coords, like=internal)
 
-        # Apply pending puckering to flexible rings
-        self._apply_pending_puckering()
-
         self._validate_coordinates()
-
-    def _apply_pending_puckering(self) -> None:
-        """Apply pending puckering values to flexible ring atoms."""
-        if self._pending_puckering is None or len(self._pending_puckering) == 0:
-            return
-        if not self._flexible_rings:
-            return
-
-        from .puckering import apply_puckering_5ring, apply_puckering_6ring
-
-        coords_np = to_numpy(self._coordinates).copy()
-        puck_idx = 0
-
-        for ring in self._flexible_rings:
-            ring_atoms = ring.atoms
-            ring_coords = coords_np[ring_atoms]
-
-            if len(ring_atoms) == 5:
-                q2 = self._pending_puckering[puck_idx]
-                phi2 = self._pending_puckering[puck_idx + 1]
-                puckered = apply_puckering_5ring(ring_coords, q2, phi2)
-                coords_np[ring_atoms] = puckered
-                puck_idx += 2
-            elif len(ring_atoms) == 6:
-                Q = self._pending_puckering[puck_idx]
-                theta = self._pending_puckering[puck_idx + 1]
-                phi = self._pending_puckering[puck_idx + 2]
-                puckered = apply_puckering_6ring(ring_coords, Q, theta, phi)
-                coords_np[ring_atoms] = puckered
-                puck_idx += 3
-
-        self._coordinates = to_backend(coords_np, like=self._coordinates)
-        self._pending_puckering = None  # Clear after applying
 
     def _recompute_dof_from_coordinates(self) -> None:
         """Recompute DOF from current coordinates."""
@@ -569,7 +520,6 @@ class MolecularGeometry:
         new_manager._independent_dof = self._independent_dof
         new_manager._flexible_rings = self._flexible_rings
         new_manager._rigid_rings = self._rigid_rings
-        new_manager._pending_puckering = self._pending_puckering
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -588,7 +538,6 @@ class MolecularGeometry:
         new_manager._independent_dof = self._independent_dof
         new_manager._flexible_rings = self._flexible_rings
         new_manager._rigid_rings = self._rigid_rings
-        new_manager._pending_puckering = self._pending_puckering
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -616,7 +565,6 @@ class MolecularGeometry:
         new_manager._independent_dof = self._independent_dof
         new_manager._flexible_rings = self._flexible_rings
         new_manager._rigid_rings = self._rigid_rings
-        new_manager._pending_puckering = self._pending_puckering
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -656,7 +604,6 @@ class MolecularGeometry:
         manager._independent_dof = None
         manager._flexible_rings = None
         manager._rigid_rings = None
-        manager._pending_puckering = None
         manager._coords_dirty = False
         manager._dof_dirty = True
         return manager

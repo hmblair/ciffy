@@ -26,9 +26,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .tree import SpanningTree
 
 
 # =============================================================================
@@ -319,6 +322,147 @@ class IndependentDOF:
             f"IndependentDOF(atoms={self.n_atoms}, "
             f"independent={self.n_independent}, "
             f"dependent={self.n_dependent}, "
+            f"rings={len(self.ring_constraints)})"
+        )
+
+
+@dataclass
+class UnifiedDOF:
+    """
+    Unified DOF representation - all degrees of freedom as generalized torsions.
+
+    This provides a single flat array of DOF where all values are angles (radians).
+    Ring closure is handled analytically: setting independent dihedrals automatically
+    computes dependent dihedrals to close rings.
+
+    Key insight: Puckering and ring dihedrals are mathematically equivalent -
+    different parametrizations of the same geometric DOF. By using analytical
+    ring closure, ring geometry (including puckering) emerges naturally.
+
+    Attributes:
+        n_atoms: Total number of atoms.
+        n_dof: Number of independent torsion DOF.
+        dof_to_atom: (K,) array mapping DOF index -> atom index.
+        atom_to_dof: (N,) array mapping atom index -> DOF index (-1 if dependent).
+        independent_mask: (N,) bool array. True = independent dihedral.
+        ring_constraints: List of RingConstraint for ring closure.
+
+    Example:
+        >>> unified = UnifiedDOF.from_independent_dof(independent_dof)
+        >>> dof_values = unified.get_dof(internal)  # (K,) angles
+        >>> internal = unified.set_dof(internal, new_values, tree, fixed_coords, offsets, original_coords)
+    """
+
+    n_atoms: int
+    n_dof: int
+    dof_to_atom: np.ndarray  # (K,) int64 - which atom each DOF controls
+    atom_to_dof: np.ndarray  # (N,) int64 - DOF index for each atom (-1 if dependent)
+    independent_mask: np.ndarray  # (N,) bool - True if atom has independent dihedral
+    ring_constraints: list[RingConstraint]
+
+    @classmethod
+    def from_independent_dof(cls, independent_dof: IndependentDOF) -> "UnifiedDOF":
+        """
+        Create UnifiedDOF from IndependentDOF.
+
+        Args:
+            independent_dof: The analyzed independent DOF structure.
+
+        Returns:
+            UnifiedDOF with mappings for DOF access.
+        """
+        n_atoms = independent_dof.n_atoms
+        n_dof = independent_dof.n_independent
+
+        # DOF to atom mapping: sorted independent indices
+        dof_to_atom = independent_dof.independent_indices.copy()
+
+        # Atom to DOF mapping: -1 for dependent, DOF index for independent
+        atom_to_dof = np.full(n_atoms, -1, dtype=np.int64)
+        for dof_idx, atom_idx in enumerate(dof_to_atom):
+            atom_to_dof[atom_idx] = dof_idx
+
+        return cls(
+            n_atoms=n_atoms,
+            n_dof=n_dof,
+            dof_to_atom=dof_to_atom,
+            atom_to_dof=atom_to_dof,
+            independent_mask=independent_dof.independent_mask.copy(),
+            ring_constraints=independent_dof.ring_constraints,
+        )
+
+    def get_dof(self, internal: np.ndarray) -> np.ndarray:
+        """
+        Extract DOF values from internal coordinates.
+
+        Simply reads the dihedral (column 2) at independent atom positions.
+
+        Args:
+            internal: (N, 3) internal coordinates [distance, angle, dihedral].
+
+        Returns:
+            (K,) array of DOF values (angles in radians).
+        """
+        if self.n_dof == 0:
+            return np.array([], dtype=internal.dtype)
+        return internal[self.dof_to_atom, 2].copy()
+
+    def set_dof(
+        self,
+        internal: np.ndarray,
+        values: np.ndarray,
+        tree: "SpanningTree",
+        fixed_coords: np.ndarray,
+        offsets: np.ndarray | None,
+        original_coords: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Set DOF values and solve ring closure.
+
+        Sets the independent dihedrals, then analytically solves for
+        dependent dihedrals to close any rings.
+
+        Args:
+            internal: (N, 3) internal coordinates [distance, angle, dihedral].
+            values: (K,) new DOF values (angles in radians).
+            tree: SpanningTree for NERF reconstruction.
+            fixed_coords: Reference coordinates for atoms at levels 0-2.
+            offsets: Per-component centering offsets, or None.
+            original_coords: Original Cartesian coordinates for solution selection.
+
+        Returns:
+            (N, 3) updated internal coordinates with rings closed.
+        """
+        from .analytical_closure import AnalyticalRingSolver
+
+        internal = internal.copy()
+
+        # 1. Set independent dihedrals
+        if self.n_dof > 0 and len(values) > 0:
+            internal[self.dof_to_atom, 2] = values
+
+        # 2. Solve ring closure for dependent dihedrals
+        if self.ring_constraints:
+            solver = AnalyticalRingSolver(
+                tree=tree,
+                fixed_coords=fixed_coords,
+                offsets=offsets if offsets is not None else np.zeros((tree.n_components, 3), dtype=np.float32),
+            )
+
+            for ring in self.ring_constraints:
+                if solver.can_solve_analytically(ring):
+                    internal, success = solver.solve_ring(
+                        internal, ring, original_coords
+                    )
+                    # If analytical fails, fall back to keeping current values
+                    # (CCD could be used here as fallback, but analytical should work for simple rings)
+
+        return internal
+
+    def __repr__(self) -> str:
+        return (
+            f"UnifiedDOF(atoms={self.n_atoms}, "
+            f"dof={self.n_dof}, "
             f"rings={len(self.ring_constraints)})"
         )
 

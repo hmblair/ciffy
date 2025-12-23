@@ -914,8 +914,15 @@ class TestCorrectnessNucleicAcid:
             assert angle_diff < ANGLE_TOLERANCE, f"Bond angles changed by {angle_diff:.6f} rad"
 
 
-class TestPuckeringIntegration:
-    """Tests for puckering DOF integration in MolecularGeometry."""
+class TestUnifiedDOF:
+    """
+    Tests for unified DOF system.
+
+    In the unified DOF system, ALL degrees of freedom are generalized torsions
+    (angles in radians). Ring puckering emerges from ring closure - it is NOT
+    a separate DOF. This simplifies the user interface: just one flat array
+    of angles.
+    """
 
     def test_flexible_rings_detected(self):
         """Flexible rings should be detected in RNA."""
@@ -932,22 +939,20 @@ class TestPuckeringIntegration:
         # At least expect the ribose sugar
         assert n_flexible >= 1, f"Expected at least 1 flexible ring, got {n_flexible}"
 
-    def test_puckering_dof_included(self):
-        """Puckering DOF should be included in total n_dof."""
+    def test_n_dof_equals_independent_dihedrals(self):
+        """n_dof should equal number of independent dihedrals (no separate puckering)."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        n_dihedral = manager._independent_dof.n_independent
-        n_puckering = sum(ring.n_dof for ring in manager._flexible_rings)
+        # Unified DOF: n_dof equals number of independent dihedrals
+        # Puckering is NOT a separate DOF - it emerges from ring closure
+        assert manager.n_dof == manager._independent_dof.n_independent
 
-        # Total DOF should include both
-        assert manager.n_dof == n_dihedral + n_puckering
-
-    def test_dof_getter_includes_puckering(self):
-        """DOF getter should return puckering parameters."""
+    def test_dof_getter_returns_dihedrals(self):
+        """DOF getter should return only independent dihedrals."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
@@ -956,71 +961,42 @@ class TestPuckeringIntegration:
         dof = manager.dof
         assert len(dof) == manager.n_dof
 
-        # If we have flexible rings, some DOF are puckering
-        manager._ensure_constraint_analysis()
-        if len(manager._flexible_rings) > 0:
-            n_puckering = sum(ring.n_dof for ring in manager._flexible_rings)
-            assert n_puckering > 0
+        # All DOF should be angles (in radians), roughly in [-pi, pi]
+        for val in dof:
+            assert -2 * np.pi <= val <= 2 * np.pi, f"DOF value out of range: {val}"
 
-    def test_puckering_values_reasonable(self):
-        """Extracted puckering values should be in reasonable range."""
+    def test_dof_are_all_angles(self):
+        """All DOF values should be angles (radians)."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
-        manager._ensure_constraint_analysis()
 
         dof = manager.dof
+        if len(dof) == 0:
+            pytest.skip("No DOF to test")
 
-        if len(manager._flexible_rings) > 0:
-            n_dihedral = manager._independent_dof.n_independent
+        # All DOF should be reasonable angle values
+        for val in dof:
+            # Angles should be between -2π and 2π
+            assert -2 * np.pi <= val <= 2 * np.pi, f"DOF {val} is not a valid angle"
 
-            # Puckering values are the last n_puckering entries
-            n_puckering = sum(ring.n_dof for ring in manager._flexible_rings)
-            puckering_dof = dof[n_dihedral:]
-
-            # Check we have the expected number
-            assert len(puckering_dof) == n_puckering
-
-            # For 5-ring: (q2, phi2) - q2 > 0, phi2 in [-pi, pi]
-            # For 6-ring: (Q, theta, phi) - Q > 0, theta in [0, pi], phi in [-pi, pi]
-            idx = 0
-            for ring in manager._flexible_rings:
-                if ring.n_dof == 2:  # 5-ring
-                    q2 = puckering_dof[idx]
-                    phi2 = puckering_dof[idx + 1]
-                    assert q2 >= 0, f"q2 should be non-negative, got {q2}"
-                    assert -np.pi <= phi2 <= np.pi, f"phi2 out of range: {phi2}"
-                    idx += 2
-                elif ring.n_dof == 3:  # 6-ring
-                    Q = puckering_dof[idx]
-                    theta = puckering_dof[idx + 1]
-                    phi = puckering_dof[idx + 2]
-                    assert Q >= 0, f"Q should be non-negative, got {Q}"
-                    assert 0 <= theta <= np.pi, f"theta out of range: {theta}"
-                    idx += 3
-
-    def test_set_puckering_dof(self):
-        """Setting puckering DOF should modify geometry."""
+    def test_setting_dof_changes_coordinates(self):
+        """Setting DOF should modify coordinates."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
-        manager._ensure_constraint_analysis()
 
-        if len(manager._flexible_rings) == 0:
-            pytest.skip("No flexible rings to test")
+        if manager.n_dof == 0:
+            pytest.skip("No DOF to test")
 
         original_coords = manager.coordinates.copy()
         original_dof = manager.dof.copy()
 
-        # Modify puckering by changing the last few DOF
+        # Modify a dihedral
         new_dof = original_dof.copy()
-        n_dihedral = manager._independent_dof.n_independent
-
-        # Change puckering amplitude
-        if len(new_dof) > n_dihedral:
-            new_dof[n_dihedral] *= 1.2  # Increase first puckering param
+        new_dof[0] += 0.5  # Add 0.5 radians to first DOF
 
         manager.dof = new_dof
 
@@ -1030,8 +1006,8 @@ class TestPuckeringIntegration:
 
         assert coord_diff > 0.01, f"Coordinates should change, diff was {coord_diff}"
 
-    def test_puckering_roundtrip(self):
-        """Getting then setting puckering DOF should roundtrip."""
+    def test_dof_roundtrip(self):
+        """Getting then setting DOF should roundtrip."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
@@ -1047,28 +1023,25 @@ class TestPuckeringIntegration:
         diff = np.abs(roundtrip_dof - original_dof)
         max_diff = np.max(diff)
 
-        # Allow for some numerical error in puckering extraction
+        # Allow for some numerical error in roundtrip
         assert max_diff < 0.01, f"DOF roundtrip error: {max_diff}"
 
-    def test_bond_lengths_preserved_after_puckering_change(self):
-        """Changing puckering should preserve bond lengths."""
+    def test_bond_lengths_preserved_after_dof_change(self):
+        """Changing DOF should preserve bond lengths."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
-        manager._ensure_constraint_analysis()
 
-        if len(manager._flexible_rings) == 0:
-            pytest.skip("No flexible rings to test")
+        if manager.n_dof == 0:
+            pytest.skip("No DOF to test")
 
         original_distances = manager.distances.copy()
         original_dof = manager.dof.copy()
 
-        # Modify puckering
+        # Modify a dihedral
         new_dof = original_dof.copy()
-        n_dihedral = manager._independent_dof.n_independent
-        if len(new_dof) > n_dihedral:
-            new_dof[n_dihedral] *= 0.8  # Change amplitude
+        new_dof[0] += 0.3
 
         manager.dof = new_dof
 
@@ -1077,10 +1050,10 @@ class TestPuckeringIntegration:
         max_diff = np.max(diff)
 
         assert max_diff < BOND_TOLERANCE, (
-            f"Bond lengths changed by {max_diff:.6f} A after puckering change"
+            f"Bond lengths changed by {max_diff:.6f} A after DOF change"
         )
 
-    def test_multiple_nucleotides_puckering(self):
+    def test_multiple_nucleotides_flexible_rings(self):
         """Multiple nucleotides should have multiple flexible rings."""
         from ciffy import from_sequence
 
@@ -1093,12 +1066,33 @@ class TestPuckeringIntegration:
         # Expect at least 1 per nucleotide
         assert n_flexible >= 4, f"Expected at least 4 flexible rings, got {n_flexible}"
 
+    def test_puckering_can_be_analyzed(self):
+        """Ring puckering can be computed from coordinates for analysis."""
+        from ciffy import from_sequence
+        from ciffy.internal.puckering import compute_puckering_5ring
 
-class TestPuckeringEdgeCases:
-    """Edge cases for puckering in MolecularGeometry."""
+        polymer = from_sequence("a")
+        manager = polymer._geometry
+        manager._ensure_constraint_analysis()
+
+        if len(manager._flexible_rings) == 0:
+            pytest.skip("No flexible rings to analyze")
+
+        coords = manager.coordinates
+        for ring in manager._flexible_rings:
+            if len(ring.atoms) == 5:
+                ring_coords = coords[ring.atoms]
+                q2, phi2 = compute_puckering_5ring(ring_coords)
+                # Check puckering is reasonable
+                assert q2 >= 0, f"q2 should be non-negative, got {q2}"
+                assert -np.pi <= phi2 <= np.pi, f"phi2 out of range: {phi2}"
+
+
+class TestUnifiedDOFEdgeCases:
+    """Edge cases for unified DOF system."""
 
     def test_protein_no_flexible_rings(self):
-        """Proteins without proline should have no flexible rings from puckering."""
+        """Proteins without proline should have no flexible rings."""
         from ciffy import from_sequence
 
         # Alanine has no rings
@@ -1138,52 +1132,67 @@ class TestPuckeringEdgeCases:
         n_flexible = len(manager._flexible_rings)
         assert n_flexible >= 1, f"Expected at least 1 flexible ring in DNA, got {n_flexible}"
 
-    def test_extreme_puckering_values(self):
-        """Setting extreme puckering values should not crash."""
+    def test_extreme_dihedral_values(self):
+        """Setting extreme dihedral values should not crash."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
-        manager._ensure_constraint_analysis()
 
-        if len(manager._flexible_rings) == 0:
-            pytest.skip("No flexible rings")
+        if manager.n_dof == 0:
+            pytest.skip("No DOF to test")
 
         original_dof = manager.dof.copy()
-        n_dihedral = manager._independent_dof.n_independent
 
-        # Try setting extreme amplitude
+        # Try setting extreme dihedral values
         new_dof = original_dof.copy()
-        if len(new_dof) > n_dihedral:
-            new_dof[n_dihedral] = 1.0  # Very large amplitude
+        new_dof[0] = np.pi  # Set to π (180 degrees)
 
         # Should not raise
         manager.dof = new_dof
         coords = manager.coordinates
         assert coords.shape[0] > 0
 
-    def test_zero_puckering_amplitude(self):
-        """Setting zero puckering amplitude should give planar ring."""
+    def test_zero_dihedral_values(self):
+        """Setting zero dihedral values should work."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")
         manager = polymer._geometry
-        manager._ensure_constraint_analysis()
 
-        if len(manager._flexible_rings) == 0:
-            pytest.skip("No flexible rings")
+        if manager.n_dof == 0:
+            pytest.skip("No DOF to test")
 
         original_dof = manager.dof.copy()
-        n_dihedral = manager._independent_dof.n_independent
 
-        # Set amplitude to zero
+        # Set some dihedrals to zero
         new_dof = original_dof.copy()
-        if len(new_dof) > n_dihedral:
-            new_dof[n_dihedral] = 0.0  # Zero amplitude
+        new_dof[0] = 0.0
 
         manager.dof = new_dof
 
         # Should not crash and give valid coordinates
+        coords = manager.coordinates
+        assert coords.shape[0] > 0
+
+    def test_large_dihedral_change(self):
+        """Large dihedral changes should work without crashing."""
+        from ciffy import from_sequence
+
+        polymer = from_sequence("a")
+        manager = polymer._geometry
+
+        if manager.n_dof == 0:
+            pytest.skip("No DOF to test")
+
+        original_dof = manager.dof.copy()
+
+        # Try adding a full rotation (2π)
+        new_dof = original_dof.copy()
+        new_dof[0] += 2 * np.pi
+
+        # Should not raise
+        manager.dof = new_dof
         coords = manager.coordinates
         assert coords.shape[0] > 0
 

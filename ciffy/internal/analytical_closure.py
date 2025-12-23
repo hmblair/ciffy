@@ -181,7 +181,8 @@ class AnalyticalRingSolver:
 
         # Determine which closure atom moves when we rotate this dihedral
         # We need to find the atom that's "downstream" of the dependent dihedral
-        affected = self._find_affected_atoms(zmatrix_indices, dep_atom)
+        # In the spanning tree, descendants of dep_atom will move when its dihedral rotates
+        affected = set(self.tree.get_descendants(dep_atom))
 
         if closure_i in affected and closure_j not in affected:
             moving_atom = closure_i
@@ -305,38 +306,3 @@ class AnalyticalRingSolver:
         success = closure_error < 0.01  # 0.01 Å tolerance
 
         return internal, success
-
-    def _find_affected_atoms(
-        self,
-        zmatrix_indices: np.ndarray,
-        dihedral_atom: int,
-    ) -> set[int]:
-        """
-        Find all atoms affected by rotating a dihedral.
-
-        When we rotate the dihedral at `dihedral_atom`, all atoms that
-        depend on it (directly or transitively) in the Z-matrix will move.
-        """
-        # Find the row of the dihedral atom
-        dihedral_row = -1
-        for row in range(len(zmatrix_indices)):
-            if int(zmatrix_indices[row, 0]) == dihedral_atom:
-                dihedral_row = row
-                break
-
-        if dihedral_row < 0:
-            return set()
-
-        affected = {dihedral_atom}
-
-        # All atoms placed AFTER the dihedral atom that depend on it
-        for row in range(dihedral_row + 1, len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            # Check if any reference is in affected set
-            for ref_idx in [1, 2, 3]:
-                ref = int(zmatrix_indices[row, ref_idx])
-                if ref >= 0 and ref in affected:
-                    affected.add(atom)
-                    break
-
-        return affected

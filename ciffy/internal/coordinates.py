@@ -260,9 +260,13 @@ class MolecularGeometry:
         # Classify rings by chemistry (flexible vs rigid)
         if self._independent_dof.ring_constraints:
             # Get element symbols from topology
-            atom_elements = self._topology.elements if hasattr(self._topology, 'elements') else None
+            if hasattr(self._topology, 'elements') and self._topology.elements is not None:
+                from ..biochemistry import ELEMENT_NAMES
+                # Convert element indices to symbols
+                atom_elements = [
+                    ELEMENT_NAMES.get(int(e), 'X') for e in self._topology.elements
+                ]
 
-            if atom_elements is not None:
                 # Find fundamental cycles for classification
                 cycles = RingAnalyzer.find_fundamental_cycles(
                     csr_offsets, csr_neighbors, self._get_n_atoms()

@@ -64,6 +64,7 @@ class TopologyInfo:
 
     Attributes:
         atoms: (N,) int32 array of atom type indices.
+        elements: (N,) int32 array of element indices (atomic numbers).
         sequence: (R,) int32 array of residue type indices.
         residue_sizes: (R,) int32 array of atom counts per residue.
         chain_lengths: (C,) int32 array of residue counts per chain.
@@ -79,6 +80,7 @@ class TopologyInfo:
     """
 
     atoms: np.ndarray
+    elements: np.ndarray
     sequence: np.ndarray
     residue_sizes: np.ndarray
     chain_lengths: np.ndarray
@@ -103,6 +105,7 @@ class TopologyInfo:
 
         # Convert to numpy for storage (topology is always CPU)
         atoms = to_numpy(polymer.atoms).astype(np.int32)
+        elements = to_numpy(polymer.elements).astype(np.int32)
         sequence = to_numpy(polymer.sequence).astype(np.int32)
         residue_sizes = to_numpy(polymer.sizes(Scale.RESIDUE)).astype(np.int32)
         chain_lengths = to_numpy(polymer.lengths).astype(np.int32)
@@ -125,6 +128,7 @@ class TopologyInfo:
 
         return cls(
             atoms=atoms,
+            elements=elements,
             sequence=sequence,
             residue_sizes=residue_sizes,
             chain_lengths=chain_lengths,
@@ -153,6 +157,7 @@ class TopologyInfo:
         """Create sliced TopologyInfo for a subset of atoms."""
         mask_np = to_numpy(mask)
         new_atoms = self.atoms[mask_np].astype(np.int32)
+        new_elements = self.elements[mask_np].astype(np.int32)
 
         residue_atom_offsets = np.zeros(self.n_residues + 1, dtype=np.int64)
         residue_atom_offsets[1:] = np.cumsum(self.residue_sizes)
@@ -188,6 +193,7 @@ class TopologyInfo:
 
         return TopologyInfo(
             atoms=new_atoms,
+            elements=new_elements,
             sequence=new_sequence,
             residue_sizes=new_residue_sizes,
             chain_lengths=new_chain_lengths,

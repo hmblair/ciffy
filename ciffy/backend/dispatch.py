@@ -7,10 +7,10 @@ using the higher-level public API via ``ciffy.internal`` or ``Polymer`` methods.
 
 Implementation selection based on array type and device:
 
-- NumPy arrays → C extension
+- NumPy arrays → C extension (parent-based)
 - PyTorch CPU tensors → C extension (via numpy conversion)
-- PyTorch CUDA tensors → CUDA kernels
-- PyTorch tensors with requires_grad → autograd functions
+- PyTorch CUDA tensors → CUDA kernels (uses bridge for zmatrix_indices)
+- PyTorch tensors with requires_grad → autograd functions (uses bridge)
 
 Import Paths
 ------------
@@ -23,8 +23,8 @@ Usage
 >>> from ciffy.backend.dispatch import cartesian_to_internal, nerf_reconstruct
 >>>
 >>> # Works with any array type on any device
->>> internal = cartesian_to_internal(coords, indices)  # (M, 3) [dist, ang, dih]
->>> coords = nerf_reconstruct(indices, internal)
+>>> internal = cartesian_to_internal(coords, parent)  # (N, 3) [dist, ang, dih]
+>>> coords = nerf_reconstruct(parent, levels, internal, ...)
 """
 
 from __future__ import annotations
@@ -38,11 +38,12 @@ from .cuda_ops import CUDA_EXTENSION_AVAILABLE, is_cuda_available
 
 if TYPE_CHECKING:
     import torch
+    from ..internal.tree import ReconstructionData
 
-# C extension imports (required)
+# C extension imports (required) - parent-based functions
 from .._c import (
-    _cartesian_to_internal as _c_cartesian_to_internal,
-    _nerf_reconstruct_leveled_anchored as _c_nerf_reconstruct_anchored,
+    _cartesian_to_internal_parent as _c_cartesian_to_internal_parent,
+    _nerf_reconstruct_parent as _c_nerf_reconstruct_parent,
 )
 
 __all__ = [
@@ -54,8 +55,6 @@ __all__ = [
     "build_bond_graph_csr",
     "find_connected_components",
     # Data structures
-    "ZMatrix",
-    "ConnectedComponents",
     "TopologyInfo",
     # Alignment
     "kabsch_rotation",
@@ -68,8 +67,6 @@ __all__ = [
 
 # Graph building and data structures (re-exported from backend.graph)
 from .graph import (
-    ZMatrix,
-    ConnectedComponents,
     TopologyInfo,
     build_bond_graph,
     build_bond_graph_csr,
@@ -82,62 +79,73 @@ from ..operations.alignment import kabsch_rotation
 
 def cartesian_to_internal(
     coords: Array,
-    indices: Array,
+    parent: Array,
     ) -> Array:
     """
     Convert Cartesian coordinates to internal coordinates.
 
     Automatically dispatches to the optimal implementation:
-    - CUDA kernels for GPU tensors
-    - C extension for CPU tensors and NumPy arrays
-    - Autograd functions when gradients are required
+    - CUDA kernels for GPU tensors (derives zmatrix from parent)
+    - C extension for CPU tensors and NumPy arrays (native parent-based)
+    - Autograd functions when gradients are required (derives zmatrix)
 
     Args:
         coords: (N, 3) array of Cartesian coordinates.
-        indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref]
+        parent: (N,) int64 array of parent indices. References are derived:
+            dist_ref[k] = parent[k]
+            ang_ref[k] = parent[parent[k]]
+            dih_ref[k] = parent[parent[parent[k]]]
 
     Returns:
-        internal: (N, 3) array of internal coordinates.
+        internal: (N, 3) array of internal coordinates [distance, angle, dihedral].
     """
     if is_torch(coords):
-        return _torch_cartesian_to_internal(coords, indices)
-    return _numpy_cartesian_to_internal(coords, indices)
+        return _torch_cartesian_to_internal(coords, parent)
+    return _numpy_cartesian_to_internal(coords, parent)
 
 
 def nerf_reconstruct(
-    indices: Array,
+    parent: Array,
+    levels: Array,
     internal: Array,
-    component_offsets: Array | None = None,
+    level_offsets: Array,
+    level_atoms: Array,
+    fixed_coords: Array,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
+    center_offsets: Array | None = None,
 ) -> Array:
     """
     Reconstruct Cartesian coordinates using NERF algorithm.
 
     Automatically dispatches to the optimal implementation:
-    - CUDA kernels for GPU tensors
-    - C extension for CPU tensors and NumPy arrays
-    - Autograd functions when gradients are required
+    - CUDA kernels for GPU tensors (derives zmatrix from parent)
+    - C extension for CPU tensors and NumPy arrays (native parent-based)
+    - Autograd functions when gradients are required (derives zmatrix)
 
     Args:
-        indices: (M, 4) int64 array [atom_idx, dist_ref, ang_ref, dih_ref].
-            The number of atoms is inferred from the first dimension.
-        internal: (M, 3) array of internal coordinates.
-            Each row: [distance, angle, dihedral].
-        component_offsets: (n_components+1,) int32 CSR-style offsets for component-parallel NERF.
-            Enables parallel NERF by processing each connected component independently.
-        anchor_coords: (n_components, 3, 3) anchor positions for each component.
-            When provided, atoms are placed directly in the reference frame
-            defined by these anchors, eliminating need for Kabsch rotation.
-        component_ids: (M,) int32 component index per Z-matrix entry.
-            Required when anchor_coords is provided.
+        parent: (N,) int64 parent indices for each atom (-1 for roots).
+        levels: (N,) int32 tree depth for each atom.
+        internal: (N, 3) array of internal coordinates [distance, angle, dihedral].
+        level_offsets: (max_level+2,) int32 CSR-style offsets by level.
+        level_atoms: (N,) int64 atom indices sorted by level.
+        fixed_coords: (N, 3) float32 reference coordinates for atoms at levels 0-2.
+        anchor_coords: (n_components, 3, 3) float32 anchor positions for CUDA path.
+        component_ids: (N,) int32 component index per atom (for center offsets).
+        center_offsets: (n_components, 3) float32 per-component centering offsets.
 
     Returns:
         (N, 3) array of Cartesian coordinates.
     """
     if is_torch(internal):
-        return _torch_nerf_reconstruct(indices, internal, component_offsets, anchor_coords, component_ids)
-    return _numpy_nerf_reconstruct(indices, internal, component_offsets, anchor_coords, component_ids)
+        return _torch_nerf_reconstruct(
+            parent, levels, internal, level_offsets, level_atoms,
+            fixed_coords, anchor_coords, component_ids, center_offsets
+        )
+    return _numpy_nerf_reconstruct(
+        parent, levels, internal, level_offsets, level_atoms,
+        fixed_coords, component_ids, center_offsets
+    )
 
 
 # =============================================================================
@@ -147,44 +155,51 @@ def nerf_reconstruct(
 
 def _numpy_cartesian_to_internal(
     coords: np.ndarray,
-    indices: np.ndarray,
+    parent: np.ndarray,
 ) -> np.ndarray:
-    """NumPy path: use C extension directly. Returns (M, 3) internal array."""
+    """NumPy path: use parent-based C extension directly. Returns (N, 3) internal array."""
     coords_f32 = np.ascontiguousarray(coords, dtype=np.float32)
-    indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
-    return _c_cartesian_to_internal(coords_f32, indices_i64)
+    parent_i64 = np.ascontiguousarray(parent, dtype=np.int64)
+    return _c_cartesian_to_internal_parent(coords_f32, parent_i64)
 
 
 def _numpy_nerf_reconstruct(
-    indices: np.ndarray,
+    parent: np.ndarray,
+    levels: np.ndarray,
     internal: np.ndarray,
-    component_offsets: np.ndarray | None = None,
-    anchor_coords: np.ndarray | None = None,
+    level_offsets: np.ndarray,
+    level_atoms: np.ndarray,
+    fixed_coords: np.ndarray,
     component_ids: np.ndarray | None = None,
+    center_offsets: np.ndarray | None = None,
 ) -> np.ndarray:
     """
-    NumPy path: use anchored C extension.
+    NumPy path: use parent-based C extension.
 
-    Requires component_offsets, anchor_coords, and component_ids for anchored
-    reconstruction which places atoms directly in the reference frame.
+    Uses level-parallel NERF reconstruction with parent array.
     """
-    if component_offsets is None or anchor_coords is None or component_ids is None:
-        raise ValueError(
-            "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
-            "Use MolecularGeometry for automatic setup of these parameters."
-        )
+    n_levels = int(levels.max()) + 1 if len(levels) > 0 else 0
 
-    n_atoms = len(indices)
-    indices_i64 = np.ascontiguousarray(indices, dtype=np.int64)
+    parent_i64 = np.ascontiguousarray(parent, dtype=np.int64)
+    levels_i32 = np.ascontiguousarray(levels, dtype=np.int32)
     internal_f32 = np.ascontiguousarray(internal, dtype=np.float32)
-    anchor_f32 = np.ascontiguousarray(anchor_coords, dtype=np.float32)
-    comp_ids_i32 = np.ascontiguousarray(component_ids, dtype=np.int32)
-    comp_off_i32 = np.ascontiguousarray(component_offsets, dtype=np.int32)
+    level_offsets_i32 = np.ascontiguousarray(level_offsets, dtype=np.int32)
+    level_atoms_i64 = np.ascontiguousarray(level_atoms, dtype=np.int64)
+    fixed_f32 = np.ascontiguousarray(fixed_coords, dtype=np.float32)
 
-    return _c_nerf_reconstruct_anchored(
-        indices_i64, internal_f32, n_atoms,
-        comp_off_i32, anchor_f32, comp_ids_i32
+    coords = _c_nerf_reconstruct_parent(
+        parent_i64, levels_i32, internal_f32,
+        level_offsets_i32, level_atoms_i64, n_levels,
+        fixed_f32
     )
+
+    # Apply per-component center offsets if provided
+    if center_offsets is not None and component_ids is not None:
+        for comp_idx in range(len(center_offsets)):
+            mask = component_ids == comp_idx
+            coords[mask] += center_offsets[comp_idx]
+
+    return coords
 
 
 # =============================================================================
@@ -194,15 +209,15 @@ def _numpy_nerf_reconstruct(
 
 def _torch_cartesian_to_internal(
     coords: "torch.Tensor",
-    indices: Array,
+    parent: Array,
 ) -> "torch.Tensor":
     """
     PyTorch dispatch for Cartesian to internal conversion.
 
     Routes to:
-    - Autograd functions if requires_grad=True
-    - CUDA kernels for CUDA tensors
-    - C extension for CPU tensors
+    - Autograd functions if requires_grad=True (derives zmatrix from parent)
+    - CUDA kernels for CUDA tensors (derives zmatrix from parent)
+    - C extension for CPU tensors (native parent-based)
     """
     import torch
     from .cuda_ops import cuda_cartesian_to_internal
@@ -210,13 +225,22 @@ def _torch_cartesian_to_internal(
     device = coords.device
     dtype = coords.dtype
 
-    # Ensure indices are tensor on same device (skip if already correct)
-    if is_torch(indices) and indices.device == device:
-        indices_tensor = indices
-    elif is_torch(indices):
-        indices_tensor = indices.to(device)
+    # Ensure parent is tensor on same device
+    if is_torch(parent) and parent.device == device:
+        parent_tensor = parent
+    elif is_torch(parent):
+        parent_tensor = parent.to(device)
     else:
-        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
+        parent_tensor = torch.from_numpy(np.asarray(parent)).to(device)
+
+    # For CUDA and autograd paths, derive zmatrix_indices from parent
+    # (bridge pattern for backward compatibility)
+    needs_zmatrix = coords.requires_grad or is_cuda_available(coords)
+    if needs_zmatrix:
+        from ..internal.tree import derive_zmatrix_from_parent
+        parent_np = parent_tensor.cpu().numpy() if is_torch(parent_tensor) else np.asarray(parent)
+        zmatrix_np = derive_zmatrix_from_parent(parent_np)
+        indices_tensor = torch.from_numpy(zmatrix_np).to(device)
 
     # Autograd path for gradient computation
     if coords.requires_grad:
@@ -231,7 +255,7 @@ def _torch_cartesian_to_internal(
         )
         return internal.to(dtype)
 
-    # CPU path: use C extension via buffer protocol
+    # CPU path: use parent-based C extension via buffer protocol
     import warnings
 
     if not coords.is_cpu:
@@ -241,101 +265,98 @@ def _torch_cartesian_to_internal(
             stacklevel=3
         )
         coords = coords.cpu()
-        indices_tensor = indices_tensor.cpu()
+        parent_tensor = parent_tensor.cpu()
 
     # Ensure contiguous layout for buffer protocol
     coords_f32 = coords.detach().to(torch.float32).contiguous()
-    indices_i64 = indices_tensor.detach().to(torch.int64).contiguous()
+    parent_i64 = parent_tensor.detach().to(torch.int64).contiguous()
 
-    # Call C extension (accepts buffer protocol objects)
-    internal_np = _c_cartesian_to_internal(coords_f32, indices_i64)
+    # Call parent-based C extension
+    internal_np = _c_cartesian_to_internal_parent(coords_f32, parent_i64)
 
     return torch.from_numpy(internal_np).to(device=device, dtype=dtype)
 
 
 def _torch_nerf_reconstruct(
-    indices: "torch.Tensor",
+    parent: "torch.Tensor",
+    levels: "torch.Tensor",
     internal: "torch.Tensor",
-    component_offsets: Array | None = None,
+    level_offsets: Array,
+    level_atoms: Array,
+    fixed_coords: Array,
     anchor_coords: Array | None = None,
     component_ids: Array | None = None,
+    center_offsets: Array | None = None,
 ) -> "torch.Tensor":
     """
-    PyTorch dispatch for anchored NERF reconstruction.
+    PyTorch dispatch for parent-based NERF reconstruction.
 
     Routes to:
-    - Autograd functions if any input requires_grad=True
-    - CUDA component-parallel kernels for CUDA tensors
-    - C extension for CPU tensors
-
-    Requires component_offsets, anchor_coords, and component_ids for anchored
-    reconstruction which places atoms directly in the reference frame.
+    - Autograd functions if internal requires_grad=True (derives zmatrix)
+    - CUDA kernels for CUDA tensors (derives zmatrix)
+    - C extension for CPU tensors (native parent-based)
     """
     import torch
     from .cuda_ops import cuda_nerf_reconstruct_leveled_anchored, ANCHORED_NERF_AVAILABLE
 
-    if component_offsets is None or anchor_coords is None or component_ids is None:
-        raise ValueError(
-            "nerf_reconstruct requires component_offsets, anchor_coords, and component_ids. "
-            "Use MolecularGeometry for automatic setup of these parameters."
-        )
-
-    n_atoms = len(indices)
+    n_atoms = len(parent)
     device = internal.device
     dtype = internal.dtype
 
-    # Ensure indices are tensor on same device
-    if is_torch(indices) and indices.device == device:
-        indices_tensor = indices
-    elif is_torch(indices):
-        indices_tensor = indices.to(device)
-    else:
-        indices_tensor = torch.from_numpy(np.asarray(indices)).to(device)
+    # Convert all arrays to tensors on same device
+    def to_tensor(arr, target_dtype=None):
+        if arr is None:
+            return None
+        if is_torch(arr) and arr.device == device:
+            t = arr
+        elif is_torch(arr):
+            t = arr.to(device)
+        else:
+            t = torch.from_numpy(np.asarray(arr)).to(device)
+        if target_dtype:
+            t = t.to(target_dtype)
+        return t
 
-    # Convert anchor_coords and component_ids to tensors on same device
-    if is_torch(anchor_coords) and anchor_coords.device == device:
-        anchor_tensor = anchor_coords
-    elif is_torch(anchor_coords):
-        anchor_tensor = anchor_coords.to(device)
-    else:
-        anchor_tensor = torch.from_numpy(np.asarray(anchor_coords)).to(device)
+    parent_tensor = to_tensor(parent, torch.int64)
+    levels_tensor = to_tensor(levels, torch.int32)
+    level_offsets_tensor = to_tensor(level_offsets, torch.int32)
+    level_atoms_tensor = to_tensor(level_atoms, torch.int64)
+    fixed_tensor = to_tensor(fixed_coords, torch.float32)
+    anchor_tensor = to_tensor(anchor_coords, torch.float32)
+    comp_ids_tensor = to_tensor(component_ids, torch.int32)
+    center_offsets_tensor = to_tensor(center_offsets, torch.float32)
 
-    if is_torch(component_ids) and component_ids.device == device:
-        comp_ids_tensor = component_ids
-    elif is_torch(component_ids):
-        comp_ids_tensor = component_ids.to(device)
-    else:
-        comp_ids_tensor = torch.from_numpy(np.asarray(component_ids)).to(device)
+    # For CUDA and autograd paths, derive zmatrix_indices from parent
+    # (bridge pattern for backward compatibility with existing CUDA kernels)
+    needs_zmatrix = internal.requires_grad or (is_cuda_available(internal) and ANCHORED_NERF_AVAILABLE)
+    if needs_zmatrix:
+        from ..internal.tree import derive_zmatrix_from_parent
+        parent_np = parent_tensor.cpu().numpy()
+        zmatrix_np = derive_zmatrix_from_parent(parent_np)
+        indices_tensor = torch.from_numpy(zmatrix_np).to(device)
 
-    # Convert component_offsets to tensor
-    if is_torch(component_offsets) and component_offsets.device == device:
-        comp_off_tensor = component_offsets
-    elif is_torch(component_offsets):
-        comp_off_tensor = component_offsets.to(device)
-    else:
-        comp_off_tensor = torch.from_numpy(np.asarray(component_offsets)).to(device)
-
-    # Validate component IDs are within anchor_coords bounds
-    # This catches indexing errors before they cause cryptic CUDA errors
-    n_anchor_components = anchor_tensor.shape[0]
-    if len(comp_ids_tensor) > 0:
-        max_comp_id = int(comp_ids_tensor.max().item())
-        if max_comp_id >= n_anchor_components:
-            raise IndexError(
-                f"Component ID out of bounds: max component_id={max_comp_id} "
-                f"but anchor_coords has only {n_anchor_components} components. "
-                f"This indicates a mismatch between ZMatrix.component_ids and "
-                f"ConnectedComponents.anchor_coords."
-            )
-        if max_comp_id < 0:
-            raise IndexError(
-                f"Invalid negative component ID: {max_comp_id}"
-            )
+        # Use provided anchor_coords or derive from fixed_coords
+        if anchor_tensor is None:
+            if component_ids is not None:
+                n_components = int(comp_ids_tensor.max().item()) + 1 if len(comp_ids_tensor) > 0 else 1
+                anchor_coords_list = []
+                for comp in range(n_components):
+                    comp_mask = comp_ids_tensor == comp
+                    level_mask = levels_tensor <= 2
+                    combined_mask = comp_mask & level_mask
+                    anchor_atoms = torch.where(combined_mask)[0][:3]
+                    if len(anchor_atoms) < 3:
+                        while len(anchor_atoms) < 3:
+                            anchor_atoms = torch.cat([anchor_atoms, anchor_atoms[:1]])
+                    anchor_coords_list.append(fixed_tensor[anchor_atoms])
+                anchor_tensor = torch.stack(anchor_coords_list)
+            else:
+                anchor_tensor = fixed_tensor[:3].unsqueeze(0)
 
     # Autograd path for gradient computation
     if internal.requires_grad:
         from .autograd import nerf_reconstruct as autograd_nerf
-        return autograd_nerf(indices_tensor, internal, comp_off_tensor, anchor_tensor, comp_ids_tensor)
+        return autograd_nerf(indices_tensor, internal, level_offsets_tensor, anchor_tensor, comp_ids_tensor)
 
     # CUDA path with anchored component-parallel reconstruction
     if is_cuda_available(internal) and ANCHORED_NERF_AVAILABLE:
@@ -344,13 +365,18 @@ def _torch_nerf_reconstruct(
             coords,
             indices_tensor.to(torch.int64).contiguous(),
             internal.to(torch.float32).contiguous(),
-            comp_off_tensor.to(torch.int32).contiguous(),
+            level_offsets_tensor.to(torch.int32).contiguous(),
             anchor_tensor.to(torch.float32).contiguous(),
             comp_ids_tensor.to(torch.int32).contiguous(),
         )
+        # Apply center offsets
+        if center_offsets_tensor is not None and comp_ids_tensor is not None:
+            for comp_idx in range(len(center_offsets_tensor)):
+                mask = comp_ids_tensor == comp_idx
+                coords[mask] += center_offsets_tensor[comp_idx]
         return coords.to(dtype)
 
-    # CPU path: use C extension via buffer protocol
+    # CPU path: use parent-based C extension via buffer protocol
     import warnings
 
     if not internal.is_cpu:
@@ -359,22 +385,43 @@ def _torch_nerf_reconstruct(
             "Consider using CUDA tensors with the CUDA extension for best performance.",
             stacklevel=3
         )
-        indices_tensor = indices_tensor.cpu()
+        parent_tensor = parent_tensor.cpu()
+        levels_tensor = levels_tensor.cpu()
         internal = internal.cpu()
-        anchor_tensor = anchor_tensor.cpu()
-        comp_ids_tensor = comp_ids_tensor.cpu()
-        comp_off_tensor = comp_off_tensor.cpu()
+        level_offsets_tensor = level_offsets_tensor.cpu()
+        level_atoms_tensor = level_atoms_tensor.cpu()
+        fixed_tensor = fixed_tensor.cpu()
+        if comp_ids_tensor is not None:
+            comp_ids_tensor = comp_ids_tensor.cpu()
+        if center_offsets_tensor is not None:
+            center_offsets_tensor = center_offsets_tensor.cpu()
+
+    # Compute n_levels
+    n_levels = int(levels_tensor.max().item()) + 1 if len(levels_tensor) > 0 else 0
 
     # Ensure contiguous layout for buffer protocol
-    indices_i64 = indices_tensor.detach().to(torch.int64).contiguous()
+    parent_i64 = parent_tensor.detach().to(torch.int64).contiguous()
+    levels_i32 = levels_tensor.detach().to(torch.int32).contiguous()
     internal_f32 = internal.detach().to(torch.float32).contiguous()
-    anchor_f32 = anchor_tensor.detach().to(torch.float32).contiguous()
-    comp_ids_i32 = comp_ids_tensor.detach().to(torch.int32).contiguous()
-    comp_off_i32 = comp_off_tensor.detach().to(torch.int32).contiguous()
+    level_offsets_i32 = level_offsets_tensor.detach().to(torch.int32).contiguous()
+    level_atoms_i64 = level_atoms_tensor.detach().to(torch.int64).contiguous()
+    fixed_f32 = fixed_tensor.detach().to(torch.float32).contiguous()
 
-    # Call C extension (accepts buffer protocol objects)
-    coords_np = _c_nerf_reconstruct_anchored(
-        indices_i64, internal_f32, n_atoms,
-        comp_off_i32, anchor_f32, comp_ids_i32
+    # Call parent-based C extension
+    coords_np = _c_nerf_reconstruct_parent(
+        parent_i64, levels_i32, internal_f32,
+        level_offsets_i32, level_atoms_i64, n_levels,
+        fixed_f32
     )
-    return torch.from_numpy(coords_np).to(device=device, dtype=dtype)
+
+    coords = torch.from_numpy(coords_np).to(device=device, dtype=dtype)
+
+    # Apply center offsets
+    if center_offsets_tensor is not None and comp_ids_tensor is not None:
+        comp_ids_np = comp_ids_tensor.numpy() if comp_ids_tensor.is_cpu else comp_ids_tensor.cpu().numpy()
+        center_np = center_offsets_tensor.numpy() if center_offsets_tensor.is_cpu else center_offsets_tensor.cpu().numpy()
+        for comp_idx in range(len(center_np)):
+            mask = comp_ids_np == comp_idx
+            coords[mask] += torch.from_numpy(center_np[comp_idx]).to(device=device, dtype=dtype)
+
+    return coords

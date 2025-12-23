@@ -386,7 +386,7 @@ def _group_fused_rings(ring_constraints: list) -> list[list]:
 
 def solve_ring_closure(
     internal: Array,
-    zmatrix_indices: np.ndarray,
+    parent: np.ndarray,
     coords: Array,
     ring_constraints: list,
     tree=None,
@@ -404,7 +404,7 @@ def solve_ring_closure(
 
     Args:
         internal: (N, 3) internal coordinates [distance, angle, dihedral]
-        zmatrix_indices: (N, 4) Z-matrix indices
+        parent: (N,) int64 parent array from spanning tree
         coords: (N, 3) original Cartesian coordinates (for closure distances)
         ring_constraints: List of RingConstraint objects
         tree: SpanningTree for NERF reconstruction
@@ -477,12 +477,10 @@ def _solve_rings_lbfgs(
     for ring in rings:
         all_ring_atoms.update(ring.ring_atoms.tolist())
 
-    # Build Z-matrix mapping
-    zmatrix_indices = tree.to_zmatrix_indices()
-    atom_to_row = {int(zmatrix_indices[r, 0]): r for r in range(len(zmatrix_indices))}
-
-    # Get ring dihedral rows
-    ring_rows = sorted([atom_to_row.get(a, -1) for a in all_ring_atoms if atom_to_row.get(a, -1) >= 3])
+    # With parent-based storage, atom k's data is at row k (identity mapping)
+    # Ring dihedral rows are atoms with level >= 3 (have valid dihedrals)
+    levels = tree.level
+    ring_rows = sorted([int(a) for a in all_ring_atoms if levels[int(a)] >= 3])
 
     if not ring_rows:
         return internal

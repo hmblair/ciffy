@@ -140,28 +140,24 @@ class AnalyticalRingSolver:
         # Use the first dependent dihedral - it should move one closure atom
         dep_atom = int(dependent_dihedrals[0])
 
-        # Build atom -> Z-matrix row mapping
-        zmatrix_indices = self.tree.to_zmatrix_indices()
-        atom_to_row = {}
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            atom_to_row[atom] = row
-
-        dep_row = atom_to_row.get(dep_atom, -1)
-        if dep_row < 3:
+        # With parent-based storage, atom k's data is at row k
+        # Check if dep_atom has a valid dihedral (level >= 3)
+        if self.tree.level[dep_atom] < 3:
             return internal, False
 
-        # Get Z-matrix references for the dependent atom
-        dist_ref = int(zmatrix_indices[dep_row, 1])  # Parent (bond partner)
-        ang_ref = int(zmatrix_indices[dep_row, 2])   # Angle reference
-        dih_ref = int(zmatrix_indices[dep_row, 3])   # Dihedral reference
+        # Derive references from parent array
+        parent = self.tree.parent
+        dist_ref = int(parent[dep_atom])  # Parent (bond partner)
+        ang_ref = int(parent[dist_ref]) if dist_ref >= 0 else -1  # Angle reference
+        dih_ref = int(parent[ang_ref]) if ang_ref >= 0 else -1   # Dihedral reference
 
         if dist_ref < 0 or ang_ref < 0 or dih_ref < 0:
             return internal, False
 
         # Get bond length and angle for the dependent atom
-        bond_length = to_scalar(internal[dep_row, 0])
-        bond_angle = to_scalar(internal[dep_row, 1])
+        # With parent-based storage, atom k's data is at row k
+        bond_length = to_scalar(internal[dep_atom, 0])
+        bond_angle = to_scalar(internal[dep_atom, 1])
 
         # Get expected closure distance from original coords
         original_np = to_numpy(original_coords)
@@ -256,7 +252,7 @@ class AnalyticalRingSolver:
         # Compute the required dihedral change
         # The angle from circle_sphere_intersect is relative to an arbitrary basis
         # We need to compute the actual dihedral change
-        current_dihedral = to_scalar(internal[dep_row, 2])
+        current_dihedral = to_scalar(internal[dep_atom, 2])
 
         # Compute current angle on circle
         v_perp_normalized = v_perp / circle_radius
@@ -288,11 +284,11 @@ class AnalyticalRingSolver:
         # Update the internal coordinates
         if is_torch(internal):
             import torch
-            internal[dep_row, 2] = torch.tensor(
+            internal[dep_atom, 2] = torch.tensor(
                 new_dihedral, dtype=internal.dtype, device=internal.device
             )
         else:
-            internal[dep_row, 2] = new_dihedral
+            internal[dep_atom, 2] = new_dihedral
 
         # Verify the solution
         internal_np = to_numpy(internal).astype(np.float32)

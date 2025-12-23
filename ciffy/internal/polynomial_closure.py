@@ -128,14 +128,10 @@ class PolynomialRingSolver:
             original_np[closure_j] - original_np[closure_i]
         ))
 
-        # Build Z-matrix info
-        zmatrix_indices = self.tree.to_zmatrix_indices()
-        atom_to_row = {int(zmatrix_indices[r, 0]): r for r in range(len(zmatrix_indices))}
-
-        # Get ALL ring dihedral rows (not just dependent)
-        # This is crucial for successful ring closure
-        ring_rows = [atom_to_row.get(int(a), -1) for a in ring_constraint.ring_atoms]
-        ring_rows = [r for r in ring_rows if r >= 3]
+        # With parent-based storage, atom k's data is at row k (identity mapping)
+        # Get ALL ring dihedral rows (atoms with level >= 3 have valid dihedrals)
+        levels = self.tree.level
+        ring_rows = [int(a) for a in ring_constraint.ring_atoms if levels[int(a)] >= 3]
 
         if len(ring_rows) == 0:
             return internal, False

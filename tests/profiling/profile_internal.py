@@ -177,6 +177,129 @@ def benchmark_to_cartesian(
     return BenchmarkResult("to_cartesian", forward_result, backward_result)
 
 
+def benchmark_coords_to_dof(
+    polymer,
+    original_coords,
+    sync: Callable[[], None],
+    runs: int,
+    include_backward: bool = True,
+) -> BenchmarkResult:
+    """
+    Benchmark Cartesian -> DOF conversion (independent dihedrals only).
+
+    This benchmarks the new DOF-based system which only exposes the
+    independent degrees of freedom (non-ring dihedrals).
+
+    Args:
+        polymer: Polymer object.
+        original_coords: Original coordinates tensor.
+        sync: Device synchronization function.
+        runs: Number of benchmark runs.
+        include_backward: Whether to benchmark backward pass.
+
+    Returns:
+        BenchmarkResult with forward and optionally backward timings.
+    """
+    import torch
+
+    geometry = polymer._geometry
+
+    # Forward pass benchmark
+    def forward():
+        polymer.coordinates = original_coords.clone()
+        return geometry.dof
+
+    forward_result = Timer.benchmark(forward, sync=sync, runs=runs)
+
+    # Backward pass benchmark (if requested)
+    backward_result = None
+    if include_backward:
+        def forward_backward():
+            coords = original_coords.clone().requires_grad_(True)
+            polymer.coordinates = coords
+            dof = geometry.dof
+            loss = dof.sum()
+            loss.backward()
+            return coords.grad
+
+        fwd_bwd_result = Timer.benchmark(forward_backward, sync=sync, runs=runs)
+
+        # Backward time = total - forward
+        backward_result = TimingResult(
+            mean=max(0, fwd_bwd_result.mean - forward_result.mean),
+            std=(fwd_bwd_result.std**2 + forward_result.std**2)**0.5,
+            min=max(0, fwd_bwd_result.min - forward_result.max),
+            max=fwd_bwd_result.max - forward_result.min,
+            runs=runs,
+        )
+
+    return BenchmarkResult("coords_to_dof", forward_result, backward_result)
+
+
+def benchmark_dof_to_coords(
+    polymer,
+    original_coords,
+    sync: Callable[[], None],
+    runs: int,
+    include_backward: bool = True,
+) -> BenchmarkResult:
+    """
+    Benchmark DOF -> Cartesian conversion (with ring closure).
+
+    This benchmarks the full DOF-to-coordinates pipeline which includes:
+    1. Setting independent DOF values
+    2. Ring closure solver (L-BFGS) to find dependent dihedrals
+    3. NERF reconstruction to get Cartesian coordinates
+
+    Args:
+        polymer: Polymer object.
+        original_coords: Original coordinates (to reset state between runs).
+        sync: Device synchronization function.
+        runs: Number of benchmark runs.
+        include_backward: Whether to benchmark backward pass.
+
+    Returns:
+        BenchmarkResult with forward and optionally backward timings.
+    """
+    import torch
+
+    geometry = polymer._geometry
+
+    # Get base DOF values
+    base_dof = geometry.dof.detach().clone()
+
+    # Forward pass benchmark
+    def forward():
+        geometry.dof = base_dof.clone()
+        return geometry.coordinates
+
+    forward_result = Timer.benchmark(forward, sync=sync, runs=runs)
+
+    # Backward pass benchmark (if requested)
+    backward_result = None
+    if include_backward:
+        def forward_backward():
+            dof = base_dof.detach().clone().requires_grad_(True)
+            geometry.dof = dof
+            coords = geometry.coordinates
+            loss = coords.sum()
+            loss.backward()
+            return dof.grad
+
+        fwd_bwd_result = Timer.benchmark(forward_backward, sync=sync, runs=runs)
+
+        # Backward time = total - forward
+        backward_result = TimingResult(
+            mean=max(0, fwd_bwd_result.mean - forward_result.mean),
+            std=(fwd_bwd_result.std**2 + forward_result.std**2)**0.5,
+            min=max(0, fwd_bwd_result.min - forward_result.max),
+            max=fwd_bwd_result.max - forward_result.min,
+            runs=runs,
+        )
+
+    return BenchmarkResult("dof_to_coords", forward_result, backward_result)
+
+
 def benchmark_round_trip(
     polymer,
     original_coords,
@@ -234,7 +357,13 @@ def benchmark_round_trip(
     return BenchmarkResult("round_trip", forward_result, backward_result)
 
 
-def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> dict:
+def benchmark_device(
+    filepath: str,
+    device: str,
+    runs: int = BENCHMARK_RUNS,
+    include_dof: bool = True,
+    max_atoms_for_dof: int = 1000,
+) -> dict:
     """
     Benchmark internal coordinate conversions on a specific device.
 
@@ -242,6 +371,8 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
         filepath: Path to CIF file.
         device: Device string ('cpu', 'cuda', 'mps').
         runs: Number of benchmark runs.
+        include_dof: Whether to include DOF benchmarks (ring closure).
+        max_atoms_for_dof: Skip DOF benchmarks for structures larger than this.
 
     Returns:
         Dict with timing results for each operation.
@@ -256,10 +387,12 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
     if device != "cpu":
         polymer = polymer.to(device)
 
+    n_atoms = polymer.size()
+
     results = {
         "file": os.path.basename(filepath),
         "device": device,
-        "atoms": polymer.size(),
+        "atoms": n_atoms,
         "residues": polymer.size(ciffy.Scale.RESIDUE),
         "chains": polymer.size(ciffy.Scale.CHAIN),
     }
@@ -268,13 +401,24 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
 
     # Initialize internal coordinates by triggering first computation
     _ = polymer.dihedrals
-    results["n_atoms"] = polymer.size()
+    results["n_atoms"] = n_atoms
     results["n_components"] = polymer._geometry._tree.n_components
+
+    # Determine if we should run DOF benchmarks
+    run_dof = include_dof and n_atoms <= max_atoms_for_dof
+
+    # Only compute n_dof if we'll use it (triggers slow ring analysis)
+    if run_dof:
+        results["n_dof"] = polymer._geometry.n_dof
+    else:
+        results["n_dof"] = None
+        if include_dof and n_atoms > max_atoms_for_dof:
+            results["dof_skipped_reason"] = f"atoms > {max_atoms_for_dof}"
 
     # Cache original coordinates
     original_coords = polymer.coordinates.clone()
 
-    # Run benchmarks
+    # Run benchmarks - unconstrained (all dihedrals)
     results["to_internal"] = benchmark_to_internal(
         polymer, original_coords, sync, runs, include_backward=True
     )
@@ -294,6 +438,20 @@ def benchmark_device(filepath: str, device: str, runs: int = BENCHMARK_RUNS) -> 
         polymer, original_coords, sync, runs, include_backward=True
     )
 
+    # Run benchmarks - constrained (DOF with ring closure)
+    if run_dof:
+        polymer.detach()
+
+        results["coords_to_dof"] = benchmark_coords_to_dof(
+            polymer, original_coords, sync, runs, include_backward=True
+        )
+
+        polymer.detach()
+
+        results["dof_to_coords"] = benchmark_dof_to_coords(
+            polymer, original_coords, sync, runs, include_backward=True
+        )
+
     return results
 
 
@@ -309,9 +467,15 @@ def print_results(results: dict) -> None:
     print(f"  Atoms: {results['atoms']:,} | Residues: {results.get('residues', '?'):,} | "
           f"Chains: {results.get('chains', '?')} | "
           f"Components: {results.get('n_components', '?')}")
+    n_dof = results.get('n_dof')
+    if n_dof is not None:
+        print(f"  DOF: {n_dof:,} (independent dihedrals)")
+    elif "dof_skipped_reason" in results:
+        print(f"  DOF: skipped ({results['dof_skipped_reason']})")
     print()
 
-    # Print timing table
+    # Print timing table - Unconstrained (all dihedrals)
+    print("  Unconstrained (all dihedrals):")
     print(f"  {'Operation':<16} {'Forward':>14} {'Backward':>14}")
     print(f"  {'-'*16} {'-'*14} {'-'*14}")
 
@@ -326,12 +490,30 @@ def print_results(results: dict) -> None:
             bwd_str = f"{'N/A':>12}"
         print(f"  {bench.name:<16} {fwd_str:>14} {bwd_str:>14}")
 
+    # Print timing table - Constrained (DOF with ring closure)
+    if "coords_to_dof" in results or "dof_to_coords" in results:
+        print()
+        print("  Constrained (DOF with ring closure):")
+        print(f"  {'Operation':<16} {'Forward':>14} {'Backward':>14}")
+        print(f"  {'-'*16} {'-'*14} {'-'*14}")
+
+        for op_name in ["coords_to_dof", "dof_to_coords"]:
+            if op_name not in results:
+                continue
+            bench: BenchmarkResult = results[op_name]
+            fwd_str = f"{bench.forward.mean*1000:>10.2f}ms"
+            if bench.backward:
+                bwd_str = f"{bench.backward.mean*1000:>10.2f}ms"
+            else:
+                bwd_str = f"{'N/A':>12}"
+            print(f"  {bench.name:<16} {fwd_str:>14} {bwd_str:>14}")
+
     # Print throughput
     if "to_internal" in results and results["atoms"] > 0:
         atoms = results["atoms"]
         print()
         print(f"  Throughput (forward):")
-        for op_name in ["to_internal", "to_cartesian"]:
+        for op_name in ["to_internal", "to_cartesian", "coords_to_dof", "dof_to_coords"]:
             if op_name in results:
                 bench: BenchmarkResult = results[op_name]
                 ms = bench.forward.mean * 1000
@@ -339,7 +521,7 @@ def print_results(results: dict) -> None:
 
         # Backward throughput
         print(f"  Throughput (backward):")
-        for op_name in ["to_internal", "to_cartesian"]:
+        for op_name in ["to_internal", "to_cartesian", "coords_to_dof", "dof_to_coords"]:
             if op_name in results:
                 bench: BenchmarkResult = results[op_name]
                 if bench.backward:
@@ -369,9 +551,23 @@ def print_device_comparison(all_results: list[dict]) -> None:
         divider += f" {'-'*12}"
     print(divider)
 
-    # Forward pass rows
+    # Forward pass rows - Unconstrained
+    print("  Unconstrained:")
     for op_name in ["to_internal", "to_cartesian", "round_trip"]:
-        row = f"  {op_name:<16}"
+        row = f"    {op_name:<14}"
+        for r in all_results:
+            if op_name in r:
+                bench: BenchmarkResult = r[op_name]
+                ms = bench.forward.mean * 1000
+                row += f" {ms:>10.2f}ms"
+            else:
+                row += f" {'N/A':>12}"
+        print(row)
+
+    # Forward pass rows - Constrained
+    print("  Constrained (DOF):")
+    for op_name in ["coords_to_dof", "dof_to_coords"]:
+        row = f"    {op_name:<14}"
         for r in all_results:
             if op_name in r:
                 bench: BenchmarkResult = r[op_name]
@@ -385,8 +581,24 @@ def print_device_comparison(all_results: list[dict]) -> None:
     print()
     print("Backward Pass:")
     print(divider)
+    print("  Unconstrained:")
     for op_name in ["to_internal", "to_cartesian", "round_trip"]:
-        row = f"  {op_name:<16}"
+        row = f"    {op_name:<14}"
+        for r in all_results:
+            if op_name in r:
+                bench: BenchmarkResult = r[op_name]
+                if bench.backward:
+                    ms = bench.backward.mean * 1000
+                    row += f" {ms:>10.2f}ms"
+                else:
+                    row += f" {'N/A':>12}"
+            else:
+                row += f" {'N/A':>12}"
+        print(row)
+
+    print("  Constrained (DOF):")
+    for op_name in ["coords_to_dof", "dof_to_coords"]:
+        row = f"    {op_name:<14}"
         for r in all_results:
             if op_name in r:
                 bench: BenchmarkResult = r[op_name]
@@ -400,6 +612,7 @@ def print_device_comparison(all_results: list[dict]) -> None:
         print(row)
 
     # Speedup ratios (relative to CPU)
+    all_ops = ["to_internal", "to_cartesian", "round_trip", "coords_to_dof", "dof_to_coords"]
     cpu_results = next((r for r in all_results if r["device"] == "cpu"), None)
     if cpu_results:
         print()
@@ -408,7 +621,7 @@ def print_device_comparison(all_results: list[dict]) -> None:
             if r["device"] == "cpu":
                 continue
             print(f"    {r['device']}:")
-            for op_name in ["to_internal", "to_cartesian", "round_trip"]:
+            for op_name in all_ops:
                 if op_name not in r or op_name not in cpu_results:
                     continue
                 cpu_bench: BenchmarkResult = cpu_results[op_name]
@@ -463,6 +676,14 @@ if __name__ == "__main__":
         "--all", action="store_true",
         help="Benchmark all test structures"
     )
+    parser.add_argument(
+        "--no-dof", action="store_true",
+        help="Skip DOF benchmarks (ring closure)"
+    )
+    parser.add_argument(
+        "--max-atoms-dof", type=int, default=1000,
+        help="Max atoms for DOF benchmarks (default: 1000)"
+    )
     args = parser.parse_args()
 
     # Detect available devices
@@ -473,6 +694,8 @@ if __name__ == "__main__":
     print(f"ciffy version: {ciffy.__version__}")
     print(f"Benchmark runs: {args.runs}")
     print(f"Available devices: {', '.join(devices)}")
+    if not args.no_dof:
+        print(f"DOF benchmarks: enabled (max {args.max_atoms_dof} atoms)")
 
     # Determine which structures to benchmark
     if args.all:
@@ -496,7 +719,11 @@ if __name__ == "__main__":
         # Benchmark each device
         for device in devices:
             try:
-                results = benchmark_device(filepath, device, args.runs)
+                results = benchmark_device(
+                    filepath, device, args.runs,
+                    include_dof=not args.no_dof,
+                    max_atoms_for_dof=args.max_atoms_dof,
+                )
                 print_results(results)
                 all_results.append(results)
             except Exception as e:

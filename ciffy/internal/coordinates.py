@@ -26,7 +26,7 @@ from ..backend.dispatch import (
     TopologyInfo,
     build_bond_graph_csr,
 )
-from .tree import SpanningTree
+from .tree import SpanningTree, ReconstructionData
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -66,10 +66,7 @@ class MolecularGeometry:
         # Internal representation (private)
         '_internal',
         '_tree',  # SpanningTree for coordinate conversion
-
-        # Coordinate centering for float32 precision
-        '_center_offset',
-        '_fixed_coords',
+        '_recon_data',  # ReconstructionData bundle for NERF
 
         # Structural metadata
         '_topology',
@@ -77,8 +74,6 @@ class MolecularGeometry:
 
         # Constraint analysis (private)
         '_independent_dof',  # IndependentDOF result
-        '_csr_offsets',
-        '_csr_neighbors',
 
         # Dirty flags
         '_coords_dirty',  # True if coordinates need recomputation from dof
@@ -107,13 +102,10 @@ class MolecularGeometry:
         # Internal representation (computed lazily)
         self._internal: Array | None = None
         self._tree: SpanningTree | None = None
-        self._center_offset: np.ndarray | None = None
-        self._fixed_coords: np.ndarray | None = None
+        self._recon_data: ReconstructionData | None = None
 
         # Constraint analysis (computed lazily)
         self._independent_dof = None
-        self._csr_offsets = None
-        self._csr_neighbors = None
 
         # Dirty flags - initially coordinates are valid, dof is dirty
         self._coords_dirty = False
@@ -239,19 +231,17 @@ class MolecularGeometry:
         # Ensure internal coordinates are computed (builds tree)
         self._ensure_internal()
 
-        # Build bond graph CSR if not cached
-        if self._csr_offsets is None:
-            self._csr_offsets, self._csr_neighbors, _ = build_bond_graph_csr(self._topology)
+        # Build bond graph CSR for ring analysis
+        csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
 
         # Analyze constraints with default spec (all bonds and angles fixed)
         spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
-        zmatrix_indices = self._tree.to_zmatrix_indices()
 
         self._independent_dof = RingAnalyzer.analyze_constraints(
-            self._csr_offsets,
-            self._csr_neighbors,
+            csr_offsets,
+            csr_neighbors,
             self._get_n_atoms(),
-            zmatrix_indices,
+            self._tree.parent,
             spec,
         )
 
@@ -265,15 +255,13 @@ class MolecularGeometry:
     # ─────────────────────────────────────────────────────────────────────
 
     def _get_atom_to_row_mapping(self) -> np.ndarray:
-        """Build mapping from atom index to Z-matrix row index."""
-        zmatrix_indices = self._tree.to_zmatrix_indices()
+        """Build mapping from atom index to internal coordinate row index.
+
+        With parent-based internal coordinates, atom k's data is at row k,
+        so this is an identity mapping.
+        """
         n_atoms = self._get_n_atoms()
-        atom_to_row = np.full(n_atoms, -1, dtype=np.int64)
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            if atom < n_atoms:
-                atom_to_row[atom] = row
-        return atom_to_row
+        return np.arange(n_atoms, dtype=np.int64)
 
     def _get_dof_values(self) -> Array:
         """Get current values of independent DOF."""
@@ -325,14 +313,16 @@ class MolecularGeometry:
             if self._coordinates is None:
                 self._recompute_cartesian()
 
+            # Get reconstruction data for ring closure
+            recon = self._recon_data
             internal = solve_ring_closure(
                 internal=internal,
-                zmatrix_indices=self._tree.to_zmatrix_indices(),
+                parent=self._tree.parent,
                 coords=self._coordinates,
                 ring_constraints=self._independent_dof.ring_constraints,
                 tree=self._tree,
-                fixed_coords=self._fixed_coords,
-                offsets=self._center_offset,
+                fixed_coords=recon.fixed_coords if recon else None,
+                offsets=recon.center_offsets if recon else None,
                 max_iterations=100,
                 tolerance=0.01,
             )
@@ -356,28 +346,44 @@ class MolecularGeometry:
             if self._topology is None:
                 raise RuntimeError("Cannot compute internal without topology")
             csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
-            self._csr_offsets = csr_offsets
-            self._csr_neighbors = csr_neighbors
             self._tree = SpanningTree.from_bond_graph(csr_offsets, csr_neighbors, n_atoms)
 
-        # Convert to numpy for C backend
-        coords_np = to_numpy(coords).astype(np.float32)
+        # Check if we need autograd path (PyTorch tensor with requires_grad)
+        use_autograd = is_torch(coords) and coords.requires_grad
 
-        # Convert Cartesian to internal with per-component centering
-        internal, offsets = self._tree.cartesian_to_internal(coords_np, center=True)
-        self._center_offset = offsets
+        if use_autograd:
+            # Use autograd path via dispatch (bridge derives zmatrix from parent)
+            from ..backend.dispatch import cartesian_to_internal as dispatch_c2i
 
-        # Store fixed coords for NERF reconstruction
-        if offsets is not None:
-            self._fixed_coords = coords_np.copy()
-            for comp_idx in range(self._tree.n_components):
-                mask = self._tree.component_id == comp_idx
-                self._fixed_coords[mask] -= offsets[comp_idx]
+            # Compute internal coords with autograd (dispatch handles bridge)
+            internal = dispatch_c2i(coords, self._tree.parent)
+
+            # Create ReconstructionData bundle (no centering for autograd)
+            coords_np = to_numpy(coords.detach()).astype(np.float32)
+            self._recon_data = self._tree.get_reconstruction_data(coords_np, None)
+
+            self._internal = internal
         else:
-            self._fixed_coords = coords_np.copy()
+            # NumPy path: convert to numpy for C backend
+            coords_np = to_numpy(coords).astype(np.float32)
 
-        # Convert back to original backend
-        self._internal = to_backend(internal, like=coords)
+            # Convert Cartesian to internal with per-component centering
+            internal, center_offsets = self._tree.cartesian_to_internal(coords_np, center=True)
+
+            # Compute fixed coords (centered if centering was used)
+            if center_offsets is not None:
+                fixed_coords = coords_np.copy()
+                for comp_idx in range(self._tree.n_components):
+                    mask = self._tree.component_id == comp_idx
+                    fixed_coords[mask] -= center_offsets[comp_idx]
+            else:
+                fixed_coords = coords_np.copy()
+
+            # Create ReconstructionData bundle
+            self._recon_data = self._tree.get_reconstruction_data(fixed_coords, center_offsets)
+
+            # Convert back to original backend
+            self._internal = to_backend(internal, like=coords)
 
     def _recompute_cartesian(self) -> None:
         """Recompute Cartesian coordinates from internal."""
@@ -385,19 +391,45 @@ class MolecularGeometry:
             raise RuntimeError("Cannot reconstruct: internal is None")
         if self._tree is None:
             raise RuntimeError("Cannot reconstruct: tree is None")
-        if self._fixed_coords is None:
-            raise RuntimeError("Cannot reconstruct: fixed_coords is None")
+        if self._recon_data is None:
+            raise RuntimeError("Cannot reconstruct: recon_data is None")
 
         internal = self._internal
-        internal_np = to_numpy(internal).astype(np.float32)
+        recon = self._recon_data
 
-        # NERF reconstruction
-        coords = self._tree.internal_to_cartesian(
-            internal_np, self._fixed_coords, offsets=self._center_offset
-        )
+        # Check if we need autograd path (PyTorch tensor with requires_grad)
+        use_autograd = is_torch(internal) and internal.requires_grad
 
-        # Convert back to original backend
-        self._coordinates = to_backend(coords, like=internal)
+        if use_autograd:
+            # Use autograd path via dispatch (bridge derives zmatrix from parent)
+            from ..backend.dispatch import nerf_reconstruct as dispatch_nerf
+
+            # NERF reconstruction with autograd via dispatch
+            coords = dispatch_nerf(
+                parent=recon.parent,
+                levels=recon.levels,
+                internal=internal,
+                level_offsets=recon.level_offsets,
+                level_atoms=recon.level_atoms,
+                fixed_coords=recon.fixed_coords,
+                anchor_coords=recon.anchor_coords,
+                component_ids=recon.component_ids,
+                center_offsets=recon.center_offsets,
+            )
+
+            self._coordinates = coords
+        else:
+            # NumPy path
+            internal_np = to_numpy(internal).astype(np.float32)
+
+            # NERF reconstruction using ReconstructionData
+            coords = self._tree.internal_to_cartesian(
+                internal_np, recon.fixed_coords, offsets=recon.center_offsets
+            )
+
+            # Convert back to original backend
+            self._coordinates = to_backend(coords, like=internal)
+
         self._validate_coordinates()
 
     def _recompute_dof_from_coordinates(self) -> None:
@@ -434,11 +466,8 @@ class MolecularGeometry:
             new_manager._internal = to_numpy(self._internal)
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
-        new_manager._center_offset = self._center_offset
-        new_manager._fixed_coords = self._fixed_coords
+        new_manager._recon_data = self._recon_data
         new_manager._independent_dof = self._independent_dof
-        new_manager._csr_offsets = self._csr_offsets
-        new_manager._csr_neighbors = self._csr_neighbors
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -453,11 +482,8 @@ class MolecularGeometry:
             new_manager._internal = to_torch(self._internal)
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
-        new_manager._center_offset = self._center_offset
-        new_manager._fixed_coords = self._fixed_coords
+        new_manager._recon_data = self._recon_data
         new_manager._independent_dof = self._independent_dof
-        new_manager._csr_offsets = self._csr_offsets
-        new_manager._csr_neighbors = self._csr_neighbors
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -481,11 +507,8 @@ class MolecularGeometry:
             new_manager._internal = convert(self._internal)
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
-        new_manager._center_offset = self._center_offset
-        new_manager._fixed_coords = self._fixed_coords
+        new_manager._recon_data = self._recon_data
         new_manager._independent_dof = self._independent_dof
-        new_manager._csr_offsets = self._csr_offsets
-        new_manager._csr_neighbors = self._csr_neighbors
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -521,11 +544,8 @@ class MolecularGeometry:
         manager._bonds = None
         manager._internal = None
         manager._tree = None
-        manager._center_offset = None
-        manager._fixed_coords = None
+        manager._recon_data = None
         manager._independent_dof = None
-        manager._csr_offsets = None
-        manager._csr_neighbors = None
         manager._coords_dirty = False
         manager._dof_dirty = True
         return manager

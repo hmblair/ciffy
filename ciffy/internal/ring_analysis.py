@@ -298,13 +298,13 @@ class RingAnalyzer:
         csr_offsets: np.ndarray,
         csr_neighbors: np.ndarray,
         n_atoms: int,
-        zmatrix_indices: np.ndarray,
+        parent: np.ndarray,
         constraint_spec: ConstraintSpec,
     ) -> IndependentDOF:
         """
         Analyze constraints and compute independent DOF.
 
-        Given the bond graph, Z-matrix, and constraint specification,
+        Given the bond graph, parent array, and constraint specification,
         determines which dihedrals are independent vs dependent.
 
         For acyclic molecules: all N-3 dihedrals are independent.
@@ -315,7 +315,7 @@ class RingAnalyzer:
             csr_offsets: (N+1,) CSR offsets for bond graph.
             csr_neighbors: (E,) CSR neighbor indices.
             n_atoms: Total number of atoms.
-            zmatrix_indices: (N, 4) Z-matrix indices array.
+            parent: (N,) int64 parent array from spanning tree.
             constraint_spec: User-specified constraints.
 
         Returns:
@@ -345,26 +345,18 @@ class RingAnalyzer:
             )
             cycles.extend(extra_cycles)
 
-        # Build atom -> row mapping for Z-matrix
-        # With BFS ordering, atoms may not be in natural order
-        atom_to_row = {}
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            atom_to_row[atom] = row
+        # Compute tree depth (level) for each atom to determine valid dihedrals
+        # Atoms need level >= 3 to have valid dihedral (parent, grandparent, great-grandparent)
+        level = RingAnalyzer._compute_levels(parent, n_atoms)
 
-        # Start with dihedrals as independent for atoms at Z-matrix rows >= 3
-        # (first 3 rows don't have full dihedral definitions)
-        independent_mask = np.zeros(n_atoms, dtype=bool)
-        for atom_idx in range(n_atoms):
-            row = atom_to_row.get(atom_idx, -1)
-            if row >= 3:
-                independent_mask[atom_idx] = True
+        # Start with dihedrals as independent for atoms at level >= 3
+        independent_mask = level >= 3
 
         # Process each ring to mark dependent dihedrals
         ring_constraints = []
         for cycle in cycles:
             ring_constraint = RingAnalyzer._create_ring_constraint(
-                cycle, zmatrix_indices, independent_mask
+                cycle, parent, level, independent_mask
             )
             if ring_constraint is not None:
                 ring_constraints.append(ring_constraint)
@@ -375,10 +367,10 @@ class RingAnalyzer:
         # Detect fused rings (rings sharing atoms)
         ring_constraints = RingAnalyzer.detect_fused_rings(ring_constraints)
 
-        # Extract indices - atoms whose Z-matrix row >= 3 and are independent
+        # Extract indices - atoms at level >= 3 and are independent
         independent_indices = np.where(independent_mask)[0].astype(np.int64)
-        # Dependent = atoms with Z-matrix row >= 3 that are NOT independent
-        has_dihedral = np.array([atom_to_row.get(i, -1) >= 3 for i in range(n_atoms)])
+        # Dependent = atoms at level >= 3 that are NOT independent
+        has_dihedral = level >= 3
         dependent_indices = np.where(~independent_mask & has_dihedral)[0].astype(np.int64)
 
         return IndependentDOF(
@@ -390,6 +382,19 @@ class RingAnalyzer:
             n_independent=len(independent_indices),
             n_dependent=len(dependent_indices),
         )
+
+    @staticmethod
+    def _compute_levels(parent: np.ndarray, n_atoms: int) -> np.ndarray:
+        """Compute tree depth for each atom from parent array."""
+        level = np.zeros(n_atoms, dtype=np.int32)
+        for k in range(n_atoms):
+            depth = 0
+            curr = k
+            while parent[curr] >= 0:
+                depth += 1
+                curr = int(parent[curr])
+            level[k] = depth
+        return level
 
     @staticmethod
     def _find_cycles_from_extra_bonds(
@@ -479,44 +484,41 @@ class RingAnalyzer:
     @staticmethod
     def identify_closure_bond(
         cycle: np.ndarray,
-        zmatrix_indices: np.ndarray,
+        parent: np.ndarray,
     ) -> tuple[int, int]:
         """
-        Find which bond in the cycle is NOT represented in the Z-matrix.
+        Find which bond in the cycle is NOT represented in the spanning tree.
 
-        The Z-matrix is a tree: each atom has exactly one parent (dist_ref).
+        The parent array forms a tree: each atom has exactly one parent.
         In a ring, one bond must be "missing" from this tree - this is the
         closure bond that we need to satisfy through CCD.
 
         Args:
             cycle: (k,) atom indices forming the ring in order.
-            zmatrix_indices: (M, 4) Z-matrix indices [atom, dist_ref, ang_ref, dih_ref].
-                Note: With BFS Z-matrix, atoms may not be in natural order.
+            parent: (N,) int64 parent array.
 
         Returns:
             (atom_i, atom_j) - the closure bond endpoints (sorted).
 
         Example:
-            For cycle [4, 5, 6, 7, 8] where Z-matrix has:
-            - 5 → 4 (bond 4-5)
-            - 6 → 5 (bond 5-6)
-            - 7 → 6 (bond 6-7)
-            - 8 → 7 (bond 7-8)
-            The closure bond is (4, 8) since there's no 8→4 or 4→8 in Z-matrix.
+            For cycle [4, 5, 6, 7, 8] where parent has:
+            - parent[5] = 4 (bond 4-5)
+            - parent[6] = 5 (bond 5-6)
+            - parent[7] = 6 (bond 6-7)
+            - parent[8] = 7 (bond 7-8)
+            The closure bond is (4, 8) since there's no parent edge 8→4 or 4→8.
         """
         cycle_set = set(int(a) for a in cycle)
         k = len(cycle)
 
-        # Build set of Z-matrix bonds within the cycle
-        # Iterate through ALL Z-matrix entries to find bonds (handles BFS ordering)
-        zmatrix_bonds = set()
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            dist_ref = int(zmatrix_indices[row, 1])
-            if atom in cycle_set and dist_ref >= 0 and dist_ref in cycle_set:
-                # This is a Z-matrix bond within the cycle
-                bond = tuple(sorted([atom, dist_ref]))
-                zmatrix_bonds.add(bond)
+        # Build set of tree bonds within the cycle
+        tree_bonds = set()
+        for atom in cycle:
+            atom = int(atom)
+            p = int(parent[atom])
+            if p >= 0 and p in cycle_set:
+                bond = tuple(sorted([atom, p]))
+                tree_bonds.add(bond)
 
         # Check each adjacent pair in the cycle to find the missing bond
         for i in range(k):
@@ -524,16 +526,16 @@ class RingAnalyzer:
             atom_b = int(cycle[(i + 1) % k])  # Next atom (wraps around)
             bond = tuple(sorted([atom_a, atom_b]))
 
-            if bond not in zmatrix_bonds:
+            if bond not in tree_bonds:
                 return bond
 
-        # Fallback: if all bonds are in Z-matrix (shouldn't happen for rings),
+        # Fallback: if all bonds are in tree (shouldn't happen for rings),
         # use the bond between first and last atoms
         return (int(cycle[0]), int(cycle[-1]))
 
     @staticmethod
     def find_affected_atoms(
-        zmatrix_indices: np.ndarray,
+        parent: np.ndarray,
         dihedral_atom: int,
         n_atoms: int,
     ) -> set[int]:
@@ -541,49 +543,38 @@ class RingAnalyzer:
         Find all atoms whose position is affected by rotating a dihedral.
 
         When we rotate the dihedral at atom `dihedral_atom`, all atoms that
-        depend (directly or transitively) on this atom in the Z-matrix will move.
-
-        In NERF reconstruction, atom k's position depends on its dist_ref, ang_ref,
-        and dih_ref. If any of these move, atom k also moves.
+        are descendants of this atom in the parent tree will move.
 
         Args:
-            zmatrix_indices: (M, 4) Z-matrix indices [atom, dist_ref, ang_ref, dih_ref].
-                Note: With BFS Z-matrix, atoms may not be in natural order.
+            parent: (N,) int64 parent array.
             dihedral_atom: Atom index whose dihedral is being rotated.
             n_atoms: Total number of atoms.
 
         Returns:
             Set of atom indices affected by rotating this dihedral.
         """
-        # Find which row the dihedral_atom is at
-        dihedral_row = -1
-        for row in range(len(zmatrix_indices)):
-            if int(zmatrix_indices[row, 0]) == dihedral_atom:
-                dihedral_row = row
-                break
-
-        if dihedral_row < 0:
-            return set()  # Atom not found in Z-matrix
-
         affected = set()
         affected.add(dihedral_atom)
 
-        # Process Z-matrix rows AFTER the dihedral's row (in Z-matrix order)
-        # Atoms placed later may depend on the dihedral atom
-        for row in range(dihedral_row + 1, len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            # Check if any of this atom's references are in the affected set
-            for ref_idx in [1, 2, 3]:  # dist_ref, ang_ref, dih_ref
-                ref = int(zmatrix_indices[row, ref_idx])
-                if ref >= 0 and ref in affected:
-                    affected.add(atom)
+        # Find all descendants of dihedral_atom in the tree
+        # An atom is a descendant if its parent chain includes dihedral_atom
+        for k in range(n_atoms):
+            if k == dihedral_atom:
+                continue
+            # Trace parent chain to see if it includes dihedral_atom
+            curr = k
+            while curr >= 0:
+                if curr == dihedral_atom:
+                    affected.add(k)
                     break
+                curr = int(parent[curr])
 
         return affected
 
     @staticmethod
     def find_effective_dihedrals(
-        zmatrix_indices: np.ndarray,
+        parent: np.ndarray,
+        level: np.ndarray,
         closure_bond: tuple[int, int],
         cycle: np.ndarray,
         n_atoms: int,
@@ -596,8 +587,8 @@ class RingAnalyzer:
         (or neither moves), the distance between them doesn't change.
 
         Args:
-            zmatrix_indices: (M, 4) Z-matrix indices.
-                Note: With BFS Z-matrix, atoms may not be in natural order.
+            parent: (N,) int64 parent array.
+            level: (N,) int32 level array.
             closure_bond: (atom_i, atom_j) - the closure bond endpoints.
             cycle: (k,) atom indices forming the ring.
             n_atoms: Total number of atoms.
@@ -612,20 +603,13 @@ class RingAnalyzer:
         closure_i, closure_j = closure_bond
         effective = []
 
-        # Build atom -> row mapping for quick lookup
-        atom_to_row = {}
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            atom_to_row[atom] = row
-
         # Check each atom in the cycle
         for atom_idx in cycle:
             atom_idx = int(atom_idx)
-            row = atom_to_row.get(atom_idx, -1)
-            if row < 3:  # First 3 rows don't have full dihedral definitions
+            if level[atom_idx] < 3:  # Need level >= 3 for valid dihedral
                 continue
 
-            affected = RingAnalyzer.find_affected_atoms(zmatrix_indices, atom_idx, n_atoms)
+            affected = RingAnalyzer.find_affected_atoms(parent, atom_idx, n_atoms)
             i_affected = closure_i in affected
             j_affected = closure_j in affected
 
@@ -638,7 +622,8 @@ class RingAnalyzer:
     @staticmethod
     def _create_ring_constraint(
         cycle: np.ndarray,
-        zmatrix_indices: np.ndarray,
+        parent: np.ndarray,
+        level: np.ndarray,
         current_independent: np.ndarray,
     ) -> RingConstraint | None:
         """
@@ -654,7 +639,8 @@ class RingAnalyzer:
 
         Args:
             cycle: (k,) array of atom indices in ring.
-            zmatrix_indices: (N, 4) Z-matrix indices.
+            parent: (N,) int64 parent array.
+            level: (N,) int32 level array.
             current_independent: Current independent mask (may be updated).
 
         Returns:
@@ -664,14 +650,14 @@ class RingAnalyzer:
         if k < 4:
             return None  # Need at least 4 atoms for a dihedral constraint
 
-        n_atoms = len(zmatrix_indices)
+        n_atoms = len(parent)
 
-        # Find the closure bond (the one NOT in Z-matrix)
-        closure_bond = RingAnalyzer.identify_closure_bond(cycle, zmatrix_indices)
+        # Find the closure bond (the one NOT in tree)
+        closure_bond = RingAnalyzer.identify_closure_bond(cycle, parent)
 
         # Find effective dihedrals (those that move exactly one closure atom)
         effective = RingAnalyzer.find_effective_dihedrals(
-            zmatrix_indices, closure_bond, cycle, n_atoms
+            parent, level, closure_bond, cycle, n_atoms
         )
 
         # Filter to only currently independent dihedrals
@@ -684,19 +670,12 @@ class RingAnalyzer:
             # No effective dihedrals available
             return None
 
-        # Build atom -> row mapping
-        atom_to_row = {}
-        for row in range(len(zmatrix_indices)):
-            atom = int(zmatrix_indices[row, 0])
-            atom_to_row[atom] = row
-
         # Find all dihedrals in the cycle that are currently independent
         cycle_dihedrals = []
         for atom_idx in cycle:
             atom_idx = int(atom_idx)
-            row = atom_to_row.get(atom_idx, -1)
-            # Check Z-matrix row (not atom index) for dihedral validity
-            if row >= 3 and current_independent[atom_idx]:
+            # Check level (not row) for dihedral validity
+            if level[atom_idx] >= 3 and current_independent[atom_idx]:
                 cycle_dihedrals.append(atom_idx)
 
         if len(cycle_dihedrals) < 3:

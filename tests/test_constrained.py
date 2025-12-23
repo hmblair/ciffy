@@ -263,20 +263,13 @@ class TestCorrectnessRingDetection:
             edges = [(i, i + 1) for i in range(n_atoms - 1)]
             offsets, neighbors = _edges_to_csr(edges, n_atoms)
 
-            # Create mock Z-matrix indices (simplified)
-            zmatrix = np.zeros((n_atoms, 4), dtype=np.int64)
-            for i in range(n_atoms):
-                zmatrix[i, 0] = i
-                if i >= 1:
-                    zmatrix[i, 1] = i - 1
-                if i >= 2:
-                    zmatrix[i, 2] = i - 2
-                if i >= 3:
-                    zmatrix[i, 3] = i - 3
+            # Create parent array for linear chain (DFS from root 0)
+            # parent[i] = i-1 for i > 0, parent[0] = -1
+            parent = np.arange(-1, n_atoms - 1, dtype=np.int64)
 
             spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
             result = RingAnalyzer.analyze_constraints(
-                offsets, neighbors, n_atoms, zmatrix, spec
+                offsets, neighbors, n_atoms, parent, spec
             )
 
             expected_dof = n_atoms - 3
@@ -295,20 +288,14 @@ class TestCorrectnessRingDetection:
         edges = [(i, (i + 1) % n_atoms) for i in range(n_atoms)]
         offsets, neighbors = _edges_to_csr(edges, n_atoms)
 
-        # Create Z-matrix (ring structure)
-        zmatrix = np.zeros((n_atoms, 4), dtype=np.int64)
-        for i in range(n_atoms):
-            zmatrix[i, 0] = i
-            if i >= 1:
-                zmatrix[i, 1] = i - 1
-            if i >= 2:
-                zmatrix[i, 2] = i - 2
-            if i >= 3:
-                zmatrix[i, 3] = i - 3
+        # Create parent array for ring (DFS traversal from root 0)
+        # 0-1-2-3-4-5-0 ring: spanning tree goes 0->1->2->3->4->5
+        # Closure bond is 5-0
+        parent = np.arange(-1, n_atoms - 1, dtype=np.int64)
 
         spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
         result = RingAnalyzer.analyze_constraints(
-            offsets, neighbors, n_atoms, zmatrix, spec
+            offsets, neighbors, n_atoms, parent, spec
         )
 
         # 6-ring: 6-3 = 3 independent dihedrals (but first 3 atoms have no dihedrals)
@@ -559,19 +546,15 @@ class TestCorrectnessGeometryPreservation:
         topology = TopologyInfo.from_polymer(polymer)
         csr_offsets, csr_neighbors, _ = build_bond_graph_csr(topology)
 
-        # Get Z-matrix to identify parent-child bonds vs closure bonds
+        # Get parent array to identify parent-child bonds vs closure bonds
         # Access internal to ensure tree is built
         _ = manager.dihedrals
         tree = manager._tree
-        zmatrix = tree.to_zmatrix_indices()
+        parent = tree.parent
 
-        # Build map: atom -> its Z-matrix parent (dist_ref)
-        atom_to_parent = {}
-        for row in range(len(zmatrix)):
-            atom = int(zmatrix[row, 0])
-            dist_ref = int(zmatrix[row, 1])
-            if dist_ref >= 0:
-                atom_to_parent[atom] = dist_ref
+        # Build map: atom -> its parent (dist_ref)
+        # With parent-based storage, this is just the parent array
+        atom_to_parent = {i: int(parent[i]) for i in range(len(parent)) if parent[i] >= 0}
 
         # Get original coordinates to compute expected distances for closure bonds
         original_coords = manager.coordinates.copy()

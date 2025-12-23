@@ -60,6 +60,79 @@ class TestRingAnalysis:
         assert len(cycles) == 2, f"Expected 2 cycles for fused rings, got {len(cycles)}"
 
 
+class TestRingClassification:
+    """Tests for chemistry-based ring classification."""
+
+    def test_ribose_is_flexible(self):
+        """Ribose sugar (5-ring with 1 O + 4 C) should be classified as FLEXIBLE_5."""
+        from ciffy.internal.ring_analysis import classify_ring, RingType
+
+        # Simulated ribose: 5 atoms with 1 O and 4 C
+        ring_atoms = np.array([0, 1, 2, 3, 4], dtype=np.int64)
+        # Elements: O4', C1', C2', C3', C4' (typical ribose naming)
+        atom_elements = ['O', 'C', 'C', 'C', 'C']
+
+        classified = classify_ring(ring_atoms, atom_elements)
+        assert classified.ring_type == RingType.FLEXIBLE_5
+        assert classified.n_dof == 2
+
+    def test_proline_is_flexible(self):
+        """Proline ring (5-ring with 1 N + 4 C) should be classified as FLEXIBLE_5."""
+        from ciffy.internal.ring_analysis import classify_ring, RingType
+
+        ring_atoms = np.array([0, 1, 2, 3, 4], dtype=np.int64)
+        # Proline: N-Cα-Cβ-Cγ-Cδ
+        atom_elements = ['N', 'C', 'C', 'C', 'C']
+
+        classified = classify_ring(ring_atoms, atom_elements)
+        assert classified.ring_type == RingType.FLEXIBLE_5
+        assert classified.n_dof == 2
+
+    def test_pyrimidine_is_rigid(self):
+        """Pyrimidine base (6-ring with 2+ N) should be classified as RIGID_PLANAR."""
+        from ciffy.internal.ring_analysis import classify_ring, RingType
+
+        ring_atoms = np.array([0, 1, 2, 3, 4, 5], dtype=np.int64)
+        # Pyrimidine: N1-C2-N3-C4-C5-C6
+        atom_elements = ['N', 'C', 'N', 'C', 'C', 'C']
+
+        classified = classify_ring(ring_atoms, atom_elements)
+        assert classified.ring_type == RingType.RIGID_PLANAR
+        assert classified.n_dof == 0
+
+    def test_imidazole_is_rigid(self):
+        """Imidazole (5-ring with 2 N) should be classified as RIGID_PLANAR."""
+        from ciffy.internal.ring_analysis import classify_ring, RingType
+
+        ring_atoms = np.array([0, 1, 2, 3, 4], dtype=np.int64)
+        # Imidazole: C-N-C-N-C
+        atom_elements = ['C', 'N', 'C', 'N', 'C']
+
+        classified = classify_ring(ring_atoms, atom_elements)
+        assert classified.ring_type == RingType.RIGID_PLANAR
+        assert classified.n_dof == 0
+
+    def test_classify_rings_separates_flexible_rigid(self):
+        """classify_rings should separate flexible and rigid rings."""
+        from ciffy.internal.ring_analysis import classify_rings
+
+        # Two rings: one ribose-like (flexible), one imidazole-like (rigid)
+        cycles = [
+            np.array([0, 1, 2, 3, 4], dtype=np.int64),  # ribose
+            np.array([5, 6, 7, 8, 9], dtype=np.int64),  # imidazole
+        ]
+        # Elements for first ring: 1 O + 4 C (ribose)
+        # Elements for second ring: 2 N + 3 C (imidazole)
+        atom_elements = ['O', 'C', 'C', 'C', 'C',  # ring 1
+                         'C', 'N', 'C', 'N', 'C']  # ring 2
+
+        flexible, rigid = classify_rings(cycles, atom_elements)
+        assert len(flexible) == 1
+        assert len(rigid) == 1
+        assert flexible[0].n_dof == 2
+        assert rigid[0].n_dof == 0
+
+
 class TestConstraintSpec:
     """Tests for constraint specification."""
 

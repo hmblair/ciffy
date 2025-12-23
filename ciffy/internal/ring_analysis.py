@@ -3,6 +3,7 @@ Ring detection and degrees of freedom analysis for constrained internal coordina
 
 This module provides algorithms for:
 - Finding fundamental cycles (rings) in molecular bond graphs
+- Classifying rings by chemistry (ribose, purine, proline, etc.)
 - Computing independent vs dependent degrees of freedom
 - Analyzing ring closure constraints
 
@@ -14,14 +15,194 @@ and A angles, the remaining degrees of freedom are:
 For acyclic molecules (trees), this equals N-3 independent dihedrals.
 For molecules with rings, some dihedrals become dependent through ring
 closure constraints.
+
+Ring classification determines flexibility:
+- Flexible rings (ribose, proline): use Cremer-Pople puckering coordinates
+- Rigid rings (purine, pyrimidine, aromatics): planar, 0 internal DOF
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Literal
 
 import numpy as np
+
+
+# =============================================================================
+# Ring Classification
+# =============================================================================
+
+
+class RingType(Enum):
+    """
+    Classification of ring flexibility by chemistry.
+
+    Used to determine how to represent ring degrees of freedom:
+    - FLEXIBLE_5: 5-membered flexible ring (ribose, proline) → Cremer-Pople (q₂, φ₂)
+    - FLEXIBLE_6: 6-membered flexible ring (cyclohexane-like) → Cremer-Pople (Q, θ, φ)
+    - RIGID_PLANAR: Aromatic or base rings (purine, pyrimidine) → 0 internal DOF
+    - UNKNOWN: Fallback, treated as rigid
+    """
+    FLEXIBLE_5 = auto()
+    FLEXIBLE_6 = auto()
+    RIGID_PLANAR = auto()
+    UNKNOWN = auto()
+
+
+@dataclass
+class ClassifiedRing:
+    """
+    A ring with its chemistry-based type classification.
+
+    Attributes:
+        atoms: Atom indices in the ring, in cyclic order.
+        ring_type: Chemistry-based classification (flexible vs rigid).
+        n_dof: Number of puckering DOF (0 for rigid, 2 for 5-ring, 3 for 6-ring flexible).
+        element_pattern: Element composition for debugging.
+    """
+    atoms: np.ndarray
+    ring_type: RingType
+    n_dof: int
+    element_pattern: str = ""
+
+    def __repr__(self) -> str:
+        return (
+            f"ClassifiedRing(size={len(self.atoms)}, type={self.ring_type.name}, "
+            f"dof={self.n_dof}, pattern='{self.element_pattern}')"
+        )
+
+
+def classify_ring(
+    ring_atoms: np.ndarray,
+    atom_elements: list[str],
+    is_aromatic: np.ndarray | None = None,
+) -> ClassifiedRing:
+    """
+    Classify a ring by its chemistry.
+
+    Uses element composition and aromaticity to determine if a ring is:
+    - Flexible (ribose, proline): has puckering DOF
+    - Rigid (purine, pyrimidine, aromatics): planar, no internal DOF
+
+    Args:
+        ring_atoms: Atom indices in the ring (in order).
+        atom_elements: Element symbols for ALL atoms in the molecule.
+        is_aromatic: Optional (N,) bool array of aromaticity flags.
+
+    Returns:
+        ClassifiedRing with type and DOF count.
+
+    Classification rules:
+    1. 5-ring with 1 O + 4 C → ribose/deoxyribose → FLEXIBLE_5 (2 DOF)
+    2. 5-ring with 1 N + 4 C → proline → FLEXIBLE_5 (2 DOF)
+    3. Any ring marked aromatic → RIGID_PLANAR (0 DOF)
+    4. 5 or 6-ring with ≥2 N → purine/pyrimidine base → RIGID_PLANAR (0 DOF)
+    5. Default → RIGID_PLANAR (0 DOF)
+    """
+    k = len(ring_atoms)
+    elements = [atom_elements[int(i)] for i in ring_atoms]
+    element_counts = Counter(elements)
+    element_pattern = "".join(sorted(elements))
+
+    # Check for aromatic rings first (always rigid)
+    if is_aromatic is not None:
+        if all(is_aromatic[int(i)] for i in ring_atoms):
+            return ClassifiedRing(
+                atoms=ring_atoms,
+                ring_type=RingType.RIGID_PLANAR,
+                n_dof=0,
+                element_pattern=element_pattern,
+            )
+
+    # Check for ribose/deoxyribose: 5-ring with 1 O and 4 C (sugar ring)
+    if k == 5:
+        n_oxygen = element_counts.get('O', 0)
+        n_carbon = element_counts.get('C', 0)
+        if n_oxygen == 1 and n_carbon == 4:
+            return ClassifiedRing(
+                atoms=ring_atoms,
+                ring_type=RingType.FLEXIBLE_5,
+                n_dof=2,
+                element_pattern=element_pattern,
+            )
+
+    # Check for proline: 5-ring with 1 N and 4 C (pyrrolidine ring)
+    if k == 5:
+        n_nitrogen = element_counts.get('N', 0)
+        n_carbon = element_counts.get('C', 0)
+        if n_nitrogen == 1 and n_carbon == 4:
+            return ClassifiedRing(
+                atoms=ring_atoms,
+                ring_type=RingType.FLEXIBLE_5,
+                n_dof=2,
+                element_pattern=element_pattern,
+            )
+
+    # Check for purine/pyrimidine bases (N-rich heterocycles)
+    if k == 5 or k == 6:
+        n_nitrogen = element_counts.get('N', 0)
+        if n_nitrogen >= 2:
+            # Likely a nucleobase ring (imidazole, pyrimidine)
+            return ClassifiedRing(
+                atoms=ring_atoms,
+                ring_type=RingType.RIGID_PLANAR,
+                n_dof=0,
+                element_pattern=element_pattern,
+            )
+
+    # Check for 6-membered all-carbon ring (could be cyclohexane-like)
+    if k == 6:
+        n_carbon = element_counts.get('C', 0)
+        if n_carbon == 6:
+            # All-carbon 6-ring: could be aromatic (benzene) or flexible (cyclohexane)
+            # Without aromaticity info, default to rigid (conservative)
+            # In proteins, Phe/Tyr/Trp rings are aromatic, so this is usually correct
+            return ClassifiedRing(
+                atoms=ring_atoms,
+                ring_type=RingType.RIGID_PLANAR,
+                n_dof=0,
+                element_pattern=element_pattern,
+            )
+
+    # Default: treat as rigid (conservative)
+    return ClassifiedRing(
+        atoms=ring_atoms,
+        ring_type=RingType.RIGID_PLANAR,
+        n_dof=0,
+        element_pattern=element_pattern,
+    )
+
+
+def classify_rings(
+    cycles: list[np.ndarray],
+    atom_elements: list[str],
+    is_aromatic: np.ndarray | None = None,
+) -> tuple[list[ClassifiedRing], list[ClassifiedRing]]:
+    """
+    Classify all rings and separate into flexible vs rigid.
+
+    Args:
+        cycles: List of ring atom arrays from find_fundamental_cycles.
+        atom_elements: Element symbols for all atoms.
+        is_aromatic: Optional aromaticity flags.
+
+    Returns:
+        (flexible_rings, rigid_rings): Two lists of ClassifiedRing.
+    """
+    flexible = []
+    rigid = []
+
+    for cycle in cycles:
+        classified = classify_ring(cycle, atom_elements, is_aromatic)
+        if classified.ring_type in (RingType.FLEXIBLE_5, RingType.FLEXIBLE_6):
+            flexible.append(classified)
+        else:
+            rigid.append(classified)
+
+    return flexible, rigid
 
 
 @dataclass

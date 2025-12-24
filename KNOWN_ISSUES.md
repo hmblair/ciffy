@@ -153,3 +153,19 @@ This codebase has two algorithms for building Z-matrices:
 3. **Chi angle limitation is fundamental**
    - Ring structures cannot have internal dihedrals freely modified without rigid-body treatment
    - Would require treating nucleobases as rigid bodies with only glycosidic bond rotation
+
+---
+
+## ResidueFlow Module Limitations
+
+### Fixed Atom Set Requirement
+
+- **Severity**: LOW (by design)
+- **Location**: `ciffy/nn/residue_flow/`
+- **Issue**: The PCA + Flow architecture requires a fixed set of atoms. Missing atoms at inference time will cause failures.
+
+**Root Cause**: PCA projection matrix V has shape `(k, n_atoms×3)` - a fixed dimensionality. The model cannot handle variable-length inputs.
+
+**Current Mitigation**: The `min_coverage` parameter (default 0.9) filters training data to only include atoms present in ≥90% of structures, ensuring the trained model uses commonly-available atoms.
+
+**Potential Fix**: Replace PCA with a set-based encoder (e.g., PointNet-style shared MLP + pooling). The normalizing flow layers would remain unchanged - only the coordinate-to-latent projection needs modification. This would require more parameters for similar reconstruction quality since the model would need to learn permutation invariance rather than relying on canonical frame alignment.

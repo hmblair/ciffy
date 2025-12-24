@@ -270,3 +270,200 @@ class TestTrainPCAFlow:
         )
 
         assert info_12d["pca_rmsd"] < info_6d["pca_rmsd"]
+
+
+class TestExtendedResidueFlow:
+    """Tests for extended residue flow (with link transforms)."""
+
+    @pytest.fixture
+    def sample_extended_data(self):
+        """Generate synthetic extended representation data."""
+        np.random.seed(42)
+        n_samples = 100
+        n_atoms = 22  # Typical adenosine
+
+        # Create coordinates with some structure
+        base_coords = np.random.randn(n_atoms, 3)
+        noise = 0.1 * np.random.randn(n_samples, n_atoms, 3)
+        coords = base_coords + noise
+
+        # Create transforms with realistic values
+        # axis-angle: small rotations (~0.5 rad)
+        # translation: typical O3'-P distance (~1.6 Å)
+        axis_angles = 0.5 * np.random.randn(n_samples, 3)
+        translations = np.array([0.0, 0.0, 1.6]) + 0.1 * np.random.randn(n_samples, 3)
+        transforms = np.concatenate([axis_angles, translations], axis=1)
+
+        return coords.astype(np.float32), transforms.astype(np.float32)
+
+    def test_extended_pca_flow(self, sample_extended_data):
+        """Test PCAFlow with extended representation."""
+        coords, transforms = sample_extended_data
+        n_samples = len(coords)
+
+        # Create extended representation
+        coords_flat = coords.reshape(n_samples, -1)
+        extended = np.concatenate([coords_flat, transforms], axis=1)
+
+        # Compute PCA
+        V, mean, _, var_explained = compute_pca(extended, n_components=8)
+        V_t = torch.from_numpy(V).float()
+        mean_t = torch.from_numpy(mean).float()
+
+        flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32, bound=3.0)
+
+        # Extended dim = n_atoms*3 + 6
+        assert flow.d == 22 * 3 + 6
+
+        # Test encode-decode
+        X = torch.from_numpy(extended).float()
+        with torch.no_grad():
+            z = flow.encode(X)
+            recon = flow.decode(z)
+
+        # Flatten decoded output for comparison
+        recon_flat = recon.reshape(n_samples, -1)
+        rmsd = torch.sqrt(((X - recon_flat) ** 2).mean()).item()
+        assert rmsd < 0.5
+
+    def test_decode_extended_split(self, sample_extended_data):
+        """Test that decode_extended correctly splits coords and transforms."""
+        from ciffy.nn.residue_flow.model import ExtendedResidueFlowModel
+        from ciffy.biochemistry import Residue
+
+        coords, transforms = sample_extended_data
+        n_samples, n_atoms = coords.shape[:2]
+
+        # Create extended representation
+        coords_flat = coords.reshape(n_samples, -1)
+        extended = np.concatenate([coords_flat, transforms], axis=1)
+
+        # Create and train flow
+        V, mean, _, _ = compute_pca(extended, n_components=8)
+        V_t = torch.from_numpy(V).float()
+        mean_t = torch.from_numpy(mean).float()
+        flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32)
+
+        # Create model (use first 22 atoms of adenosine as placeholder)
+        model = ExtendedResidueFlowModel(
+            flow=flow,
+            residue=Residue.A,
+            atom_indices=list(Residue.A.index()[:n_atoms]),
+            n_atoms=n_atoms,
+            pca_rmsd=0.1,
+            var_explained=0.95,
+        )
+
+        # Test decode_extended
+        z = torch.randn(5, 8)
+        with torch.no_grad():
+            decoded_coords, decoded_transforms = model.decode_extended(z)
+
+        assert decoded_coords.shape == (5, n_atoms, 3)
+        assert decoded_transforms.shape == (5, 6)
+
+    def test_position_next_residue(self):
+        """Test positioning next residue using transform."""
+        from ciffy.nn.residue_flow.data import (
+            position_next_residue,
+            compute_link_frames,
+            compute_relative_transform,
+        )
+        from ciffy.biochemistry import Residue
+
+        np.random.seed(42)
+
+        # Create synthetic residue coordinates
+        # We need atoms: C4', C3', O3' for res1 and P, O5', OP1 for res2
+        atoms = list(Residue.A.index()[:22])  # Get atom indices
+        n_atoms = len(atoms)
+
+        # Random coordinates (just for testing transform logic)
+        coords1 = np.random.randn(n_atoms, 3).astype(np.float32)
+        coords2 = np.random.randn(n_atoms, 3).astype(np.float32)
+
+        # Compute transform from coords1 to coords2
+        o1, R1, o2, R2 = compute_link_frames(coords1, coords2, atoms, Residue.A)
+        transform = compute_relative_transform(o1, R1, o2, R2)
+
+        # Position coords2 using the transform (should recover original positions)
+        coords2_positioned = position_next_residue(
+            coords1, coords2, transform, atoms, Residue.A
+        )
+
+        # The P atom should be at the target position
+        atom_to_col = {a: i for i, a in enumerate(atoms)}
+        p_idx = atom_to_col[Residue.A.P.value]
+
+        # P position from original coords2 after positioning
+        p_positioned = coords2_positioned[p_idx]
+        # Target P position from transform
+        o1_new, R1_new, _, _ = compute_link_frames(coords1, coords2, atoms, Residue.A)
+        from ciffy.nn.residue_flow.data import apply_relative_transform
+        target_p, _ = apply_relative_transform(o1_new, R1_new, transform)
+
+        np.testing.assert_allclose(p_positioned, target_p, atol=1e-5)
+
+    def test_link_transform_stats(self, sample_extended_data):
+        """Test that transform statistics are reasonable."""
+        _, transforms = sample_extended_data
+
+        # axis-angle magnitude (rotation angle)
+        rot_angles = np.linalg.norm(transforms[:, :3], axis=1)
+        mean_rot = np.rad2deg(rot_angles.mean())
+
+        # translation magnitude
+        trans_dist = np.linalg.norm(transforms[:, 3:], axis=1)
+        mean_trans = trans_dist.mean()
+
+        # Should be reasonable values
+        assert 0 < mean_rot < 180  # Degrees
+        assert 0.5 < mean_trans < 5.0  # Angstroms (typical O3'-P is ~1.6)
+
+    def test_save_load_extended_model(self, sample_extended_data):
+        """Test save/load for ExtendedResidueFlowModel."""
+        from ciffy.nn.residue_flow.model import ExtendedResidueFlowModel
+        from ciffy.biochemistry import Residue
+
+        coords, transforms = sample_extended_data
+        n_samples, n_atoms = coords.shape[:2]
+
+        # Create extended representation
+        coords_flat = coords.reshape(n_samples, -1)
+        extended = np.concatenate([coords_flat, transforms], axis=1)
+
+        # Create and train flow
+        V, mean, _, var_explained = compute_pca(extended, n_components=8)
+        V_t = torch.from_numpy(V).float()
+        mean_t = torch.from_numpy(mean).float()
+        flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32)
+
+        # Create model
+        model = ExtendedResidueFlowModel(
+            flow=flow,
+            residue=Residue.A,
+            atom_indices=list(Residue.A.index()[:n_atoms]),
+            n_atoms=n_atoms,
+            pca_rmsd=0.1,
+            var_explained=float(var_explained[-1]),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = tmpdir + "/extended_model"
+            model.save(save_path)
+
+            # Load and verify
+            loaded = ExtendedResidueFlowModel.load(save_path)
+
+            assert loaded.residue.name == "A"
+            assert loaded.n_atoms == n_atoms
+            assert loaded.latent_dim == 8
+
+            # Verify outputs match
+            z_test = torch.randn(3, 8)
+            with torch.no_grad():
+                orig_coords, orig_trans = model.decode_extended(z_test)
+                loaded_coords, loaded_trans = loaded.decode_extended(z_test)
+
+            assert torch.allclose(orig_coords, loaded_coords, atol=1e-6)
+            assert torch.allclose(orig_trans, loaded_trans, atol=1e-6)

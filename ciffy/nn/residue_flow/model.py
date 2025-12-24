@@ -473,25 +473,45 @@ class ResidueFlowModel:
         """Whether the decoder is JIT-compiled."""
         return self._jit_decoder is not None
 
-    def encode(self, coords: np.ndarray | torch.Tensor) -> torch.Tensor:
+    def encode(self, coords: torch.Tensor) -> torch.Tensor:
         """Encode coordinates to latent space."""
-        if isinstance(coords, np.ndarray):
-            coords = torch.from_numpy(coords).float()
-        coords = coords.to(self.flow.V.device)
+        n_atoms = len(self._atom_indices)
+        if coords.shape[-2:] != (n_atoms, 3) and coords.shape[-1] != n_atoms * 3:
+            raise ValueError(
+                f"Expected coords shape (..., {n_atoms}, 3) or (..., {n_atoms * 3}), "
+                f"got {tuple(coords.shape)}"
+            )
+        if coords.device != self.flow.V.device:
+            raise ValueError(
+                f"Input on {coords.device}, model on {self.flow.V.device}. "
+                f"Use coords.to('{self.flow.V.device}') first."
+            )
         return self.flow.encode(coords)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """Decode latent vectors to coordinates."""
+        # Validate shape
+        if z.shape[-1] != self.flow.k:
+            raise ValueError(
+                f"Expected latent dim {self.flow.k}, got {z.shape[-1]}"
+            )
+
+        # Validate device
+        if z.device != self.flow.V.device:
+            raise ValueError(
+                f"Input on {z.device}, model on {self.flow.V.device}. "
+                f"Use z.to('{self.flow.V.device}') first."
+            )
+
         if self._jit_decoder is not None:
             return self._jit_decoder(z)
         return self.flow.decode(z)
 
-    def sample(self, n_samples: int) -> np.ndarray:
+    def sample(self, n_samples: int) -> torch.Tensor:
         """Sample new conformations."""
         with torch.no_grad():
             z = torch.randn(n_samples, self.flow.k, device=self.flow.V.device)
-            samples = self.decode(z)
-        return samples.cpu().numpy()
+            return self.decode(z)
 
     def save(self, path: str | Path) -> None:
         """
@@ -515,7 +535,9 @@ class ResidueFlowModel:
         save_file(tensors, path / "tensors.safetensors")
 
         # Save metadata as JSON (convert numpy types to Python types)
+        import ciffy
         config = {
+            "version": ciffy.__version__,
             "residue_name": self.residue.name,
             "atom_indices": [int(x) for x in self._atom_indices],
             "n_layers": len(self.flow.layers) // 2,

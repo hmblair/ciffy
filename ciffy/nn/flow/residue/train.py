@@ -13,7 +13,7 @@ from .data import compute_pca
 
 
 def train_pca_flow(
-    coords: np.ndarray,
+    data: np.ndarray,
     latent_dim: int = 12,
     n_layers: int = 8,
     hidden_dim: int = 64,
@@ -25,10 +25,14 @@ def train_pca_flow(
     verbose: bool = True,
 ) -> tuple[PCAFlow, dict]:
     """
-    Train a PCA + Flow model on coordinate data.
+    Train a PCA + Flow model on data.
+
+    This is the core training function used by ResidueFlowModel.from_structures().
+    It handles PCA computation, model creation, and the training loop.
 
     Args:
-        coords: (n_instances, n_atoms, 3) coordinate array.
+        data: (n_instances, d) flat data array. Can be coordinates, extended
+              representations, or any flat feature vectors.
         latent_dim: Number of PCA components / latent dimensions.
         n_layers: Number of flow layers.
         hidden_dim: Hidden dimension in coupling networks.
@@ -43,20 +47,24 @@ def train_pca_flow(
         flow: Trained PCAFlow model.
         info: Dictionary with training info (pca_rmsd, var_explained, losses).
     """
-    n_instances = len(coords)
+    # Handle 3D input (n_instances, n_atoms, 3) by flattening
+    if data.ndim == 3:
+        data = data.reshape(len(data), -1)
+
+    n_instances = len(data)
+    batch_size = min(batch_size, n_instances)
 
     # Compute PCA
-    V, mean, singular_values, var_explained = compute_pca(coords, n_components=latent_dim)
+    V, mean, singular_values, var_explained = compute_pca(data, n_components=latent_dim)
     pca_var = var_explained[latent_dim - 1]
 
     # Compute PCA reconstruction RMSD
-    coords_flat = coords.reshape(n_instances, -1)
-    pca_coords = (coords_flat - mean) @ V.T
-    recon_flat = pca_coords @ V + mean
-    pca_rmsd = float(np.sqrt(((coords_flat - recon_flat) ** 2).mean()))
+    pca_coords = (data - mean) @ V.T
+    recon = pca_coords @ V + mean
+    pca_rmsd = float(np.sqrt(((data - recon) ** 2).mean()))
 
     if verbose:
-        print(f"PCA: {latent_dim} dims, {pca_var*100:.1f}% var, RMSD={pca_rmsd:.4f}Å")
+        print(f"PCA: {latent_dim} dims, {pca_var*100:.1f}% var, RMSD={pca_rmsd:.4f}")
 
     # Create model
     V_tensor = torch.from_numpy(V).float()
@@ -69,7 +77,7 @@ def train_pca_flow(
     ).to(device)
 
     # Prepare data
-    X = torch.from_numpy(coords).float().to(device)
+    X = torch.from_numpy(data).float().to(device)
 
     # Training
     optimizer = optim.Adam(flow.parameters(), lr=lr)
@@ -77,15 +85,12 @@ def train_pca_flow(
     losses = []
 
     for epoch in range(n_epochs):
-        # Shuffle data
         perm = torch.randperm(n_instances)
-
         epoch_loss = 0.0
         n_batches = 0
 
         for i in range(0, n_instances, batch_size):
-            batch_idx = perm[i:i + batch_size]
-            batch = X[batch_idx]
+            batch = X[perm[i:i + batch_size]]
 
             optimizer.zero_grad()
             loss = -flow.log_prob(batch).mean()
@@ -102,15 +107,14 @@ def train_pca_flow(
         if verbose and (epoch + 1) % 50 == 0:
             print(f"  Epoch {epoch+1:3d}: loss={avg_loss:.4f}")
 
-    # Compute final reconstruction RMSD (should match PCA RMSD)
+    # Compute final reconstruction RMSD
     flow.eval()
     with torch.no_grad():
-        X_flat = X.reshape(n_instances, -1)
-        X_recon = flow.decode(flow.encode(X))  # Returns (N, d) flat
-        flow_rmsd = float(torch.sqrt(((X_recon - X_flat) ** 2).mean()).item())
+        X_recon = flow.decode(flow.encode(X))
+        flow_rmsd = float(torch.sqrt(((X_recon - X) ** 2).mean()).item())
 
     if verbose:
-        print(f"Final: RMSD={flow_rmsd:.4f}Å (PCA={pca_rmsd:.4f}Å)")
+        print(f"Final: RMSD={flow_rmsd:.4f} (PCA={pca_rmsd:.4f})")
 
     info = {
         "pca_rmsd": pca_rmsd,

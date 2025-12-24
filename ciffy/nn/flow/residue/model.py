@@ -437,8 +437,8 @@ class ResidueFlowModel:
         Returns:
             Trained ResidueFlowModel.
         """
-        from .data import extract_residues_with_links, compute_pca
-        import torch.optim as optim
+        from .data import extract_residues_with_links
+        from .train import train_pca_flow
 
         if config is None:
             config = ResidueFlowConfig()
@@ -456,81 +456,32 @@ class ResidueFlowModel:
         if verbose:
             print(f"Dataset: {n_instances} instances, {n_atoms} atoms")
 
-        # Create extended representation
+        # Create extended representation (coords + SE(3) transforms)
         coords_flat = coords.reshape(n_instances, -1)
         extended = np.concatenate([coords_flat, transforms], axis=1)
-        extended_dim = extended.shape[1]
 
         if verbose:
-            print(f"Extended representation: {extended_dim} dims ({n_atoms}*3 + 6)")
+            print(f"Extended representation: {extended.shape[1]} dims ({n_atoms}*3 + 6)")
 
-        # Compute PCA
-        V, mean, singular_values, var_explained = compute_pca(
-            extended.reshape(n_instances, -1, 1)[:, :, 0],  # Reshape for compute_pca
-            n_components=config.latent_dim,
-        )
-        pca_var = var_explained[config.latent_dim - 1]
-
-        # Compute PCA reconstruction RMSD
-        pca_coords = (extended - mean) @ V.T
-        recon = pca_coords @ V + mean
-        pca_rmsd = float(np.sqrt(((extended - recon) ** 2).mean()))
-
-        if verbose:
-            print(f"PCA: {config.latent_dim} dims, {pca_var*100:.1f}% var, RMSD={pca_rmsd:.4f}")
-
-        # Create model
-        V_tensor = torch.from_numpy(V).float()
-        mean_tensor = torch.from_numpy(mean).float()
-        flow = PCAFlow(
-            V_tensor, mean_tensor,
+        # Train flow model
+        flow, info = train_pca_flow(
+            extended,
+            latent_dim=config.latent_dim,
             n_layers=config.n_layers,
             hidden_dim=config.hidden_dim,
             bound=config.bound,
-        ).to(device)
-
-        # Training
-        X = torch.from_numpy(extended).float().to(device)
-        optimizer = optim.Adam(flow.parameters(), lr=1e-3)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
-
-        batch_size = min(256, n_instances)
-
-        for epoch in range(n_epochs):
-            perm = torch.randperm(n_instances)
-            epoch_loss = 0.0
-            n_batches = 0
-
-            for i in range(0, n_instances, batch_size):
-                batch = X[perm[i:i + batch_size]]
-                optimizer.zero_grad()
-                loss = -flow.log_prob(batch).mean()
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-                n_batches += 1
-
-            scheduler.step()
-
-            if verbose and (epoch + 1) % 50 == 0:
-                print(f"  Epoch {epoch+1:3d}: loss={epoch_loss/n_batches:.4f}")
-
-        flow.eval()
-
-        if verbose:
-            with torch.no_grad():
-                recon = flow.decode(flow.encode(X))
-                recon_flat = recon.reshape(n_instances, -1)
-                flow_rmsd = float(torch.sqrt(((recon_flat - X) ** 2).mean()).item())
-            print(f"Final: RMSD={flow_rmsd:.4f} (PCA={pca_rmsd:.4f})")
+            n_epochs=n_epochs,
+            device=device,
+            verbose=verbose,
+        )
 
         return cls(
             flow=flow,
             residue=residue,
             atom_indices=atoms,
             n_atoms=n_atoms,
-            pca_rmsd=pca_rmsd,
-            var_explained=pca_var,
+            pca_rmsd=info["pca_rmsd"],
+            var_explained=info["var_explained"],
         )
 
     def encode(
@@ -747,29 +698,60 @@ class ResidueFlowModel:
         n_angles = len(angle_targets)
 
         def newton_step(coords: torch.Tensor) -> torch.Tensor:
-            """Single Newton step. coords: (n_atoms, 3)"""
+            """Single vectorized Newton step. coords: (n_atoms, 3)"""
+            device = coords.device
             n_constraints = n_bonds + n_angles
-            residuals = torch.zeros(n_constraints, device=coords.device)
-            J = torch.zeros(n_constraints, n_atoms * 3, device=coords.device)
+            residuals = torch.zeros(n_constraints, device=device)
+            J = torch.zeros(n_constraints, n_atoms * 3, device=device)
 
-            # Bond length constraints
-            for idx, (a1, a2) in enumerate(bond_pairs_t):
-                diff = coords[a2] - coords[a1]
-                length = torch.norm(diff)
-                residuals[idx] = length - bond_targets_t[idx].to(coords.device)
-                unit = diff / (length + 1e-8)
-                J[idx, a1*3:a1*3+3] = -unit
-                J[idx, a2*3:a2*3+3] = unit
+            # Move constraint data to device (once per step, cached would be better)
+            bond_pairs_d = bond_pairs_t.to(device)
+            bond_targets_d = bond_targets_t.to(device)
 
-            # Angle constraints: (x_i - x_j) · (x_k - x_j) = target
-            for idx, (i, j, k) in enumerate(angle_triples_t):
-                v1 = coords[i] - coords[j]
-                v2 = coords[k] - coords[j]
-                dot_product = torch.dot(v1, v2)
-                residuals[n_bonds + idx] = dot_product - angle_targets_t[idx].to(coords.device)
-                J[n_bonds + idx, i*3:i*3+3] = v2
-                J[n_bonds + idx, k*3:k*3+3] = v1
-                J[n_bonds + idx, j*3:j*3+3] = -v1 - v2
+            # Vectorized bond length constraints
+            if n_bonds > 0:
+                a1_idx = bond_pairs_d[:, 0]  # (n_bonds,)
+                a2_idx = bond_pairs_d[:, 1]  # (n_bonds,)
+                diff = coords[a2_idx] - coords[a1_idx]  # (n_bonds, 3)
+                lengths = torch.norm(diff, dim=1)  # (n_bonds,)
+                residuals[:n_bonds] = lengths - bond_targets_d
+                units = diff / (lengths.unsqueeze(1) + 1e-8)  # (n_bonds, 3)
+
+                # Build Jacobian for bonds (fully vectorized)
+                bond_idx = torch.arange(n_bonds, device=device)
+                # Create flat indices for all 3 dimensions at once
+                dims = torch.arange(3, device=device)
+                row_idx = bond_idx.unsqueeze(1).expand(-1, 3).reshape(-1)  # [0,0,0,1,1,1,...]
+                col_a1 = (a1_idx.unsqueeze(1) * 3 + dims).reshape(-1)  # [a1*3, a1*3+1, a1*3+2, ...]
+                col_a2 = (a2_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+                J[row_idx, col_a1] = -units.reshape(-1)
+                J[row_idx, col_a2] = units.reshape(-1)
+
+            # Vectorized angle constraints
+            if n_angles > 0:
+                angle_triples_d = angle_triples_t.to(device)
+                angle_targets_d = angle_targets_t.to(device)
+
+                i_idx = angle_triples_d[:, 0]  # (n_angles,)
+                j_idx = angle_triples_d[:, 1]  # (n_angles,)
+                k_idx = angle_triples_d[:, 2]  # (n_angles,)
+
+                v1 = coords[i_idx] - coords[j_idx]  # (n_angles, 3)
+                v2 = coords[k_idx] - coords[j_idx]  # (n_angles, 3)
+                dot_products = (v1 * v2).sum(dim=1)  # (n_angles,)
+                residuals[n_bonds:] = dot_products - angle_targets_d
+
+                # Jacobian for angles (fully vectorized)
+                # d(v1·v2)/d(x_i)=v2, d/d(x_k)=v1, d/d(x_j)=-v1-v2
+                angle_idx = torch.arange(n_angles, device=device) + n_bonds
+                dims = torch.arange(3, device=device)
+                row_idx = angle_idx.unsqueeze(1).expand(-1, 3).reshape(-1)
+                col_i = (i_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+                col_j = (j_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+                col_k = (k_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+                J[row_idx, col_i] = v2.reshape(-1)
+                J[row_idx, col_k] = v1.reshape(-1)
+                J[row_idx, col_j] = (-v1 - v2).reshape(-1)
 
             # Gauss-Newton: dx = -J^T @ (J @ J^T)^{-1} @ residuals
             JJT = J @ J.T

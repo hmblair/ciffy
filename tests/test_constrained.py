@@ -269,9 +269,9 @@ class TestMolecularGeometry:
 
         # Access internal state to check rings
         manager._ensure_constraint_analysis()
-        n_rings = len(manager._independent_dof.ring_constraints)
-        # Adenine has fused 5+6 rings = 2 fundamental cycles
-        assert n_rings >= 0, "Ring detection should work"
+        n_closures = manager._constraint_system.closures.n_closures
+        # Adenine has fused 5+6 rings = 2 fundamental cycles = 2 closures
+        assert n_closures >= 0, "Ring detection should work"
 
     def test_repr(self):
         """Test string representation."""
@@ -387,11 +387,11 @@ class TestCorrectnessRingDetection:
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        n_rings = len(manager._independent_dof.ring_constraints)
+        n_closures = manager._constraint_system.closures.n_closures
         # Purine base has 2 fundamental cycles (5-ring + 6-ring fused)
         # Plus ribose sugar (5-ring)
-        # So we expect at least 2-3 rings detected
-        assert n_rings >= 2, f"Adenine should have at least 2 rings, found {n_rings}"
+        # So we expect at least 2-3 closures detected
+        assert n_closures >= 2, f"Adenine should have at least 2 closures, found {n_closures}"
 
 
 class TestCorrectnessGeometryPreservation:
@@ -679,7 +679,7 @@ class TestCorrectnessDOFReduction:
         manager._ensure_constraint_analysis()
 
         # With rings, we should have fewer independent DOF
-        if len(manager._independent_dof.ring_constraints) > 0:
+        if manager._constraint_system.closures.n_closures > 0:
             assert manager.n_dof < max_possible_dihedrals, (
                 f"With rings, DOF ({manager.n_dof}) should be less than "
                 f"max possible ({max_possible_dihedrals})"
@@ -860,35 +860,35 @@ class TestCorrectnessNucleicAcid:
             manager = polymer._geometry
             manager._ensure_constraint_analysis()
 
-            n_rings = len(manager._independent_dof.ring_constraints)
-            assert n_rings >= 1, (
-                f"Nucleotide '{seq}' should have at least 1 ring (sugar), "
-                f"found {n_rings}"
+            n_closures = manager._constraint_system.closures.n_closures
+            assert n_closures >= 1, (
+                f"Nucleotide '{seq}' should have at least 1 closure (ring), "
+                f"found {n_closures}"
             )
 
     def test_purine_has_more_rings_than_pyrimidine(self):
         """Purines (A, G) have fused rings, pyrimidines (C, U) have single base ring."""
         from ciffy import from_sequence
 
-        # Purines have 2 fused base rings + sugar = 3 rings
-        # Pyrimidines have 1 base ring + sugar = 2 rings
+        # Purines have 2 fused base rings + sugar = 3 closures
+        # Pyrimidines have 1 base ring + sugar = 2 closures
         for purine in ["a", "g"]:
             polymer = from_sequence(purine)
             manager = polymer._geometry
             manager._ensure_constraint_analysis()
-            purine_rings = len(manager._independent_dof.ring_constraints)
+            purine_closures = manager._constraint_system.closures.n_closures
 
             for pyrimidine in ["c", "u"]:
                 polymer = from_sequence(pyrimidine)
                 manager = polymer._geometry
                 manager._ensure_constraint_analysis()
-                pyrimidine_rings = len(manager._independent_dof.ring_constraints)
+                pyrimidine_closures = manager._constraint_system.closures.n_closures
 
-                # Purine should have at least as many rings as pyrimidine
+                # Purine should have at least as many closures as pyrimidine
                 # (in practice, should have 1 more due to fused ring)
-                assert purine_rings >= pyrimidine_rings, (
-                    f"Purine '{purine}' ({purine_rings} rings) should have >= rings "
-                    f"than pyrimidine '{pyrimidine}' ({pyrimidine_rings} rings)"
+                assert purine_closures >= pyrimidine_closures, (
+                    f"Purine '{purine}' ({purine_closures} closures) should have >= closures "
+                    f"than pyrimidine '{pyrimidine}' ({pyrimidine_closures} closures)"
                 )
 
     def test_rna_geometry_preserved(self):
@@ -924,20 +924,18 @@ class TestUnifiedDOF:
     of angles.
     """
 
-    def test_flexible_rings_detected(self):
-        """Flexible rings should be detected in RNA."""
+    def test_rings_detected_as_closures(self):
+        """Rings should be detected as closure constraints in RNA."""
         from ciffy import from_sequence
 
         polymer = from_sequence("a")  # Adenine has ribose
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        # Should have at least one flexible ring (ribose)
-        assert hasattr(manager, '_flexible_rings')
-        # Ribose should be classified as flexible
-        n_flexible = len(manager._flexible_rings)
-        # At least expect the ribose sugar
-        assert n_flexible >= 1, f"Expected at least 1 flexible ring, got {n_flexible}"
+        # Rings are detected as closure bonds (non-tree edges)
+        n_closures = manager._constraint_system.closures.n_closures
+        # Adenine has purine (2 fused rings) + ribose = at least 2-3 closures
+        assert n_closures >= 1, f"Expected at least 1 closure (ring), got {n_closures}"
 
     def test_n_dof_equals_independent_dihedrals(self):
         """n_dof should equal number of independent dihedrals (no separate puckering)."""
@@ -949,7 +947,9 @@ class TestUnifiedDOF:
 
         # Unified DOF: n_dof equals number of independent dihedrals
         # Puckering is NOT a separate DOF - it emerges from ring closure
-        assert manager.n_dof == manager._independent_dof.n_independent
+        n_torsions = (manager._constraint_system.level >= 3).sum()
+        n_dependent = len(manager._constraint_system.closures.dependent_idx)
+        assert manager.n_dof == n_torsions - n_dependent
 
     def test_dof_getter_returns_dihedrals(self):
         """DOF getter should return only independent dihedrals."""
@@ -1053,46 +1053,54 @@ class TestUnifiedDOF:
             f"Bond lengths changed by {max_diff:.6f} A after DOF change"
         )
 
-    def test_multiple_nucleotides_flexible_rings(self):
-        """Multiple nucleotides should have multiple flexible rings."""
+    def test_multiple_nucleotides_have_closures(self):
+        """Multiple nucleotides should have multiple ring closures."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu")
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        # Should have multiple flexible rings (one ribose per nucleotide)
-        n_flexible = len(manager._flexible_rings)
-        # Expect at least 1 per nucleotide
-        assert n_flexible >= 4, f"Expected at least 4 flexible rings, got {n_flexible}"
+        # Should have multiple closures (rings create non-tree edges)
+        n_closures = manager._constraint_system.closures.n_closures
+        # Each nucleotide has sugar + base rings
+        assert n_closures >= 4, f"Expected at least 4 closures, got {n_closures}"
 
     def test_puckering_can_be_analyzed(self):
         """Ring puckering can be computed from coordinates for analysis."""
         from ciffy import from_sequence
         from ciffy.internal.puckering import compute_puckering_5ring
+        from ciffy.internal.ring_analysis import find_cycles
+        from ciffy.backend.graph import build_bond_graph_from_topology
 
         polymer = from_sequence("a")
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        if len(manager._flexible_rings) == 0:
-            pytest.skip("No flexible rings to analyze")
-
+        # Find 5-membered rings in the structure
         coords = manager.coordinates
-        for ring in manager._flexible_rings:
-            if len(ring.atoms) == 5:
-                ring_coords = coords[ring.atoms]
-                q2, phi2 = compute_puckering_5ring(ring_coords)
-                # Check puckering is reasonable
-                assert q2 >= 0, f"q2 should be non-negative, got {q2}"
-                assert -np.pi <= phi2 <= np.pi, f"phi2 out of range: {phi2}"
+        edges, _ = build_bond_graph_from_topology(manager._topology)
+
+        # Find cycles using ring analysis
+        cycles = find_cycles(edges, len(coords))
+        rings_5 = [c for c in cycles if len(c) == 5]
+
+        if len(rings_5) == 0:
+            pytest.skip("No 5-membered rings to analyze")
+
+        for ring_atoms in rings_5:
+            ring_coords = coords[ring_atoms]
+            q2, phi2 = compute_puckering_5ring(ring_coords)
+            # Check puckering is reasonable
+            assert q2 >= 0, f"q2 should be non-negative, got {q2}"
+            assert -np.pi <= phi2 <= np.pi, f"phi2 out of range: {phi2}"
 
 
 class TestUnifiedDOFEdgeCases:
     """Edge cases for unified DOF system."""
 
-    def test_protein_no_flexible_rings(self):
-        """Proteins without proline should have no flexible rings."""
+    def test_protein_no_closures(self):
+        """Proteins without rings should have no closure constraints."""
         from ciffy import from_sequence
 
         # Alanine has no rings
@@ -1100,37 +1108,36 @@ class TestUnifiedDOFEdgeCases:
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        # All rings should be rigid (if any)
-        n_flexible = len(manager._flexible_rings)
+        # Linear chain has no ring closures
+        n_closures = manager._constraint_system.closures.n_closures
         # Pure alanine backbone has no rings
-        assert n_flexible == 0, f"Expected 0 flexible rings in poly-A, got {n_flexible}"
+        assert n_closures == 0, f"Expected 0 closures in poly-A, got {n_closures}"
 
-    def test_protein_with_proline(self):
-        """Proline should be classified as flexible."""
+    def test_protein_with_proline_has_closures(self):
+        """Proline rings should create closure constraints."""
         from ciffy import from_sequence
 
         polymer = from_sequence("APAP")  # Alternating Ala-Pro
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        # Should have flexible rings from proline
-        n_flexible = len(manager._flexible_rings)
-        # 2 prolines, so at least 2 flexible rings
-        assert n_flexible >= 2, f"Expected at least 2 flexible rings from proline, got {n_flexible}"
+        # Should have closures from proline rings
+        n_closures = manager._constraint_system.closures.n_closures
+        # 2 prolines, so at least 2 closures
+        assert n_closures >= 2, f"Expected at least 2 closures from proline, got {n_closures}"
 
-    def test_dna_has_flexible_sugars(self):
-        """DNA nucleotides should have deoxyribose classified as flexible."""
+    def test_dna_has_ring_closures(self):
+        """DNA nucleotides should have ring closure constraints."""
         from ciffy import from_sequence
 
         # DNA uses lowercase with 't' (e.g., 'at' for adenine-thymine)
-        # RNA uses lowercase with 'u' (e.g., 'au')
         polymer = from_sequence("at")  # DNA adenine-thymine
         manager = polymer._geometry
         manager._ensure_constraint_analysis()
 
-        # DNA has deoxyribose (5-ring with 1O 4C) - should be flexible
-        n_flexible = len(manager._flexible_rings)
-        assert n_flexible >= 1, f"Expected at least 1 flexible ring in DNA, got {n_flexible}"
+        # DNA has deoxyribose + base rings
+        n_closures = manager._constraint_system.closures.n_closures
+        assert n_closures >= 1, f"Expected at least 1 closure in DNA, got {n_closures}"
 
     def test_extreme_dihedral_values(self):
         """Setting extreme dihedral values should not crash."""

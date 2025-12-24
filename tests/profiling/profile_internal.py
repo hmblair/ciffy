@@ -517,7 +517,8 @@ def print_results(results: dict) -> None:
             if op_name in results:
                 bench: BenchmarkResult = results[op_name]
                 ms = bench.forward.mean * 1000
-                print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
+                if ms > 0:
+                    print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
 
         # Backward throughput
         print(f"  Throughput (backward):")
@@ -526,7 +527,8 @@ def print_results(results: dict) -> None:
                 bench: BenchmarkResult = results[op_name]
                 if bench.backward:
                     ms = bench.backward.mean * 1000
-                    print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
+                    if ms > 0:
+                        print(f"    {op_name:<16} {atoms / ms * 1000:>12,.0f} atoms/sec")
 
 
 def print_device_comparison(all_results: list[dict]) -> None:

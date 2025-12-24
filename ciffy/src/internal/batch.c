@@ -811,30 +811,69 @@ void batch_nerf_reconstruct_parent(
     const int32_t *component_id,
     int n_components
 ) {
-    /* Process level by level (sequential between levels, parallel within) */
-    for (int lvl = 0; lvl < n_levels; lvl++) {
-        int start = level_offsets[lvl];
-        int end = level_offsets[lvl + 1];
+    /* Component-parallel NERF (when component_id is available):
+     * Each component is independent, so we can process them in parallel.
+     * Within each component, atoms must be processed in level order.
+     *
+     * This eliminates ~n_levels barrier synchronizations (e.g., 2000+
+     * barriers for long chains) in favor of n_components parallel tasks.
+     *
+     * Falls back to level-parallel when component_id is NULL. */
 
-        /* Atoms at same level can be placed in parallel */
+    if (component_id != NULL && n_components > 0) {
+        /* Component-parallel: O(n_atoms * n_components) comparisons, 1 barrier */
 #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(dynamic)
 #endif
-        for (int i = start; i < end; i++) {
-            int64_t k = level_atoms[i];
-            int32_t atom_level = level[k];
+        for (int comp = 0; comp < n_components; comp++) {
+            /* Scan level_atoms (sorted by level) and process atoms in our component.
+             * This ensures correct level order within each component. */
+            for (size_t i = 0; i < n_atoms; i++) {
+                int64_t k = level_atoms[i];
 
-            /* Atoms at levels 0-2 have insufficient parent chain for full NERF.
-             * Copy from fixed_coords if provided, else use anchor-based placement. */
-            if (atom_level < 3 && fixed_coords != NULL) {
-                coords[k * 3 + 0] = fixed_coords[k * 3 + 0];
-                coords[k * 3 + 1] = fixed_coords[k * 3 + 1];
-                coords[k * 3 + 2] = fixed_coords[k * 3 + 2];
-            } else {
-                nerf_place_atom_parent(
-                    coords, n_atoms, parent, internal, k,
-                    anchor_coords, component_id, n_components
-                );
+                /* Skip atoms not in this component */
+                if (component_id[k] != comp) {
+                    continue;
+                }
+
+                int32_t atom_level = level[k];
+
+                /* Atoms at levels 0-2: copy from fixed_coords */
+                if (atom_level < 3 && fixed_coords != NULL) {
+                    coords[k * 3 + 0] = fixed_coords[k * 3 + 0];
+                    coords[k * 3 + 1] = fixed_coords[k * 3 + 1];
+                    coords[k * 3 + 2] = fixed_coords[k * 3 + 2];
+                } else {
+                    nerf_place_atom_parent(
+                        coords, n_atoms, parent, internal, k,
+                        anchor_coords, component_id, n_components
+                    );
+                }
+            }
+        }
+    } else {
+        /* Level-parallel fallback: O(n_atoms) work, O(n_levels) barriers */
+        for (int lvl = 0; lvl < n_levels; lvl++) {
+            int start = level_offsets[lvl];
+            int end = level_offsets[lvl + 1];
+
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+#endif
+            for (int i = start; i < end; i++) {
+                int64_t k = level_atoms[i];
+                int32_t atom_level = level[k];
+
+                if (atom_level < 3 && fixed_coords != NULL) {
+                    coords[k * 3 + 0] = fixed_coords[k * 3 + 0];
+                    coords[k * 3 + 1] = fixed_coords[k * 3 + 1];
+                    coords[k * 3 + 2] = fixed_coords[k * 3 + 2];
+                } else {
+                    nerf_place_atom_parent(
+                        coords, n_atoms, parent, internal, k,
+                        anchor_coords, component_id, n_components
+                    );
+                }
             }
         }
     }

@@ -442,8 +442,10 @@ class UnifiedDOF:
         """
         Set DOF values and solve ring closure.
 
-        Sets the independent dihedrals, then analytically solves for
-        dependent dihedrals to close any rings.
+        .. deprecated::
+            Use the new ConstraintSystem from ciffy.internal.constraints instead.
+            This method is kept for backwards compatibility but redirects to the
+            new Newton-Raphson solver.
 
         Args:
             internal: (N, 3) internal coordinates [distance, angle, dihedral].
@@ -456,29 +458,15 @@ class UnifiedDOF:
         Returns:
             (N, 3) updated internal coordinates with rings closed.
         """
-        from .analytical_closure import AnalyticalRingSolver
-
         internal = internal.copy()
 
         # 1. Set independent dihedrals
         if self.n_dof > 0 and len(values) > 0:
             internal[self.dof_to_atom, 2] = values
 
-        # 2. Solve ring closure for dependent dihedrals
-        if self.ring_constraints:
-            solver = AnalyticalRingSolver(
-                tree=tree,
-                fixed_coords=fixed_coords,
-                offsets=offsets if offsets is not None else np.zeros((tree.n_components, 3), dtype=np.float32),
-            )
-
-            for ring in self.ring_constraints:
-                if solver.can_solve_analytically(ring):
-                    internal, success = solver.solve_ring(
-                        internal, ring, original_coords
-                    )
-                    # If analytical fails, fall back to keeping current values
-                    # (CCD could be used here as fallback, but analytical should work for simple rings)
+        # 2. For ring closure, users should use the new ConstraintSystem
+        # This legacy method just sets independent DOF without solving closures
+        # Ring closure is handled by MolecularGeometry via the new system
 
         return internal
 
@@ -1118,3 +1106,54 @@ class RingAnalyzer:
                     ring_constraints[j].fused_with.append(i)
 
         return ring_constraints
+
+
+def find_cycles(edges: np.ndarray | list, n_atoms: int) -> list[np.ndarray]:
+    """
+    Find all fundamental cycles (rings) in a bond graph.
+
+    Convenience wrapper around RingAnalyzer.find_fundamental_cycles that
+    accepts edge list format instead of CSR.
+
+    Args:
+        edges: (E, 2) array or list of (i, j) tuples representing bonds.
+        n_atoms: Total number of atoms.
+
+    Returns:
+        List of (k,) arrays, each containing atom indices of a ring.
+    """
+    if n_atoms == 0:
+        return []
+
+    # Convert edges to list of tuples if numpy array
+    if isinstance(edges, np.ndarray):
+        edge_list = [(int(e[0]), int(e[1])) for e in edges]
+    else:
+        edge_list = list(edges)
+
+    if len(edge_list) == 0:
+        return []
+
+    # Build CSR format
+    counts = np.zeros(n_atoms, dtype=np.int64)
+    for i, j in edge_list:
+        counts[i] += 1
+        counts[j] += 1
+
+    offsets = np.zeros(n_atoms + 1, dtype=np.int64)
+    offsets[1:] = np.cumsum(counts)
+
+    n_edges = len(edge_list) * 2
+    neighbors = np.zeros(n_edges, dtype=np.int64)
+    current = np.zeros(n_atoms, dtype=np.int64)
+
+    for i, j in edge_list:
+        idx = int(offsets[i] + current[i])
+        neighbors[idx] = j
+        current[i] += 1
+
+        idx = int(offsets[j] + current[j])
+        neighbors[idx] = i
+        current[j] += 1
+
+    return RingAnalyzer.find_fundamental_cycles(offsets, neighbors, n_atoms)

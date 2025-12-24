@@ -28,10 +28,28 @@ Note: Dihedral type definitions and atom mappings are now in:
 """
 
 from .coordinates import MolecularGeometry
+
+# New unified constraint system
+from .constraints import ClosureConstraints, ConstraintSystem, solve_closure
+from .jacobian import discover_dof, compute_jacobian_analytical
+from .differentiable import DOFToCartesian, dof_to_cartesian, TORCH_AVAILABLE
+
+# Legacy exports (kept for backwards compatibility)
 from .ring_analysis import ConstraintSpec, IndependentDOF, RingConstraint, RingAnalyzer
 
 __all__ = [
+    # Main class
     "MolecularGeometry",
+    # New constraint system
+    "ClosureConstraints",
+    "ConstraintSystem",
+    "solve_closure",
+    "discover_dof",
+    "compute_jacobian_analytical",
+    "DOFToCartesian",
+    "dof_to_cartesian",
+    "TORCH_AVAILABLE",
+    # Legacy (deprecated - will be removed in future version)
     "ConstraintSpec",
     "IndependentDOF",
     "RingConstraint",

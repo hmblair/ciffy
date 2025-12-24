@@ -589,11 +589,12 @@ class SpanningTree:
         level_atoms = np.argsort(self.level).astype(np.int64)
         n_levels = int(self.level.max()) + 1 if self.n_atoms > 0 else 0
 
-        # Reconstruct
+        # Reconstruct with component-parallel processing
         coords = _nerf_reconstruct_parent(
             self.parent, self.level, internal,
             level_offsets, level_atoms, n_levels,
             fixed_coords,
+            self.component_id,  # Enables component-parallel NERF
         )
 
         # Add per-component offsets if provided

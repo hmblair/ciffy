@@ -1554,7 +1554,7 @@ PyObject *py_cartesian_to_internal_parent(PyObject *self, PyObject *args) {
  *
  * Python signature:
  *   _nerf_reconstruct_parent(parent, level, internal, level_offsets,
- *       level_atoms, n_levels, fixed_coords=None) -> coords
+ *       level_atoms, n_levels, fixed_coords=None, component_id=None) -> coords
  *
  * Args:
  *   parent: (N,) int64 array where parent[k] is parent of atom k.
@@ -1565,6 +1565,9 @@ PyObject *py_cartesian_to_internal_parent(PyObject *self, PyObject *args) {
  *   n_levels: int, number of levels.
  *   fixed_coords: Optional (N, 3) float32 original coordinates. Atoms at
  *                 levels 0-2 are copied from here (required for accuracy).
+ *   component_id: Optional (N,) int32 component index for each atom. If
+ *                 provided, enables component-parallel processing which is
+ *                 faster when n_components << n_levels.
  *
  * Returns:
  *   coords: (N, 3) float32 array of reconstructed coordinates.
@@ -1576,11 +1579,12 @@ PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args) {
     PyObject *py_level_offsets, *py_level_atoms;
     int n_levels;
     PyObject *py_fixed_coords = Py_None;
+    PyObject *py_component_id = Py_None;
 
-    if (!PyArg_ParseTuple(args, "OOOOOi|O",
+    if (!PyArg_ParseTuple(args, "OOOOOi|OO",
                           &py_parent, &py_level, &py_internal,
                           &py_level_offsets, &py_level_atoms, &n_levels,
-                          &py_fixed_coords)) {
+                          &py_fixed_coords, &py_component_id)) {
         return NULL;
     }
 
@@ -1658,6 +1662,40 @@ PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args) {
         }
     }
 
+    /* Parse optional component_id for component-parallel processing */
+    PyArrayObject *component_id_arr = NULL;
+    int n_components = 0;
+    if (py_component_id != Py_None) {
+        component_id_arr = require_array_1d(py_component_id, NPY_INT32, "component_id");
+        if (component_id_arr == NULL) {
+            Py_XDECREF(fixed_arr);
+            Py_DECREF(parent_arr);
+            Py_DECREF(level_arr);
+            Py_DECREF(internal_arr);
+            Py_DECREF(level_offsets_arr);
+            Py_DECREF(level_atoms_arr);
+            return NULL;
+        }
+        if (PyArray_DIM(component_id_arr, 0) != n_atoms) {
+            PyErr_SetString(PyExc_ValueError, "component_id must have same length as parent");
+            Py_DECREF(component_id_arr);
+            Py_XDECREF(fixed_arr);
+            Py_DECREF(parent_arr);
+            Py_DECREF(level_arr);
+            Py_DECREF(internal_arr);
+            Py_DECREF(level_offsets_arr);
+            Py_DECREF(level_atoms_arr);
+            return NULL;
+        }
+        /* Count components (max component_id + 1) */
+        const int32_t *comp_data = (const int32_t *)PyArray_DATA(component_id_arr);
+        for (npy_intp i = 0; i < n_atoms; i++) {
+            if (comp_data[i] >= n_components) {
+                n_components = comp_data[i] + 1;
+            }
+        }
+    }
+
     /* Get data pointers */
     const int64_t *parent = (const int64_t *)PyArray_DATA(parent_arr);
     const int32_t *level = (const int32_t *)PyArray_DATA(level_arr);
@@ -1665,6 +1703,7 @@ PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args) {
     const int32_t *level_offsets = (const int32_t *)PyArray_DATA(level_offsets_arr);
     const int64_t *level_atoms = (const int64_t *)PyArray_DATA(level_atoms_arr);
     const float *fixed_coords = fixed_arr ? (const float *)PyArray_DATA(fixed_arr) : NULL;
+    const int32_t *component_id = component_id_arr ? (const int32_t *)PyArray_DATA(component_id_arr) : NULL;
 
     /* Allocate output */
     npy_intp dims[2] = {n_atoms, 3};
@@ -1687,10 +1726,12 @@ PyObject *py_nerf_reconstruct_parent(PyObject *self, PyObject *args) {
         parent, level, internal,
         level_offsets, level_atoms, n_levels,
         fixed_coords,
-        NULL, NULL, 0  /* No anchor-based placement */
+        NULL,  /* No anchor coords */
+        component_id, n_components  /* Component-parallel if available */
     );
 
     /* Clean up */
+    Py_XDECREF(component_id_arr);
     Py_XDECREF(fixed_arr);
     Py_DECREF(parent_arr);
     Py_DECREF(level_arr);

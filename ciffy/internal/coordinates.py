@@ -4,6 +4,15 @@ Coordinate management with dual representation and constraint support.
 Provides the MolecularGeometry class that manages both Cartesian and internal
 coordinate representations with lazy evaluation, automatic conversion, and
 constraint-aware minimal DOF representation.
+
+The constraint system uses a unified architecture:
+1. Spanning tree handles implicit constraints (bond lengths/angles)
+2. Non-tree edges (closures) create explicit constraints
+3. Jacobian analysis discovers independent DOF automatically
+4. Newton-Raphson solves for dependent torsions
+
+This eliminates chemistry-specific ring classification - all constraints
+are geometric, enabling arbitrary bond/angle constraints.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from ..backend.dispatch import (
     build_bond_graph_csr,
 )
 from .tree import SpanningTree, ReconstructionData
+from .constraints import ConstraintSystem, solve_closure
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,10 +82,8 @@ class MolecularGeometry:
         '_topology',
         '_bonds',  # Cached (B, 2) bond array
 
-        # Constraint analysis (private)
-        '_independent_dof',  # IndependentDOF result
-        '_flexible_rings',   # ClassifiedRing list (for puckering analysis)
-        '_rigid_rings',      # ClassifiedRing list (planar)
+        # Constraint analysis (private) - unified system
+        '_constraint_system',  # ConstraintSystem with DOF discovery
 
         # Dirty flags
         '_coords_dirty',  # True if coordinates need recomputation from dof
@@ -106,10 +114,8 @@ class MolecularGeometry:
         self._tree: SpanningTree | None = None
         self._recon_data: ReconstructionData | None = None
 
-        # Constraint analysis (computed lazily)
-        self._independent_dof = None
-        self._flexible_rings = None
-        self._rigid_rings = None
+        # Constraint analysis (computed lazily) - unified system
+        self._constraint_system: ConstraintSystem | None = None
 
         # Dirty flags - initially coordinates are valid, dof is dirty
         self._coords_dirty = False
@@ -187,7 +193,7 @@ class MolecularGeometry:
         closure - it is not a separate DOF.
         """
         self._ensure_constraint_analysis()
-        return self._independent_dof.n_independent
+        return self._constraint_system.n_dof
 
     @property
     def bonds(self) -> np.ndarray:
@@ -223,8 +229,8 @@ class MolecularGeometry:
         """Return string representation."""
         n_atoms = self._get_n_atoms()
         # Avoid triggering constraint analysis just for repr
-        if self._independent_dof is not None:
-            n_dof = self._independent_dof.n_independent
+        if self._constraint_system is not None:
+            n_dof = self._constraint_system.n_dof
             return f"MolecularGeometry(n_atoms={n_atoms}, n_dof={n_dof})"
         return f"MolecularGeometry(n_atoms={n_atoms})"
 
@@ -233,53 +239,47 @@ class MolecularGeometry:
     # ─────────────────────────────────────────────────────────────────────
 
     def _ensure_constraint_analysis(self) -> None:
-        """Ensure constraint analysis has been performed."""
-        if self._independent_dof is not None:
+        """
+        Ensure constraint analysis has been performed.
+
+        Uses the unified ConstraintSystem which:
+        1. Builds spanning tree from bond graph
+        2. Identifies non-tree edges (closure bonds)
+        3. Computes Jacobian to discover independent DOF
+        4. No chemistry-specific ring classification needed
+        """
+        if self._constraint_system is not None:
             return
 
-        from .ring_analysis import ConstraintSpec, RingAnalyzer, classify_rings
+        # Ensure we have coordinates for constraint analysis
+        if self._coordinates is None:
+            raise RuntimeError("Cannot analyze constraints without coordinates")
 
-        # Ensure internal coordinates are computed (builds tree)
-        self._ensure_internal()
+        coords_np = to_numpy(self._coordinates).astype(np.float32)
 
-        # Build bond graph CSR for ring analysis
-        csr_offsets, csr_neighbors, _ = build_bond_graph_csr(self._topology)
-
-        # Analyze constraints with default spec (all bonds and angles fixed)
-        spec = ConstraintSpec(fixed_bonds="all", fixed_angles="all")
-
-        self._independent_dof = RingAnalyzer.analyze_constraints(
-            csr_offsets,
-            csr_neighbors,
-            self._get_n_atoms(),
-            self._tree.parent,
-            spec,
+        # Build constraint system from topology
+        self._constraint_system = ConstraintSystem.from_topology(
+            topology=self._topology,
+            coords=coords_np,
+            fix_covalent_bonds=True,
+            fix_covalent_angles=True,
         )
 
-        # Classify rings by chemistry (flexible vs rigid)
-        if self._independent_dof.ring_constraints:
-            # Get element symbols from topology
-            if hasattr(self._topology, 'elements') and self._topology.elements is not None:
-                from ..biochemistry import ELEMENT_NAMES
-                # Convert element indices to symbols
-                atom_elements = [
-                    ELEMENT_NAMES.get(int(e), 'X') for e in self._topology.elements
-                ]
+        # Update tree and recon_data to match constraint system
+        self._tree = SpanningTree(
+            parent=self._constraint_system.parent,
+            level=self._constraint_system.level,
+            component_id=np.zeros(self._constraint_system.n_atoms, dtype=np.int32),
+            n_components=1,
+        )
 
-                # Find fundamental cycles for classification
-                cycles = RingAnalyzer.find_fundamental_cycles(
-                    csr_offsets, csr_neighbors, self._get_n_atoms()
-                )
-                self._flexible_rings, self._rigid_rings = classify_rings(
-                    cycles, atom_elements
-                )
-            else:
-                # No element info, treat all as rigid
-                self._flexible_rings = []
-                self._rigid_rings = []
-        else:
-            self._flexible_rings = []
-            self._rigid_rings = []
+        # Update internal coordinates if they exist
+        if self._internal is not None:
+            # Use base_internal from constraint system
+            self._internal = to_backend(
+                self._constraint_system.base_internal,
+                like=self._coordinates
+            )
 
     def _ensure_internal(self) -> None:
         """Ensure internal coordinates are computed."""
@@ -309,15 +309,24 @@ class MolecularGeometry:
         self._ensure_constraint_analysis()
         self._ensure_internal()
 
-        atom_indices = self._independent_dof.independent_indices
-        if len(atom_indices) == 0:
+        system = self._constraint_system
+
+        # Get all torsion atoms (level >= 3) that are not dependent
+        all_torsions = np.where(system.level >= 3)[0]
+        dependent_set = set(system.closures.dependent_idx.tolist())
+
+        # Collect independent torsion values
+        dof_list = []
+        for atom in all_torsions:
+            if atom not in dependent_set:
+                dof_list.append(atom)
+
+        if len(dof_list) == 0:
             return empty(0, like=self._internal)
 
         # Extract independent dihedrals
-        all_dihedrals = self._internal[:, 2]
-        atom_to_row = self._get_atom_to_row_mapping()
-        row_indices = atom_to_row[atom_indices]
-        dihedral_dof = all_dihedrals[row_indices]
+        indices = np.array(dof_list, dtype=np.int64)
+        dihedral_dof = self._internal[indices, 2]
 
         return clone(dihedral_dof)
 
@@ -326,51 +335,46 @@ class MolecularGeometry:
         Set independent DOF (all torsions) and solve ring closure.
 
         All DOF are generalized torsions (angles in radians). After setting
-        independent dihedrals, ring closure analytically computes dependent
-        dihedrals to maintain ring geometry.
+        independent dihedrals, Newton-Raphson solves for dependent dihedrals
+        to satisfy ring closure constraints.
         """
         self._ensure_constraint_analysis()
         self._ensure_internal()
 
-        new_values_np = to_numpy(new_values)
-        n_dof = len(self._independent_dof.independent_indices)
+        system = self._constraint_system
+        new_values_np = to_numpy(new_values).astype(np.float32)
+
+        # Get all torsion atoms that are independent
+        all_torsions = np.where(system.level >= 3)[0]
+        dependent_set = set(system.closures.dependent_idx.tolist())
+
+        independent_atoms = [a for a in all_torsions if a not in dependent_set]
+        n_dof = len(independent_atoms)
 
         if len(new_values_np) != n_dof:
             raise ValueError(f"Expected {n_dof} DOF values, got {len(new_values_np)}")
 
-        atom_indices = self._independent_dof.independent_indices
-        if len(atom_indices) == 0:
+        if n_dof == 0:
             return
 
+        # Get internal as numpy for modification
+        internal_np = to_numpy(self._internal).astype(np.float32).copy()
+
         # Set independent dihedrals
-        atom_to_row = self._get_atom_to_row_mapping()
-        row_indices = atom_to_row[atom_indices]
+        for i, atom in enumerate(independent_atoms):
+            internal_np[atom, 2] = new_values_np[i]
 
-        internal = clone(self._internal)
-        internal[row_indices, 2] = to_backend(new_values_np, like=self._internal)
-
-        # Solve ring closure for dependent dihedrals
-        if self._independent_dof.ring_constraints:
-            from .ring_closure import solve_ring_closure
-
-            # Need current coordinates for ring closure
-            if self._coordinates is None:
-                self._recompute_cartesian()
-
-            recon = self._recon_data
-            internal = solve_ring_closure(
-                internal=internal,
-                parent=self._tree.parent,
-                coords=self._coordinates,
-                ring_constraints=self._independent_dof.ring_constraints,
-                tree=self._tree,
-                fixed_coords=recon.fixed_coords if recon else None,
-                offsets=recon.center_offsets if recon else None,
-                max_iterations=100,
-                tolerance=0.01,
+        # Solve ring closure for dependent dihedrals using Newton-Raphson
+        if system.closures.n_closures > 0:
+            internal_np = solve_closure(
+                internal=internal_np,
+                system=system,
+                max_iter=10,
+                tol=1e-7,
             )
 
-        self._internal = internal
+        # Convert back to original backend
+        self._internal = to_backend(internal_np, like=self._coordinates)
 
     # ─────────────────────────────────────────────────────────────────────
     # Private: Recomputation Methods
@@ -514,9 +518,7 @@ class MolecularGeometry:
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._recon_data = self._recon_data
-        new_manager._independent_dof = self._independent_dof
-        new_manager._flexible_rings = self._flexible_rings
-        new_manager._rigid_rings = self._rigid_rings
+        new_manager._constraint_system = self._constraint_system
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -532,9 +534,7 @@ class MolecularGeometry:
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._recon_data = self._recon_data
-        new_manager._independent_dof = self._independent_dof
-        new_manager._flexible_rings = self._flexible_rings
-        new_manager._rigid_rings = self._rigid_rings
+        new_manager._constraint_system = self._constraint_system
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -559,9 +559,7 @@ class MolecularGeometry:
         new_manager._bonds = self._bonds
         new_manager._tree = self._tree
         new_manager._recon_data = self._recon_data
-        new_manager._independent_dof = self._independent_dof
-        new_manager._flexible_rings = self._flexible_rings
-        new_manager._rigid_rings = self._rigid_rings
+        new_manager._constraint_system = self._constraint_system
         new_manager._coords_dirty = self._coords_dirty
         new_manager._dof_dirty = self._dof_dirty
         return new_manager
@@ -598,9 +596,7 @@ class MolecularGeometry:
         manager._internal = None
         manager._tree = None
         manager._recon_data = None
-        manager._independent_dof = None
-        manager._flexible_rings = None
-        manager._rigid_rings = None
+        manager._constraint_system = None
         manager._coords_dirty = False
         manager._dof_dirty = True
         return manager

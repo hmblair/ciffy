@@ -183,8 +183,8 @@ class PCAFlow(nn.Module):
         mean: Mean coordinates (d,).
         n_layers: Number of flow layers (ActNorm + Coupling pairs).
         hidden_dim: Hidden dimension in coupling networks.
-        bound: Tanh bound (in std devs) for decode(). Prevents extrapolation.
-               None disables bounding.
+        bound: Tanh bound (in std devs) for decode(). None (default) disables
+               bounding, preserving exact invertibility.
     """
 
     def __init__(
@@ -193,7 +193,7 @@ class PCAFlow(nn.Module):
         mean: torch.Tensor,
         n_layers: int = 8,
         hidden_dim: int = 64,
-        bound: float | None = 3.0,
+        bound: float | None = None,
     ):
         super().__init__()
         self.k = V.shape[0]  # Latent dimension
@@ -337,10 +337,10 @@ class _JITDecoder(nn.Module):
 class ResidueFlowConfig:
     """Configuration for ResidueFlowModel."""
 
-    latent_dim: int = 8
+    latent_dim: int = 12
     n_layers: int = 8
     hidden_dim: int = 64
-    bound: float | None = 3.0
+    bound: float | None = None
     min_coverage: float = 0.9
 
 
@@ -678,6 +678,142 @@ class ResidueFlowModel:
     def latent_dim(self) -> int:
         """Dimensionality of the latent space."""
         return self.flow.k
+
+    def _build_geometry_projector(self) -> callable:
+        """
+        Build a Newton projector for bond length and angle constraints.
+
+        Returns a function that projects coordinates onto ideal geometry using
+        Gauss-Newton optimization. This preserves conformational diversity while
+        fixing local geometry errors.
+        """
+        residue = self.residue
+        atoms = self._atom_indices
+
+        # Reference bond lengths (Å) from crystallographic data
+        ref_bonds = [
+            (residue.P, residue.OP1, 1.484),
+            (residue.P, residue.OP2, 1.484),
+            (residue.P, residue.O5p, 1.594),
+            (residue.O5p, residue.C5p, 1.430),
+            (residue.C5p, residue.C4p, 1.512),
+            (residue.C4p, residue.C3p, 1.520),
+            (residue.C3p, residue.O3p, 1.423),
+            (residue.C4p, residue.O4p, 1.448),
+            (residue.O4p, residue.C1p, 1.418),
+            (residue.C1p, residue.C2p, 1.529),
+            (residue.C2p, residue.C3p, 1.523),
+            (residue.C1p, residue.N9, 1.465),
+        ]
+
+        # Phosphate angle constraints (degrees)
+        ref_angles = [
+            (residue.OP1, residue.P, residue.OP2, 119.494),
+            (residue.O5p, residue.P, residue.OP1, 108.365),
+            (residue.O5p, residue.P, residue.OP2, 108.246),
+        ]
+
+        atom_to_idx = {a: i for i, a in enumerate(atoms)}
+        n_atoms = len(atoms)
+
+        # Build bond constraint data
+        bond_pairs = []
+        bond_targets = []
+        for a1, a2, target in ref_bonds:
+            if a1.value in atom_to_idx and a2.value in atom_to_idx:
+                bond_pairs.append((atom_to_idx[a1.value], atom_to_idx[a2.value]))
+                bond_targets.append(target)
+        bond_pairs_t = torch.tensor(bond_pairs)
+        bond_targets_t = torch.tensor(bond_targets, dtype=torch.float32)
+        n_bonds = len(bond_targets)
+
+        # Build angle constraint data
+        angle_triples = []
+        angle_targets = []
+        bond_length_map = {(a1.value, a2.value): d for a1, a2, d in ref_bonds}
+        bond_length_map.update({(a2.value, a1.value): d for a1, a2, d in ref_bonds})
+
+        for a_i, a_j, a_k, angle_deg in ref_angles:
+            if all(a.value in atom_to_idx for a in [a_i, a_j, a_k]):
+                i, j, k = atom_to_idx[a_i.value], atom_to_idx[a_j.value], atom_to_idx[a_k.value]
+                angle_triples.append((i, j, k))
+                d_ij = bond_length_map.get((a_i.value, a_j.value), 1.5)
+                d_jk = bond_length_map.get((a_j.value, a_k.value), 1.5)
+                cos_theta = np.cos(np.radians(angle_deg))
+                angle_targets.append(cos_theta * d_ij * d_jk)
+
+        angle_triples_t = torch.tensor(angle_triples)
+        angle_targets_t = torch.tensor(angle_targets, dtype=torch.float32)
+        n_angles = len(angle_targets)
+
+        def newton_step(coords: torch.Tensor) -> torch.Tensor:
+            """Single Newton step. coords: (n_atoms, 3)"""
+            n_constraints = n_bonds + n_angles
+            residuals = torch.zeros(n_constraints, device=coords.device)
+            J = torch.zeros(n_constraints, n_atoms * 3, device=coords.device)
+
+            # Bond length constraints
+            for idx, (a1, a2) in enumerate(bond_pairs_t):
+                diff = coords[a2] - coords[a1]
+                length = torch.norm(diff)
+                residuals[idx] = length - bond_targets_t[idx].to(coords.device)
+                unit = diff / (length + 1e-8)
+                J[idx, a1*3:a1*3+3] = -unit
+                J[idx, a2*3:a2*3+3] = unit
+
+            # Angle constraints: (x_i - x_j) · (x_k - x_j) = target
+            for idx, (i, j, k) in enumerate(angle_triples_t):
+                v1 = coords[i] - coords[j]
+                v2 = coords[k] - coords[j]
+                dot_product = torch.dot(v1, v2)
+                residuals[n_bonds + idx] = dot_product - angle_targets_t[idx].to(coords.device)
+                J[n_bonds + idx, i*3:i*3+3] = v2
+                J[n_bonds + idx, k*3:k*3+3] = v1
+                J[n_bonds + idx, j*3:j*3+3] = -v1 - v2
+
+            # Gauss-Newton: dx = -J^T @ (J @ J^T)^{-1} @ residuals
+            JJT = J @ J.T
+            y = torch.linalg.solve(JJT, residuals)
+            dx = -J.T @ y
+
+            return coords + dx.reshape(n_atoms, 3)
+
+        return newton_step
+
+    def project_geometry(
+        self,
+        coords: "torch.Tensor",
+        n_steps: int = 2,
+    ) -> "torch.Tensor":
+        """
+        Project coordinates onto ideal bond length and angle constraints.
+
+        Uses Gauss-Newton optimization to correct local geometry while
+        preserving overall conformation. Typically 2 steps are sufficient
+        for sub-0.01Å bond length accuracy.
+
+        Args:
+            coords: (N, n_atoms, 3) or (n_atoms, 3) coordinates.
+            n_steps: Number of Newton steps (default 2).
+
+        Returns:
+            Projected coordinates with same shape as input.
+        """
+        newton_step = self._build_geometry_projector()
+
+        single = coords.dim() == 2
+        if single:
+            coords = coords.unsqueeze(0)
+
+        projected = []
+        for i in range(coords.shape[0]):
+            c = coords[i]
+            for _ in range(n_steps):
+                c = newton_step(c)
+            projected.append(c)
+
+        result = torch.stack(projected)
+        return result[0] if single else result
 
     def __repr__(self) -> str:
         return (

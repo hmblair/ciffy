@@ -1,12 +1,12 @@
-"""Tests for ciffy.nn.residue_flow module."""
+"""Tests for ciffy.nn.flow.residue module."""
 
 import tempfile
 import numpy as np
 import pytest
 import torch
 
-from ciffy.nn.residue_flow import PCAFlow, train_pca_flow
-from ciffy.nn.residue_flow.data import compute_pca
+from ciffy.nn.flow.residue import PCAFlow, train_pca_flow
+from ciffy.nn.flow.residue.data import compute_pca
 
 
 @pytest.fixture
@@ -159,7 +159,7 @@ class TestPCAFlow:
 
     def test_safetensors_roundtrip(self, sample_coords):
         """Test save/load with safetensors format."""
-        from ciffy.nn.residue_flow import ResidueFlowModel
+        from ciffy.nn.flow.residue import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
         flow, info = train_pca_flow(
@@ -202,8 +202,8 @@ class TestPCAFlow:
 
     def test_jit_compilation(self, sample_coords):
         """Test JIT compilation of decoder."""
-        from ciffy.nn.residue_flow import ResidueFlowModel
-        from ciffy.nn.residue_flow.data import compute_pca
+        from ciffy.nn.flow.residue import ResidueFlowModel
+        from ciffy.nn.flow.residue.data import compute_pca
         from ciffy.biochemistry import Residue
 
         n_samples, n_atoms = sample_coords.shape[:2]
@@ -347,7 +347,7 @@ class TestResidueFlowModel:
 
     def test_decode_split(self, sample_extended_data):
         """Test that decode correctly splits coords and transforms."""
-        from ciffy.nn.residue_flow.model import ResidueFlowModel
+        from ciffy.nn.flow.residue.model import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
         coords, transforms = sample_extended_data
@@ -383,7 +383,7 @@ class TestResidueFlowModel:
 
     def test_position_next_residue(self):
         """Test positioning next residue using transform."""
-        from ciffy.nn.residue_flow.data import (
+        from ciffy.nn.flow.residue.data import (
             position_next_residue,
             compute_link_frames,
             compute_relative_transform,
@@ -418,7 +418,7 @@ class TestResidueFlowModel:
         p_positioned = coords2_positioned[p_idx]
         # Target P position from transform
         o1_new, R1_new, _, _ = compute_link_frames(coords1, coords2, atoms, Residue.A)
-        from ciffy.nn.residue_flow.data import apply_relative_transform
+        from ciffy.nn.flow.residue.data import apply_relative_transform
         target_p, _ = apply_relative_transform(o1_new, R1_new, transform)
 
         np.testing.assert_allclose(p_positioned, target_p, atol=1e-5)
@@ -441,7 +441,7 @@ class TestResidueFlowModel:
 
     def test_save_load_model(self, sample_extended_data):
         """Test save/load for ResidueFlowModel."""
-        from ciffy.nn.residue_flow.model import ResidueFlowModel
+        from ciffy.nn.flow.residue.model import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
         coords, transforms = sample_extended_data

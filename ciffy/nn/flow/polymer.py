@@ -1,0 +1,319 @@
+"""
+PolymerFlowModel: Orchestrates per-residue flows for full polymer encoding/decoding.
+
+This module provides a simple wrapper around ResidueFlowModel that handles:
+- Partitioning flat coordinate arrays by residue
+- Encoding each residue with its appropriate model
+- Decoding and positioning residues using SE(3) transforms
+
+Example:
+    >>> from ciffy.nn.flow import PolymerFlowModel, ResidueFlowModel
+    >>> from ciffy.biochemistry import Residue
+    >>>
+    >>> # Load pre-trained per-residue models
+    >>> models = {
+    ...     Residue.A: ResidueFlowModel.load("models/A"),
+    ...     Residue.G: ResidueFlowModel.load("models/G"),
+    ... }
+    >>> polymer_flow = PolymerFlowModel(models)
+    >>>
+    >>> # Encode polymer coordinates
+    >>> sequence = [Residue.A, Residue.G, Residue.A]
+    >>> latents = polymer_flow.encode(coords, sequence)  # (3, k)
+    >>>
+    >>> # Decode back to positioned coordinates
+    >>> coords_recon = polymer_flow.decode(latents, sequence)  # (N, 3)
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import torch
+
+from ciffy.nn.flow.residue.data import position_next_residue
+
+if TYPE_CHECKING:
+    from ciffy.biochemistry import Residue
+    from ciffy.nn.flow.residue import ResidueFlowModel
+
+
+class PolymerFlowModel:
+    """
+    Orchestrates per-residue flow models for full polymer encoding/decoding.
+
+    This class wraps multiple ResidueFlowModel instances (one per residue type)
+    and provides encode/decode methods that work on entire polymers.
+
+    The encode method partitions a flat (N, 3) coordinate array by residue
+    and encodes each residue independently. The decode method reconstructs
+    coordinates and chains them together using the SE(3) transforms that
+    each ResidueFlowModel outputs.
+
+    Attributes:
+        residue_models: Dict mapping Residue type to trained ResidueFlowModel.
+        latent_dim: Dimension of per-residue latent space (assumes all models match).
+
+    Example:
+        >>> polymer = PolymerFlowModel(models)
+        >>> latents = polymer.encode(coords, sequence)
+        >>> coords_recon = polymer.decode(latents, sequence)
+    """
+
+    def __init__(self, residue_models: dict["Residue", "ResidueFlowModel"]):
+        """
+        Initialize with pre-trained per-residue models.
+
+        Args:
+            residue_models: Dict mapping Residue enum to ResidueFlowModel.
+                            All models should have the same latent_dim.
+        """
+        if not residue_models:
+            raise ValueError("residue_models cannot be empty")
+
+        self.residue_models = residue_models
+
+        # Validate all models have same latent dim
+        latent_dims = [m.latent_dim for m in residue_models.values()]
+        if len(set(latent_dims)) > 1:
+            raise ValueError(
+                f"All ResidueFlowModels must have same latent_dim, got {latent_dims}"
+            )
+        self.latent_dim = latent_dims[0]
+
+    def _get_atom_counts(self, sequence: list["Residue"]) -> list[int]:
+        """Get atom counts for each residue in sequence."""
+        counts = []
+        for res_type in sequence:
+            if res_type not in self.residue_models:
+                available = list(self.residue_models.keys())
+                raise ValueError(
+                    f"No model for residue type {res_type}. "
+                    f"Available: {[r.name for r in available]}"
+                )
+            counts.append(self.residue_models[res_type].n_atoms)
+        return counts
+
+    def _validate_coords_shape(
+        self,
+        coords: torch.Tensor,
+        sequence: list["Residue"],
+    ) -> None:
+        """Validate that coords shape matches sequence."""
+        expected_atoms = sum(self._get_atom_counts(sequence))
+        if coords.shape[0] != expected_atoms:
+            raise ValueError(
+                f"coords has {coords.shape[0]} atoms but sequence expects {expected_atoms}"
+            )
+        if coords.shape[1] != 3:
+            raise ValueError(f"coords must be (N, 3), got shape {coords.shape}")
+
+    def encode(
+        self,
+        coords: torch.Tensor,
+        sequence: list["Residue"],
+    ) -> torch.Tensor:
+        """
+        Encode polymer coordinates to per-residue latent vectors.
+
+        Args:
+            coords: (N, 3) flat coordinate array for all atoms.
+            sequence: List of Residue types, one per residue.
+
+        Returns:
+            (n_residues, latent_dim) latent vectors.
+        """
+        self._validate_coords_shape(coords, sequence)
+
+        latents = []
+        offset = 0
+
+        for res_type in sequence:
+            model = self.residue_models[res_type]
+            n_atoms = model.n_atoms
+
+            # Extract this residue's coordinates
+            res_coords = coords[offset:offset + n_atoms]
+
+            # Reshape to (1, n_atoms, 3) for model.encode()
+            res_coords = res_coords.unsqueeze(0)
+
+            # Encode (transforms=None uses zeros, which is fine for encoding)
+            z = model.encode(res_coords)  # (1, k)
+            latents.append(z.squeeze(0))  # (k,)
+
+            offset += n_atoms
+
+        return torch.stack(latents)  # (n_residues, k)
+
+    def decode(
+        self,
+        latents: torch.Tensor,
+        sequence: list["Residue"],
+    ) -> torch.Tensor:
+        """
+        Decode latent vectors to positioned polymer coordinates.
+
+        Args:
+            latents: (n_residues, latent_dim) latent vectors.
+            sequence: List of Residue types, one per residue.
+
+        Returns:
+            (N, 3) flat coordinate array with all residues positioned.
+        """
+        if latents.shape[0] != len(sequence):
+            raise ValueError(
+                f"latents has {latents.shape[0]} rows but sequence has {len(sequence)} residues"
+            )
+
+        if len(sequence) == 0:
+            return torch.empty(0, 3, device=latents.device, dtype=latents.dtype)
+
+        all_coords = []
+        prev_coords = None
+        prev_transform = None
+        prev_model = None
+
+        for i, res_type in enumerate(sequence):
+            model = self.residue_models[res_type]
+
+            # Decode this residue
+            with torch.no_grad():
+                coords_i, transform_i = model.decode(latents[i:i + 1])
+
+            # coords_i is (1, n_atoms, 3), squeeze to (n_atoms, 3)
+            coords_i = coords_i.squeeze(0)
+            # transform_i is (1, 6), squeeze to (6,)
+            transform_i = transform_i.squeeze(0)
+
+            if i == 0:
+                # First residue: place at origin (already in canonical frame)
+                positioned = coords_i
+            else:
+                # Position relative to previous residue using its transform
+                positioned = position_next_residue(
+                    prev_coords.numpy(),
+                    coords_i.numpy(),
+                    prev_transform.numpy(),
+                    prev_model._atom_indices,
+                    prev_model.residue,
+                )
+                positioned = torch.from_numpy(positioned).to(coords_i.dtype)
+
+            all_coords.append(positioned)
+
+            # Store for next iteration
+            prev_coords = positioned
+            prev_transform = transform_i
+            prev_model = model
+
+        return torch.cat(all_coords, dim=0)  # (N, 3)
+
+    def sample(
+        self,
+        sequence: list["Residue"],
+        n_samples: int = 1,
+    ) -> torch.Tensor | list[torch.Tensor]:
+        """
+        Sample new polymer conformations.
+
+        Args:
+            sequence: List of Residue types defining the polymer.
+            n_samples: Number of samples to generate.
+
+        Returns:
+            If n_samples=1: (N, 3) coordinate array.
+            If n_samples>1: List of (N, 3) coordinate arrays.
+        """
+        if len(sequence) == 0:
+            if n_samples == 1:
+                return torch.empty(0, 3)
+            return [torch.empty(0, 3) for _ in range(n_samples)]
+
+        # Get device from first model
+        device = next(iter(self.residue_models.values())).flow.V.device
+
+        samples = []
+        for _ in range(n_samples):
+            # Sample random latents from standard normal
+            latents = torch.randn(len(sequence), self.latent_dim, device=device)
+            coords = self.decode(latents, sequence)
+            samples.append(coords)
+
+        if n_samples == 1:
+            return samples[0]
+        return samples
+
+    @property
+    def supported_residues(self) -> list["Residue"]:
+        """List of residue types this model can handle."""
+        return list(self.residue_models.keys())
+
+    def save(self, path: str | Path) -> None:
+        """
+        Save model to directory.
+
+        Each ResidueFlowModel is saved to a subdirectory named by residue.
+
+        Args:
+            path: Directory to save to.
+        """
+        import json
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        # Save each residue model
+        for res_type, model in self.residue_models.items():
+            model.save(path / res_type.name)
+
+        # Save metadata
+        config = {
+            "residue_types": [r.name for r in self.residue_models.keys()],
+            "latent_dim": self.latent_dim,
+        }
+        with open(path / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        device: str = "cpu",
+        jit: bool = False,
+    ) -> "PolymerFlowModel":
+        """
+        Load model from directory.
+
+        Args:
+            path: Directory containing saved model.
+            device: Device to load models to.
+            jit: Whether to JIT-compile the decoders.
+
+        Returns:
+            Loaded PolymerFlowModel.
+        """
+        import json
+        from ciffy.biochemistry import Residue
+        from ciffy.nn.flow.residue import ResidueFlowModel
+
+        path = Path(path)
+
+        with open(path / "config.json") as f:
+            config = json.load(f)
+
+        residue_models = {}
+        for res_name in config["residue_types"]:
+            res_type = getattr(Residue, res_name)
+            residue_models[res_type] = ResidueFlowModel.load(
+                path / res_name,
+                device=device,
+                jit=jit,
+            )
+
+        return cls(residue_models)
+
+    def __repr__(self) -> str:
+        residues = [r.name for r in self.residue_models.keys()]
+        return f"PolymerFlowModel(residues={residues}, latent_dim={self.latent_dim})"

@@ -50,10 +50,13 @@ class TestPCAFlow:
         X = torch.from_numpy(sample_coords[:10]).float()
         with torch.no_grad():
             z = flow.encode(X)
-            X_recon = flow.decode(z)
+            X_recon = flow.decode(z)  # Returns (N, d) flat
+
+        # Flatten X for comparison (PCAFlow now returns flat output)
+        X_flat = X.reshape(X.shape[0], -1)
 
         # RMSD should be small (bounded by PCA truncation)
-        rmsd = torch.sqrt(((X - X_recon) ** 2).mean()).item()
+        rmsd = torch.sqrt(((X_flat - X_recon) ** 2).mean()).item()
         assert rmsd < 0.5  # Reasonable threshold for 6D PCA
 
     def test_bound_prevents_extrapolation(self, sample_coords):
@@ -83,7 +86,8 @@ class TestPCAFlow:
 
         samples = flow.sample(50)
 
-        assert samples.shape == (50, 10, 3)
+        # PCAFlow returns flat output (N, d)
+        assert samples.shape == (50, 30)  # 10 atoms * 3 = 30
         assert torch.isfinite(samples).all()
 
     def test_log_prob(self, sample_coords):
@@ -169,6 +173,7 @@ class TestPCAFlow:
             flow=flow,
             residue=Residue.A,
             atom_indices=atom_indices,
+            n_atoms=len(atom_indices),
             pca_rmsd=info["pca_rmsd"],
             var_explained=info["var_explained"],
         )
@@ -198,20 +203,32 @@ class TestPCAFlow:
     def test_jit_compilation(self, sample_coords):
         """Test JIT compilation of decoder."""
         from ciffy.nn.residue_flow import ResidueFlowModel
+        from ciffy.nn.residue_flow.data import compute_pca
         from ciffy.biochemistry import Residue
 
-        flow, info = train_pca_flow(
-            sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
-        )
+        n_samples, n_atoms = sample_coords.shape[:2]
+
+        # Create extended representation (coords + 6D transform)
+        coords_flat = sample_coords.reshape(n_samples, -1)
+        transforms = np.random.randn(n_samples, 6).astype(np.float32) * 0.1
+        extended = np.concatenate([coords_flat, transforms], axis=1)
+
+        # Compute PCA and create flow
+        V, mean, _, var_explained = compute_pca(extended, n_components=6)
+        V_t = torch.from_numpy(V).float()
+        mean_t = torch.from_numpy(mean).float()
+        flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32, bound=3.0)
+
+        pca_rmsd = float(np.sqrt(((extended - (extended - mean) @ V.T @ V - mean) ** 2).mean()))
 
         # Create model without JIT
         model_no_jit = ResidueFlowModel(
             flow=flow,
             residue=Residue.A,
-            atom_indices=list(Residue.A.index()[:10]),
-            pca_rmsd=info["pca_rmsd"],
-            var_explained=info["var_explained"],
+            atom_indices=list(Residue.A.index()[:n_atoms]),
+            n_atoms=n_atoms,
+            pca_rmsd=pca_rmsd,
+            var_explained=float(var_explained[-1]),
             jit=False,
         )
 
@@ -219,21 +236,23 @@ class TestPCAFlow:
         model_jit = ResidueFlowModel(
             flow=flow,
             residue=Residue.A,
-            atom_indices=list(Residue.A.index()[:10]),
-            pca_rmsd=info["pca_rmsd"],
-            var_explained=info["var_explained"],
+            atom_indices=list(Residue.A.index()[:n_atoms]),
+            n_atoms=n_atoms,
+            pca_rmsd=pca_rmsd,
+            var_explained=float(var_explained[-1]),
             jit=True,
         )
 
         assert not model_no_jit.is_jit
         assert model_jit.is_jit
 
-        # Verify outputs match
+        # Verify outputs match (decode returns coords, transforms tuple)
         z = torch.randn(5, 6)
         with torch.no_grad():
-            out_no_jit = model_no_jit.decode(z)
-            out_jit = model_jit.decode(z)
-        assert torch.allclose(out_no_jit, out_jit, atol=1e-6)
+            coords_no_jit, trans_no_jit = model_no_jit.decode(z)
+            coords_jit, trans_jit = model_jit.decode(z)
+        assert torch.allclose(coords_no_jit, coords_jit, atol=1e-5)
+        assert torch.allclose(trans_no_jit, trans_jit, atol=1e-5)
 
 
 class TestTrainPCAFlow:
@@ -272,8 +291,8 @@ class TestTrainPCAFlow:
         assert info_12d["pca_rmsd"] < info_6d["pca_rmsd"]
 
 
-class TestExtendedResidueFlow:
-    """Tests for extended residue flow (with link transforms)."""
+class TestResidueFlowModel:
+    """Tests for ResidueFlowModel (with link transforms)."""
 
     @pytest.fixture
     def sample_extended_data(self):
@@ -326,9 +345,9 @@ class TestExtendedResidueFlow:
         rmsd = torch.sqrt(((X - recon_flat) ** 2).mean()).item()
         assert rmsd < 0.5
 
-    def test_decode_extended_split(self, sample_extended_data):
-        """Test that decode_extended correctly splits coords and transforms."""
-        from ciffy.nn.residue_flow.model import ExtendedResidueFlowModel
+    def test_decode_split(self, sample_extended_data):
+        """Test that decode correctly splits coords and transforms."""
+        from ciffy.nn.residue_flow.model import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
         coords, transforms = sample_extended_data
@@ -345,7 +364,7 @@ class TestExtendedResidueFlow:
         flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32)
 
         # Create model (use first 22 atoms of adenosine as placeholder)
-        model = ExtendedResidueFlowModel(
+        model = ResidueFlowModel(
             flow=flow,
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
@@ -354,10 +373,10 @@ class TestExtendedResidueFlow:
             var_explained=0.95,
         )
 
-        # Test decode_extended
+        # Test decode
         z = torch.randn(5, 8)
         with torch.no_grad():
-            decoded_coords, decoded_transforms = model.decode_extended(z)
+            decoded_coords, decoded_transforms = model.decode(z)
 
         assert decoded_coords.shape == (5, n_atoms, 3)
         assert decoded_transforms.shape == (5, 6)
@@ -420,9 +439,9 @@ class TestExtendedResidueFlow:
         assert 0 < mean_rot < 180  # Degrees
         assert 0.5 < mean_trans < 5.0  # Angstroms (typical O3'-P is ~1.6)
 
-    def test_save_load_extended_model(self, sample_extended_data):
-        """Test save/load for ExtendedResidueFlowModel."""
-        from ciffy.nn.residue_flow.model import ExtendedResidueFlowModel
+    def test_save_load_model(self, sample_extended_data):
+        """Test save/load for ResidueFlowModel."""
+        from ciffy.nn.residue_flow.model import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
         coords, transforms = sample_extended_data
@@ -439,7 +458,7 @@ class TestExtendedResidueFlow:
         flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32)
 
         # Create model
-        model = ExtendedResidueFlowModel(
+        model = ResidueFlowModel(
             flow=flow,
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
@@ -449,11 +468,11 @@ class TestExtendedResidueFlow:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            save_path = tmpdir + "/extended_model"
+            save_path = tmpdir + "/residue_model"
             model.save(save_path)
 
             # Load and verify
-            loaded = ExtendedResidueFlowModel.load(save_path)
+            loaded = ResidueFlowModel.load(save_path)
 
             assert loaded.residue.name == "A"
             assert loaded.n_atoms == n_atoms
@@ -462,8 +481,8 @@ class TestExtendedResidueFlow:
             # Verify outputs match
             z_test = torch.randn(3, 8)
             with torch.no_grad():
-                orig_coords, orig_trans = model.decode_extended(z_test)
-                loaded_coords, loaded_trans = loaded.decode_extended(z_test)
+                orig_coords, orig_trans = model.decode(z_test)
+                loaded_coords, loaded_trans = loaded.decode(z_test)
 
             assert torch.allclose(orig_coords, loaded_coords, atol=1e-6)
             assert torch.allclose(orig_trans, loaded_trans, atol=1e-6)

@@ -105,8 +105,9 @@ def train_pca_flow(
     # Compute final reconstruction RMSD (should match PCA RMSD)
     flow.eval()
     with torch.no_grad():
-        X_recon = flow.decode(flow.encode(X))
-        flow_rmsd = float(torch.sqrt(((X_recon - X) ** 2).mean()).item())
+        X_flat = X.reshape(n_instances, -1)
+        X_recon = flow.decode(flow.encode(X))  # Returns (N, d) flat
+        flow_rmsd = float(torch.sqrt(((X_recon - X_flat) ** 2).mean()).item())
 
     if verbose:
         print(f"Final: RMSD={flow_rmsd:.4f}Å (PCA={pca_rmsd:.4f}Å)")

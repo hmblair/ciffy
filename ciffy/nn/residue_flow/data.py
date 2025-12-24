@@ -18,6 +18,237 @@ if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
 
 
+# =============================================================================
+# Frame Computation Helpers (single source of truth for each frame type)
+# =============================================================================
+
+
+def compute_glycosidic_frame(
+    coords: np.ndarray,
+    atoms: list[int],
+    residue: "Residue",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the glycosidic frame for a residue.
+
+    Frame definition:
+    - Origin: C1' atom
+    - X-axis: Toward N9 (purines) or N1 (pyrimidines)
+    - Z-axis: Normal to the C1'-N9-C4 plane
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates.
+        atoms: List of atom type indices.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) C1' position.
+        R: (3, 3) rotation matrix [x, y, z] as columns.
+    """
+    atom_to_col = {a: i for i, a in enumerate(atoms)}
+
+    c1p_idx = atom_to_col[residue.C1p.value]
+    c4_idx = atom_to_col[residue.C4.value]
+
+    # N9 for purines (A, G), N1 for pyrimidines (C, U)
+    try:
+        n_idx = atom_to_col[residue.N9.value]
+    except KeyError:
+        n_idx = atom_to_col[residue.N1.value]
+
+    origin = coords[c1p_idx].copy()
+    n_pos = coords[n_idx]
+    c4_pos = coords[c4_idx]
+
+    x_axis = n_pos - origin
+    x_axis = x_axis / np.linalg.norm(x_axis)
+
+    y_temp = c4_pos - origin
+    z_axis = np.cross(x_axis, y_temp)
+    z_axis = z_axis / np.linalg.norm(z_axis)
+
+    y_axis = np.cross(z_axis, x_axis)
+
+    R = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float32)
+    return origin.astype(np.float32), R
+
+
+def compute_o3p_frame(
+    coords: np.ndarray,
+    atoms: list[int],
+    residue: "Residue",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the O3' frame for a residue (used for backbone linking).
+
+    Frame definition:
+    - Origin: O3' atom
+    - Z-axis: Along C3'->O3' bond
+    - X-axis: Perpendicular, in the C4'-C3'-O3' plane
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates.
+        atoms: List of atom type indices.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) O3' position.
+        R: (3, 3) rotation matrix.
+    """
+    atom_to_col = {a: i for i, a in enumerate(atoms)}
+
+    c4p = coords[atom_to_col[residue.C4p.value]]
+    c3p = coords[atom_to_col[residue.C3p.value]]
+    o3p = coords[atom_to_col[residue.O3p.value]]
+
+    origin = o3p.copy()
+
+    z_axis = o3p - c3p
+    z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-8)
+
+    y_temp = c4p - c3p
+    x_axis = np.cross(y_temp, z_axis)
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-8)
+
+    y_axis = np.cross(z_axis, x_axis)
+
+    R = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float32)
+    return origin.astype(np.float32), R
+
+
+def compute_p_frame(
+    coords: np.ndarray,
+    atoms: list[int],
+    residue: "Residue",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the P frame for a residue (used for backbone linking).
+
+    Frame definition:
+    - Origin: P atom
+    - Z-axis: Along O5'->P bond
+    - X-axis: Perpendicular, toward OP1
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates.
+        atoms: List of atom type indices.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) P position.
+        R: (3, 3) rotation matrix.
+    """
+    atom_to_col = {a: i for i, a in enumerate(atoms)}
+
+    p = coords[atom_to_col[residue.P.value]]
+    o5p = coords[atom_to_col[residue.O5p.value]]
+    op1 = coords[atom_to_col[residue.OP1.value]]
+
+    origin = p.copy()
+
+    z_axis = p - o5p
+    z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-8)
+
+    y_temp = op1 - p
+    x_axis = np.cross(y_temp, z_axis)
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-8)
+
+    y_axis = np.cross(z_axis, x_axis)
+
+    R = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float32)
+    return origin.astype(np.float32), R
+
+
+# =============================================================================
+# SE(3) Transform Helpers
+# =============================================================================
+
+
+def _rotation_matrix_to_axis_angle(R: np.ndarray) -> np.ndarray:
+    """Convert rotation matrix to axis-angle representation."""
+    angle = np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))
+    if angle < 1e-6:
+        return np.zeros(3, dtype=np.float32)
+    if np.pi - angle < 1e-6:
+        M = R + np.eye(3)
+        col_norms = np.linalg.norm(M, axis=0)
+        k = np.argmax(col_norms)
+        axis = M[:, k] / col_norms[k]
+        return (axis * angle).astype(np.float32)
+    axis = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    axis = axis / (2 * np.sin(angle) + 1e-8)
+    return (axis * angle).astype(np.float32)
+
+
+def _axis_angle_to_rotation_matrix(axis_angle: np.ndarray) -> np.ndarray:
+    """Convert axis-angle to rotation matrix (Rodrigues' formula)."""
+    angle = np.linalg.norm(axis_angle)
+    if angle < 1e-8:
+        return np.eye(3, dtype=np.float32)
+    axis = axis_angle / angle
+    K = np.array([
+        [0, -axis[2], axis[1]],
+        [axis[2], 0, -axis[0]],
+        [-axis[1], axis[0], 0]
+    ], dtype=np.float32)
+    return np.eye(3, dtype=np.float32) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+
+
+def compute_relative_transform(
+    origin1: np.ndarray,
+    R1: np.ndarray,
+    origin2: np.ndarray,
+    R2: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute relative SE(3) transform from frame 1 to frame 2.
+
+    Args:
+        origin1, R1: First frame (position and rotation).
+        origin2, R2: Second frame (position and rotation).
+
+    Returns:
+        6D vector: [axis-angle (3), translation in frame1 coords (3)].
+    """
+    R_rel = R1.T @ R2
+    axis_angle = _rotation_matrix_to_axis_angle(R_rel)
+    t_world = origin2 - origin1
+    t_local = R1.T @ t_world
+    return np.concatenate([axis_angle, t_local]).astype(np.float32)
+
+
+def apply_relative_transform(
+    origin1: np.ndarray,
+    R1: np.ndarray,
+    rel_transform: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Apply relative transform to get frame 2 from frame 1.
+
+    Args:
+        origin1, R1: Source frame.
+        rel_transform: 6D vector [axis-angle (3), translation (3)].
+
+    Returns:
+        origin2, R2: Target frame.
+    """
+    axis_angle = rel_transform[:3]
+    t_local = rel_transform[3:]
+    R_rel = _axis_angle_to_rotation_matrix(axis_angle)
+    R2 = R1 @ R_rel
+    t_world = R1 @ t_local
+    origin2 = origin1 + t_world
+    return origin2, R2
+
+
+# =============================================================================
+# Single Residue Extraction
+# =============================================================================
+
+
 def extract_residues(
     cif_paths: list[Path],
     residue_type: "Residue",
@@ -115,12 +346,7 @@ def align_to_frame(
     residue: "Residue",
 ) -> np.ndarray:
     """
-    Align each residue to a canonical local frame.
-
-    The frame is defined by:
-    - Origin: C1' atom
-    - X-axis: Toward N9 (purines) or N1 (pyrimidines)
-    - Z-axis: Normal to the plane defined by C1', N9/N1, C4
+    Align each residue to a canonical local frame (glycosidic frame).
 
     Args:
         coords: (n_instances, n_atoms, 3) coordinate array.
@@ -131,35 +357,10 @@ def align_to_frame(
         Aligned coordinates with same shape as input.
     """
     n_instances = coords.shape[0]
-
-    # Get frame atom indices
-    c1p_idx = atoms.index(residue.C1p.value)
-    c4_idx = atoms.index(residue.C4.value)
-
-    # N9 for purines (A, G), N1 for pyrimidines (C, U)
-    try:
-        n_idx = atoms.index(residue.N9.value)
-    except (ValueError, AttributeError):
-        n_idx = atoms.index(residue.N1.value)
-
     aligned = np.zeros_like(coords)
 
     for i in range(n_instances):
-        origin = coords[i, c1p_idx]
-        n_pos = coords[i, n_idx]
-        c4_pos = coords[i, c4_idx]
-
-        # Build orthonormal frame
-        x_axis = n_pos - origin
-        x_axis /= np.linalg.norm(x_axis)
-
-        y_temp = c4_pos - origin
-        z_axis = np.cross(x_axis, y_temp)
-        z_axis /= np.linalg.norm(z_axis)
-
-        y_axis = np.cross(z_axis, x_axis)
-
-        R = np.column_stack([x_axis, y_axis, z_axis])
+        origin, R = compute_glycosidic_frame(coords[i], atoms, residue)
         aligned[i] = (coords[i] - origin) @ R
 
     return aligned
@@ -231,173 +432,71 @@ def check_bond_lengths(
 
 
 # =============================================================================
-# Extended Residue Representation (with link transforms)
+# Extended Residue Extraction (with backbone link transforms)
 # =============================================================================
 
 
-def _rotation_matrix_to_axis_angle(R: np.ndarray) -> np.ndarray:
-    """Convert rotation matrix to axis-angle representation."""
-    angle = np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))
-    if angle < 1e-6:
-        return np.zeros(3, dtype=np.float32)
-    if np.pi - angle < 1e-6:
-        M = R + np.eye(3)
-        col_norms = np.linalg.norm(M, axis=0)
-        k = np.argmax(col_norms)
-        axis = M[:, k] / col_norms[k]
-        return (axis * angle).astype(np.float32)
-    axis = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
-    axis = axis / (2 * np.sin(angle) + 1e-8)
-    return (axis * angle).astype(np.float32)
-
-
-def _axis_angle_to_rotation_matrix(axis_angle: np.ndarray) -> np.ndarray:
-    """Convert axis-angle to rotation matrix (Rodrigues' formula)."""
-    angle = np.linalg.norm(axis_angle)
-    if angle < 1e-8:
-        return np.eye(3, dtype=np.float32)
-    axis = axis_angle / angle
-    K = np.array([
-        [0, -axis[2], axis[1]],
-        [axis[2], 0, -axis[0]],
-        [-axis[1], axis[0], 0]
-    ], dtype=np.float32)
-    return np.eye(3, dtype=np.float32) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
-
-
-def compute_link_frames(
-    coords1: np.ndarray,
-    coords2: np.ndarray,
-    atoms: list[int],
-    residue: "Residue",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Compute frames at linking atoms (O3' of res1, P of res2).
-
-    Each frame is defined using only atoms from its own residue to ensure
-    the frames are intrinsic to each residue's conformation.
-
-    Args:
-        coords1: (n_atoms, 3) coordinates of first residue.
-        coords2: (n_atoms, 3) coordinates of second residue.
-        atoms: List of atom type indices.
-        residue: Residue type.
-
-    Returns:
-        origin1: (3,) O3' position.
-        R1: (3, 3) O3' frame rotation matrix.
-        origin2: (3,) P position.
-        R2: (3, 3) P frame rotation matrix.
-    """
-    atom_to_col = {a: i for i, a in enumerate(atoms)}
-
-    # O3' frame from residue 1 (C4'-C3'-O3' defines the frame)
-    c4p_1 = coords1[atom_to_col[residue.C4p.value]]
-    c3p_1 = coords1[atom_to_col[residue.C3p.value]]
-    o3p_1 = coords1[atom_to_col[residue.O3p.value]]
-
-    origin1 = o3p_1
-    z1 = o3p_1 - c3p_1
-    z1 = z1 / (np.linalg.norm(z1) + 1e-8)
-    y_temp1 = c4p_1 - c3p_1
-    x1 = np.cross(y_temp1, z1)
-    x1 = x1 / (np.linalg.norm(x1) + 1e-8)
-    y1 = np.cross(z1, x1)
-    R1 = np.column_stack([x1, y1, z1]).astype(np.float32)
-
-    # P frame from residue 2 (OP1-P-O5' defines the frame)
-    p_2 = coords2[atom_to_col[residue.P.value]]
-    o5p_2 = coords2[atom_to_col[residue.O5p.value]]
-    op1_2 = coords2[atom_to_col[residue.OP1.value]]
-
-    origin2 = p_2
-    z2 = p_2 - o5p_2
-    z2 = z2 / (np.linalg.norm(z2) + 1e-8)
-    y_temp2 = op1_2 - p_2
-    x2 = np.cross(y_temp2, z2)
-    x2 = x2 / (np.linalg.norm(x2) + 1e-8)
-    y2 = np.cross(z2, x2)
-    R2 = np.column_stack([x2, y2, z2]).astype(np.float32)
-
-    return origin1, R1, origin2, R2
-
-
-def compute_relative_transform(
-    origin1: np.ndarray,
-    R1: np.ndarray,
-    origin2: np.ndarray,
-    R2: np.ndarray,
+def _remap_coords_to_common_atoms(
+    raw_coords: np.ndarray,
+    raw_atoms: list[int],
+    common_atoms: list[int],
 ) -> np.ndarray:
     """
-    Compute relative SE(3) transform from frame 1 to frame 2.
+    Remap raw coordinates to common atom ordering.
 
     Args:
-        origin1, R1: First frame (position and rotation).
-        origin2, R2: Second frame (position and rotation).
+        raw_coords: (n_raw_atoms, 3) coordinates in raw ordering.
+        raw_atoms: List of atom type indices for raw_coords.
+        common_atoms: Target atom ordering.
 
     Returns:
-        6D vector: [axis-angle (3), translation in frame1 coords (3)].
+        (n_common_atoms, 3) coordinates in common atom ordering.
     """
-    R_rel = R1.T @ R2
-    axis_angle = _rotation_matrix_to_axis_angle(R_rel)
-    t_world = origin2 - origin1
-    t_local = R1.T @ t_world
-    return np.concatenate([axis_angle, t_local]).astype(np.float32)
+    atom_to_col = {a: c for c, a in enumerate(common_atoms)}
+    n_atoms = len(common_atoms)
+    coords = np.zeros((n_atoms, 3), dtype=np.float32)
 
+    for atom_idx, coord in zip(raw_atoms, raw_coords):
+        if atom_idx in atom_to_col:
+            coords[atom_to_col[atom_idx]] = coord
 
-def apply_relative_transform(
-    origin1: np.ndarray,
-    R1: np.ndarray,
-    rel_transform: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Apply relative transform to get frame 2 from frame 1.
-
-    Args:
-        origin1, R1: Source frame.
-        rel_transform: 6D vector [axis-angle (3), translation (3)].
-
-    Returns:
-        origin2, R2: Target frame.
-    """
-    axis_angle = rel_transform[:3]
-    t_local = rel_transform[3:]
-    R_rel = _axis_angle_to_rotation_matrix(axis_angle)
-    R2 = R1 @ R_rel
-    t_world = R1 @ t_local
-    origin2 = origin1 + t_world
-    return origin2, R2
+    return coords
 
 
 def extract_residues_with_links(
     cif_paths: list[Path],
     residue_type: "Residue",
     min_coverage: float = 0.9,
+    max_bond_length: float = 2.0,
     verbose: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """
-    Extract residues that have a next neighbor, with SE(3) link transforms.
+    Extract residues with SE(3) transforms to next residue.
 
     This creates an extended representation where each residue includes
     information about how it connects to the next residue in the chain.
-    This allows models to learn the coupling between residue conformation
-    and backbone geometry.
+
+    Data flow:
+    1. Extract adjacent residue pairs from structures
+    2. Filter by O3'-P bond length to ensure true connectivity
+    3. Find common atoms across all instances
+    4. For each pair:
+       a. Remap both residues to common atom ordering
+       b. Align coords1 to canonical (glycosidic) frame
+       c. Apply SAME transform to coords2 (preserving relative geometry)
+       d. Compute O3'->P transform from aligned coordinates
 
     Args:
         cif_paths: List of paths to CIF files.
         residue_type: Residue enum (e.g., Residue.A for adenosine).
         min_coverage: Minimum fraction of instances an atom must appear in.
+        max_bond_length: Maximum O3'-P distance to accept (filters chain breaks).
         verbose: Print progress information.
 
     Returns:
-        coords: (n_instances, n_atoms, 3) coordinate array (frame-aligned).
+        coords: (n_instances, n_atoms, 3) aligned first-residue coordinates.
         transforms: (n_instances, 6) SE(3) transforms [axis-angle, translation].
         atoms: List of atom type indices in column order.
-
-    Example:
-        >>> coords, transforms, atoms = extract_residues_with_links(paths, Residue.A)
-        >>> # Extended representation: concatenate flattened coords with transform
-        >>> extended = np.concatenate([coords.reshape(len(coords), -1), transforms], axis=1)
     """
     # Required atoms for link computation
     required_link_atoms = {
@@ -405,7 +504,8 @@ def extract_residues_with_links(
         residue_type.P.value, residue_type.O5p.value, residue_type.OP1.value,
     }
 
-    all_instances = []  # (coords1, coords2, atoms1)
+    # Phase 1: Extract raw pairs with bond length filtering
+    all_pairs = []  # (raw_coords1, raw_atoms1, raw_coords2, raw_atoms2)
 
     for path in cif_paths:
         if verbose:
@@ -444,7 +544,15 @@ def extract_residues_with_links(
                 coords1 = to_numpy(per_res_coords[idx1])
                 coords2 = to_numpy(per_res_coords[idx2])
 
-                all_instances.append((coords1, coords2, atoms1))
+                # Check O3'-P bond length (use each residue's own atom ordering)
+                o3p_idx_1 = atoms1.index(residue_type.O3p.value)
+                p_idx_2 = atoms2.index(residue_type.P.value)
+                bond_length = np.linalg.norm(coords2[p_idx_2] - coords1[o3p_idx_1])
+
+                if bond_length > max_bond_length:
+                    continue
+
+                all_pairs.append((coords1, atoms1, coords2, atoms2))
                 count += 1
 
             if verbose:
@@ -454,68 +562,61 @@ def extract_residues_with_links(
             if verbose:
                 print(f"error: {e}")
 
-    if not all_instances:
+    if not all_pairs:
         raise ValueError(f"No {residue_type.name} residue pairs found")
 
     if verbose:
-        print(f"\nCollected {len(all_instances)} residue pairs")
+        print(f"\nCollected {len(all_pairs)} residue pairs")
 
-    # Find common atoms across all first residues
+    # Phase 2: Find common atoms across first residues
     atom_counts = Counter()
-    for _, _, atoms1 in all_instances:
+    for _, atoms1, _, _ in all_pairs:
         atom_counts.update(atoms1)
 
-    min_count = int(len(all_instances) * min_coverage)
+    min_count = int(len(all_pairs) * min_coverage)
     common_atoms = sorted([a for a, c in atom_counts.items() if c >= min_count])
 
     if verbose:
         print(f"Atoms with >={min_coverage*100:.0f}% coverage: {len(common_atoms)}")
 
-    # Filter instances that have all common atoms in both residues
+    # Phase 3: Filter to pairs where both residues have all common atoms
     common_set = set(common_atoms)
-    filtered = []
-    for coords1, coords2, atoms1 in all_instances:
-        # Check first residue has all common atoms
-        if not common_set.issubset(set(atoms1)):
-            continue
-        filtered.append((coords1, coords2, atoms1))
+    filtered_pairs = []
+    for raw_coords1, atoms1, raw_coords2, atoms2 in all_pairs:
+        if common_set.issubset(set(atoms1)) and common_set.issubset(set(atoms2)):
+            filtered_pairs.append((raw_coords1, atoms1, raw_coords2, atoms2))
 
     if verbose:
-        print(f"Instances with all common atoms: {len(filtered)}")
+        print(f"Pairs with all common atoms: {len(filtered_pairs)}")
 
-    # Build output arrays
+    # Phase 4: Remap, align, and compute transforms
+    n_pairs = len(filtered_pairs)
     n_atoms = len(common_atoms)
-    atom_to_col = {a: c for c, a in enumerate(common_atoms)}
 
-    coords_out = np.zeros((len(filtered), n_atoms, 3), dtype=np.float32)
-    transforms_out = np.zeros((len(filtered), 6), dtype=np.float32)
+    coords_out = np.zeros((n_pairs, n_atoms, 3), dtype=np.float32)
+    transforms_out = np.zeros((n_pairs, 6), dtype=np.float32)
 
-    for i, (raw_coords1, raw_coords2, atoms1) in enumerate(filtered):
-        # Map coords1 to common atom ordering
-        coords1 = np.zeros((n_atoms, 3), dtype=np.float32)
-        for atom_idx, coord in zip(atoms1, raw_coords1):
-            if atom_idx in atom_to_col:
-                coords1[atom_to_col[atom_idx]] = coord
+    for i, (raw_coords1, atoms1, raw_coords2, atoms2) in enumerate(filtered_pairs):
+        # Remap both residues to common atom ordering
+        coords1 = _remap_coords_to_common_atoms(raw_coords1, atoms1, common_atoms)
+        coords2 = _remap_coords_to_common_atoms(raw_coords2, atoms2, common_atoms)
 
-        # For coords2, we only need the link atoms for transform computation
-        # Map using atoms1 ordering (same residue type, so same atom indices)
-        atoms2 = atoms1  # Same residue type
-        coords2 = np.zeros((n_atoms, 3), dtype=np.float32)
-        for atom_idx, coord in zip(atoms2, raw_coords2):
-            if atom_idx in atom_to_col:
-                coords2[atom_to_col[atom_idx]] = coord
+        # Compute alignment frame from residue 1
+        origin, R = compute_glycosidic_frame(coords1, common_atoms, residue_type)
 
-        # Compute link transform
-        o1, R1, o2, R2 = compute_link_frames(coords1, coords2, common_atoms, residue_type)
-        transform = compute_relative_transform(o1, R1, o2, R2)
+        # Apply SAME transformation to both residues (preserves relative geometry)
+        coords1_aligned = (coords1 - origin) @ R
+        coords2_aligned = (coords2 - origin) @ R
 
-        coords_out[i] = coords1
+        # Compute link transform: O3' frame of res1 -> P frame of res2
+        o3p_origin, o3p_R = compute_o3p_frame(coords1_aligned, common_atoms, residue_type)
+        p_origin, p_R = compute_p_frame(coords2_aligned, common_atoms, residue_type)
+        transform = compute_relative_transform(o3p_origin, o3p_R, p_origin, p_R)
+
+        coords_out[i] = coords1_aligned
         transforms_out[i] = transform
 
-    # Align coordinates to canonical frame
-    coords_aligned = align_to_frame(coords_out, common_atoms, residue_type)
-
-    return coords_aligned, transforms_out, common_atoms
+    return coords_out, transforms_out, common_atoms
 
 
 def position_next_residue(
@@ -528,6 +629,10 @@ def position_next_residue(
     """
     Position residue 2 relative to residue 1 using the link transform.
 
+    This is the inverse of transform extraction: given coords1 and a transform,
+    position coords2 so that its P frame matches the target derived from
+    coords1's O3' frame + transform.
+
     Args:
         coords1: (n_atoms, 3) coordinates of first residue.
         coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
@@ -538,45 +643,37 @@ def position_next_residue(
     Returns:
         (n_atoms, 3) positioned coordinates of second residue.
     """
-    atom_to_col = {a: i for i, a in enumerate(atoms)}
-
     # Compute O3' frame from coords1
-    c4p_1 = coords1[atom_to_col[residue.C4p.value]]
-    c3p_1 = coords1[atom_to_col[residue.C3p.value]]
-    o3p_1 = coords1[atom_to_col[residue.O3p.value]]
-
-    o3p_origin = o3p_1
-    z1 = o3p_1 - c3p_1
-    z1 = z1 / (np.linalg.norm(z1) + 1e-8)
-    y_temp1 = c4p_1 - c3p_1
-    x1 = np.cross(y_temp1, z1)
-    x1 = x1 / (np.linalg.norm(x1) + 1e-8)
-    y1 = np.cross(z1, x1)
-    o3p_R = np.column_stack([x1, y1, z1]).astype(np.float32)
+    o3p_origin, o3p_R = compute_o3p_frame(coords1, atoms, residue)
 
     # Apply transform to get target P frame
     target_p_origin, target_p_R = apply_relative_transform(o3p_origin, o3p_R, rel_transform)
 
     # Compute current P frame from coords2
-    p_2 = coords2[atom_to_col[residue.P.value]]
-    o5p_2 = coords2[atom_to_col[residue.O5p.value]]
-    op1_2 = coords2[atom_to_col[residue.OP1.value]]
+    current_p_origin, current_p_R = compute_p_frame(coords2, atoms, residue)
 
-    current_p_origin = p_2
-    z2 = p_2 - o5p_2
-    z2 = z2 / (np.linalg.norm(z2) + 1e-8)
-    y_temp2 = op1_2 - p_2
-    x2 = np.cross(y_temp2, z2)
-    x2 = x2 / (np.linalg.norm(x2) + 1e-8)
-    y2 = np.cross(z2, x2)
-    current_p_R = np.column_stack([x2, y2, z2]).astype(np.float32)
-
-    # Compute and apply correction
+    # Compute rigid transformation to align current P frame to target P frame
     R_correction = target_p_R @ current_p_R.T
-    t_correction = target_p_origin - current_p_origin
+    t_correction = target_p_origin - R_correction @ current_p_origin
 
-    coords2_centered = coords2 - current_p_origin
-    coords2_rotated = (R_correction @ coords2_centered.T).T
-    coords2_final = coords2_rotated + current_p_origin + t_correction
+    # Apply transformation
+    coords2_positioned = (R_correction @ coords2.T).T + t_correction
 
-    return coords2_final.astype(np.float32)
+    return coords2_positioned.astype(np.float32)
+
+
+# Legacy compatibility aliases
+def compute_link_frames(
+    coords1: np.ndarray,
+    coords2: np.ndarray,
+    atoms: list[int],
+    residue: "Residue",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute frames at linking atoms (O3' of res1, P of res2).
+
+    This is a convenience function that combines compute_o3p_frame and compute_p_frame.
+    """
+    o3p_origin, o3p_R = compute_o3p_frame(coords1, atoms, residue)
+    p_origin, p_R = compute_p_frame(coords2, atoms, residue)
+    return o3p_origin, o3p_R, p_origin, p_R

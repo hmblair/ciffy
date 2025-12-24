@@ -16,39 +16,37 @@ Example:
     >>> model.atoms.index()  # array([0, 1, 2, ...])
     >>> len(model.atoms)     # 22
     >>>
-    >>> # Encode/decode
-    >>> z = model.encode(coords)
-    >>> coords_recon = model.decode(z)
+    >>> # Decode gives coords + link transform to next residue
+    >>> coords, transform = model.decode(z)
+    >>>
+    >>> # Position next residue using the transform
+    >>> from ciffy.nn.residue_flow import position_next_residue
+    >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
     >>>
     >>> # Sample new conformations
-    >>> samples = model.sample(n_samples=100)
-
-Extended Residue Flow (with backbone link information):
-    >>> from ciffy.nn.residue_flow import ExtendedResidueFlowModel
-    >>>
-    >>> # Train model that captures residue + link to next residue
-    >>> model = ExtendedResidueFlowModel.from_structures(cif_paths, Residue.A)
-    >>>
-    >>> # Decode gives coords + link transform
-    >>> coords, transform = model.decode_extended(z)
+    >>> coords, transforms = model.sample(n_samples=100)
 """
 
 from .model import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    ExtendedResidueFlowModel,
-    ExtendedResidueFlowConfig,
     create_atom_subset,
 )
 from .data import (
+    # Frame computation
+    compute_glycosidic_frame,
+    compute_o3p_frame,
+    compute_p_frame,
+    # SE(3) transforms
+    compute_relative_transform,
+    apply_relative_transform,
+    # Data extraction
     extract_residues,
     align_to_frame,
     extract_residues_with_links,
     position_next_residue,
     compute_link_frames,
-    compute_relative_transform,
-    apply_relative_transform,
 )
 from .train import train_pca_flow
 
@@ -57,17 +55,20 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    "ExtendedResidueFlowModel",
-    "ExtendedResidueFlowConfig",
     "create_atom_subset",
+    # Frame computation
+    "compute_glycosidic_frame",
+    "compute_o3p_frame",
+    "compute_p_frame",
+    # SE(3) transforms
+    "compute_relative_transform",
+    "apply_relative_transform",
     # Data extraction
     "extract_residues",
     "align_to_frame",
     "extract_residues_with_links",
     "position_next_residue",
     "compute_link_frames",
-    "compute_relative_transform",
-    "apply_relative_transform",
     # Training
     "train_pca_flow",
 ]

@@ -6,15 +6,13 @@ from __future__ import annotations
 
 import numpy as np
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from ciffy.utils.enum_base import IndexEnum, PairEnum
+from ciffy.utils.enum_base import IndexEnum
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -199,8 +197,7 @@ class PCAFlow(nn.Module):
     ):
         super().__init__()
         self.k = V.shape[0]  # Latent dimension
-        self.d = V.shape[1]  # Coordinate dimension (n_atoms * 3)
-        self.n_atoms = self.d // 3
+        self.d = V.shape[1]  # Coordinate dimension (n_atoms * 3 + 6)
         self.bound = bound
 
         # PCA parameters (fixed, not learned)
@@ -218,17 +215,16 @@ class PCAFlow(nn.Module):
         flat = x.reshape(-1, self.d)
         return (flat - self.mean) @ self.V.T
 
-    def pca_to_coords(self, pca: torch.Tensor) -> torch.Tensor:
-        """Reconstruct coordinates from PCA (approximate due to truncation)."""
-        flat = pca @ self.V + self.mean
-        return flat.reshape(-1, self.n_atoms, 3)
+    def pca_to_flat(self, pca: torch.Tensor) -> torch.Tensor:
+        """Reconstruct flat coordinates from PCA (approximate due to truncation)."""
+        return pca @ self.V + self.mean
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Encode coordinates to latent space.
 
         Args:
-            x: Coordinates (N, n_atoms, 3) or (N, n_atoms*3).
+            x: Coordinates (N, d) flat representation.
 
         Returns:
             z: Latent vectors (N, k).
@@ -245,13 +241,13 @@ class PCAFlow(nn.Module):
 
     def inverse(self, z: torch.Tensor) -> torch.Tensor:
         """
-        Decode latent vectors to coordinates.
+        Decode latent vectors to flat coordinates.
 
         Args:
             z: Latent vectors (N, k).
 
         Returns:
-            Coordinates (N, n_atoms, 3).
+            Flat coordinates (N, d).
         """
         if self.bound is not None:
             z = self.bound * torch.tanh(z / self.bound)
@@ -259,7 +255,7 @@ class PCAFlow(nn.Module):
         h = z
         for layer in reversed(self.layers):
             h = layer.inverse(h)
-        return self.pca_to_coords(h)
+        return self.pca_to_flat(h)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """Encode coordinates to latent space."""
@@ -267,7 +263,7 @@ class PCAFlow(nn.Module):
         return z
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent vectors to coordinates."""
+        """Decode latent vectors to flat coordinates (N, d)."""
         return self.inverse(z)
 
     def log_prob(self, x: torch.Tensor) -> torch.Tensor:
@@ -277,9 +273,14 @@ class PCAFlow(nn.Module):
         return log_pz + log_det
 
     def sample(self, n_samples: int) -> torch.Tensor:
-        """Sample new coordinates from the learned distribution."""
+        """Sample new flat coordinates from the learned distribution."""
         z = torch.randn(n_samples, self.k, device=self.V.device)
         return self.decode(z)
+
+
+# =============================================================================
+# JIT Decoder
+# =============================================================================
 
 
 class _JITDecoder(nn.Module):
@@ -290,10 +291,10 @@ class _JITDecoder(nn.Module):
     avoiding conditionals that complicate tracing.
     """
 
-    def __init__(self, flow: PCAFlow):
+    def __init__(self, flow: PCAFlow, n_atoms: int):
         super().__init__()
         self.k = flow.k
-        self.n_atoms = flow.n_atoms
+        self.n_atoms = n_atoms
         self.bound: float | None = flow.bound
 
         # Copy buffers
@@ -306,8 +307,8 @@ class _JITDecoder(nn.Module):
             copy.deepcopy(layer) for layer in reversed(list(flow.layers))
         ])
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent vectors to coordinates."""
+    def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Decode latent vectors to (coords, transforms)."""
         if self.bound is not None:
             z = self.bound * torch.tanh(z / self.bound)
 
@@ -315,13 +316,20 @@ class _JITDecoder(nn.Module):
         for layer in self.layers:
             h = layer.inverse(h)
 
-        # PCA to coords
+        # PCA to flat coords
         flat = h @ self.V + self.mean
-        return flat.reshape(-1, self.n_atoms, 3)
+
+        # Split into coords and transforms
+        n_coord_dims = self.n_atoms * 3
+        coords_flat = flat[:, :n_coord_dims]
+        transforms = flat[:, n_coord_dims:]
+        coords = coords_flat.reshape(-1, self.n_atoms, 3)
+
+        return coords, transforms
 
 
 # =============================================================================
-# High-Level Model Wrapper
+# ResidueFlowModel
 # =============================================================================
 
 
@@ -329,7 +337,7 @@ class _JITDecoder(nn.Module):
 class ResidueFlowConfig:
     """Configuration for ResidueFlowModel."""
 
-    latent_dim: int = 12
+    latent_dim: int = 8
     n_layers: int = 8
     hidden_dim: int = 64
     bound: float | None = 3.0
@@ -338,26 +346,30 @@ class ResidueFlowConfig:
 
 class ResidueFlowModel:
     """
-    High-level wrapper for training and using residue flow models.
+    Residue flow model that captures conformation and backbone link geometry.
 
-    This class handles data extraction, alignment, PCA computation,
-    and flow training in a single interface.
+    This model learns the joint distribution of residue coordinates AND
+    the SE(3) transform to the next residue in the chain. This enables
+    sampling residue conformations with realistic backbone connectivity.
+
+    The representation is: [coords_flat (n_atoms*3), transform (6)]
+    where transform = [axis-angle (3), translation (3)] defines the relative
+    position and orientation of the next residue's P atom.
 
     Attributes:
         flow: The underlying PCAFlow model.
-        residue: The source residue type (e.g., Residue.A).
-        atoms: IndexEnum subset containing only the atoms used by this model.
-               Provides full IndexEnum interface: index(), list(), dict(), etc.
+        residue: The source residue type.
+        atoms: IndexEnum subset containing the atoms used.
+        n_atoms: Number of atoms per residue.
         pca_rmsd: Reconstruction RMSD from PCA truncation.
-        var_explained: Fraction of variance explained by the latent dimensions.
+        var_explained: Fraction of variance explained.
 
     Example:
         >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
-        >>> model.atoms.list()  # ['C1p', 'C2p', 'O2p', ...]
-        >>> model.atoms.index()  # array([0, 1, 2, ...])
-        >>> len(model.atoms)  # 22
-        >>> samples = model.sample(100)
-        >>> model.save("adenosine_flow.pt")
+        >>> coords, transform = model.decode(z)
+        >>> # Position next residue using the transform
+        >>> from ciffy.nn.residue_flow import position_next_residue
+        >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
     """
 
     def __init__(
@@ -365,6 +377,7 @@ class ResidueFlowModel:
         flow: PCAFlow,
         residue: "Residue",
         atom_indices: list[int],
+        n_atoms: int,
         pca_rmsd: float,
         var_explained: float,
         jit: bool = False,
@@ -372,7 +385,8 @@ class ResidueFlowModel:
         self.flow = flow
         self.residue = residue
         self._atom_indices = atom_indices
-        self._atoms_enum: type[IndexEnum] | None = None  # Lazy-created
+        self.n_atoms = n_atoms
+        self._atoms_enum: type[IndexEnum] | None = None
         self.pca_rmsd = pca_rmsd
         self.var_explained = var_explained
         self._jit_decoder: torch.jit.ScriptModule | None = None
@@ -380,22 +394,21 @@ class ResidueFlowModel:
         if jit:
             self._compile_jit()
 
+    def _compile_jit(self) -> None:
+        """Compile the decoder to TorchScript for faster inference."""
+        self.flow.eval()
+        decoder = _JITDecoder(self.flow, self.n_atoms)
+        decoder.eval()
+        self._jit_decoder = torch.jit.script(decoder)
+
+    @property
+    def is_jit(self) -> bool:
+        """Whether the decoder is JIT-compiled."""
+        return self._jit_decoder is not None
+
     @property
     def atoms(self) -> type[IndexEnum]:
-        """
-        IndexEnum subset containing only the atoms used by this model.
-
-        Provides the full IndexEnum interface:
-            - len(atoms): Number of atoms
-            - atoms.list(): List of atom names
-            - atoms.index(): Array of atom indices
-            - atoms.dict(): Name → index mapping
-            - atoms.revdict(): Index → name mapping
-            - Iteration: for atom in atoms
-
-        Returns:
-            IndexEnum class with the subset of atoms.
-        """
+        """IndexEnum subset containing the atoms used by this model."""
         if self._atoms_enum is None:
             self._atoms_enum = create_atom_subset(self.residue, self._atom_indices)
         return self._atoms_enum
@@ -424,294 +437,11 @@ class ResidueFlowModel:
         Returns:
             Trained ResidueFlowModel.
         """
-        from .data import extract_residues, align_to_frame, compute_pca
-        from .train import train_pca_flow
-
-        if config is None:
-            config = ResidueFlowConfig()
-
-        # Extract and align
-        if verbose:
-            print(f"Extracting {residue.name} residues...")
-        coords, atoms = extract_residues(
-            cif_paths, residue, min_coverage=config.min_coverage, verbose=verbose
-        )
-        coords = align_to_frame(coords, atoms, residue)
-
-        if verbose:
-            print(f"Dataset: {len(coords)} instances, {len(atoms)} atoms")
-
-        # Train
-        flow, info = train_pca_flow(
-            coords,
-            latent_dim=config.latent_dim,
-            n_layers=config.n_layers,
-            hidden_dim=config.hidden_dim,
-            bound=config.bound,
-            n_epochs=n_epochs,
-            device=device,
-            verbose=verbose,
-        )
-
-        return cls(
-            flow=flow,
-            residue=residue,
-            atom_indices=atoms,
-            pca_rmsd=info["pca_rmsd"],
-            var_explained=info["var_explained"],
-        )
-
-    def _compile_jit(self) -> None:
-        """Compile the decoder to TorchScript for faster inference."""
-        self.flow.eval()
-        decoder = _JITDecoder(self.flow)
-        decoder.eval()
-        self._jit_decoder = torch.jit.script(decoder)
-
-    @property
-    def is_jit(self) -> bool:
-        """Whether the decoder is JIT-compiled."""
-        return self._jit_decoder is not None
-
-    def encode(self, coords: torch.Tensor) -> torch.Tensor:
-        """Encode coordinates to latent space."""
-        n_atoms = len(self._atom_indices)
-        if coords.shape[-2:] != (n_atoms, 3) and coords.shape[-1] != n_atoms * 3:
-            raise ValueError(
-                f"Expected coords shape (..., {n_atoms}, 3) or (..., {n_atoms * 3}), "
-                f"got {tuple(coords.shape)}"
-            )
-        if coords.device != self.flow.V.device:
-            raise ValueError(
-                f"Input on {coords.device}, model on {self.flow.V.device}. "
-                f"Use coords.to('{self.flow.V.device}') first."
-            )
-        return self.flow.encode(coords)
-
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent vectors to coordinates."""
-        # Validate shape
-        if z.shape[-1] != self.flow.k:
-            raise ValueError(
-                f"Expected latent dim {self.flow.k}, got {z.shape[-1]}"
-            )
-
-        # Validate device
-        if z.device != self.flow.V.device:
-            raise ValueError(
-                f"Input on {z.device}, model on {self.flow.V.device}. "
-                f"Use z.to('{self.flow.V.device}') first."
-            )
-
-        if self._jit_decoder is not None:
-            return self._jit_decoder(z)
-        return self.flow.decode(z)
-
-    def sample(self, n_samples: int) -> torch.Tensor:
-        """Sample new conformations."""
-        with torch.no_grad():
-            z = torch.randn(n_samples, self.flow.k, device=self.flow.V.device)
-            return self.decode(z)
-
-    def save(self, path: str | Path) -> None:
-        """
-        Save model to directory.
-
-        Creates a directory containing:
-            - tensors.safetensors: Model weights (V, mean, flow parameters)
-            - config.json: Metadata (residue, atoms, metrics)
-
-        Args:
-            path: Directory path to save to. Created if it doesn't exist.
-        """
-        import json
-        from safetensors.torch import save_file
-
-        path = Path(path)
-        path.mkdir(parents=True, exist_ok=True)
-
-        # Save flow state dict (includes V and mean as buffers)
-        tensors = {k: v.cpu().contiguous() for k, v in self.flow.state_dict().items()}
-        save_file(tensors, path / "tensors.safetensors")
-
-        # Save metadata as JSON (convert numpy types to Python types)
-        import ciffy
-        config = {
-            "version": ciffy.__version__,
-            "residue_name": self.residue.name,
-            "atom_indices": [int(x) for x in self._atom_indices],
-            "n_layers": len(self.flow.layers) // 2,
-            "hidden_dim": self.flow.layers[1].net.net[0].out_features,
-            "bound": float(self.flow.bound) if self.flow.bound is not None else None,
-            "pca_rmsd": float(self.pca_rmsd),
-            "var_explained": float(self.var_explained),
-        }
-        with open(path / "config.json", "w") as f:
-            json.dump(config, f, indent=2)
-
-    @classmethod
-    def load(
-        cls,
-        path: str | Path,
-        device: str = "cpu",
-        jit: bool = True,
-    ) -> "ResidueFlowModel":
-        """
-        Load model from directory.
-
-        Args:
-            path: Directory containing tensors.safetensors and config.json.
-            device: Device to load model onto.
-            jit: Whether to JIT-compile the decoder for faster inference.
-
-        Returns:
-            Loaded ResidueFlowModel.
-        """
-        import json
-        from safetensors.torch import load_file
-        from ciffy.biochemistry import Residue
-
-        path = Path(path)
-
-        tensors = load_file(path / "tensors.safetensors", device=device)
-        with open(path / "config.json") as f:
-            config = json.load(f)
-
-        V = tensors["V"].float()
-        mean = tensors["mean"].float()
-
-        flow = PCAFlow(
-            V, mean,
-            n_layers=config["n_layers"],
-            hidden_dim=config["hidden_dim"],
-            bound=config["bound"],
-        ).to(device)
-        flow.load_state_dict(tensors)
-
-        residue = getattr(Residue, config["residue_name"])
-
-        return cls(
-            flow=flow,
-            residue=residue,
-            atom_indices=config["atom_indices"],
-            pca_rmsd=config["pca_rmsd"],
-            var_explained=config["var_explained"],
-            jit=jit,
-        )
-
-    @property
-    def latent_dim(self) -> int:
-        """Dimensionality of the latent space."""
-        return self.flow.k
-
-    def __repr__(self) -> str:
-        return (
-            f"ResidueFlowModel({self.residue.name}, "
-            f"atoms={len(self._atom_indices)}, "
-            f"latent_dim={self.flow.k}, "
-            f"var={self.var_explained*100:.1f}%, "
-            f"rmsd={self.pca_rmsd:.3f}Å)"
-        )
-
-
-# =============================================================================
-# Extended Residue Flow Model (with backbone link)
-# =============================================================================
-
-
-@dataclass
-class ExtendedResidueFlowConfig:
-    """Configuration for ExtendedResidueFlowModel."""
-
-    latent_dim: int = 8
-    n_layers: int = 8
-    hidden_dim: int = 64
-    bound: float | None = 3.0
-    min_coverage: float = 0.9
-
-
-class ExtendedResidueFlowModel:
-    """
-    Extended residue flow model that captures backbone link geometry.
-
-    This model learns the joint distribution of residue coordinates AND
-    the SE(3) transform to the next residue in the chain. This enables
-    sampling residue conformations with realistic backbone connectivity.
-
-    The extended representation is: [coords_flat (n_atoms*3), transform (6)]
-    where transform = [axis-angle (3), translation (3)] defines the relative
-    position and orientation of the next residue's P atom.
-
-    Attributes:
-        flow: The underlying PCAFlow model.
-        residue: The source residue type.
-        atoms: IndexEnum subset containing the atoms used.
-        n_atoms: Number of atoms per residue.
-        pca_rmsd: Reconstruction RMSD from PCA truncation.
-        var_explained: Fraction of variance explained.
-
-    Example:
-        >>> model = ExtendedResidueFlowModel.from_structures(cif_paths, Residue.A)
-        >>> z = model.encode(coords, transforms)
-        >>> coords, transform = model.decode_extended(z)
-        >>> # Position next residue using the transform
-        >>> from ciffy.nn.residue_flow import position_next_residue
-        >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
-    """
-
-    def __init__(
-        self,
-        flow: PCAFlow,
-        residue: "Residue",
-        atom_indices: list[int],
-        n_atoms: int,
-        pca_rmsd: float,
-        var_explained: float,
-    ):
-        self.flow = flow
-        self.residue = residue
-        self._atom_indices = atom_indices
-        self.n_atoms = n_atoms
-        self._atoms_enum: type[IndexEnum] | None = None
-        self.pca_rmsd = pca_rmsd
-        self.var_explained = var_explained
-
-    @property
-    def atoms(self) -> type[IndexEnum]:
-        """IndexEnum subset containing the atoms used by this model."""
-        if self._atoms_enum is None:
-            self._atoms_enum = create_atom_subset(self.residue, self._atom_indices)
-        return self._atoms_enum
-
-    @classmethod
-    def from_structures(
-        cls,
-        cif_paths: list[Path],
-        residue: "Residue",
-        config: ExtendedResidueFlowConfig | None = None,
-        n_epochs: int = 200,
-        device: str = "cpu",
-        verbose: bool = True,
-    ) -> "ExtendedResidueFlowModel":
-        """
-        Train an extended model from CIF structures.
-
-        Args:
-            cif_paths: List of paths to CIF files.
-            residue: Residue type to extract.
-            config: Model configuration.
-            n_epochs: Number of training epochs.
-            device: Device to train on.
-            verbose: Print progress.
-
-        Returns:
-            Trained ExtendedResidueFlowModel.
-        """
         from .data import extract_residues_with_links, compute_pca
         import torch.optim as optim
 
         if config is None:
-            config = ExtendedResidueFlowConfig()
+            config = ResidueFlowConfig()
 
         # Extract residues with link transforms
         if verbose:
@@ -750,7 +480,6 @@ class ExtendedResidueFlowModel:
             print(f"PCA: {config.latent_dim} dims, {pca_var*100:.1f}% var, RMSD={pca_rmsd:.4f}")
 
         # Create model
-        import torch
         V_tensor = torch.from_numpy(V).float()
         mean_tensor = torch.from_numpy(mean).float()
         flow = PCAFlow(
@@ -791,7 +520,6 @@ class ExtendedResidueFlowModel:
         if verbose:
             with torch.no_grad():
                 recon = flow.decode(flow.encode(X))
-                # Flatten for comparison
                 recon_flat = recon.reshape(n_instances, -1)
                 flow_rmsd = float(torch.sqrt(((recon_flat - X) ** 2).mean()).item())
             print(f"Final: RMSD={flow_rmsd:.4f} (PCA={pca_rmsd:.4f})")
@@ -811,7 +539,7 @@ class ExtendedResidueFlowModel:
         transforms: "torch.Tensor | None" = None,
     ) -> "torch.Tensor":
         """
-        Encode coordinates (and optionally transforms) to latent space.
+        Encode coordinates and transforms to latent space.
 
         Args:
             coords: (N, n_atoms, 3) or (N, n_atoms*3) coordinates.
@@ -820,8 +548,6 @@ class ExtendedResidueFlowModel:
         Returns:
             (N, latent_dim) latent vectors.
         """
-        import torch
-
         # Flatten coords if needed
         if coords.dim() == 3:
             coords = coords.reshape(coords.shape[0], -1)
@@ -833,23 +559,7 @@ class ExtendedResidueFlowModel:
         extended = torch.cat([coords, transforms], dim=-1)
         return self.flow.encode(extended)
 
-    def decode(self, z: "torch.Tensor") -> "torch.Tensor":
-        """
-        Decode latent vectors to extended representation.
-
-        Args:
-            z: (N, latent_dim) latent vectors.
-
-        Returns:
-            (N, n_atoms*3 + 6) extended representation.
-            Use decode_extended() to get separate coords and transforms.
-        """
-        decoded = self.flow.decode(z)
-        # PCAFlow reshapes to (N, n_atoms, 3), but n_atoms here includes
-        # the 6 transform values divided by 3, so we need to flatten
-        return decoded.reshape(z.shape[0], -1)
-
-    def decode_extended(
+    def decode(
         self,
         z: "torch.Tensor",
     ) -> tuple["torch.Tensor", "torch.Tensor"]:
@@ -863,7 +573,10 @@ class ExtendedResidueFlowModel:
             coords: (N, n_atoms, 3) residue coordinates.
             transforms: (N, 6) SE(3) transforms [axis-angle, translation].
         """
-        extended = self.decode(z)
+        if self._jit_decoder is not None:
+            return self._jit_decoder(z)
+
+        extended = self.flow.decode(z)
         n_coord_dims = self.n_atoms * 3
 
         coords_flat = extended[:, :n_coord_dims]
@@ -880,10 +593,9 @@ class ExtendedResidueFlowModel:
             coords: (N, n_atoms, 3) sampled coordinates.
             transforms: (N, 6) sampled SE(3) transforms.
         """
-        import torch
         with torch.no_grad():
             z = torch.randn(n_samples, self.flow.k, device=self.flow.V.device)
-            return self.decode_extended(z)
+            return self.decode(z)
 
     def save(self, path: str | Path) -> None:
         """Save model to directory."""
@@ -899,7 +611,6 @@ class ExtendedResidueFlowModel:
         import ciffy
         config = {
             "version": ciffy.__version__,
-            "model_type": "extended",
             "residue_name": self.residue.name,
             "atom_indices": [int(x) for x in self._atom_indices],
             "n_atoms": self.n_atoms,
@@ -917,8 +628,19 @@ class ExtendedResidueFlowModel:
         cls,
         path: str | Path,
         device: str = "cpu",
-    ) -> "ExtendedResidueFlowModel":
-        """Load model from directory."""
+        jit: bool = False,
+    ) -> "ResidueFlowModel":
+        """
+        Load model from directory.
+
+        Args:
+            path: Directory containing saved model.
+            device: Device to load model to.
+            jit: Whether to JIT-compile the decoder for faster inference.
+
+        Returns:
+            Loaded ResidueFlowModel.
+        """
         import json
         from safetensors.torch import load_file
         from ciffy.biochemistry import Residue
@@ -949,6 +671,7 @@ class ExtendedResidueFlowModel:
             n_atoms=config["n_atoms"],
             pca_rmsd=config["pca_rmsd"],
             var_explained=config["var_explained"],
+            jit=jit,
         )
 
     @property
@@ -958,7 +681,7 @@ class ExtendedResidueFlowModel:
 
     def __repr__(self) -> str:
         return (
-            f"ExtendedResidueFlowModel({self.residue.name}, "
+            f"ResidueFlowModel({self.residue.name}, "
             f"atoms={self.n_atoms}, "
             f"latent_dim={self.flow.k}, "
             f"var={self.var_explained*100:.1f}%, "

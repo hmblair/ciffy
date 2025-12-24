@@ -282,6 +282,44 @@ class PCAFlow(nn.Module):
         return self.decode(z)
 
 
+class _JITDecoder(nn.Module):
+    """
+    JIT-compatible decoder wrapper.
+
+    Extracts just the decode path with bound baked in as a constant,
+    avoiding conditionals that complicate tracing.
+    """
+
+    def __init__(self, flow: PCAFlow):
+        super().__init__()
+        self.k = flow.k
+        self.n_atoms = flow.n_atoms
+        self.bound: float | None = flow.bound
+
+        # Copy buffers
+        self.register_buffer("V", flow.V.clone())
+        self.register_buffer("mean", flow.mean.clone())
+
+        # Copy layers in reverse order (TorchScript doesn't support reversed())
+        import copy
+        self.layers = nn.ModuleList([
+            copy.deepcopy(layer) for layer in reversed(list(flow.layers))
+        ])
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        """Decode latent vectors to coordinates."""
+        if self.bound is not None:
+            z = self.bound * torch.tanh(z / self.bound)
+
+        h = z
+        for layer in self.layers:
+            h = layer.inverse(h)
+
+        # PCA to coords
+        flat = h @ self.V + self.mean
+        return flat.reshape(-1, self.n_atoms, 3)
+
+
 # =============================================================================
 # High-Level Model Wrapper
 # =============================================================================
@@ -329,6 +367,7 @@ class ResidueFlowModel:
         atom_indices: list[int],
         pca_rmsd: float,
         var_explained: float,
+        jit: bool = False,
     ):
         self.flow = flow
         self.residue = residue
@@ -336,6 +375,10 @@ class ResidueFlowModel:
         self._atoms_enum: type[IndexEnum] | None = None  # Lazy-created
         self.pca_rmsd = pca_rmsd
         self.var_explained = var_explained
+        self._jit_decoder: torch.jit.ScriptModule | None = None
+
+        if jit:
+            self._compile_jit()
 
     @property
     def atoms(self) -> type[IndexEnum]:
@@ -418,6 +461,18 @@ class ResidueFlowModel:
             var_explained=info["var_explained"],
         )
 
+    def _compile_jit(self) -> None:
+        """Compile the decoder to TorchScript for faster inference."""
+        self.flow.eval()
+        decoder = _JITDecoder(self.flow)
+        decoder.eval()
+        self._jit_decoder = torch.jit.script(decoder)
+
+    @property
+    def is_jit(self) -> bool:
+        """Whether the decoder is JIT-compiled."""
+        return self._jit_decoder is not None
+
     def encode(self, coords: np.ndarray | torch.Tensor) -> torch.Tensor:
         """Encode coordinates to latent space."""
         if isinstance(coords, np.ndarray):
@@ -427,12 +482,15 @@ class ResidueFlowModel:
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """Decode latent vectors to coordinates."""
+        if self._jit_decoder is not None:
+            return self._jit_decoder(z)
         return self.flow.decode(z)
 
     def sample(self, n_samples: int) -> np.ndarray:
         """Sample new conformations."""
         with torch.no_grad():
-            samples = self.flow.sample(n_samples)
+            z = torch.randn(n_samples, self.flow.k, device=self.flow.V.device)
+            samples = self.decode(z)
         return samples.cpu().numpy()
 
     def save(self, path: str | Path) -> None:
@@ -470,13 +528,19 @@ class ResidueFlowModel:
             json.dump(config, f, indent=2)
 
     @classmethod
-    def load(cls, path: str | Path, device: str = "cpu") -> "ResidueFlowModel":
+    def load(
+        cls,
+        path: str | Path,
+        device: str = "cpu",
+        jit: bool = True,
+    ) -> "ResidueFlowModel":
         """
         Load model from directory.
 
         Args:
             path: Directory containing tensors.safetensors and config.json.
             device: Device to load model onto.
+            jit: Whether to JIT-compile the decoder for faster inference.
 
         Returns:
             Loaded ResidueFlowModel.
@@ -510,6 +574,7 @@ class ResidueFlowModel:
             atom_indices=config["atom_indices"],
             pca_rmsd=config["pca_rmsd"],
             var_explained=config["var_explained"],
+            jit=jit,
         )
 
     @property

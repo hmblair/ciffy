@@ -195,6 +195,46 @@ class TestPCAFlow:
                 loaded_out = loaded.flow.decode(z_test)
             assert torch.allclose(orig_out, loaded_out, atol=1e-6)
 
+    def test_jit_compilation(self, sample_coords):
+        """Test JIT compilation of decoder."""
+        from ciffy.nn.residue_flow import ResidueFlowModel
+        from ciffy.biochemistry import Residue
+
+        flow, info = train_pca_flow(
+            sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
+            n_epochs=10, verbose=False
+        )
+
+        # Create model without JIT
+        model_no_jit = ResidueFlowModel(
+            flow=flow,
+            residue=Residue.A,
+            atom_indices=list(Residue.A.index()[:10]),
+            pca_rmsd=info["pca_rmsd"],
+            var_explained=info["var_explained"],
+            jit=False,
+        )
+
+        # Create model with JIT
+        model_jit = ResidueFlowModel(
+            flow=flow,
+            residue=Residue.A,
+            atom_indices=list(Residue.A.index()[:10]),
+            pca_rmsd=info["pca_rmsd"],
+            var_explained=info["var_explained"],
+            jit=True,
+        )
+
+        assert not model_no_jit.is_jit
+        assert model_jit.is_jit
+
+        # Verify outputs match
+        z = torch.randn(5, 6)
+        with torch.no_grad():
+            out_no_jit = model_no_jit.decode(z)
+            out_jit = model_jit.decode(z)
+        assert torch.allclose(out_no_jit, out_jit, atol=1e-6)
+
 
 class TestTrainPCAFlow:
     """Tests for train_pca_flow function."""

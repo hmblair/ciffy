@@ -3,6 +3,27 @@ ciffy - Fast CIF file parsing for molecular structures.
 
 A Python package for loading and manipulating molecular structures from
 CIF (Crystallographic Information File) format files.
+
+Primary API:
+    load(path)              Load structure from CIF file
+    Polymer                 Main structure class
+    Scale                   Hierarchy levels (ATOM, RESIDUE, CHAIN, MOLECULE)
+    Molecule                Molecule types (PROTEIN, RNA, DNA, ...)
+    Residue                 Residue types with atom accessors
+
+Operations:
+    rmsd(p1, p2, scale)     Kabsch-aligned RMSD
+    align(p1, p2, scale)    Align structures
+    tm_score(pred, ref)     TM-score
+    lddt(pred, ref)         lDDT score
+    join(*polymers)         Combine polymers
+
+Submodules:
+    ciffy.biochemistry      Full biochemistry constants and types
+    ciffy.nn                Neural network utilities (requires PyTorch)
+    ciffy.flow              High-level flow model API
+    ciffy.visualize         Visualization utilities
+    ciffy.operations        All operations (alignment, metrics, reduction)
 """
 
 from importlib.metadata import version, PackageNotFoundError
@@ -34,19 +55,9 @@ except ImportError as e:
 
 # Core types
 from .polymer import Polymer
-from .biochemistry import (
-    Scale, Molecule, DihedralType,
-    PROTEIN_BACKBONE, RNA_BACKBONE, RNA_GLYCOSIDIC,
-    DIHEDRAL_ATOMS, DIHEDRAL_NAME_TO_TYPE,
-)
+from .biochemistry import Scale, Molecule, Residue
 
-# Operations
-from .operations.reduction import Reduction
-from .operations.alignment import kabsch_distance as rmsd, kabsch_rotation, kabsch_align, align
-from .operations.metrics import tm_score, lddt
-from .operations.chain import join
-
-# I/O
+# Primary I/O
 from .io.loader import load, load_metadata
 from .io.writer import write_cif
 
@@ -56,20 +67,20 @@ from .template import from_sequence, from_extract
 # Ensemble for conformational analysis
 from .ensemble import Ensemble
 
-# Vocabulary sizes (for embedding layers)
-from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
+# Operations - commonly used, re-exported at top level
+from .operations.alignment import kabsch_distance as rmsd, align
+from .operations.metrics import tm_score, lddt
+from .operations.chain import join
+from .operations.reduction import Reduction
 
-# Re-export Residue for common use cases (reduce imports needed)
-from .biochemistry import Residue
-
-# Neural network utilities (requires PyTorch)
+# Submodules (lazy-ish - imported but not used directly)
+from . import biochemistry
+from . import operations
 from . import nn
-
-# High-level flow API
 from . import flow
-
-# Visualization utilities
 from . import visualize
+
+# Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map
 
 # Expose profiling function if available (when built with CIFFY_PROFILE=1)
@@ -78,7 +89,7 @@ try:
 except (ImportError, AttributeError):
     pass  # Profiling not enabled in this build
 
-# Convenience aliases
+# Convenience aliases - these are commonly used so we keep them
 ATOM = Scale.ATOM
 RESIDUE = Scale.RESIDUE
 CHAIN = Scale.CHAIN
@@ -98,35 +109,33 @@ __all__ = [
     "Polymer",
     "Scale",
     "Molecule",
-    "DihedralType",
-    "PROTEIN_BACKBONE",
-    "RNA_BACKBONE",
-    "RNA_GLYCOSIDIC",
-    "DIHEDRAL_ATOMS",
-    "DIHEDRAL_NAME_TO_TYPE",
-    "Reduction",
-    # Functions
+    "Residue",
+    # I/O
     "load",
     "load_metadata",
     "write_cif",
+    # Template
     "from_sequence",
     "from_extract",
+    # Ensemble
     "Ensemble",
+    # Operations
     "rmsd",
-    "kabsch_rotation",
-    "kabsch_align",
     "align",
     "tm_score",
     "lddt",
     "join",
-    # Vocabulary sizes
-    "NUM_ELEMENTS",
-    "NUM_RESIDUES",
-    "NUM_ATOMS",
-    # Common biochemistry types
-    "Residue",
-    # High-level flow API
+    "Reduction",
+    # Submodules
+    "biochemistry",
+    "operations",
+    "nn",
     "flow",
+    "visualize",
+    # Visualization
+    "to_defattr",
+    "plot_profile",
+    "contact_map",
     # Convenience aliases
     "ATOM",
     "RESIDUE",
@@ -138,11 +147,4 @@ __all__ = [
     "LIGAND",
     "ION",
     "WATER",
-    # Submodules
-    "nn",
-    "visualize",
-    # Visualization functions
-    "to_defattr",
-    "plot_profile",
-    "contact_map",
 ]

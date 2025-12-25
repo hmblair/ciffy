@@ -24,10 +24,6 @@ from .biochemistry import (
     Residue,
     ATOM_NAMES,
     ELEMENT_NAMES,
-    Backbone,
-    Nucleobase,
-    Phosphate,
-    Sidechain,
 )
 from .utils import all_equal, filter_by_mask
 from .utils.formatting import format_chain_table
@@ -854,10 +850,8 @@ class Polymer:
         Returns:
             Boolean array at dest scale.
         """
-        counts = self.size(source)
-        objects = ops.zeros(counts, like=self.coordinates, dtype='bool')
-        objects[indices] = True
-        return self.expand(objects, source, dest)
+        from .selection import mask
+        return mask(self, indices, source, dest)
 
     def __getitem__(self: Polymer, key: Array | slice) -> Polymer:
         """
@@ -924,48 +918,8 @@ class Polymer:
         Raises:
             IndexError: If any index is out of range.
         """
-        if isinstance(ix, int):
-            ix = ops.array([ix], like=self.coordinates)
-
-        # Validate indices
-        max_chain = self.size(Scale.CHAIN)
-        ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
-        for j in ix_list:
-            if j < 0 or j >= max_chain:
-                raise IndexError(
-                    f"Chain index {j} out of range for Polymer with {max_chain} chains"
-                )
-
-        atm_ix = self.mask(ix, Scale.CHAIN, Scale.ATOM)
-        res_ix = self.mask(ix, Scale.CHAIN, Scale.RESIDUE)
-
-        coordinates = self.coordinates[atm_ix]
-        atoms = self.atoms[atm_ix]
-        elements = self.elements[atm_ix]
-        lengths = self.lengths[ix]
-
-        sizes = {
-            Scale.RESIDUE: self._sizes[Scale.RESIDUE][res_ix],
-            Scale.CHAIN: self._sizes[Scale.CHAIN][ix],
-            Scale.MOLECULE: ops.array([len(coordinates)], like=self.coordinates),
-        }
-
-        sequence = self.sequence[res_ix]
-        names = [self.names[j] for j in ix]
-        strands = [self.strands[j] for j in ix]
-
-        # Calculate new polymer_count from residue sizes
-        # (residue atoms are always polymer atoms)
-        new_polymer_count = sizes[Scale.RESIDUE].sum().item()
-
-        # Preserve molecule types if available
-        mol_types = self._molecule_types[ix] if self._molecule_types is not None else None
-
-        return Polymer(
-            coordinates, atoms, elements, sequence, sizes,
-            self.pdb_id, names, strands, lengths, new_polymer_count,
-            mol_types,
-        )
+        from .selection import by_index
+        return by_index(self, ix)
 
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """
@@ -977,9 +931,8 @@ class Polymer:
         Returns:
             New Polymer with matching atoms.
         """
-        name = ops.convert_backend(name, self.atoms)
-        mask = (self.atoms[:, None] == name).any(1)
-        return self[mask]
+        from .selection import by_atom
+        return by_atom(self, name)
 
     def by_residue(self: Polymer, res: Array | int) -> Polymer:
         """
@@ -996,10 +949,8 @@ class Polymer:
             >>> adenosines = polymer.by_residue(Residue.A)
             >>> purines = polymer.by_residue([Residue.A, Residue.G])
         """
-        res = ops.convert_backend(res, self.sequence)
-        res_mask = (self.sequence[:, None] == res).any(1)
-        atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-        return self[atom_mask]
+        from .selection import by_residue
+        return by_residue(self, res)
 
     def by_residue_index(self: Polymer, ix: Array | int) -> Polymer:
         """
@@ -1026,20 +977,8 @@ class Polymer:
             >>> from ciffy.biochemistry import Sugar
             >>> first_c5 = polymer.by_residue_index(0).by_atom(Sugar.C5p.index())
         """
-        if isinstance(ix, int):
-            ix = ops.array([ix], like=self.coordinates)
-
-        # Validate indices
-        max_res = self.size(Scale.RESIDUE)
-        ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
-        for j in ix_list:
-            if j < 0 or j >= max_res:
-                raise IndexError(
-                    f"Residue index {j} out of range for Polymer with {max_res} residues"
-                )
-
-        atom_mask = self.mask(ix, Scale.RESIDUE, Scale.ATOM)
-        return self[atom_mask]
+        from .selection import by_residue_index
+        return by_residue_index(self, ix)
 
     def by_type(self: Polymer, mol: Molecule) -> Polymer:
         """
@@ -1051,8 +990,8 @@ class Polymer:
         Returns:
             New Polymer with chains of that type.
         """
-        ix = ops.nonzero_1d(self.molecule_type == mol.value)
-        return self.by_index(ix)
+        from .selection import by_type
+        return by_type(self, mol)
 
     def poly(self: Polymer) -> Polymer:
         """
@@ -1072,39 +1011,8 @@ class Polymer:
             >>> rna = p.poly()  # Get polymer only
             >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
         """
-        if self.nonpoly == 0:
-            return self
-
-        # Slice to polymer atoms only
-        coordinates = self.coordinates[:self.polymer_count]
-        atoms = self.atoms[:self.polymer_count]
-        elements = self.elements[:self.polymer_count]
-
-        # Keep only chains that have residues (polymer chains)
-        chain_mask = self.lengths > 0
-        lengths = self.lengths[chain_mask]
-        names = filter_by_mask(self.names, chain_mask)
-        strands = filter_by_mask(self.strands, chain_mask)
-
-        # Calculate chain sizes from residue sizes (atoms per chain = sum of
-        # atoms per residue for that chain)
-        chn_sizes = self.rreduce(self._sizes[Scale.RESIDUE], Scale.CHAIN, Reduction.SUM)
-        chn_sizes = chn_sizes[chain_mask]
-
-        sizes = {
-            Scale.RESIDUE: self._sizes[Scale.RESIDUE],  # Unchanged
-            Scale.CHAIN: chn_sizes,
-            Scale.MOLECULE: ops.array([self.polymer_count], like=self.coordinates),
-        }
-
-        # Filter molecule types if available
-        mol_types = self._molecule_types[chain_mask] if self._molecule_types is not None else None
-
-        return Polymer(
-            coordinates, atoms, elements, self.sequence, sizes,
-            self.pdb_id, names, strands, lengths, self.polymer_count,
-            mol_types,
-        )
+        from .selection import poly
+        return poly(self)
 
     def hetero(self: Polymer) -> Polymer:
         """
@@ -1125,7 +1033,8 @@ class Polymer:
             >>> if not ligands.empty():
             ...     ligands.center(Scale.ATOM)  # Works on atom scale
         """
-        return self[self.polymer_count:]
+        from .selection import hetero
+        return hetero(self)
 
     def chains(
         self: Polymer,
@@ -1140,10 +1049,8 @@ class Polymer:
         Yields:
             Individual chain Polymers.
         """
-        for ix in range(self.size(Scale.CHAIN)):
-            chain = self.by_index(ix)
-            if mol is None or chain.istype(mol):
-                yield chain
+        from .selection import chains
+        return chains(self, mol)
 
     def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
         """
@@ -1155,7 +1062,8 @@ class Polymer:
         Returns:
             Boolean tensor where True indicates resolved units.
         """
-        return self._sizes[scale] != 0
+        from .selection import resolved
+        return resolved(self, scale)
 
     def strip(self: Polymer, scale: Scale = Scale.RESIDUE) -> Polymer:
         """
@@ -1167,16 +1075,8 @@ class Polymer:
         Returns:
             New Polymer without empty units.
         """
-        poly = copy(self)
-
-        resolved = self._sizes[scale] > 0
-        poly._sizes = copy(self._sizes)
-        poly._sizes[scale] = poly._sizes[scale][resolved]
-
-        poly.lengths = self.rreduce(ops.to_int64(resolved), Scale.CHAIN, Reduction.SUM)
-        poly.sequence = self.sequence[resolved]
-
-        return poly
+        from .selection import strip
+        return strip(self, scale)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Specialized Selections
@@ -1184,19 +1084,23 @@ class Polymer:
 
     def backbone(self: Polymer) -> Polymer:
         """Select backbone atoms (sugar-phosphate for RNA/DNA, N-CA-C-O for protein)."""
-        return self.by_atom(Backbone.index())
+        from .selection import backbone
+        return backbone(self)
 
     def nucleobase(self: Polymer) -> Polymer:
         """Select RNA nucleobase atoms."""
-        return self.by_atom(Nucleobase.index())
+        from .selection import nucleobase
+        return nucleobase(self)
 
     def phosphate(self: Polymer) -> Polymer:
         """Select RNA/DNA phosphate atoms."""
-        return self.by_atom(Phosphate.index())
+        from .selection import phosphate
+        return phosphate(self)
 
     def sidechain(self: Polymer) -> Polymer:
         """Select protein sidechain atoms."""
-        return self.by_atom(Sidechain.index())
+        from .selection import sidechain
+        return sidechain(self)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Chain Operations

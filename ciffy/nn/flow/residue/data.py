@@ -76,7 +76,7 @@ def compute_glycosidic_frame(
     # N9 for purines (A, G), N1 for pyrimidines (C, U)
     try:
         n_idx = atom_to_col[residue.N9.value]
-    except KeyError:
+    except (KeyError, AttributeError):
         n_idx = atom_to_col[residue.N1.value]
 
     origin = coords[c1p_idx].copy()

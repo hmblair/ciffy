@@ -118,10 +118,8 @@ def main():
     for p in cif_paths:
         print(f"  - {p.name}")
 
-    # RNA nucleotides to train
-    # Note: Currently only purines (A, G) are supported due to frame computation
-    # using N9 atom. Pyrimidines (C, U) use N1 and need different frame handling.
-    rna_residues = [Residue.A, Residue.G]
+    # RNA nucleotides to train (all 4 standard bases)
+    rna_residues = [Residue.A, Residue.C, Residue.G, Residue.U]
 
     # Flow model configuration
     # Note: Small values for quick demo; increase for production

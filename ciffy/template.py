@@ -16,7 +16,7 @@ import numpy as np
 
 from .polymer import Polymer
 from .types import Scale, Molecule
-from .biochemistry._generated_residues import Residue
+from .biochemistry import Residue
 from .biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
 
 
@@ -100,9 +100,10 @@ def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, in
     dna_map: dict[str, int] = {}
     amino_acid_map: dict[str, int] = {}
 
-    for residue in Residue:
+    for residue in Residue.all():
         # Only include canonical residues with atom definitions
-        if residue.atoms is None:
+        # In v2, residue IS the AtomGroup, so check if it has any atoms
+        if len(residue) == 0:
             continue
 
         name = residue.name
@@ -153,7 +154,8 @@ _MOLECULE_CONFIGS: dict[Molecule, MoleculeTypeConfig] = {
 
 def _get_molecule_config(residue_idx: int) -> MoleculeTypeConfig:
     """Get config for a residue's molecule type."""
-    mol_type = Residue(residue_idx).molecule_type
+    mol_type_int = Residue.from_index(residue_idx).molecule_type
+    mol_type = Molecule(mol_type_int)
     if mol_type not in _MOLECULE_CONFIGS:
         raise ValueError(f"Unsupported molecule type: {mol_type.name}")
     return _MOLECULE_CONFIGS[mol_type]
@@ -194,8 +196,8 @@ def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int
     The _expand_residue() wrapper handles copying for safe mutation.
     """
     try:
-        residue = Residue(residue_idx)
-    except ValueError:
+        residue = Residue.from_index(residue_idx)
+    except (ValueError, KeyError):
         raise ValueError(f"Invalid residue index: {residue_idx}")
 
     if residue.atoms is None:
@@ -426,7 +428,7 @@ def _position_residue(
     # expansion.ideal_coords is already a copy from _expand_residue()
     coords = expansion.ideal_coords
     link_def = config.linking
-    residue = Residue(residue_idx)
+    residue = Residue.from_index(residue_idx)
     atom_to_col = _build_atom_to_col(expansion)
 
     # Position relative to previous residue
@@ -460,14 +462,14 @@ def _position_residue(
 
 def _validate_linking_atoms(
     expansion: ResidueExpansion,
-    residue: Residue,
+    residue: "AtomGroup",
     link_def: "LinkingDefinition",
     which: str,
 ) -> None:
     """Validate that required linking atoms are present."""
     from .types import Molecule
 
-    mol = residue.molecule_type
+    mol = Molecule(residue.molecule_type)
     atom_to_col = _build_atom_to_col(expansion)
 
     if which == "next":

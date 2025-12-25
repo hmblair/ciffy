@@ -215,8 +215,8 @@ class PolymerFlowModel:
 
         if unsupported:
             from ciffy.biochemistry import Residue
-            names = [Residue(v).name for v in sorted(unsupported)]
-            available = [Residue(v).name for v in sorted(self._supported_types_set)]
+            names = [Residue.from_index(v).name for v in sorted(unsupported)]
+            available = [Residue.from_index(v).name for v in sorted(self._supported_types_set)]
             raise ValueError(
                 f"Unsupported residue types: {names}. "
                 f"Available: {available}"
@@ -524,10 +524,10 @@ class PolymerFlowModel:
         return np.array(sorted(self.residue_models.keys()), dtype=np.int64)
 
     @property
-    def supported_residues(self) -> list["Residue"]:
-        """List of residue types this model can handle (as Residue enum)."""
+    def supported_residues(self) -> list["AtomGroup"]:
+        """List of residue types this model can handle (as AtomGroup)."""
         from ciffy.biochemistry import Residue
-        return [Residue(v) for v in sorted(self.residue_models.keys())]
+        return [Residue.from_index(v) for v in sorted(self.residue_models.keys())]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Device Management
@@ -582,7 +582,7 @@ class PolymerFlowModel:
         # Save each residue model (use residue name as subdirectory)
         residue_names = []
         for res_type, model in self.residue_models.items():
-            res_name = Residue(res_type).name
+            res_name = Residue.from_index(res_type).name
             model.save(path / res_name)
             residue_names.append(res_name)
 
@@ -766,5 +766,5 @@ class PolymerFlowModel:
 
     def __repr__(self) -> str:
         from ciffy.biochemistry import Residue
-        residues = [Residue(r).name for r in self.residue_models.keys()]
+        residues = [Residue.from_index(r).name for r in self.residue_models.keys()]
         return f"PolymerFlowModel(residues={residues}, latent_dim={self.latent_dim})"

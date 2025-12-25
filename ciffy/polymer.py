@@ -55,12 +55,12 @@ def _classify_chain_type(min_idx: int, max_idx: int,
         return Molecule.UNKNOWN.value
 
     try:
-        min_type = Residue(min_idx).molecule_type
-    except ValueError:
+        min_type = Molecule(Residue.from_index(min_idx).molecule_type)
+    except (ValueError, KeyError):
         min_type = Molecule.UNKNOWN
     try:
-        max_type = Residue(max_idx).molecule_type
-    except ValueError:
+        max_type = Molecule(Residue.from_index(max_idx).molecule_type)
+    except (ValueError, KeyError):
         max_type = Molecule.UNKNOWN
 
     # If min and max agree, use that type; otherwise mark as OTHER (mixed)
@@ -1279,8 +1279,8 @@ class Polymer:
         """
         def abbrev(x: int) -> str:
             try:
-                return Residue(x).abbrev
-            except ValueError:
+                return Residue.from_index(x).abbrev
+            except (ValueError, KeyError):
                 return 'n'
         return "".join(abbrev(ix.item()) for ix in self.sequence)
 

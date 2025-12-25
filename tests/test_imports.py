@@ -212,33 +212,37 @@ class TestHierarchicalEnum:
         assert len(shared) > 0  # C4 and C5 are shared
 
     def test_hierarchical_enum_methods(self):
-        """Test all IndexEnum-like methods on HierarchicalEnum."""
+        """Test all AtomGroup methods on hierarchical groups."""
         import numpy as np
         from ciffy.biochemistry import PurineBase
 
-        # index() returns numpy array
+        # index() returns numpy array of all atom values
         idx = PurineBase.index()
         assert isinstance(idx, np.ndarray)
         assert idx.dtype == np.int64
 
-        # list() returns list of atom names
+        # list() returns list of member names (atom position names)
         names = PurineBase.list()
         assert isinstance(names, list)
         assert "N1" in names
         assert "N9" in names
 
-        # dict() returns name -> subenum mapping
+        # dict() returns leaf atoms only (empty for hierarchical groups)
+        # In v2, hierarchical groups have nested AtomGroups, not leaf Atoms
         d = PurineBase.dict()
         assert isinstance(d, dict)
-        assert "N1" in d
+        # Note: dict() is empty for hierarchical groups because members are AtomGroups
+        assert len(d) == 0
 
-        # Nested IndexEnum has full functionality
-        assert PurineBase.N1.list() == ["A", "G", "DA", "DG"]
+        # Access nested AtomGroup for each atom position
+        assert hasattr(PurineBase, "N1")
+        assert set(PurineBase.N1.list()) == {"A", "G", "DA", "DG"}
+        # N1 nested group contains Atoms, so dict() works
         assert PurineBase.N1.dict() == {
-            "A": PurineBase.N1.A.value,
-            "G": PurineBase.N1.G.value,
-            "DA": PurineBase.N1.DA.value,
-            "DG": PurineBase.N1.DG.value,
+            "A": int(PurineBase.N1.A),
+            "G": int(PurineBase.N1.G),
+            "DA": int(PurineBase.N1.DA),
+            "DG": int(PurineBase.N1.DG),
         }
 
     def test_atom_groups_with_polymer(self):
@@ -283,19 +287,25 @@ class TestHierarchicalEnum:
         assert n1_purine.coordinates.shape[0] == 2  # A and G only
 
     def test_iteration_and_containment(self):
-        """Test __iter__ and __contains__ on HierarchicalEnum."""
+        """Test __iter__ and __contains__ on AtomGroup (hierarchical)."""
         from ciffy.biochemistry import PurineBase
 
-        # Iteration yields subenums
+        # In v2, __iter__ only yields leaf Atoms. PurineBase has nested AtomGroups
+        # so iteration is empty. Use list() for member names instead.
         members = list(PurineBase)
-        assert len(members) > 0
+        assert len(members) == 0  # No leaf atoms, only nested AtomGroups
 
-        # String containment
+        # Use list() to get member names (both Atoms and AtomGroups)
+        names = PurineBase.list()
+        assert len(names) > 0
+        assert "N1" in names
+
+        # String containment checks member names
         assert "N1" in PurineBase
         assert "INVALID" not in PurineBase
 
-        # Subenum containment
-        assert PurineBase.N1 in PurineBase
+        # Nested AtomGroup access via index
+        assert PurineBase.N1.index() is not None
 
 
 class TestMoleculeEnum:

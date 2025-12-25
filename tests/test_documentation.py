@@ -77,19 +77,19 @@ class TestBiochemistryAPI:
             biochemistry, "Uridine"
         ), "Uridine class exists - update docs/guides/selection.md"
 
-    def test_by_atom_requires_value(self):
-        """Test that by_atom requires .value for enum access."""
+    def test_by_atom_works_directly(self):
+        """Test that by_atom works directly with Atom (since Atom IS an int)."""
         polymer = ciffy.load("tests/data/9GCM.cif")
         protein = polymer.by_type(ciffy.PROTEIN)
 
         if protein.size() > 0:
             # by_atom with integer works
-            result = protein.by_atom(Residue.ALA.CA.value)
+            result = polymer.by_atom(Residue.ALA.CA.value)
             assert result.size() >= 0
 
-            # by_atom with raw enum doesn't work (returns 0)
-            result_enum = protein.by_atom(Residue.ALA.CA)
-            assert result_enum.size() == 0, "by_atom now accepts enum directly - update docs"
+            # by_atom with Atom directly also works (Atom IS an int in v2)
+            result_atom = polymer.by_atom(Residue.ALA.CA)
+            assert result_atom.size() == result.size(), "Atom should work directly without .value"
 
 
 class TestAllExportsDocumented:

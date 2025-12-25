@@ -227,6 +227,11 @@ class AtomGroup:
         return list(self._members.keys())
 
     @property
+    def atoms(self) -> "AtomGroup":
+        """Return self for backward compatibility with ResidueType.atoms pattern."""
+        return self
+
+    @property
     def n_atoms(self) -> int:
         """Number of atoms (leaf members only)."""
         return sum(1 for _ in self)

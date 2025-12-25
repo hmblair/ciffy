@@ -152,13 +152,14 @@ PEPTIDE_LINK = LinkingDefinition(
 
 # Map molecule type to linking definition
 # Only polymer types with well-defined inter-residue linkages are included
+# Keys are molecule type int values for easy lookup from residue.molecule_type
 LINKING_BY_TYPE: dict[int, LinkingDefinition] = {
     # Nucleic acids (phosphodiester linkage)
-    Molecule.RNA: NUCLEIC_ACID_LINK,
-    Molecule.DNA: NUCLEIC_ACID_LINK,
-    Molecule.HYBRID: NUCLEIC_ACID_LINK,
+    Molecule.RNA.value: NUCLEIC_ACID_LINK,
+    Molecule.DNA.value: NUCLEIC_ACID_LINK,
+    Molecule.HYBRID.value: NUCLEIC_ACID_LINK,
     # Peptides (peptide bond)
-    Molecule.PROTEIN: PEPTIDE_LINK,
-    Molecule.PROTEIN_D: PEPTIDE_LINK,
-    Molecule.CYCLIC_PEPTIDE: PEPTIDE_LINK,
+    Molecule.PROTEIN.value: PEPTIDE_LINK,
+    Molecule.PROTEIN_D.value: PEPTIDE_LINK,
+    Molecule.CYCLIC_PEPTIDE.value: PEPTIDE_LINK,
 }

@@ -633,9 +633,8 @@ class TestBondsAndLinking:
         assert hasattr(Residue.A, 'bonds')
         assert len(Residue.A.bonds) > 30  # Adenosine has ~39 bonds
 
-        # Check bonds returns PairEnum with indices() method
-        indices = Residue.A.bonds.indices()
-        assert indices.shape[1] == 2  # Each bond has 2 atoms
+        # In v2, bonds is a numpy array of shape (n_bonds, 2)
+        assert Residue.A.bonds.shape[1] == 2  # Each bond has 2 atoms
 
     def test_chain_extends_linearly(self):
         """Test that chain extends in one direction without overlapping."""

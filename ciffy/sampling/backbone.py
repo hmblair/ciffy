@@ -1122,12 +1122,12 @@ def _detect_molecule_type(polymer: "Polymer") -> "Molecule":
     # Fall back to first residue's molecule type
     first_res_idx = int(polymer.sequence[0])
     try:
-        first_res = Residue(first_res_idx)
-        mol_type = first_res.molecule_type
+        first_res = Residue.from_index(first_res_idx)
+        mol_type = Molecule(first_res.molecule_type)
         # Trust the molecule type if it's not ambiguous
         if mol_type in (Molecule.PROTEIN, Molecule.RNA, Molecule.DNA):
             return mol_type
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, KeyError):
         pass
 
     # Default to protein
@@ -1593,9 +1593,9 @@ def randomize_backbone(
     # Detect molecule type from first residue
     first_res_idx = int(polymer.sequence[0])
     try:
-        first_res = Residue(first_res_idx)
-        mol_type = first_res.molecule_type
-    except (ValueError, AttributeError):
+        first_res = Residue.from_index(first_res_idx)
+        mol_type = Molecule(first_res.molecule_type)
+    except (ValueError, AttributeError, KeyError):
         mol_type = Molecule.PROTEIN  # Default to protein
 
     if mol_type == Molecule.PROTEIN:

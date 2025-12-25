@@ -45,7 +45,6 @@ from .residue import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    create_atom_subset,
     # Frame computation
     compute_glycosidic_frame,
     compute_o3p_frame,
@@ -74,7 +73,6 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    "create_atom_subset",
     # Frame computation
     "compute_glycosidic_frame",
     "compute_o3p_frame",

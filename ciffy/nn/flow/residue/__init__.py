@@ -11,7 +11,7 @@ Example:
     >>> # Train a model for adenosine
     >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
     >>>
-    >>> # Access atom information via IndexEnum interface
+    >>> # Access atom information via AtomGroup
     >>> model.atoms.list()   # ['C1p', 'C2p', 'O2p', ...]
     >>> model.atoms.index()  # array([0, 1, 2, ...])
     >>> len(model.atoms)     # 22
@@ -31,7 +31,6 @@ from .model import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    create_atom_subset,
 )
 from .data import (
     # Frame computation
@@ -56,7 +55,6 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    "create_atom_subset",
     # Frame computation
     "compute_glycosidic_frame",
     "compute_o3p_frame",

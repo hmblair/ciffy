@@ -12,49 +12,9 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from ciffy.utils.enum_base import IndexEnum
-
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
-
-
-# =============================================================================
-# Atom Subset Enum
-# =============================================================================
-
-
-def create_atom_subset(residue: "Residue", atom_indices: list[int]) -> type[IndexEnum]:
-    """
-    Create an IndexEnum subset containing only the specified atoms from a residue.
-
-    The returned enum has the same interface as IndexEnum:
-        - Iteration over members
-        - index() → array of values
-        - list() → list of names
-        - dict() → name → value mapping
-        - revdict() → value → name mapping
-
-    Args:
-        residue: The source residue (e.g., Residue.A).
-        atom_indices: List of atom indices to include.
-
-    Returns:
-        A new IndexEnum class with only the specified atoms.
-
-    Example:
-        >>> atoms = create_atom_subset(Residue.A, [0, 1, 5, 10])
-        >>> list(atoms)  # [<Atoms.C1p: 0>, <Atoms.C2p: 1>, ...]
-        >>> atoms.index()  # array([0, 1, 5, 10])
-    """
-    # Build name → value mapping for the subset
-    atom_set = set(atom_indices)
-    members = {}
-    for member in residue:
-        if member.value in atom_set:
-            members[member.name] = member.value
-
-    # Create the subset enum dynamically
-    return IndexEnum(f"{residue.name}Atoms", members)
+    from ciffy.utils import AtomGroup
 
 
 # =============================================================================
@@ -362,7 +322,7 @@ class ResidueFlowModel:
     Attributes:
         flow: The underlying PCAFlow model.
         residue: The source residue type.
-        atoms: IndexEnum subset containing the atoms used.
+        atoms: AtomGroup subset containing the atoms used.
         n_atoms: Number of atoms per residue.
         pca_rmsd: Reconstruction RMSD from PCA truncation.
         var_explained: Fraction of variance explained.
@@ -389,7 +349,7 @@ class ResidueFlowModel:
         self.residue = residue
         self._atom_indices = atom_indices
         self.n_atoms = n_atoms
-        self._atoms_enum: type[IndexEnum] | None = None
+        self._atoms_group: "AtomGroup | None" = None
         self.pca_rmsd = pca_rmsd
         self.var_explained = var_explained
         self._jit_decoder: torch.jit.ScriptModule | None = None
@@ -449,11 +409,11 @@ class ResidueFlowModel:
         return self._jit_decoder is not None
 
     @property
-    def atoms(self) -> type[IndexEnum]:
-        """IndexEnum subset containing the atoms used by this model."""
-        if self._atoms_enum is None:
-            self._atoms_enum = create_atom_subset(self.residue, self._atom_indices)
-        return self._atoms_enum
+    def atoms(self) -> "AtomGroup":
+        """AtomGroup subset containing the atoms used by this model."""
+        if self._atoms_group is None:
+            self._atoms_group = self.residue.subset(set(self._atom_indices))
+        return self._atoms_group
 
     # ─────────────────────────────────────────────────────────────────────────
     # Frame Properties (for inter-residue positioning)

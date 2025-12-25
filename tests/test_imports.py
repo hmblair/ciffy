@@ -29,21 +29,6 @@ class TestUtilityFunctions:
         result = filter_by_mask(items, mask)
         assert result == ['a', 'c']
 
-    def test_index_enum(self):
-        import numpy as np
-        from ciffy.utils import IndexEnum
-
-        TestEnum = IndexEnum("TestEnum", {"A": 1, "B": 2, "C": 3})
-        assert TestEnum.A.value == 1
-
-        indices = TestEnum.index()
-        assert np.array_equal(indices, np.array([1, 2, 3]))
-
-        d = TestEnum.dict()
-        assert d == {"A": 1, "B": 2, "C": 3}
-
-        rd = TestEnum.revdict()
-        assert rd == {1: "A", 2: "B", 3: "C"}
 
 
 class TestBiochemistryConstants:

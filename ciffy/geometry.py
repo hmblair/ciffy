@@ -1,5 +1,5 @@
 """
-Backend-agnostic geometric primitives for internal coordinate operations.
+Backend-agnostic geometric primitives for molecular modeling.
 
 This module provides pure geometric functions that work with both NumPy and PyTorch
 backends. All functions are stateless and testable in isolation.
@@ -8,16 +8,14 @@ The key functions are:
 - Vector operations: cross, dot, norm, normalize
 - Rodrigues rotation: rotate points around an axis
 - CCD optimization: find optimal rotation angle to minimize distance to target
-
-These primitives are used by the ring closure solver and other internal
-coordinate operations.
+- Circle-sphere intersection: for ring closure and constraint solving
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from ..backend import Array, is_torch
+from .backend import Array, is_torch
 
 __all__ = [
     # Vector operations

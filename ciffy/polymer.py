@@ -173,13 +173,13 @@ class Polymer:
         self._molecule_types = molecule_types
         self.descriptions = descriptions
 
-        # Create topology info for coordinate manager
-        from .backend.dispatch import TopologyInfo
+        # Create topology info
+        from .backend.graph import TopologyInfo
         self._topology = TopologyInfo.from_polymer(self)
 
-        # Initialize coordinate manager with Cartesian coordinates
-        from .internal.coordinates import MolecularGeometry
-        self._geometry = MolecularGeometry(coordinates, self._topology)
+        # Store coordinates directly (no internal coordinate system)
+        self._coordinates = coordinates
+        self._bonds: np.ndarray | None = None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
@@ -231,24 +231,15 @@ class Polymer:
 
     @property
     def coordinates(self) -> Array:
-        """
-        (N, 3) tensor of atom positions.
-
-        Automatically reconstructed from internal coordinates if needed.
-        """
-        return self._geometry.coordinates
+        """(N, 3) tensor of atom positions."""
+        return self._coordinates
 
     @coordinates.setter
     def coordinates(self, value: Array) -> None:
-        """
-        Set coordinates with backend/device validation.
-
-        Invalidates internal coordinate representation.
-        """
-        # Validate backend compatibility
-        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
-            check_compatible(self._geometry._coordinates, value, "coordinates")
-        self._geometry.coordinates = value
+        """Set coordinates with backend/device validation."""
+        if self._coordinates is not None:
+            check_compatible(self._coordinates, value, "coordinates")
+        self._coordinates = value
 
     @property
     def atoms(self) -> Array:
@@ -258,8 +249,8 @@ class Polymer:
     @atoms.setter
     def atoms(self, value: Array) -> None:
         """Set atoms with backend/device validation."""
-        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
-            check_compatible(self._geometry._coordinates, value, "atoms")
+        if self._coordinates is not None:
+            check_compatible(self._coordinates, value, "atoms")
         self._atoms = value
 
     @property
@@ -270,8 +261,8 @@ class Polymer:
     @elements.setter
     def elements(self, value: Array) -> None:
         """Set elements with backend/device validation."""
-        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
-            check_compatible(self._geometry._coordinates, value, "elements")
+        if self._coordinates is not None:
+            check_compatible(self._coordinates, value, "elements")
         self._elements = value
 
     @property
@@ -282,8 +273,8 @@ class Polymer:
     @sequence.setter
     def sequence(self, value: Array) -> None:
         """Set sequence with backend/device validation."""
-        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
-            check_compatible(self._geometry._coordinates, value, "sequence")
+        if self._coordinates is not None:
+            check_compatible(self._coordinates, value, "sequence")
         self._sequence = value
 
     @property
@@ -294,79 +285,76 @@ class Polymer:
     @lengths.setter
     def lengths(self, value: Array) -> None:
         """Set lengths with backend/device validation."""
-        if hasattr(self, '_geometry') and self._geometry._coordinates is not None:
-            check_compatible(self._geometry._coordinates, value, "lengths")
+        if self._coordinates is not None:
+            check_compatible(self._coordinates, value, "lengths")
         self._lengths = value
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Internal Coordinate Properties
+    # Geometry Properties (deprecated - internal coordinates removed)
     # ─────────────────────────────────────────────────────────────────────────
 
     @property
     def distances(self) -> Array:
         """
-        Bond lengths in internal coordinate representation.
+        Bond lengths - NOT IMPLEMENTED.
 
-        Returns:
-            (N,) array of bond lengths in Angstroms.
+        The internal coordinate system has been removed.
+        Compute distances directly from coordinates if needed.
 
-        Note:
-            Automatically computed from Cartesian coordinates if needed.
+        Raises:
+            NotImplementedError: Always.
         """
-        return self._geometry.distances
+        raise NotImplementedError(
+            "distances property removed - internal coordinate system deprecated. "
+            "Compute from coordinates: torch.norm(coords[bonds[:,0]] - coords[bonds[:,1]], dim=-1)"
+        )
 
     @distances.setter
     def distances(self, value: Array) -> None:
-        """
-        Set bond lengths.
-
-        Invalidates Cartesian coordinate representation.
-        """
-        self._geometry.distances = value
+        """Not implemented."""
+        raise NotImplementedError("distances property removed - internal coordinate system deprecated")
 
     @property
     def angles(self) -> Array:
         """
-        Bond angles in internal coordinate representation.
+        Bond angles - NOT IMPLEMENTED.
 
-        Returns:
-            (N,) array of bond angles in radians.
+        The internal coordinate system has been removed.
+        Compute angles directly from coordinates if needed.
 
-        Note:
-            Automatically computed from Cartesian coordinates if needed.
+        Raises:
+            NotImplementedError: Always.
         """
-        return self._geometry.angles
+        raise NotImplementedError(
+            "angles property removed - internal coordinate system deprecated. "
+            "Compute from coordinates using 3-atom angle formula."
+        )
 
     @angles.setter
     def angles(self, value: Array) -> None:
-        """
-        Set bond angles.
-
-        Invalidates Cartesian coordinate representation.
-        """
-        self._geometry.angles = value
+        """Not implemented."""
+        raise NotImplementedError("angles property removed - internal coordinate system deprecated")
 
     @property
     def dihedrals(self) -> Array:
         """
-        Dihedral angles in internal coordinate representation.
+        Dihedral angles - NOT IMPLEMENTED.
 
-        Returns:
-            (N,) array of dihedral angles in radians.
+        The internal coordinate system has been removed.
+        Use PolymerFlowModel for generative modeling of molecular conformations.
 
-        Note:
-            Automatically computed from Cartesian coordinates if needed.
+        Raises:
+            NotImplementedError: Always.
         """
-        return self._geometry.dihedrals
+        raise NotImplementedError(
+            "dihedrals property removed - internal coordinate system deprecated. "
+            "Use ciffy.nn.flow.PolymerFlowModel for generative modeling."
+        )
 
     @dihedrals.setter
     def dihedrals(self, value: Array) -> None:
-        """
-        Set dihedral angles.
-
-        Invalidates Cartesian coordinate representation.
-        """
-        self._geometry.dihedrals = value
+        """Not implemented."""
+        raise NotImplementedError("dihedrals property removed - internal coordinate system deprecated")
 
     @property
     def bonds(self) -> np.ndarray:
@@ -381,7 +369,12 @@ class Polymer:
             Computed lazily from topology and cached. Includes both
             intra-residue bonds and inter-residue linkages.
         """
-        return self._geometry.bonds
+        if self._bonds is None:
+            from .backend.graph import build_bond_graph_from_topology
+            edges, _ = build_bond_graph_from_topology(self._topology)
+            # Filter to i < j to avoid duplicates
+            self._bonds = edges[edges[:, 0] < edges[:, 1]]
+        return self._bonds
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -731,9 +724,8 @@ class Polymer:
         coordinates = self.coordinates - expanded
 
         centered = copy(self)
-        # Create a new coordinate manager for the copy (reuse topology from copy)
-        from .internal.coordinates import MolecularGeometry
-        centered._geometry = MolecularGeometry(coordinates, centered._topology)
+        centered._coordinates = coordinates
+        centered._bonds = None  # Clear cached bonds
 
         return centered, means
 
@@ -952,10 +944,8 @@ class Polymer:
 
         mask = key
 
-        # Slice coordinate manager (ensures Cartesian valid, marks internal dirty)
-        sliced_manager = self._geometry[mask]
-        coordinates = sliced_manager._coordinates
-
+        # Slice coordinates directly
+        coordinates = self.coordinates[mask]
         atoms = self.atoms[mask]
         elements = self.elements[mask]
 
@@ -983,16 +973,10 @@ class Polymer:
         # polymer_count atoms survive the mask (direct slice avoids O(N) allocation)
         new_polymer_count = mask[:self.polymer_count].sum().item()
 
-        result = Polymer(
+        return Polymer(
             coordinates, atoms, elements, sequence, sizes,
             self.pdb_id, names, strands, lengths, new_polymer_count,
         )
-
-        # Replace default coord manager with sliced one and set topology
-        result._geometry = sliced_manager
-        sliced_manager._topology = result._topology
-
-        return result
 
     def by_index(self: Polymer, ix: Array | int) -> Polymer:
         """
@@ -1390,7 +1374,7 @@ class Polymer:
             return self
 
         # Create new polymer with converted arrays
-        result = Polymer(
+        return Polymer(
             coordinates=to_numpy(self.coordinates),
             atoms=to_numpy(self.atoms),
             elements=to_numpy(self.elements),
@@ -1403,12 +1387,6 @@ class Polymer:
             polymer_count=self.polymer_count,
             molecule_types=to_numpy(self._molecule_types) if self._molecule_types is not None else None,
         )
-
-        # Replace coordinate manager with converted one
-        result._geometry = self._geometry.numpy()
-        result._geometry._topology = result._topology
-
-        return result
 
     def torch(self: Polymer) -> Polymer:
         """
@@ -1425,7 +1403,7 @@ class Polymer:
             return self
 
         # Create new polymer with converted arrays
-        result = Polymer(
+        return Polymer(
             coordinates=to_torch(self.coordinates).float(),
             atoms=to_torch(self.atoms).long(),
             elements=to_torch(self.elements).long(),
@@ -1438,12 +1416,6 @@ class Polymer:
             polymer_count=self.polymer_count,
             molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
         )
-
-        # Replace coordinate manager with converted one
-        result._geometry = self._geometry.torch()
-        result._geometry._topology = result._topology
-
-        return result
 
     def to(self: Polymer, device=None, dtype=None) -> Polymer:
         """
@@ -1487,7 +1459,7 @@ class Polymer:
             return t.to(device) if device is not None else t
 
         # Create new polymer with moved arrays
-        result = Polymer(
+        return Polymer(
             coordinates=coords,
             atoms=move_int(self.atoms),
             elements=move_int(self.elements),
@@ -1499,10 +1471,6 @@ class Polymer:
             lengths=move_int(self.lengths),
             polymer_count=self.polymer_count,
         )
-
-        result._geometry = self._geometry.to(device, dtype)
-
-        return result
 
     def cuda(self: Polymer) -> Polymer:
         """
@@ -1545,36 +1513,21 @@ class Polymer:
         """
         Detach all tensors from their computation graphs (torch backend only).
 
-        This is useful after calling `backward()` on a computation that used
-        this polymer's coordinates or internal coordinates. After backward(),
-        the cached tensors retain grad_fn pointers to freed computation graphs.
-        Calling detach() clears these pointers, allowing the polymer to be
-        reused for new gradient computations.
+        Detaches the coordinate tensor from its computation graph. For NumPy
+        arrays, this is a no-op since NumPy doesn't have computation graphs.
 
         Returns:
             Self, for method chaining.
 
         Example:
-            >>> # Compute gradients through to_internal
             >>> coords = polymer.coordinates.clone().requires_grad_(True)
             >>> polymer.coordinates = coords
-            >>> loss = polymer.dihedrals.sum()
+            >>> loss = polymer.coordinates.sum()
             >>> loss.backward()
-            >>>
-            >>> # Detach before next computation
             >>> polymer.detach()
-            >>>
-            >>> # Now safe to compute new gradients through to_cartesian
-            >>> dihedrals = polymer.dihedrals.detach().clone().requires_grad_(True)
-            >>> polymer.dihedrals = dihedrals
-            >>> new_loss = polymer.coordinates.sum()
-            >>> new_loss.backward()
-
-        Note:
-            For NumPy arrays, this is a no-op since NumPy doesn't have
-            computation graphs.
         """
-        self._geometry.detach()
+        if is_torch(self._coordinates) and self._coordinates is not None:
+            self._coordinates = self._coordinates.detach()
         return self
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1631,7 +1584,6 @@ class Polymer:
         check_compatible(self.coordinates, coordinates, "coordinates")
 
         result = copy(self)
-        # Create a new coordinate manager for the copy (to avoid sharing state, reuse topology)
-        from .internal.coordinates import MolecularGeometry
-        result._geometry = MolecularGeometry(coordinates, result._topology)
+        result._coordinates = coordinates
+        result._bonds = None  # Clear cached bonds
         return result

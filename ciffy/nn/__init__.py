@@ -7,7 +7,7 @@ Modules:
     - layers: Reusable neural network building blocks (DenseNetwork, Transformer, etc.)
     - diffusion: Noise schedules, diffusion processes, and EMA utilities
     - runners: Multi-job experiment and inference runners
-    - vae: Variational autoencoder for polymer conformations
+    - flow: Normalizing flow models for polymer conformations
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
@@ -70,9 +70,8 @@ from .runners import (
 
 from .protocols import PolymerGenerativeModel, PolymerEncoder
 from .model_registry import register_model, get_model_class
-from .inference import load_model_from_checkpoint, load_vae, generate_samples
+from .inference import load_model_from_checkpoint, generate_samples
 from .inference_config import InferenceConfig
-from .vae import PolymerVAE, DihedralEncoder, DihedralDecoder, VAETrainer, VAEConfig
 
 # Diffusion (moved from root to diffusion/)
 from .diffusion import (
@@ -141,18 +140,11 @@ __all__ = [
     "get_model_class",
     # Inference utilities (from runners/)
     "load_model_from_checkpoint",
-    "load_vae",
     "generate_samples",
     "InferenceConfig",
     "InferenceResult",
     "run_inference_jobs",
     "format_inference_results_table",
-    # VAE
-    "PolymerVAE",
-    "DihedralEncoder",
-    "DihedralDecoder",
-    "VAETrainer",
-    "VAEConfig",
     # Diffusion utilities (from diffusion/)
     "FixedSinusoidalEmbedding",
     "NoiseSchedule",

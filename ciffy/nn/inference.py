@@ -130,41 +130,6 @@ def load_model_from_checkpoint(
     return model, ckpt
 
 
-def load_vae(
-    checkpoint_path: str | Path,
-    device: str = "auto",
-) -> nn.Module:
-    """
-    Convenience function to load a PolymerVAE from checkpoint.
-
-    Args:
-        checkpoint_path: Path to VAE checkpoint.
-        device: Device to load on ("auto", "cuda", "cpu", "mps").
-
-    Returns:
-        Loaded PolymerVAE model in eval mode.
-
-    Raises:
-        FileNotFoundError: If checkpoint doesn't exist.
-        TypeError: If checkpoint contains non-VAE model.
-
-    Example:
-        >>> vae = load_vae("checkpoints/vae_best.pt", device="cuda")
-        >>> print(f"Latent dimension: {vae.latent_dim}")
-    """
-    model, _ = load_model_from_checkpoint(checkpoint_path, device)
-
-    from .vae import PolymerVAE
-
-    if not isinstance(model, PolymerVAE):
-        raise TypeError(
-            f"Checkpoint contains {model.__class__.__name__}, not PolymerVAE. "
-            f"Use load_model_from_checkpoint() for generic models."
-        )
-
-    return model
-
-
 def generate_samples(
     model: PolymerGenerativeModel,
     sequence: str | list[str],
@@ -205,11 +170,11 @@ def generate_samples(
         RuntimeError: If model is in training mode (should call .eval() first).
 
     Example:
-        >>> from ciffy.nn import load_vae, generate_samples
+        >>> from ciffy.nn import load_model_from_checkpoint, generate_samples
         >>>
-        >>> vae = load_vae("checkpoints/vae_best.pt")
+        >>> model, _ = load_model_from_checkpoint("checkpoints/model_best.pt")
         >>> samples = generate_samples(
-        ...     vae,
+        ...     model,
         ...     sequence=["MGKLF", "acgu"],
         ...     n_samples=10,
         ...     temperature=1.0,
@@ -303,6 +268,5 @@ def generate_samples(
 
 __all__ = [
     "load_model_from_checkpoint",
-    "load_vae",
     "generate_samples",
 ]

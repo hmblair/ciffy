@@ -7,14 +7,9 @@ detected from the array type.
 
 Submodules
 ----------
-autograd
-    PyTorch autograd functions for differentiable internal coordinate
-    conversions. See :mod:`ciffy.backend.autograd` for details.
-
-dispatch
-    Device-agnostic dispatch for internal coordinate operations.
-    Automatically selects CUDA, CPU, or autograd implementations.
-    See :mod:`ciffy.backend.dispatch` for details.
+graph
+    Bond graph construction and topology data structures.
+    See :mod:`ciffy.backend.graph` for details.
 
 cuda_ops
     CUDA kernel wrappers for GPU-accelerated operations.

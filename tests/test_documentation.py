@@ -212,9 +212,5 @@ class TestPolymerMethods:
         for method in documented_methods:
             assert hasattr(polymer, method), f"Missing Polymer method: {method}"
 
-    def test_internal_coordinate_properties_exist(self, polymer):
-        """Verify internal coordinate properties exist."""
-        # These are documented in api.md
-        assert hasattr(polymer, "distances")
-        assert hasattr(polymer, "angles")
-        assert hasattr(polymer, "dihedrals")
+    # NOTE: test_internal_coordinate_properties_exist removed - internal
+    # coordinate system deprecated in favor of ciffy.nn.flow.PolymerFlowModel

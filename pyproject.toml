@@ -48,11 +48,11 @@ packages = [
     "ciffy.operations",
     "ciffy.io",
     "ciffy.nn",
-    "ciffy.nn.vae",
+    "ciffy.nn.flow",
+    "ciffy.nn.flow.residue",
     "ciffy.nn.geometric",
     "ciffy.visualize",
     "ciffy.cli",
-    "ciffy.internal",
     "ciffy.sampling",
 ]
 

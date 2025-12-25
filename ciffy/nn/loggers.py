@@ -6,11 +6,10 @@ implement the MetricsLogger protocol from base_trainer.
 
 Example:
     >>> from ciffy.nn.loggers import WandbLogger
-    >>> from ciffy.nn.vae.trainer import VAETrainer, VAEConfig
+    >>> from ciffy.nn import BaseTrainer, TrainingConfig
     >>>
-    >>> config = VAEConfig.from_yaml("config.yaml")
     >>> logger = WandbLogger(project="my-project", config=config.to_dict())
-    >>> trainer = VAETrainer(config, model, dataset, logger=logger)
+    >>> trainer = BaseTrainer(config, model, dataset, logger=logger)
     >>> trainer.train()
 """
 

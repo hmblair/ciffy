@@ -193,14 +193,22 @@ def strict_tolerances():
 
 @pytest.fixture
 def assert_roundtrip():
-    """Fixture providing the roundtrip assertion function."""
+    """DEPRECATED: Internal coordinate system removed.
+
+    This fixture returned a function that relied on the internal coordinate system
+    which has been deprecated in favor of ciffy.nn.flow.PolymerFlowModel.
+    """
     from tests.testing import assert_roundtrip_preserves_structure
     return assert_roundtrip_preserves_structure
 
 
 @pytest.fixture
 def assert_gradients():
-    """Fixture providing the gradient flow assertion function."""
+    """DEPRECATED: Internal coordinate system removed.
+
+    This fixture returned a function that relied on the internal coordinate system
+    which has been deprecated in favor of ciffy.nn.flow.PolymerFlowModel.
+    """
     from tests.testing import assert_gradient_flows
     return assert_gradient_flows
 

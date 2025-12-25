@@ -1,12 +1,13 @@
 """
 PolymerFlowModel: Orchestrates per-residue flows for full polymer encoding/decoding.
 
-This module provides a simple wrapper around ResidueFlowModel that handles:
+This module provides a wrapper around ResidueFlowModel that handles:
 - Partitioning flat coordinate arrays by residue
 - Encoding each residue with its appropriate model
 - Decoding and positioning residues using SE(3) transforms
+- Lazy computation with dirty-flag caching for efficient coordinate/latent access
 
-Example:
+Example (stateless API):
     >>> from ciffy.nn.flow import PolymerFlowModel, ResidueFlowModel
     >>> from ciffy.biochemistry import Residue
     >>>
@@ -23,6 +24,18 @@ Example:
     >>>
     >>> # Decode back to positioned coordinates
     >>> coords_recon = polymer_flow.decode(latents, sequence)  # (N, 3)
+
+Example (stateful lazy API):
+    >>> # Bind to a sequence for lazy computation
+    >>> polymer_flow.bind(sequence)
+    >>>
+    >>> # Set coordinates - latents computed lazily
+    >>> polymer_flow.coordinates = coords
+    >>> z = polymer_flow.latents  # Computed on first access
+    >>>
+    >>> # Modify latents - coordinates recomputed lazily
+    >>> polymer_flow.latents = modified_z
+    >>> new_coords = polymer_flow.coordinates  # Recomputed on access
 """
 
 from __future__ import annotations
@@ -51,14 +64,28 @@ class PolymerFlowModel:
     coordinates and chains them together using the SE(3) transforms that
     each ResidueFlowModel outputs.
 
+    Supports two usage patterns:
+
+    1. **Stateless API**: Pass coordinates/latents and sequence to encode()/decode().
+       Each call is independent with no state.
+
+    2. **Stateful Lazy API**: Call bind(sequence), then use coordinates/latents
+       properties. Values are cached and lazily recomputed only when needed.
+
     Attributes:
         residue_models: Dict mapping Residue type to trained ResidueFlowModel.
         latent_dim: Dimension of per-residue latent space (assumes all models match).
 
-    Example:
+    Example (stateless):
         >>> polymer = PolymerFlowModel(models)
         >>> latents = polymer.encode(coords, sequence)
         >>> coords_recon = polymer.decode(latents, sequence)
+
+    Example (stateful):
+        >>> polymer = PolymerFlowModel(models)
+        >>> polymer.bind(sequence)
+        >>> polymer.coordinates = coords
+        >>> z = polymer.latents  # Lazily computed
     """
 
     def __init__(self, residue_models: dict["Residue", "ResidueFlowModel"]):
@@ -81,6 +108,172 @@ class PolymerFlowModel:
                 f"All ResidueFlowModels must have same latent_dim, got {latent_dims}"
             )
         self.latent_dim = latent_dims[0]
+
+        # Stateful lazy computation attributes
+        self._sequence: list["Residue"] | None = None
+        self._cached_latents: torch.Tensor | None = None
+        self._cached_coordinates: torch.Tensor | None = None
+        self._latents_dirty: bool = True
+        self._coords_dirty: bool = True
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Stateful Lazy API
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def bind(self, sequence: list["Residue"]) -> "PolymerFlowModel":
+        """
+        Bind the model to a specific sequence for stateful lazy computation.
+
+        After binding, you can use the `coordinates` and `latents` properties
+        for lazy get/set access with automatic cache invalidation.
+
+        Args:
+            sequence: List of Residue types defining the polymer.
+
+        Returns:
+            Self for method chaining.
+
+        Example:
+            >>> polymer_flow.bind(sequence).coordinates = coords
+            >>> z = polymer_flow.latents  # Lazily computed
+        """
+        # Validate all residue types are supported
+        for res_type in sequence:
+            if res_type not in self.residue_models:
+                available = list(self.residue_models.keys())
+                raise ValueError(
+                    f"No model for residue type {res_type}. "
+                    f"Available: {[r.name for r in available]}"
+                )
+
+        self._sequence = sequence
+        self._cached_latents = None
+        self._cached_coordinates = None
+        self._latents_dirty = True
+        self._coords_dirty = True
+        return self
+
+    @property
+    def sequence(self) -> list["Residue"] | None:
+        """The currently bound sequence, or None if unbound."""
+        return self._sequence
+
+    @property
+    def is_bound(self) -> bool:
+        """Whether a sequence is currently bound."""
+        return self._sequence is not None
+
+    def _ensure_bound(self) -> None:
+        """Raise if no sequence is bound."""
+        if not self.is_bound:
+            raise RuntimeError(
+                "No sequence bound. Call bind(sequence) first, or use "
+                "the stateless encode()/decode() methods."
+            )
+
+    @property
+    def latents(self) -> torch.Tensor:
+        """
+        (n_residues, latent_dim) latent representation.
+
+        Lazily recomputed from coordinates when dirty.
+
+        Raises:
+            RuntimeError: If no sequence is bound.
+            RuntimeError: If latents are dirty and no coordinates are set.
+        """
+        self._ensure_bound()
+
+        if self._latents_dirty:
+            if self._cached_coordinates is None:
+                raise RuntimeError(
+                    "Cannot compute latents: no coordinates set. "
+                    "Set coordinates first via the coordinates property."
+                )
+            self._cached_latents = self.encode(self._cached_coordinates, self._sequence)
+            self._latents_dirty = False
+
+        return self._cached_latents
+
+    @latents.setter
+    def latents(self, value: torch.Tensor) -> None:
+        """
+        Set latent representation, marks coordinates as dirty.
+
+        Args:
+            value: (n_residues, latent_dim) latent vectors.
+        """
+        self._ensure_bound()
+
+        if value.shape[0] != len(self._sequence):
+            raise ValueError(
+                f"latents has {value.shape[0]} rows but sequence has "
+                f"{len(self._sequence)} residues"
+            )
+        if value.shape[1] != self.latent_dim:
+            raise ValueError(
+                f"latents has dim {value.shape[1]} but model expects {self.latent_dim}"
+            )
+
+        self._cached_latents = value
+        self._latents_dirty = False
+        self._coords_dirty = True  # Coordinates need recomputation
+
+    @property
+    def coordinates(self) -> torch.Tensor:
+        """
+        (N, 3) Cartesian coordinates.
+
+        Lazily recomputed from latents when dirty.
+
+        Raises:
+            RuntimeError: If no sequence is bound.
+            RuntimeError: If coordinates are dirty and no latents are set.
+        """
+        self._ensure_bound()
+
+        if self._coords_dirty:
+            if self._cached_latents is None:
+                raise RuntimeError(
+                    "Cannot compute coordinates: no latents set. "
+                    "Set latents first via the latents property."
+                )
+            self._cached_coordinates = self.decode(self._cached_latents, self._sequence)
+            self._coords_dirty = False
+
+        return self._cached_coordinates
+
+    @coordinates.setter
+    def coordinates(self, value: torch.Tensor) -> None:
+        """
+        Set Cartesian coordinates, marks latents as dirty.
+
+        Args:
+            value: (N, 3) coordinate array.
+        """
+        self._ensure_bound()
+        self._validate_coords_shape(value, self._sequence)
+
+        self._cached_coordinates = value
+        self._coords_dirty = False
+        self._latents_dirty = True  # Latents need recomputation
+
+    def unbind(self) -> None:
+        """
+        Unbind from current sequence and clear cached state.
+
+        After unbinding, the stateful properties will raise RuntimeError
+        until bind() is called again.
+        """
+        self._sequence = None
+        self._cached_latents = None
+        self._cached_coordinates = None
+        self._latents_dirty = True
+        self._coords_dirty = True
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Stateless API (original methods)
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _get_atom_counts(self, sequence: list["Residue"]) -> list[int]:
         """Get atom counts for each residue in sequence."""

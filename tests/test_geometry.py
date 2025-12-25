@@ -1,14 +1,13 @@
 """
-Unit tests for ciffy.internal.geometry primitives.
+Unit tests for ciffy.geometry primitives.
 
-These tests verify the correctness of geometric operations in isolation,
-making it easier to debug ring closure issues.
+These tests verify the correctness of geometric operations in isolation.
 """
 
 import numpy as np
 import pytest
 
-from ciffy.internal.geometry import (
+from ciffy.geometry import (
     cross,
     dot,
     norm,

@@ -29,10 +29,7 @@ polymer = ciffy.load("structure.cif", backend="torch")
 # Move to GPU
 polymer = polymer.to("cuda")
 
-# Operations now use CUDA kernels
-distances = polymer.distances    # GPU-accelerated
-angles = polymer.angles          # GPU-accelerated
-dihedrals = polymer.dihedrals    # GPU-accelerated
+# Operations now use CUDA kernels automatically
 ```
 
 ## Building from Source

@@ -47,11 +47,6 @@
         - to
         - write
         - with_coordinates
-        - distances
-        - angles
-        - dihedrals
-        - dihedral
-        - set_dihedral
 
 ---
 
@@ -120,14 +115,6 @@
 ### from_extract
 
 ::: ciffy.from_extract
-
----
-
-## Sampling
-
-### randomize_backbone
-
-::: ciffy.randomize_backbone
 
 ---
 

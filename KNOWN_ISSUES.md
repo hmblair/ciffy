@@ -13,18 +13,3 @@ The PCA + Flow architecture requires a fixed set of atoms per residue type. Miss
 
 **Potential Fix**: Replace PCA with a set-based encoder (e.g., PointNet-style shared MLP + pooling). The normalizing flow layers would remain unchanged - only the coordinate-to-latent projection needs modification.
 
----
-
-## Sampling Module Non-Functional
-
-- **Severity**: MEDIUM
-- **Location**: `ciffy/sampling/`
-
-The sampling module (`randomize_backbone`, `sample_dihedrals`, etc.) is currently non-functional after deprecating the internal coordinate system.
-
-**Root Cause**: The sampling functions relied on `Polymer.dihedrals` and `Polymer.set_dihedral()` which are now deprecated.
-
-**Migration Path**: Use `ciffy.nn.flow.PolymerFlowModel` for generating polymer conformations. The flow-based approach provides:
-- Direct Cartesian coordinate generation
-- Latent space interpolation and sampling
-- No ring closure or DOF discovery issues

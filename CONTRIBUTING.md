@@ -118,8 +118,7 @@ ciffy/
 ├── examples/               # Example scripts
 │
 ├── setup.py                # C extension build
-├── pyproject.toml          # Package metadata
-└── setup_cuda.py           # Legacy CUDA build wrapper (deprecated)
+└── pyproject.toml          # Package metadata
 ```
 
 ## Code Generation

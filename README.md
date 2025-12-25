@@ -125,41 +125,6 @@ for chain in polymer.chains(ciffy.RNA):
 rmsd = ciffy.rmsd(polymer1, polymer2)
 ```
 
-## Internal Coordinates
-
-Polymer supports dual representation - access both Cartesian (XYZ) and internal (bond lengths, angles, dihedrals) coordinates on the same object. Conversions happen automatically with lazy evaluation.
-
-```python
-import ciffy
-
-polymer = ciffy.load("structure.cif", backend="torch")
-
-# Access internal coordinates (computed lazily on first access)
-distances = polymer.distances   # (N,) bond lengths
-angles = polymer.angles         # (N,) bond angles
-dihedrals = polymer.dihedrals   # (N,) dihedral angles
-
-# Access named backbone dihedrals using enum
-phi = polymer.dihedral(ciffy.DihedralType.PHI)    # Protein phi
-psi = polymer.dihedral(ciffy.DihedralType.PSI)    # Protein psi
-alpha = polymer.dihedral(ciffy.DihedralType.ALPHA)  # RNA/DNA alpha
-
-# Modify dihedrals - Cartesian coordinates auto-update
-new_dihedrals = polymer.dihedrals + noise
-polymer.dihedrals = new_dihedrals
-coords = polymer.coordinates  # Automatically reconstructed
-
-# Set specific named dihedrals
-polymer.set_dihedral(ciffy.DihedralType.PHI, new_phi_values)
-
-# Fully differentiable for PyTorch (gradients flow through reconstruction)
-dihedrals = polymer.dihedrals.requires_grad_(True)
-polymer.dihedrals = dihedrals
-loss = ciffy.rmsd(polymer, target)
-loss.backward()
-print(dihedrals.grad)  # Gradients on dihedral angles
-```
-
 ## Saving Structures
 
 ```python

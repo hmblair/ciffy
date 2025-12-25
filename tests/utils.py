@@ -175,15 +175,6 @@ def mps_available() -> bool:
         return False
 
 
-def cuda_extension_available() -> bool:
-    """Check if ciffy CUDA extension is built."""
-    try:
-        from ciffy.backend.cuda_ops import CUDA_EXTENSION_AVAILABLE
-        return CUDA_EXTENSION_AVAILABLE
-    except ImportError:
-        return False
-
-
 # Available devices for parametrized tests
 DEVICES = ["cpu"]
 if cuda_available():
@@ -200,9 +191,6 @@ requires_cuda = pytest.mark.skipif(
 )
 requires_mps = pytest.mark.skipif(
     not mps_available(), reason="MPS not available"
-)
-requires_cuda_extension = pytest.mark.skipif(
-    not cuda_extension_available(), reason="CUDA extension not built"
 )
 requires_gpu = pytest.mark.skipif(
     len(GPU_DEVICES) == 0, reason="No GPU available"

@@ -9,11 +9,6 @@
 - [gperf](https://www.gnu.org/software/gperf/) 3.1+ (for code generation)
 - NumPy
 
-**Optional for CUDA support:**
-- NVIDIA GPU with CUDA support
-- PyTorch with CUDA
-- CUDA toolkit
-
 ### Installing gperf
 
 ```bash
@@ -38,9 +33,6 @@ cd ciffy
 
 # Install base package in editable mode
 pip install -e .
-
-# Optional: Install CUDA extension
-pip install -e ./cuda
 ```
 
 ### Running Tests
@@ -69,7 +61,6 @@ ciffy/
 │   ├── backend/            # NumPy/PyTorch abstraction layer
 │   │   ├── numpy_ops.py    # NumPy implementations
 │   │   ├── torch_ops.py    # PyTorch implementations
-│   │   ├── cuda_ops.py     # CUDA kernel wrappers
 │   │   └── dispatch.py     # Backend selection logic
 │   ├── types/              # Enums and type definitions
 │   │   ├── scale.py        # Scale enum (ATOM, RESIDUE, CHAIN, MOLECULE)
@@ -84,17 +75,14 @@ ciffy/
 │   ├── io/                 # File I/O
 │   │   ├── loader.py       # CIF loading
 │   │   └── writer.py       # CIF writing
-│   ├── internal/           # Internal coordinates (Python)
 │   ├── nn/                 # Neural network utilities
 │   ├── visualize/          # Visualization tools
 │   └── src/                # C source code
 │       ├── module.c        # Python C extension entry point
 │       ├── cif/            # CIF parsing (C)
-│       ├── internal/       # Internal coordinates (C + CUDA)
-│       │   ├── geometry.c  # CPU geometry calculations
-│       │   ├── batch.c     # CPU batch operations
-│       │   ├── batch.cu    # CUDA batch operations
-│       │   └── cuda_module.cu  # CUDA Python bindings
+│       ├── internal/       # Graph algorithms (C)
+│       │   ├── geometry.c  # Geometry calculations
+│       │   └── batch.c     # Batch operations
 │       └── hash/           # Hash tables (auto-generated)
 │           ├── *.gperf     # gperf input files (auto-generated)
 │           └── *.c         # gperf output files (auto-generated)
@@ -107,11 +95,6 @@ ciffy/
 │   ├── c_codegen.py        # C/gperf code generation
 │   ├── python_codegen.py   # Python enum generation
 │   └── residue.py          # Residue definition class
-│
-├── cuda/                   # CUDA extension package (ciffy-cuda)
-│   ├── pyproject.toml      # Package metadata
-│   ├── setup.py            # CUDA build script
-│   └── ciffy_cuda/         # Placeholder package
 │
 ├── tests/                  # Test suite
 ├── docs/                   # Documentation (MkDocs)
@@ -173,19 +156,12 @@ RESIDUE_WHITELIST = {
 |------|---------|
 | `pyproject.toml` | Package metadata, dependencies, tool config |
 | `setup.py` | C extension build (OpenMP detection, codegen integration) |
-| `cuda/pyproject.toml` | ciffy-cuda package metadata |
-| `cuda/setup.py` | CUDA extension build (PyTorch BuildExtension) |
 
 ### Environment Variables
 
-**C extension (`setup.py`):**
 - `CIFFY_NO_OPENMP=1` - Disable OpenMP (single-threaded builds)
 - `CIFFY_PROFILE=1` - Enable profiling instrumentation
 - `CIFFY_CCD_PATH` - Custom path to CCD file
-
-**CUDA extension (`cuda/setup.py`):**
-- `CIFFY_CUDA_ARCH` - Target GPU architectures (e.g., `"86"` or `"70,75,80,86"`)
-- `CIFFY_CUDA_DEBUG=1` - Debug build with symbols
 
 ### Rebuilding After C Changes
 
@@ -205,16 +181,6 @@ sudo apt install ccache  # Linux
 # Set as compiler wrapper
 export CC="ccache gcc"
 pip install -e .
-```
-
-## Testing CUDA
-
-```bash
-# Check CUDA extension is loaded
-python -c "from ciffy.backend.cuda_ops import HAS_CUDA_EXTENSION; print(f'CUDA: {HAS_CUDA_EXTENSION}')"
-
-# Run tests on GPU (requires CUDA-capable PyTorch)
-pytest tests/ -v -k "cuda or gpu"
 ```
 
 ## Code Style

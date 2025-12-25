@@ -22,16 +22,6 @@ ciffy is **70-125x faster** than BioPython and Biotite for parsing CIF files:
 pip install ciffy
 ```
 
-### With GPU Acceleration (CUDA)
-
-For GPU-accelerated coordinate conversions:
-
-```bash
-pip install ciffy-cuda
-```
-
-This requires PyTorch with CUDA support. See [ciffy-cuda](cuda/README.md) for details.
-
 ### From Source
 
 ```bash
@@ -39,9 +29,6 @@ git clone https://github.com/hmblair/ciffy.git
 cd ciffy
 pip install -r requirements.txt
 pip install -e .
-
-# Optional: Install CUDA extension for GPU acceleration
-pip install -e ./cuda
 ```
 
 ## Backends

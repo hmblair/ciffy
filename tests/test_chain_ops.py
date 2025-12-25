@@ -123,8 +123,6 @@ class TestJoin:
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_join_backend_preserved(self, backend):
         """Join preserves backend."""
-        pytest.importorskip("torch")
-
         p1 = from_sequence("ac", backend=backend)
         p2 = from_sequence("gu", backend=backend)
 

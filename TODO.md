@@ -80,3 +80,32 @@ The following C functions in `ciffy/src/internal/` are no longer used by the Pyt
 - `ciffy/src/internal/internal_module.c`
 - `ciffy/src/internal/internal_module.h`
 - `ciffy/src/module.c`
+
+---
+
+## Test Coverage Gaps
+
+The following modules lack test coverage. Adding tests would improve reliability.
+
+### High Priority
+
+| Module | Issue |
+|--------|-------|
+| `ciffy/ensemble.py` | Core feature for conformational analysis, no tests |
+| `ciffy/operations/extract.py` | Used by template system, no tests |
+
+### Medium Priority
+
+| Module | Issue |
+|--------|-------|
+| `ciffy/nn/dataset.py` | ML pipeline data loading, no direct tests |
+| `ciffy/nn/inference.py` | Inference utilities, no tests |
+| `ciffy/nn/runners/` | Training infrastructure (experiment_runner, inference_runner), no tests |
+
+### Low Priority
+
+| Module | Issue |
+|--------|-------|
+| `ciffy/utils/formatting.py` | Utility functions |
+| `ciffy/utils/helpers.py` | Utility functions |
+| `ciffy/cli/` | CLI commands |

@@ -278,8 +278,10 @@ class TestAlign:
         chain = p.by_index(0)
 
         # Give varied coordinates for meaningful alignment
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             chain.coordinates = torch.randn(chain.size(), 3) * 10
         else:
             chain.coordinates = np.random.randn(chain.size(), 3).astype(np.float32) * 10
@@ -302,8 +304,10 @@ class TestAlign:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
         # Give varied coordinates
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             p.coordinates = torch.randn(p.size(), 3) * 10
         else:
             p.coordinates = np.random.randn(p.size(), 3).astype(np.float32) * 10
@@ -328,8 +332,10 @@ class TestWithCoordinates:
         p = ciffy.from_sequence("acgu", backend=backend)
         original_coords = np.asarray(p.coordinates).copy()
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             new_coords = torch.randn(p.size(), 3)
         else:
             new_coords = np.random.randn(p.size(), 3).astype(np.float32)
@@ -348,8 +354,10 @@ class TestWithCoordinates:
 
         p = ciffy.from_sequence("acgu", backend=backend)
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             new_coords = torch.randn(p.size(), 3)
         else:
             new_coords = np.random.randn(p.size(), 3).astype(np.float32)
@@ -370,8 +378,10 @@ class TestKabschAlignment:
         """kabsch_rotation returns a 3x3 rotation matrix."""
         from ciffy.operations.alignment import kabsch_rotation
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords1 = torch.randn(10, 3)
             coords2 = torch.randn(10, 3)
         else:
@@ -386,8 +396,10 @@ class TestKabschAlignment:
         """kabsch_rotation returns orthogonal matrix (R @ R.T = I)."""
         from ciffy.operations.alignment import kabsch_rotation
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords1 = torch.randn(20, 3)
             coords2 = torch.randn(20, 3)
         else:
@@ -406,8 +418,10 @@ class TestKabschAlignment:
         """kabsch_rotation returns proper rotation (det = +1)."""
         from ciffy.operations.alignment import kabsch_rotation
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords1 = torch.randn(15, 3)
             coords2 = torch.randn(15, 3)
         else:
@@ -425,8 +439,10 @@ class TestKabschAlignment:
         """kabsch_align returns (aligned, rotation, translation)."""
         from ciffy.operations.alignment import kabsch_align
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords1 = torch.randn(10, 3)
             coords2 = torch.randn(10, 3)
         else:
@@ -445,8 +461,10 @@ class TestKabschAlignment:
         """kabsch_align of coords to itself gives zero RMSD."""
         from ciffy.operations.alignment import kabsch_align
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords = torch.randn(20, 3)
         else:
             coords = np.random.randn(20, 3).astype(np.float32)
@@ -472,8 +490,10 @@ class TestKabschAlignment:
             [0, 0, 1]
         ], dtype=np.float32)
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords2 = torch.randn(30, 3)
             coords1 = coords2 @ torch.from_numpy(R_true.T)  # Rotate coords2
         else:
@@ -501,8 +521,10 @@ class TestKabschAlignment:
         """kabsch_align handles translation correctly."""
         from ciffy.operations.alignment import kabsch_align
 
+        np.random.seed(42)
         if backend == "torch":
             import torch
+            torch.manual_seed(42)
             coords2 = torch.randn(20, 3)
             # Translate coords1
             coords1 = coords2 + torch.tensor([10.0, -5.0, 3.0])

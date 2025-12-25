@@ -8,6 +8,7 @@ API drift early. Run with: pytest tests/test_documentation.py
 import pytest
 import ciffy
 from ciffy.biochemistry import Residue
+from tests.utils import get_test_cif
 
 
 class TestREADMEExamples:
@@ -15,7 +16,7 @@ class TestREADMEExamples:
 
     def test_basic_load_and_access(self):
         """Test basic load and access pattern from README."""
-        polymer = ciffy.load("tests/data/9MDS.cif", backend="numpy")
+        polymer = ciffy.load(get_test_cif("9MDS"), backend="numpy")
 
         # From README: basic information
         coords = polymer.coordinates
@@ -28,7 +29,7 @@ class TestREADMEExamples:
 
     def test_molecule_type_selection(self):
         """Test that by_type works (not subset)."""
-        polymer = ciffy.load("tests/data/9MDS.cif")
+        polymer = ciffy.load(get_test_cif("9MDS"))
 
         # Correct API is by_type, not subset
         rna_chains = polymer.by_type(ciffy.RNA)
@@ -38,7 +39,7 @@ class TestREADMEExamples:
 
     def test_geometric_operations(self):
         """Test geometric operations from README."""
-        polymer = ciffy.load("tests/data/9MDS.cif", backend="numpy")
+        polymer = ciffy.load(get_test_cif("9MDS"), backend="numpy")
 
         # From README: geometric operations
         centered, means = polymer.center(ciffy.MOLECULE)
@@ -79,7 +80,7 @@ class TestBiochemistryAPI:
 
     def test_by_atom_works_directly(self):
         """Test that by_atom works directly with Atom (since Atom IS an int)."""
-        polymer = ciffy.load("tests/data/9GCM.cif")
+        polymer = ciffy.load(get_test_cif("9GCM"))
         protein = polymer.by_type(ciffy.PROTEIN)
 
         if protein.size() > 0:
@@ -133,10 +134,6 @@ class TestAllExportsDocumented:
         assert callable(ciffy.from_sequence)
         assert callable(ciffy.from_extract)
 
-    @pytest.mark.skip(reason="randomize_backbone temporarily removed during refactoring")
-    def test_sampling_exists(self):
-        """Verify sampling functions documented in api.md exist."""
-        assert callable(ciffy.randomize_backbone)
 
     def test_ensemble_exists(self):
         """Verify Ensemble class documented in api.md exists."""
@@ -180,7 +177,7 @@ class TestPolymerMethods:
 
     @pytest.fixture
     def polymer(self):
-        return ciffy.load("tests/data/9MDS.cif")
+        return ciffy.load(get_test_cif("9MDS"))
 
     def test_documented_methods_exist(self, polymer):
         """Verify all methods listed in api.md Polymer section exist."""

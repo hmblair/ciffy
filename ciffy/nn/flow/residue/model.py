@@ -394,8 +394,43 @@ class ResidueFlowModel:
         self.var_explained = var_explained
         self._jit_decoder: torch.jit.ScriptModule | None = None
 
+        # Pre-resolve frame column indices for fast frame computation
+        self._init_frame_indices()
+
         if jit:
             self._compile_jit()
+
+    def _init_frame_indices(self) -> None:
+        """
+        Pre-resolve frame column indices from atom names.
+
+        This converts the string-based FrameDefinition to integer indices
+        once at model initialization, enabling fast vectorized frame
+        computation at runtime without Python attribute lookups.
+        """
+        from ciffy.biochemistry.linking import LINKING_BY_TYPE
+
+        atom_to_col = {a: i for i, a in enumerate(self._atom_indices)}
+        link_def = LINKING_BY_TYPE.get(self.residue.molecule_type)
+
+        if link_def is not None:
+            # Pre-resolve prev frame (outgoing) indices
+            self._prev_frame_cols = link_def.prev_frame.resolve(
+                self.residue, atom_to_col
+            )
+            self._prev_z_toward_origin = link_def.prev_frame.z_toward_origin
+
+            # Pre-resolve next frame (incoming) indices
+            self._next_frame_cols = link_def.next_frame.resolve(
+                self.residue, atom_to_col
+            )
+            self._next_z_toward_origin = link_def.next_frame.z_toward_origin
+        else:
+            # Non-polymer residue types (ligands, etc.) - no linking
+            self._prev_frame_cols = None
+            self._next_frame_cols = None
+            self._prev_z_toward_origin = True
+            self._next_z_toward_origin = True
 
     def _compile_jit(self) -> None:
         """Compile the decoder to TorchScript for faster inference."""

@@ -383,62 +383,117 @@ def _find_atom_index(atom_names: tuple[str, ...], target: str) -> int | None:
         return None
 
 
-# Direction for chain extension (along positive X axis for linear templates)
-_EXTENSION_DIR = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+@dataclass
+class _PrevResidueState:
+    """State from previous residue needed for positioning next residue."""
+    coords: np.ndarray          # (n_atoms, 3) positioned coordinates
+    atom_to_col: dict[int, int] # {atom_type_value: col_index}
+    residue: Residue            # Residue enum
+
+
+def _build_atom_to_col(expansion: ResidueExpansion) -> dict[int, int]:
+    """Build atom type value -> column index mapping from expansion."""
+    return {atom_idx: i for i, atom_idx in enumerate(expansion.atom_indices)}
 
 
 def _position_residue(
     expansion: ResidueExpansion,
     residue_idx: int,
-    prev_link_pos: np.ndarray | None,
+    prev_state: _PrevResidueState | None,
     config: MoleculeTypeConfig,
-) -> tuple[np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, _PrevResidueState | None]:
     """
     Position residue coordinates relative to previous residue.
+
+    Uses the geometry module's position_residue() function which properly
+    aligns residue frames (not just translating atoms).
 
     Args:
         expansion: Residue expansion with ideal coordinates.
         residue_idx: Residue index (for error messages).
-        prev_link_pos: Position of previous residue's linking atom, or None for first.
+        prev_state: Previous residue state, or None for first residue.
         config: Molecule type configuration with linking definition.
 
     Returns:
-        Tuple of (positioned_coords, new_link_pos for next residue).
-        new_link_pos is None if no linking definition.
+        Tuple of (positioned_coords, new_state for next residue).
+        new_state is None if no linking definition.
 
     Raises:
         ValueError: If linking atoms are not found in the residue.
     """
+    from .geometry import position_residue
+
     # expansion.ideal_coords is already a copy from _expand_residue()
     coords = expansion.ideal_coords
     link_def = config.linking
+    residue = Residue(residue_idx)
+    atom_to_col = _build_atom_to_col(expansion)
 
     # Position relative to previous residue
-    if link_def is not None and prev_link_pos is not None:
-        curr_link_idx = _find_atom_index(expansion.atom_names, link_def.next_atom)
-        if curr_link_idx is None:
-            res_name = Residue(residue_idx).name
-            raise ValueError(
-                f"Linking atom '{link_def.next_atom}' not found in residue {res_name}. "
-                f"Available atoms: {list(expansion.atom_names)[:10]}..."
-            )
-        target_pos = prev_link_pos + _EXTENSION_DIR * link_def.bond_length
-        offset = target_pos - coords[curr_link_idx]
-        coords = coords + offset
+    if link_def is not None and prev_state is not None:
+        # Validate that required atoms are present
+        _validate_linking_atoms(expansion, residue, link_def, "next")
 
-    # Compute new link position for next residue
-    new_link_pos = None
+        # Use geometry module for proper frame-based positioning
+        coords = position_residue(
+            prev_coords=prev_state.coords,
+            next_coords=coords,
+            prev_atom_to_col=prev_state.atom_to_col,
+            next_atom_to_col=atom_to_col,
+            prev_residue=prev_state.residue,
+            next_residue=residue,
+            transform=None,  # Linear extension (default orientation)
+        )
+
+    # Build state for next residue
+    new_state = None
     if link_def is not None:
-        prev_link_idx = _find_atom_index(expansion.atom_names, link_def.prev_atom)
-        if prev_link_idx is None:
-            res_name = Residue(residue_idx).name
-            raise ValueError(
-                f"Linking atom '{link_def.prev_atom}' not found in residue {res_name}. "
-                f"Available atoms: {list(expansion.atom_names)[:10]}..."
-            )
-        new_link_pos = coords[prev_link_idx].copy()
+        _validate_linking_atoms(expansion, residue, link_def, "prev")
+        new_state = _PrevResidueState(
+            coords=coords,
+            atom_to_col=atom_to_col,
+            residue=residue,
+        )
 
-    return coords, new_link_pos
+    return coords, new_state
+
+
+def _validate_linking_atoms(
+    expansion: ResidueExpansion,
+    residue: Residue,
+    link_def: "LinkingDefinition",
+    which: str,
+) -> None:
+    """Validate that required linking atoms are present."""
+    from .types import Molecule
+
+    mol = residue.molecule_type
+    atom_to_col = _build_atom_to_col(expansion)
+
+    if which == "next":
+        # Check incoming frame atoms (P frame for RNA, N frame for protein)
+        if mol in (Molecule.RNA, Molecule.DNA):
+            required = [residue.P, residue.O5p, residue.OP1]
+            frame_name = "P"
+        else:
+            required = [residue.N, residue.CA]
+            frame_name = "N"
+    else:  # which == "prev"
+        # Check outgoing frame atoms (O3' frame for RNA, C frame for protein)
+        if mol in (Molecule.RNA, Molecule.DNA):
+            required = [residue.C4p, residue.C3p, residue.O3p]
+            frame_name = "O3'"
+        else:
+            required = [residue.CA, residue.C, residue.O]
+            frame_name = "C"
+
+    missing = [a.name for a in required if a.value not in atom_to_col]
+    if missing:
+        raise ValueError(
+            f"Cannot compute {frame_name} frame for {residue.name}: "
+            f"missing atoms {missing}. "
+            f"Available: {list(expansion.atom_names)[:10]}..."
+        )
 
 
 def _process_chain(sequence: str) -> ChainData:
@@ -465,7 +520,7 @@ def _process_chain(sequence: str) -> ChainData:
     all_elements: list[int] = []
     all_coords: list[np.ndarray] = []
     atoms_per_res: list[int] = []
-    prev_link_pos: np.ndarray | None = None
+    prev_state: _PrevResidueState | None = None
 
     for i, res_idx in enumerate(residue_indices):
         is_first = (i == 0)
@@ -473,8 +528,8 @@ def _process_chain(sequence: str) -> ChainData:
 
         # Get residue data and position it
         expansion = _expand_residue(res_idx)
-        positioned_coords, prev_link_pos = _position_residue(
-            expansion, res_idx, prev_link_pos, config
+        positioned_coords, prev_state = _position_residue(
+            expansion, res_idx, prev_state, config
         )
 
         # Filter terminal atoms based on position

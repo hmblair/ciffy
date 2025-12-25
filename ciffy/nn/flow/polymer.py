@@ -45,7 +45,11 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from ciffy.nn.flow.residue.data import position_next_residue, position_next_residue_torch
+from ciffy.nn.flow.residue.data import (
+    position_next_residue,
+    position_next_residue_torch,
+    position_next_residue_fast,
+)
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -377,8 +381,7 @@ class PolymerFlowModel:
         all_coords = []
         prev_coords = None
         prev_transform = None
-        prev_atom_to_col = None
-        prev_residue = None
+        prev_model = None
 
         for i, res_type in enumerate(sequence):
             model = self.residue_models[res_type]
@@ -397,13 +400,15 @@ class PolymerFlowModel:
                 positioned = coords_i
             else:
                 # Position relative to previous residue using its transform
-                # Use PyTorch version to stay on GPU
-                positioned = position_next_residue_torch(
+                # Use fast path with pre-resolved frame indices
+                positioned = position_next_residue_fast(
                     prev_coords,
                     coords_i,
                     prev_transform,
-                    prev_atom_to_col,
-                    prev_residue,
+                    prev_model._prev_frame_cols,
+                    prev_model._prev_z_toward_origin,
+                    model._next_frame_cols,
+                    model._next_z_toward_origin,
                 )
 
             all_coords.append(positioned)
@@ -411,9 +416,7 @@ class PolymerFlowModel:
             # Store for next iteration
             prev_coords = positioned
             prev_transform = transform_i
-            # Pre-compute atom_to_col dict for next iteration
-            prev_atom_to_col = {a: i for i, a in enumerate(model._atom_indices)}
-            prev_residue = model.residue
+            prev_model = model
 
         return torch.cat(all_coords, dim=0)  # (N, 3)
 

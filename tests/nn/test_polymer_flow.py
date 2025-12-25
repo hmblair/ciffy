@@ -20,6 +20,14 @@ class MockResidueFlowModel:
         self.pca_rmsd = 0.1
         self.var_explained = 0.95
 
+        # Pre-resolved frame column indices (mock values for testing)
+        # These are set to sensible defaults for RNA nucleotides
+        # In real use, these are resolved from LinkingDefinition
+        self._prev_frame_cols = (0, 1, 2)  # Mock: first 3 atoms
+        self._prev_z_toward_origin = True
+        self._next_frame_cols = (3, 4, 5)  # Mock: next 3 atoms
+        self._next_z_toward_origin = True
+
         # Create a simple PCAFlow
         np.random.seed(42)
         n_samples = 100

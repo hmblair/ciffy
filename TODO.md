@@ -82,6 +82,35 @@ combined = ciffy.join(*polymers)
 
 ---
 
+### Chain-Level Positioning Primitives
+
+**Goal**: Build chain manipulation functions on top of the residue positioning primitives in `ciffy/geometry.py`.
+
+**Context**: The `position_residue()` function in `geometry.py` handles positioning a single residue relative to a previous residue using frame-based SE(3) alignment. These higher-level functions would compose that primitive for common chain operations.
+
+**Functions to add**:
+
+```python
+def extend_chain(chain: Polymer, residue_coords: Array, residue: Residue,
+                 transform: Array | None = None) -> Polymer:
+    """Append a residue to the end of a chain."""
+
+def insert_residue(chain: Polymer, position: int, residue_coords: Array,
+                   residue: Residue) -> Polymer:
+    """Insert residue at position, reposition all downstream residues."""
+
+def replace_residue(chain: Polymer, position: int, residue_coords: Array,
+                    residue: Residue) -> Polymer:
+    """Replace residue at position, keeping backbone frame alignment."""
+```
+
+**Files likely affected**:
+- `ciffy/geometry.py` - Add chain-level functions
+- `ciffy/__init__.py` - Export new functions
+- `tests/test_geometry.py` - Test cases
+
+---
+
 ## LOW Priority
 
 ### Clean Up Deprecated C Code

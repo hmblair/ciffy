@@ -94,11 +94,13 @@ def _get_rna_gmms() -> dict[str, GaussianMixtureModel]:
 
 # Purine residues use CHI_PURINE (O4'-C1'-N9-C4)
 # Pyrimidine residues use CHI_PYRIMIDINE (O4'-C1'-N1-C2)
-_PURINE_RESIDUE_NAMES: frozenset[str] = frozenset({
+# Note: This mirrors codegen/config.py PURINE_RESIDUES but is kept here
+# for runtime use (codegen is not installed with the package)
+_PURINE_RESIDUES: frozenset[str] = frozenset({
     # Standard RNA/DNA
     "A", "G", "DA", "DG",
-    # Modified purines
-    "I", "1MG", "2MG", "7MG", "M2G", "OMG", "2MA", "6MZ", "G7M", "PPU", "GTP", "GNG",
+    # Modified purines (common ones)
+    "I", "1MG", "2MG", "7MG", "M2G", "OMG", "2MA", "6MZ", "G7M",
 })
 
 
@@ -123,7 +125,7 @@ def _get_chi_dihedral_type(residue_enum_or_name):
     else:
         name = str(residue_enum_or_name)
 
-    if name in _PURINE_RESIDUE_NAMES:
+    if name in _PURINE_RESIDUES:
         return DihedralType.CHI_PURINE
     return DihedralType.CHI_PYRIMIDINE
 

@@ -1060,8 +1060,8 @@ class Polymer:
 
         Example:
             >>> from ciffy.biochemistry import Residue
-            >>> adenosines = polymer.by_residue(Residue.ADE)
-            >>> purines = polymer.by_residue([Residue.ADE, Residue.GUA])
+            >>> adenosines = polymer.by_residue(Residue.A)
+            >>> purines = polymer.by_residue([Residue.A, Residue.G])
         """
         res = ops.convert_backend(res, self.sequence)
         res_mask = (self.sequence[:, None] == res).any(1)

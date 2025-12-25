@@ -102,8 +102,9 @@ Extract alpha-carbon coordinates:
 ```python
 from ciffy.biochemistry import Residue
 
-# Get CA atoms for a specific residue type using .value
-ala_ca = protein.by_atom(Residue.ALA.CA.value)
+# Get CA atoms for a specific residue type
+# Atoms are ints, so they work directly with by_atom
+ala_ca = protein.by_atom(Residue.ALA.CA)
 
 # For all CA atoms, use reduce to get one coordinate per residue
 # The backbone already includes CA for proteins

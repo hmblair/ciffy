@@ -1,10 +1,8 @@
 """
 Re-exports for backwards compatibility.
 
-DEPRECATED: The internal coordinate system has been removed.
-Use ciffy.nn.flow.PolymerFlowModel for generative modeling.
-
-This module now only re-exports graph building and alignment functions.
+This module re-exports graph building and alignment functions from their
+respective modules.
 """
 
 from __future__ import annotations
@@ -32,21 +30,3 @@ from .graph import (
 
 # Kabsch rotation for coordinate alignment
 from ..operations.alignment import kabsch_rotation
-
-
-def cartesian_to_internal(*args, **kwargs):
-    """DEPRECATED: Internal coordinate system removed."""
-    raise NotImplementedError(
-        "cartesian_to_internal is deprecated. "
-        "Internal coordinate system has been removed. "
-        "Use ciffy.nn.flow.PolymerFlowModel for generative modeling."
-    )
-
-
-def nerf_reconstruct(*args, **kwargs):
-    """DEPRECATED: Internal coordinate system removed."""
-    raise NotImplementedError(
-        "nerf_reconstruct is deprecated. "
-        "Internal coordinate system has been removed. "
-        "Use ciffy.nn.flow.PolymerFlowModel for generative modeling."
-    )

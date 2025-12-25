@@ -4,44 +4,10 @@ These patterns encapsulate common testing workflows so tests can focus
 on what they're testing rather than boilerplate.
 """
 
-from typing import Optional, Callable
+from typing import Optional
 import numpy as np
 
-from .tolerances import get_tolerances, ToleranceProfile
-
-
-def assert_roundtrip_preserves_structure(
-    polymer,
-    threshold: Optional[float] = None,
-    tolerance_key: str = "roundtrip_small",
-    message: str = "",
-) -> float:
-    """DEPRECATED: Internal coordinate system removed.
-
-    This function relied on the internal coordinate system which has been
-    deprecated in favor of ciffy.nn.flow.PolymerFlowModel.
-    """
-    raise NotImplementedError(
-        "assert_roundtrip_preserves_structure is deprecated. "
-        "Internal coordinate system has been removed. "
-        "Use ciffy.nn.flow.PolymerFlowModel for generative modeling."
-    )
-
-
-def assert_gradient_flows(
-    polymer,
-    loss_fn: Optional[Callable] = None,
-) -> None:
-    """DEPRECATED: Internal coordinate system removed.
-
-    This function relied on the internal coordinate system which has been
-    deprecated in favor of ciffy.nn.flow.PolymerFlowModel.
-    """
-    raise NotImplementedError(
-        "assert_gradient_flows is deprecated. "
-        "Internal coordinate system has been removed. "
-        "Use ciffy.nn.flow.PolymerFlowModel for differentiable coordinate generation."
-    )
+from .tolerances import get_tolerances
 
 
 def assert_cif_roundtrip(

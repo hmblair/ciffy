@@ -9,11 +9,7 @@ This package provides centralized:
 """
 
 from .tolerances import ToleranceProfile, DEFAULT, GPU, STRICT, get_tolerances
-from .patterns import (
-    assert_roundtrip_preserves_structure,
-    assert_gradient_flows,
-    assert_cif_roundtrip,
-)
+from .patterns import assert_cif_roundtrip
 from .assertions import (
     assert_valid_angles,
     assert_valid_dihedrals,
@@ -36,8 +32,6 @@ __all__ = [
     "STRICT",
     "get_tolerances",
     # Patterns
-    "assert_roundtrip_preserves_structure",
-    "assert_gradient_flows",
     "assert_cif_roundtrip",
     # Assertions
     "assert_valid_angles",

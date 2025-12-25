@@ -568,9 +568,6 @@ def from_sequence(
     backend: str = "numpy",
     id: str = "template",
     atoms: dict[int, Sequence[int]] | None = None,
-    sample_dihedrals: bool = False,
-    clash_free: bool = True,
-    seed: int | None = None,
 ) -> Polymer:
     """
     Generate a template Polymer from a sequence string or list of sequences.
@@ -600,11 +597,6 @@ def from_sequence(
             If provided, only atoms in the specified set are included for each
             residue type. Useful for flow models that use a subset of atoms.
             Example: {Residue.A.value: model_A._atom_indices, ...}
-        sample_dihedrals: DEPRECATED. This parameter no longer works after the
-            internal coordinate system was removed. Use PolymerFlowModel.sample()
-            for generating realistic conformations.
-        clash_free: DEPRECATED. Only used with sample_dihedrals.
-        seed: DEPRECATED. Only used with sample_dihedrals.
 
     Returns:
         Polymer with:
@@ -687,16 +679,6 @@ def from_sequence(
         lengths=np.array(residues_per_chain, dtype=np.int64),
         polymer_count=n_atoms,
     )
-
-    # Deprecated dihedral sampling - warn and ignore
-    if sample_dihedrals:
-        warnings.warn(
-            "sample_dihedrals is deprecated and no longer works. "
-            "Use ciffy.nn.flow.PolymerFlowModel.sample() for generating "
-            "realistic conformations. The template will use ideal CCD coordinates.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     return polymer.torch() if backend == "torch" else polymer
 

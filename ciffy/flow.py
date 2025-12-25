@@ -145,7 +145,7 @@ def train(
             - String like "ACGU" (each character is a residue)
             - List of residue names ["A", "C", "G", "U"]
         output_dir: Where to save trained model (optional).
-        **config_kwargs: Passed to TrainingConfig. Common options:
+        **config_kwargs: Passed to ResidueFlowTrainingConfig. Common options:
             - latent_dim: Latent space dimension (default: 12)
             - n_epochs: Number of training epochs (default: 200)
             - device: Training device ("cpu" or "cuda")
@@ -166,7 +166,7 @@ def train(
         ...     device="cuda",
         ... )
     """
-    from .nn.flow import ResidueFlowTrainer, TrainingConfig
+    from .nn.flow import ResidueFlowTrainer, ResidueFlowTrainingConfig
     from .biochemistry import Residue
 
     # Parse residues
@@ -190,7 +190,7 @@ def train(
             resolved_paths.append(path)
 
     # Create config and train
-    config = TrainingConfig(**config_kwargs)
+    config = ResidueFlowTrainingConfig(**config_kwargs)
     trainer = ResidueFlowTrainer(config)
     results = trainer.train_all(resolved_paths, residue_list)
 

@@ -339,8 +339,8 @@ def position_next_residue_torch(
     This is the GPU-compatible version of position_next_residue. It keeps all
     computation on the same device as the input tensors.
 
-    Note: For performance-critical code, use position_next_residue_fast() with
-    pre-resolved frame column indices to avoid Python attribute lookups.
+    Note: For performance-critical code, use ciffy.geometry.position_residue_fast()
+    with pre-resolved frame column indices to avoid Python attribute lookups.
 
     Args:
         coords1: (n_atoms, 3) coordinates of first residue.
@@ -371,60 +371,6 @@ def position_next_residue_torch(
     coords2_positioned = (R_correction @ coords2.T).T + t_correction
 
     return coords2_positioned
-
-
-def position_next_residue_fast(
-    coords1: torch.Tensor,
-    coords2: torch.Tensor,
-    rel_transform: torch.Tensor,
-    prev_frame_cols: tuple[int, int, int | None],
-    prev_z_toward_origin: bool,
-    next_frame_cols: tuple[int, int, int | None],
-    next_z_toward_origin: bool,
-) -> torch.Tensor:
-    """
-    Position residue 2 relative to residue 1 using pre-resolved frame indices.
-
-    This is the fast path for residue positioning. Uses pre-resolved column
-    indices to compute frames with pure tensor math (no Python attribute lookups).
-    The frame indices should be computed once at model initialization.
-
-    Note:
-        This is a thin wrapper around ciffy.geometry.position_residue_fast for
-        backward compatibility.
-
-    Args:
-        coords1: (n_atoms, 3) coordinates of first residue.
-        coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
-        rel_transform: (6,) SE(3) transform [axis-angle, translation].
-        prev_frame_cols: Pre-resolved (origin, z_ref, perp_ref) column indices for
-            outgoing frame of coords1 (e.g., O3' frame for RNA).
-        prev_z_toward_origin: Z-axis direction for prev frame.
-        next_frame_cols: Pre-resolved column indices for incoming frame of coords2
-            (e.g., P frame for RNA).
-        next_z_toward_origin: Z-axis direction for next frame.
-
-    Returns:
-        (n_atoms, 3) positioned coordinates of second residue.
-
-    Example:
-        >>> # Pre-resolve indices at model init
-        >>> link_def = LINKING_BY_TYPE[residue.molecule_type]
-        >>> prev_cols = link_def.prev_frame.resolve(residue, atom_to_col)
-        >>> next_cols = link_def.next_frame.resolve(residue, atom_to_col)
-        >>>
-        >>> # Fast positioning at runtime
-        >>> positioned = position_next_residue_fast(
-        ...     coords1, coords2, transform,
-        ...     prev_cols, link_def.prev_frame.z_toward_origin,
-        ...     next_cols, link_def.next_frame.z_toward_origin,
-        ... )
-    """
-    return _position_residue_fast_geometry(
-        coords1, coords2, rel_transform,
-        prev_frame_cols, prev_z_toward_origin,
-        next_frame_cols, next_z_toward_origin,
-    )
 
 
 # =============================================================================

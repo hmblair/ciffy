@@ -27,10 +27,10 @@ Quick Start:
     >>> path = model.interpolate(polymer1, polymer2, n_steps=20)
 
 Training Custom Models:
-    >>> from ciffy.nn.flow import ResidueFlowTrainer, TrainingConfig
+    >>> from ciffy.nn.flow import ResidueFlowTrainer, ResidueFlowTrainingConfig
     >>> from ciffy.biochemistry import Residue
     >>>
-    >>> config = TrainingConfig(latent_dim=12, n_epochs=200, device="cuda")
+    >>> config = ResidueFlowTrainingConfig(latent_dim=12, n_epochs=200, device="cuda")
     >>> trainer = ResidueFlowTrainer(config)
     >>>
     >>> # Train on your data
@@ -61,7 +61,7 @@ from .residue import (
     # Training
     train_pca_flow,
     ResidueFlowTrainer,
-    TrainingConfig,
+    ResidueFlowTrainingConfig,
     TrainingResult,
 )
 
@@ -89,7 +89,7 @@ __all__ = [
     # Training
     "train_pca_flow",
     "ResidueFlowTrainer",
-    "TrainingConfig",
+    "ResidueFlowTrainingConfig",
     "TrainingResult",
     # Polymer flow
     "PolymerFlowModel",

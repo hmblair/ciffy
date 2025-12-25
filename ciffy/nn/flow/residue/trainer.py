@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class TrainingConfig:
+class ResidueFlowTrainingConfig:
     """Configuration for ResidueFlowModel training.
 
     Attributes:
@@ -84,10 +84,10 @@ class ResidueFlowTrainer:
     - Saving trained models to disk
 
     Example:
-        >>> from ciffy.nn.flow.residue import ResidueFlowTrainer, TrainingConfig
+        >>> from ciffy.nn.flow.residue import ResidueFlowTrainer, ResidueFlowTrainingConfig
         >>> from ciffy.biochemistry import Residue
         >>>
-        >>> config = TrainingConfig(latent_dim=12, n_epochs=100)
+        >>> config = ResidueFlowTrainingConfig(latent_dim=12, n_epochs=100)
         >>> trainer = ResidueFlowTrainer(config)
         >>>
         >>> # Train all RNA residue types
@@ -97,14 +97,14 @@ class ResidueFlowTrainer:
         >>> trainer.save(results, "models/rna_v1")
     """
 
-    def __init__(self, config: TrainingConfig | None = None):
+    def __init__(self, config: ResidueFlowTrainingConfig | None = None):
         """
         Initialize trainer with configuration.
 
         Args:
             config: Training configuration. If None, uses defaults.
         """
-        self.config = config or TrainingConfig()
+        self.config = config or ResidueFlowTrainingConfig()
 
     def train_single(
         self,

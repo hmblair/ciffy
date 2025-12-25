@@ -456,7 +456,7 @@ class TestCifSave:
         should preserve their molecule types exactly.
         """
         from ciffy import load, Scale
-        from ciffy.types import Molecule
+        from ciffy.biochemistry import Molecule
         import numpy as np
 
         original = load(cif_file, backend=backend)
@@ -486,7 +486,7 @@ class TestMoleculeTypeDetection:
     def test_9mds_is_rna(self, cif_9mds):
         """Test that 9MDS (8 RNA chains) is correctly identified as RNA."""
         from ciffy import load, RNA, Scale
-        from ciffy.types import Molecule
+        from ciffy.biochemistry import Molecule
 
         polymer = load(cif_9mds, backend="numpy")
 
@@ -502,7 +502,7 @@ class TestMoleculeTypeDetection:
     def test_9gcm_mixed_rna_protein(self, cif_9gcm):
         """Test that 9GCM (1 RNA + 3 protein chains) has correct molecule types."""
         from ciffy import load, Scale
-        from ciffy.types import Molecule
+        from ciffy.biochemistry import Molecule
 
         polymer = load(cif_9gcm, backend="numpy")
 

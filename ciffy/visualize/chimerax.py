@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
-from ..types import Scale
+from ..biochemistry import Scale
 from .defattr import to_defattr
 
 if TYPE_CHECKING:

@@ -117,7 +117,7 @@ def _get_chi_dihedral_type(residue_enum_or_name):
     Returns:
         DihedralType.CHI_PURINE or DihedralType.CHI_PYRIMIDINE
     """
-    from ..types import DihedralType
+    from ..biochemistry import DihedralType
 
     # Handle both enum and string inputs
     if hasattr(residue_enum_or_name, 'name'):
@@ -185,7 +185,7 @@ def _has_clash(
     """
     from ..backend.ops import cdist
     from ..biochemistry import Element
-    from ..types import Scale
+    from ..biochemistry import Scale
 
     if current_residue_idx <= 2:
         # Only 0, 1, or 2 previous residues; skip clash checks
@@ -318,7 +318,7 @@ def _sample_single_residue_rna(
     Returns:
         Dict mapping DihedralType -> scalar value in radians (or NaN)
     """
-    from ..types import DihedralType, Molecule
+    from ..biochemistry import DihedralType, Molecule
     from ..biochemistry import Residue as ResidueEnum
 
     # Get residue-type-specific 7D GMM via registry
@@ -404,7 +404,7 @@ def _apply_protein_dihedrals_partial(
         psi_values: List of psi angles (may contain NaN)
         omega_values: List of omega angles (may contain NaN)
     """
-    from ..types import DihedralType
+    from ..biochemistry import DihedralType
 
     # Filter non-NaN values
     phi_valid = np.array([v for v in phi_values if not np.isnan(v)])
@@ -503,7 +503,7 @@ def _apply_dihedrals(
         polymer: Polymer to modify (in-place).
         dihedral_dict: Dict mapping DihedralType -> list of angle values (may contain NaN).
     """
-    from ..types import DihedralType
+    from ..biochemistry import DihedralType
 
     for dtype, values in dihedral_dict.items():
         valid_values = np.array([v for v in values if not np.isnan(v)])
@@ -536,7 +536,7 @@ def _apply_terminal_constraints(
         n_residues: Total number of residues.
         molecule_type: Molecule type (PROTEIN, RNA, or DNA).
     """
-    from ..types import DihedralType, Molecule
+    from ..biochemistry import DihedralType, Molecule
 
     if molecule_type == Molecule.PROTEIN:
         if res_idx == 0:
@@ -640,7 +640,7 @@ class ProteinEvaluator(PolymerEvaluator):
 
     def apply_angles(self, angles: np.ndarray) -> None:
         """Apply (phi, psi) angles to polymer."""
-        from ..types import DihedralType
+        from ..biochemistry import DihedralType
 
         # angles is (phi, psi) for this residue
         phi = float(angles[0])
@@ -695,7 +695,7 @@ class RNAEvaluator(PolymerEvaluator):
 
     def apply_angles(self, angles: np.ndarray) -> None:
         """Apply 7D angles to polymer (backbone only, skip chi)."""
-        from ..types import DihedralType
+        from ..biochemistry import DihedralType
 
         # angles is [alpha, beta, gamma, delta, epsilon, zeta, chi]
         # We only use backbone dihedrals; chi is ignored to preserve base planarity
@@ -777,7 +777,7 @@ def sample_protein_autoregressive(
         >>> protein = ciffy.from_sequence("MGKLF")
         >>> protein = sample_protein_autoregressive(protein, seed=42)
     """
-    from ..types import Scale, Molecule
+    from ..biochemistry import Scale, Molecule
     from ..biochemistry import Residue as ResidueEnum
 
     rng = np.random.default_rng(seed)
@@ -900,7 +900,7 @@ def sample_protein_dihedrals(
 
 # Import DihedralType for type hints - actual import happens in functions to avoid circular imports
 if TYPE_CHECKING:
-    from ..types import DihedralType as DihedralTypeHint
+    from ..biochemistry import DihedralType as DihedralTypeHint
 
 
 def sample_rna_dihedrals(
@@ -929,7 +929,7 @@ def sample_rna_dihedrals(
         (if sequence provided, with values only for matching residue types).
         Terminal residues have NaN where the dihedral cannot be defined.
     """
-    from ..types import DihedralType
+    from ..biochemistry import DihedralType
     from ..biochemistry import Residue
 
     if rng is None:
@@ -1009,7 +1009,7 @@ def sample_rna_autoregressive(
         >>> rna = ciffy.from_sequence("acgu")
         >>> rna = sample_rna_autoregressive(rna, seed=42)
     """
-    from ..types import DihedralType, Scale
+    from ..biochemistry import DihedralType, Scale
     from ..biochemistry import Residue as ResidueEnum
 
     rng = np.random.default_rng(seed)
@@ -1104,7 +1104,7 @@ def _detect_molecule_type(polymer: "Polymer") -> "Molecule":
     Returns:
         Molecule.PROTEIN, Molecule.RNA, or Molecule.DNA
     """
-    from ..types import Molecule
+    from ..biochemistry import Molecule
     from ..biochemistry import Residue
 
     # Check multiple residues for unambiguous codes
@@ -1180,7 +1180,7 @@ def sample_autoregressive(
         >>> rna = ciffy.from_sequence("acgu")
         >>> rna = sample_autoregressive(rna, seed=42)
     """
-    from ..types import Molecule
+    from ..biochemistry import Molecule
 
     # Detect molecule type using robust heuristics
     mol_type = _detect_molecule_type(polymer)
@@ -1246,7 +1246,7 @@ def _sample_autoregressive_langevin_unified(
     Raises:
         ValueError: If molecule_type is not supported.
     """
-    from ..types import Scale, DihedralType, Molecule
+    from ..biochemistry import Scale, DihedralType, Molecule
     from ..biochemistry import Residue as ResidueEnum
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
@@ -1283,7 +1283,7 @@ def _sample_protein_autoregressive_langevin_impl(
 
     Handles protein-specific logic: 2D GMM (phi, psi), omega sampling.
     """
-    from ..types import Scale, Molecule, DihedralType
+    from ..biochemistry import Scale, Molecule, DihedralType
     from ..biochemistry import Residue as ResidueEnum
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
@@ -1363,7 +1363,7 @@ def _sample_rna_autoregressive_langevin_impl(
 
     Handles RNA-specific logic: 7D GMM (alpha, beta, gamma, delta, epsilon, zeta, chi).
     """
-    from ..types import DihedralType, Scale, Molecule
+    from ..biochemistry import DihedralType, Scale, Molecule
     from ..biochemistry import Residue as ResidueEnum
     from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
     from .langevin import langevin_dynamics
@@ -1487,7 +1487,7 @@ def sample_protein_autoregressive_langevin(
         >>> protein = ciffy.from_sequence("MGKLF")
         >>> protein = sample_protein_autoregressive_langevin(protein, seed=42)
     """
-    from ..types import Molecule
+    from ..biochemistry import Molecule
 
     return _sample_autoregressive_langevin_unified(
         polymer,
@@ -1537,7 +1537,7 @@ def sample_rna_autoregressive_langevin(
         >>> rna = ciffy.from_sequence("acgu")
         >>> rna = sample_rna_autoregressive_langevin(rna, seed=42)
     """
-    from ..types import Molecule
+    from ..biochemistry import Molecule
 
     return _sample_autoregressive_langevin_unified(
         polymer,
@@ -1581,7 +1581,7 @@ def randomize_backbone(
         >>> rna = ciffy.from_sequence("acgu")
         >>> rna = randomize_backbone(rna, seed=42)
     """
-    from ..types import DihedralType, Molecule, Scale
+    from ..biochemistry import DihedralType, Molecule, Scale
     from ..biochemistry import Residue
 
     rng = np.random.default_rng(seed)

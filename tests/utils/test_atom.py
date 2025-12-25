@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ciffy.utils.atom import Atom, AtomGroup, build_atom_group
+from ciffy.biochemistry.atom import Atom, AtomGroup, build_atom_group
 
 
 class TestAtom:

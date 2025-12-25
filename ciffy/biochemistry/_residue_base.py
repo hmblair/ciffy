@@ -7,7 +7,7 @@ The generated _generated_residues_v2.py imports this and adds the actual residue
 from typing import ClassVar, Iterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..utils import AtomGroup
+    from .atom import AtomGroup
 
 
 class ResidueBase:
@@ -58,7 +58,7 @@ class ResidueBase:
     @classmethod
     def _init_members(cls) -> None:
         """Populate lookup tables from class attributes. Called after generation."""
-        from ..utils import AtomGroup
+        from .atom import AtomGroup
         for name in dir(cls):
             if name.startswith("_"):
                 continue

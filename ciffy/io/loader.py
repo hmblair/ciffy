@@ -47,7 +47,7 @@ def load(
     """
     # Import here to avoid circular imports
     from ..polymer import Polymer
-    from ..types import Scale
+    from ..biochemistry import Scale
     from .._c import _load
 
     # Handle backend parameter

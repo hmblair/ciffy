@@ -15,7 +15,7 @@ from .backend import Array, is_torch, to_numpy
 
 if TYPE_CHECKING:
     from .polymer import Polymer
-    from .utils import AtomGroup
+    from .biochemistry import AtomGroup
 
 
 @dataclass

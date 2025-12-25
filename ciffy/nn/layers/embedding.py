@@ -16,8 +16,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = None  # Placeholder
 
-from ...types import Scale
-from ...biochemistry import NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
+from ...biochemistry import Scale, NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
 
 
 class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):

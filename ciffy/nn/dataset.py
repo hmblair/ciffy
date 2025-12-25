@@ -22,7 +22,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     Dataset = object  # Placeholder for type hints
 
-from ..types import Scale, Molecule
+from ..biochemistry import Scale, Molecule
 
 logger = logging.getLogger(__name__)
 

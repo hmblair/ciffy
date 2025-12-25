@@ -115,7 +115,7 @@ class TestAtomGroup:
     def test_build_atom_group(self):
         """Test build_atom_group creates correct structure."""
         import numpy as np
-        from ciffy.utils import build_atom_group
+        from ciffy.biochemistry import build_atom_group
         from ciffy.biochemistry import Residue
 
         # Build a simple atom group from purines

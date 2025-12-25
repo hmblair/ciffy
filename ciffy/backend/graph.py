@@ -101,7 +101,7 @@ class TopologyInfo:
         Returns:
             TopologyInfo with all structural information.
         """
-        from ..types import Scale
+        from ..biochemistry import Scale
 
         # Convert to numpy for storage (topology is always CPU)
         atoms = to_numpy(polymer.atoms).astype(np.int32)
@@ -226,7 +226,7 @@ def build_bond_graph(polymer) -> tuple[np.ndarray, int]:
             edges: (E, 2) int64 array of [atom_i, atom_j] pairs (symmetric)
             n_atoms: Total number of atoms
     """
-    from ..types import Scale
+    from ..biochemistry import Scale
 
     n_atoms = polymer.size()
     res_sizes = polymer.sizes(Scale.RESIDUE)

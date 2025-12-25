@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Union
 
 import numpy as np
 
-from ..types import Scale
+from ..biochemistry import Scale
 
 if TYPE_CHECKING:
     from ..polymer import Polymer

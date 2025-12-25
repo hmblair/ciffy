@@ -33,7 +33,7 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
         >>> polymer.write("output.cif")
     """
     from .._c import _save
-    from ..types import Scale
+    from ..biochemistry import Scale
     from ..backend import is_torch
 
     # Convert to numpy if using torch backend

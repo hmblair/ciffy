@@ -14,7 +14,7 @@ from ..backend import is_torch, Array, svd, svdvals, det, multiply
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from ..types import Scale
+    from ..biochemistry import Scale
 
 
 # =============================================================================
@@ -151,7 +151,7 @@ def kabsch_distance(
         to exclude non-polymer atoms before computing RMSD if your structure
         contains such molecules.
     """
-    from ..types import Scale
+    from ..biochemistry import Scale
 
     if scale is None:
         scale = Scale.MOLECULE
@@ -225,7 +225,7 @@ def align(
         For per-chain alignment, use scale=ciffy.CHAIN.
     """
     from copy import copy
-    from ..types import Scale
+    from ..biochemistry import Scale
 
     if scale is None:
         scale = Scale.MOLECULE

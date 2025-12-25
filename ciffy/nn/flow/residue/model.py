@@ -15,8 +15,7 @@ import torch.nn as nn
 from ciffy.utils import atoms_to_col_map
 
 if TYPE_CHECKING:
-    from ciffy.biochemistry import Residue
-    from ciffy.utils import AtomGroup
+    from ciffy.biochemistry import Residue, AtomGroup
 
 
 # =============================================================================

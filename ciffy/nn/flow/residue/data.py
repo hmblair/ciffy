@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import ciffy
 from ciffy.backend import Array, to_numpy, is_torch
-from ciffy.types import Scale
+from ciffy.biochemistry import Scale
 from ciffy.operations.reduction import Reduction
 
 # Import shared geometry primitives

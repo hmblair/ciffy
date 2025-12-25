@@ -34,7 +34,7 @@ except ImportError as e:
 
 # Core types
 from .polymer import Polymer
-from .types import (
+from .biochemistry import (
     Scale, Molecule, DihedralType,
     PROTEIN_BACKBONE, RNA_BACKBONE, RNA_GLYCOSIDIC,
     DIHEDRAL_ATOMS, DIHEDRAL_NAME_TO_TYPE,

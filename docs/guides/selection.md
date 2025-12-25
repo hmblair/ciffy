@@ -30,7 +30,7 @@ dna_chains = polymer.by_type(ciffy.DNA)
 | `Molecule.WATER` | Water molecules |
 
 ```python
-from ciffy.types import Molecule
+from ciffy.biochemistry import Molecule
 
 # Access all molecule types
 ligands = polymer.by_type(Molecule.LIGAND)

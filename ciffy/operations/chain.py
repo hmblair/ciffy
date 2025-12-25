@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from ..backend import Array, get_backend, check_compatible
 from ..backend import ops
-from ..types import Scale
+from ..biochemistry import Scale
 
 if TYPE_CHECKING:
     from ..polymer import Polymer

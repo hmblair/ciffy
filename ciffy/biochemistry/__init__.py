@@ -12,6 +12,15 @@ Residue members are AtomGroups with geometry:
 
 import numpy as np
 
+# Core atom classes
+from .atom import Atom, AtomGroup, build_atom_group
+
+# Scale enum for hierarchical levels
+from .scale import Scale
+
+# TopologyInfo for structural metadata (defined in backend to avoid circular imports)
+from ..backend.graph import TopologyInfo
+
 from ._generated_elements import Element, ELEMENT_NAMES
 from ._generated_molecule import Molecule, molecule_type
 
@@ -75,6 +84,14 @@ NUM_ATOMS: int = max(ATOM_NAMES.keys()) + 1
 
 
 __all__ = [
+    # Core atom classes
+    "Atom",
+    "AtomGroup",
+    "build_atom_group",
+    # Scale enum
+    "Scale",
+    # TopologyInfo
+    "TopologyInfo",
     # Vocabulary sizes
     "NUM_ELEMENTS",
     "NUM_RESIDUES",

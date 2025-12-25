@@ -25,7 +25,7 @@ from .reduction import Reduction
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from ..utils import AtomGroup
+    from ..biochemistry import AtomGroup
 
 
 def _from_numpy(arr: np.ndarray, reference: Array) -> Array:
@@ -113,7 +113,7 @@ def extract(
             atom_names = [A(idx).name for idx in atom_indices]
             # ['P', 'OP1', 'OP2', 'O5p', 'C5p', ...]
     """
-    from ..types import Scale
+    from ..biochemistry import Scale
 
     # Work with polymer atoms only (residues don't include HETATM)
     # Then filter to residues of the target type and remove empty ones

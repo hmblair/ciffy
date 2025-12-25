@@ -15,7 +15,7 @@ from typing import Sequence
 import numpy as np
 
 from .polymer import Polymer
-from .types import Scale, Molecule
+from .biochemistry import Scale, Molecule
 from .biochemistry import Residue
 from .biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
 from .utils import atoms_to_col_map

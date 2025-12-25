@@ -80,7 +80,10 @@ class ActNorm(nn.Module):
     def initialize(self, x: torch.Tensor) -> None:
         with torch.no_grad():
             self.bias.copy_(-x.mean(dim=0))
-            self.log_scale.copy_(-torch.log(x.std(dim=0).clamp(min=1e-6)))
+            # Use correction=0 (biased estimator) to avoid warning when batch_size=1
+            # The clamp ensures we never get log(0) even with degenerate batches
+            std = x.std(dim=0, correction=0).clamp(min=1e-6)
+            self.log_scale.copy_(-torch.log(std))
             self.initialized.fill_(True)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

@@ -788,9 +788,6 @@ class ResidueFlowModel:
         ideal_coords = residue.ideal  # (n_residue_atoms, 3)
         bonds = residue.bonds  # PairEnum of (atom1, atom2) pairs
 
-        # The first atom's enum value - used to convert global to local index
-        first_atom_value = list(residue)[0].value
-
         # Build bond constraint data from residue's bond definitions
         # Only include bonds where both atoms are in our subset
         bond_pairs = []
@@ -804,11 +801,9 @@ class ResidueFlowModel:
                 bond_pairs.append((local_i, local_j))
 
                 # Compute ideal bond length from ideal coordinates
-                # Convert global enum value to local index in ideal_coords
-                ideal_idx1 = atom1.value - first_atom_value
-                ideal_idx2 = atom2.value - first_atom_value
-                pos1 = ideal_coords[ideal_idx1]
-                pos2 = ideal_coords[ideal_idx2]
+                # Use .local for 0-indexed access into ideal_coords
+                pos1 = ideal_coords[atom1.local]
+                pos2 = ideal_coords[atom2.local]
                 ideal_length = float(np.linalg.norm(pos2 - pos1))
                 bond_targets.append(ideal_length)
 

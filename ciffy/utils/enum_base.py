@@ -75,6 +75,10 @@ class IndexEnum(Enum):
     lists, and dictionaries. Useful for biochemistry constants where enum
     values represent atom indices.
 
+    Each member has two index properties:
+        - `.value`: Global unique index (for ML embeddings, cross-residue comparison)
+        - `.local`: Local 0-indexed position within this enum (for array access)
+
     Example:
         >>> class Element(IndexEnum):
         ...     C = 6
@@ -84,12 +88,36 @@ class IndexEnum(Enum):
         array([6, 7, 8])
         >>> Element.dict()
         {'C': 6, 'N': 7, 'O': 8}
+        >>> Element.C.value  # Global index
+        6
+        >>> Element.C.local  # Local index (0-based position)
+        0
     """
+
+    @property
+    def local(self) -> int:
+        """
+        Local 0-indexed position within this enum.
+
+        Use this for accessing per-residue arrays like `ideal` coordinates
+        or local bond indices. Use `.value` for global unique identification.
+
+        Example:
+            >>> from ciffy.biochemistry import Residue
+            >>> Residue.ALA.N.value   # 1076 (global)
+            >>> Residue.ALA.N.local   # 0 (local)
+            >>> Residue.ALA.ideal[Residue.ALA.N.local]  # Access ideal coords
+        """
+        cls = type(self)
+        # Cache the first value on the class for efficiency
+        if not hasattr(cls, '_first_value'):
+            cls._first_value = next(iter(cls)).value
+        return self.value - cls._first_value
 
     @classmethod
     def index(cls: type[IndexEnum]) -> np.ndarray:
         """
-        Return an array of all enum values.
+        Return an array of all enum values (global indices).
 
         Returns:
             Integer array containing all values in the enum.
@@ -97,6 +125,16 @@ class IndexEnum(Enum):
         return np.array([
             atom.value for atom in cls
         ], dtype=np.int64)
+
+    @classmethod
+    def local_index(cls: type[IndexEnum]) -> np.ndarray:
+        """
+        Return an array of local indices (0, 1, 2, ...).
+
+        Returns:
+            Integer array [0, 1, 2, ..., n-1] where n is the number of members.
+        """
+        return np.arange(len(list(cls)), dtype=np.int64)
 
     @classmethod
     def list(

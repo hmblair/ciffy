@@ -25,7 +25,7 @@ from .reduction import Reduction
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from ..utils.enum_base import ResidueType
+    from ..utils import AtomGroup
 
 
 def _from_numpy(arr: np.ndarray, reference: Array) -> Array:
@@ -38,7 +38,7 @@ def _from_numpy(arr: np.ndarray, reference: Array) -> Array:
 
 def extract(
     poly: "Polymer",
-    residue: "ResidueType",
+    residue: "AtomGroup",
     atoms: list | None = None,
     center: bool = False,
     align: bool = False,

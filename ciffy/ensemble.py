@@ -15,7 +15,7 @@ from .backend import Array, is_torch, to_numpy
 
 if TYPE_CHECKING:
     from .polymer import Polymer
-    from .utils.enum_base import ResidueType
+    from .utils import AtomGroup
 
 
 @dataclass
@@ -29,7 +29,7 @@ class Ensemble:
     Attributes:
         coords: Dense coordinate array of shape (n_instances, n_atoms, 3).
         atoms: List of atom type indices in canonical order.
-        residue: The ResidueType for this ensemble.
+        residue: The residue AtomGroup for this ensemble.
 
     Examples:
         Extract an ensemble from a structure::
@@ -57,7 +57,7 @@ class Ensemble:
 
     coords: Array
     atoms: list[int]
-    residue: "ResidueType"
+    residue: "AtomGroup"
 
     def __len__(self) -> int:
         """Number of residue instances in the ensemble."""
@@ -143,7 +143,7 @@ class Ensemble:
     def from_polymer(
         cls,
         poly: "Polymer",
-        residue: "ResidueType",
+        residue: "AtomGroup",
         atoms: list | None = None,
         center: bool = False,
         align: bool = False,

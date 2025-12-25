@@ -1,14 +1,19 @@
 """
 Biochemistry constants for structure analysis.
 
-This module provides two types of atom groupings:
+Provides atom groups for selecting atoms by chemical identity across
+multiple residue types.
 
-1. **Flat IndexEnums** (legacy): Backbone, Nucleobase, Phosphate, Sidechain
-   - Prefixed names like "A_C5p", "GLY_CA"
-   - Use: `Backbone.index()` for all values
+Two types of groups:
 
-2. **Hierarchical Atom Groups** (preferred): Sugar, PurineBase, PyrimidineBase, etc.
-   - Nested structure: `Group.atom.residue.value`
+1. **Flat groups** (Backbone, Nucleobase, Phosphate, Sidechain):
+   - Simple collections of atoms across residue types
+   - Use: `Backbone.index()` for all backbone atom values
+   - Use: `polymer.by_atom(Backbone.index())`
+
+2. **Hierarchical groups** (Sugar, PurineBase, etc.):
+   - Nested structure for accessing atoms by position and residue
+   - Use: `Sugar.C5p.A` for adenine C5' atom
    - Use: `Sugar.C5p.index()` for all C5' values
 
 Hierarchical Access Patterns
@@ -16,66 +21,19 @@ Hierarchical Access Patterns
 ::
 
     PurineBase.N1.index()  # All N1 atoms in purines (A, G, DA, DG)
-    PurineBase.N1.A.value  # Just adenine N1 value
+    PurineBase.N1.A        # Atom for adenine N1
     PurineBase.index()     # All purine base atom values
     Sugar.C5p.index()      # All C5' atoms across all nucleotides
 
-Single Source of Truth
-----------------------
-All values come from the generated atom enums, ensuring consistency::
-
-    PurineBase.N1.A.value == Residue.A.N1.value  # Always True
-
-Adding New Atom Groups
-----------------------
-To add a new atom group (e.g., aromatic sidechain atoms):
-
-1. **Define residue sources** - list of (name, ResidueType) tuples::
-
-    _AROMATIC_RESIDUES = [
-        ("PHE", Residue.PHE),
-        ("TYR", Residue.TYR),
-        ("TRP", Residue.TRP),
-        ("HIS", Residue.HIS),
-    ]
-
-2. **Define atom filter** - set of atom names to include::
-
-    _AROMATIC_RING_NAMES = {
-        'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ',  # PHE/TYR ring
-        'NE1', 'CE2', 'CE3', 'CZ2', 'CZ3', 'CH2',  # TRP indole
-        'ND1', 'CE1', 'NE2',  # HIS imidazole
-    }
-
-3. **Build the group** using `build_atom_group_legacy`::
-
-    AromaticRing = build_atom_group_legacy(
-        "AromaticRing",
-        _AROMATIC_RESIDUES,
-        _AROMATIC_RING_NAMES
-    )
-
-4. **Export** from `__init__.py`::
-
-    from .constants import AromaticRing
-
-The resulting group supports::
-
-    AromaticRing.CG.PHE.value   # Specific atom value
-    AromaticRing.CG.index()     # All CG values across aromatics
-    AromaticRing.index()        # All aromatic ring atom values
-    polymer.by_atom(AromaticRing.index())  # Select all aromatic atoms
-
-Finding Atom Names
-------------------
-To find available atom names for a residue::
-
-    >>> from ciffy.biochemistry import Residue
-    >>> [atom.name for atom in Residue.PHE]
-    ['N', 'CA', 'C', 'O', 'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ', ...]
-
 Existing Groups
 ---------------
+Flat groups:
+- **Backbone**: Protein backbone (N, CA, C, O) + nucleic acid sugar-phosphate
+- **Nucleobase**: RNA nucleobase atoms (no sugar or phosphate)
+- **Phosphate**: Phosphate atoms across all nucleotides
+- **Sidechain**: Protein sidechain atoms (non-backbone)
+
+Hierarchical groups:
 - **Sugar**: Ribose/deoxyribose atoms (C1'-C5', O2'-O5', hydrogens)
 - **PhosphateGroup**: Phosphate atoms (P, OP1, OP2, OP3)
 - **PurineBase**: Full purine nucleobase (A, G, DA, DG)
@@ -86,118 +44,116 @@ Existing Groups
 
 from typing import Callable
 
-from ..utils import IndexEnum, build_atom_group_legacy
-from ._generated_residues import Residue
-
-# Residue groupings (prefix, residue) - atoms accessed via residue.atoms
-_RNA_NUCLEOTIDES = [
-    ("A_", Residue.A),
-    ("C_", Residue.C),
-    ("G_", Residue.G),
-    ("U_", Residue.U),
-]
-
-_DNA_NUCLEOTIDES = [
-    ("DA_", Residue.DA),
-    ("DC_", Residue.DC),
-    ("DG_", Residue.DG),
-    ("DT_", Residue.DT),
-]
-
-_AMINO_ACIDS = [
-    ("GLY_", Residue.GLY), ("ALA_", Residue.ALA), ("VAL_", Residue.VAL), ("LEU_", Residue.LEU),
-    ("ILE_", Residue.ILE), ("PRO_", Residue.PRO), ("PHE_", Residue.PHE),
-    ("TRP_", Residue.TRP), ("MET_", Residue.MET), ("CYS_", Residue.CYS),
-    ("SER_", Residue.SER), ("THR_", Residue.THR), ("ASN_", Residue.ASN),
-    ("GLN_", Residue.GLN), ("ASP_", Residue.ASP), ("GLU_", Residue.GLU),
-    ("LYS_", Residue.LYS), ("ARG_", Residue.ARG), ("HIS_", Residue.HIS), ("TYR_", Residue.TYR),
-]
-
-# Protein backbone atom names
-_PROTEIN_BACKBONE_NAMES = {'N', 'CA', 'C', 'O'}
+from ..utils import Atom, AtomGroup, build_atom_group
+from ._generated_residues_v2 import Residue
 
 
-def _filter_atoms(
-    residues: list[tuple[str, type]],
+# =============================================================================
+# Helper for building flat atom groups
+# =============================================================================
+
+def _build_flat_group(
+    name: str,
+    residues: list[tuple[str, AtomGroup]],
     predicate: Callable[[str], bool],
-) -> dict[str, int]:
+) -> AtomGroup:
     """
-    Filter atoms across residues using a predicate.
+    Build a flat AtomGroup from residues using a predicate on atom names.
 
     Args:
-        residues: List of (prefix, ResidueType) tuples.
-        predicate: Function that takes an atom name and returns True to include.
+        name: Name for the group.
+        residues: List of (prefix, AtomGroup) pairs.
+        predicate: Function taking atom name, returns True to include.
 
     Returns:
-        Dictionary mapping prefixed atom names to their indices.
+        AtomGroup with all matching atoms (prefixed names to avoid collisions).
     """
-    result = {}
-    for prefix, residue in residues:
-        for name, value in residue.atoms.dict().items():
-            if predicate(name):
-                result[prefix + name] = value
-    return result
+    atoms: dict[str, Atom] = {}
+    for prefix, res in residues:
+        for atom in res:
+            if predicate(atom.name):
+                key = f"{prefix}_{atom.name}"
+                atoms[key] = Atom(key, int(atom), atom.local)
+    return AtomGroup(name, atoms)
 
+# =============================================================================
+# Residue groupings
+# =============================================================================
+
+_RNA_NUCLEOTIDES = [
+    ("A", Residue.A), ("C", Residue.C),
+    ("G", Residue.G), ("U", Residue.U),
+]
+_DNA_NUCLEOTIDES = [
+    ("DA", Residue.DA), ("DC", Residue.DC),
+    ("DG", Residue.DG), ("DT", Residue.DT),
+]
+_PURINES = [
+    ("A", Residue.A), ("G", Residue.G),
+    ("DA", Residue.DA), ("DG", Residue.DG),
+]
+_PYRIMIDINES = [
+    ("C", Residue.C), ("U", Residue.U),
+    ("DC", Residue.DC), ("DT", Residue.DT),
+]
+_ALL_NUCLEOTIDES = _PURINES + _PYRIMIDINES
+
+_AMINO_ACIDS = [
+    ("GLY", Residue.GLY), ("ALA", Residue.ALA), ("VAL", Residue.VAL),
+    ("LEU", Residue.LEU), ("ILE", Residue.ILE), ("PRO", Residue.PRO),
+    ("PHE", Residue.PHE), ("TRP", Residue.TRP), ("MET", Residue.MET),
+    ("CYS", Residue.CYS), ("SER", Residue.SER), ("THR", Residue.THR),
+    ("ASN", Residue.ASN), ("GLN", Residue.GLN), ("ASP", Residue.ASP),
+    ("GLU", Residue.GLU), ("LYS", Residue.LYS), ("ARG", Residue.ARG),
+    ("HIS", Residue.HIS), ("TYR", Residue.TYR),
+]
+
+
+# =============================================================================
+# Predicates for flat groups
+# =============================================================================
 
 # Nucleic acid backbone: sugar-phosphate atoms (contain 'p' or 'P')
-_nucleic_backbone = lambda n: 'p' in n or 'P' in n
+_is_nucleic_backbone = lambda n: 'p' in n or 'P' in n
 
 # Nucleobase atoms: neither 'p' nor 'P'
-_nucleobase = lambda n: 'p' not in n and 'P' not in n
+_is_nucleobase = lambda n: 'p' not in n and 'P' not in n
 
 # Phosphate atoms: contain uppercase 'P'
-_phosphate = lambda n: 'P' in n
+_is_phosphate = lambda n: 'P' in n
 
 # Protein backbone atoms
-_protein_backbone = lambda n: n in _PROTEIN_BACKBONE_NAMES
+_PROTEIN_BACKBONE_NAMES = {'N', 'CA', 'C', 'O'}
+_is_protein_backbone = lambda n: n in _PROTEIN_BACKBONE_NAMES
+_is_sidechain = lambda n: n not in _PROTEIN_BACKBONE_NAMES
 
-# Sidechain atoms: not backbone
-_sidechain = lambda n: n not in _PROTEIN_BACKBONE_NAMES and n not in {'OXT', 'H', 'H2', 'H3', 'HA', 'HA2', 'HA3'}
 
+# =============================================================================
+# Flat atom groups (for polymer selection methods)
+# =============================================================================
 
-# Combined Backbone: RNA + DNA + Protein
-Backbone = IndexEnum(
+# Backbone: nucleic acid sugar-phosphate + protein backbone
+Backbone = AtomGroup(
     "Backbone",
-    _filter_atoms(_RNA_NUCLEOTIDES, _nucleic_backbone) |
-    _filter_atoms(_DNA_NUCLEOTIDES, _nucleic_backbone) |
-    _filter_atoms(_AMINO_ACIDS, _protein_backbone)
+    {
+        **_build_flat_group("_rna", _RNA_NUCLEOTIDES, _is_nucleic_backbone)._members,
+        **_build_flat_group("_dna", _DNA_NUCLEOTIDES, _is_nucleic_backbone)._members,
+        **_build_flat_group("_prot", _AMINO_ACIDS, _is_protein_backbone)._members,
+    }
 )
 
-# Nucleobase atoms (RNA only for now)
-Nucleobase = IndexEnum(
-    "Nucleobase",
-    _filter_atoms(_RNA_NUCLEOTIDES, _nucleobase)
-)
+# Nucleobase atoms (RNA only)
+Nucleobase = _build_flat_group("Nucleobase", _RNA_NUCLEOTIDES, _is_nucleobase)
 
 # Phosphate atoms (RNA + DNA)
-Phosphate = IndexEnum(
+Phosphate = _build_flat_group(
     "Phosphate",
-    _filter_atoms(_RNA_NUCLEOTIDES, _phosphate) |
-    _filter_atoms(_DNA_NUCLEOTIDES, _phosphate)
+    _RNA_NUCLEOTIDES + _DNA_NUCLEOTIDES,
+    _is_phosphate
 )
 
 # Sidechain atoms (protein only)
-Sidechain = IndexEnum(
-    "Sidechain",
-    _filter_atoms(_AMINO_ACIDS, _sidechain)
-)
-
-
-# =============================================================================
-# Hierarchical Atom Group Classes
-# =============================================================================
-#
-# These use HierarchicalEnumMeta to provide hierarchical access to atoms by
-# chemical identity. Each class has nested IndexEnums for each atom position,
-# plus standard IndexEnum-like methods (index, dict, list, revdict).
-#
-# Source of truth: Values come from generated atom enums (A, G, C, U, etc.)
-# so PurineBase.N1.A.value == Residue.A.N1.value is always true.
-
-# Residue groupings for hierarchical access
-_PURINES = [("A", Residue.A), ("G", Residue.G), ("DA", Residue.DA), ("DG", Residue.DG)]
-_PYRIMIDINES = [("C", Residue.C), ("U", Residue.U), ("DC", Residue.DC), ("DT", Residue.DT)]
-_ALL_NUCLEOTIDES = _PURINES + _PYRIMIDINES
+Sidechain = _build_flat_group("Sidechain", _AMINO_ACIDS, _is_sidechain)
 
 
 # =============================================================================
@@ -238,54 +194,19 @@ _PYRIMIDINE_BASE_NAMES = {
 
 
 # =============================================================================
-# Build hierarchical atom group classes
+# Build hierarchical atom groups
 # =============================================================================
 
 # Sugar atoms - present in all nucleotides
-Sugar = build_atom_group_legacy("Sugar", _ALL_NUCLEOTIDES, _SUGAR_NAMES)
+Sugar = build_atom_group("Sugar", _ALL_NUCLEOTIDES, _SUGAR_NAMES)
 
 # Phosphate atoms - present in all nucleotides
-PhosphateGroup = build_atom_group_legacy("PhosphateGroup", _ALL_NUCLEOTIDES, _PHOSPHATE_NAMES)
+PhosphateGroup = build_atom_group("PhosphateGroup", _ALL_NUCLEOTIDES, _PHOSPHATE_NAMES)
 
 # Purine hierarchy - A, G, DA, DG only
-PurineImidazole = build_atom_group_legacy("PurineImidazole", _PURINES, _PURINE_IMIDAZOLE_NAMES)
-PurinePyrimidine = build_atom_group_legacy("PurinePyrimidine", _PURINES, _PURINE_PYRIMIDINE_NAMES)
-PurineBase = build_atom_group_legacy("PurineBase", _PURINES, _PURINE_BASE_NAMES)
+PurineImidazole = build_atom_group("PurineImidazole", _PURINES, _PURINE_IMIDAZOLE_NAMES)
+PurinePyrimidine = build_atom_group("PurinePyrimidine", _PURINES, _PURINE_PYRIMIDINE_NAMES)
+PurineBase = build_atom_group("PurineBase", _PURINES, _PURINE_BASE_NAMES)
 
 # Pyrimidine base - C, U, DC, DT only
-PyrimidineBase = build_atom_group_legacy("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BASE_NAMES)
-
-
-# =============================================================================
-# NEW ATOM SYSTEM (v2) - Hierarchical AtomGroups
-# =============================================================================
-# These use the new AtomGroup-based system and will eventually replace the
-# legacy HierarchicalEnum-based groups above.
-
-from ..utils import build_atom_group as build_atom_group_new
-from ._generated_residues_v2 import Residue as Residue2
-
-# Residue groupings for v2 hierarchical access
-_PURINES_V2 = [
-    ("A", Residue2.A), ("G", Residue2.G),
-    ("DA", Residue2.DA), ("DG", Residue2.DG),
-]
-_PYRIMIDINES_V2 = [
-    ("C", Residue2.C), ("U", Residue2.U),
-    ("DC", Residue2.DC), ("DT", Residue2.DT),
-]
-_ALL_NUCLEOTIDES_V2 = _PURINES_V2 + _PYRIMIDINES_V2
-
-# Sugar atoms - present in all nucleotides
-Sugar2 = build_atom_group_new("Sugar2", _ALL_NUCLEOTIDES_V2, _SUGAR_NAMES)
-
-# Phosphate atoms - present in all nucleotides
-PhosphateGroup2 = build_atom_group_new("PhosphateGroup2", _ALL_NUCLEOTIDES_V2, _PHOSPHATE_NAMES)
-
-# Purine hierarchy - A, G, DA, DG only
-PurineImidazole2 = build_atom_group_new("PurineImidazole2", _PURINES_V2, _PURINE_IMIDAZOLE_NAMES)
-PurinePyrimidine2 = build_atom_group_new("PurinePyrimidine2", _PURINES_V2, _PURINE_PYRIMIDINE_NAMES)
-PurineBase2 = build_atom_group_new("PurineBase2", _PURINES_V2, _PURINE_BASE_NAMES)
-
-# Pyrimidine base - C, U, DC, DT only
-PyrimidineBase2 = build_atom_group_new("PyrimidineBase2", _PYRIMIDINES_V2, _PYRIMIDINE_BASE_NAMES)
+PyrimidineBase = build_atom_group("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BASE_NAMES)

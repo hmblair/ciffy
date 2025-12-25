@@ -693,7 +693,7 @@ def from_sequence(
 def from_extract(
     coords: np.ndarray,
     atoms: list[int],
-    residue: "ResidueType",
+    residue: "AtomGroup",
     backend: str = "numpy",
     id: str = "extracted",
 ) -> Polymer:
@@ -707,7 +707,7 @@ def from_extract(
     Args:
         coords: Coordinate array of shape (n_residues, n_atoms, 3) from extract().
         atoms: List of atom type indices from extract().
-        residue: The ResidueType that was extracted (e.g., Residue.A).
+        residue: The residue AtomGroup that was extracted (e.g., Residue.A).
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
 

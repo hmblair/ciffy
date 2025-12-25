@@ -16,7 +16,7 @@ from ._generated_elements import Element, ELEMENT_NAMES
 from ._generated_molecule import Molecule, molecule_type
 
 # =============================================================================
-# RESIDUE SYSTEM - AtomGroup-based (the main system)
+# RESIDUE SYSTEM - AtomGroup-based
 # =============================================================================
 from ._generated_residues_v2 import Residue, CIF_RESIDUE_NAMES
 from ._generated_atoms_v2 import ATOM_NAMES
@@ -40,20 +40,22 @@ from ._generated_dihedraltypes import (
     DIHEDRAL_ATOMS,
 )
 
-# Hierarchical atom groups - AtomGroup-based
+# Flat atom groups (for polymer selection methods)
 from .constants import (
-    # Flat IndexEnums (prefixed atom names) - legacy, kept for compatibility
     Backbone,
     Nucleobase,
     Phosphate,
     Sidechain,
-    # AtomGroup-based hierarchical groups (preferred)
-    Sugar2 as Sugar,
-    PhosphateGroup2 as PhosphateGroup,
-    PurineImidazole2 as PurineImidazole,
-    PurinePyrimidine2 as PurinePyrimidine,
-    PurineBase2 as PurineBase,
-    PyrimidineBase2 as PyrimidineBase,
+)
+
+# Hierarchical atom groups
+from .constants import (
+    Sugar,
+    PhosphateGroup,
+    PurineImidazole,
+    PurinePyrimidine,
+    PurineBase,
+    PyrimidineBase,
 )
 
 from .linking import (
@@ -61,28 +63,6 @@ from .linking import (
     NUCLEIC_ACID_LINK,
     PEPTIDE_LINK,
     LINKING_BY_TYPE,
-)
-
-# =============================================================================
-# LEGACY SYSTEM - kept for backward compatibility
-# =============================================================================
-from ._generated_residues import Residue as ResidueLegacy
-from ._generated_residues import CIF_RESIDUE_NAMES as CIF_RESIDUE_NAMES_LEGACY
-from ._generated_atoms import (
-    RibonucleicAcid,
-    RibonucleicAcidNoPrefix,
-    DeoxyribonucleicAcid,
-    ModifiedNucleotides,
-    AminoAcids,
-    ATOM_NAMES as ATOM_NAMES_LEGACY,
-)
-from .constants import (
-    Sugar as SugarLegacy,
-    PhosphateGroup as PhosphateGroupLegacy,
-    PurineImidazole as PurineImidazoleLegacy,
-    PurinePyrimidine as PurinePyrimidineLegacy,
-    PurineBase as PurineBaseLegacy,
-    PyrimidineBase as PyrimidineBaseLegacy,
 )
 
 # =============================================================================
@@ -110,24 +90,18 @@ __all__ = [
     "Element",
     # Residues (AtomGroup-based)
     "Residue",
-    # Hierarchical atom groups (AtomGroup-based)
+    # Flat atom groups (for polymer selection)
+    "Backbone",
+    "Nucleobase",
+    "Phosphate",
+    "Sidechain",
+    # Hierarchical atom groups
     "Sugar",
     "PhosphateGroup",
     "PurineImidazole",
     "PurinePyrimidine",
     "PurineBase",
     "PyrimidineBase",
-    # Flat IndexEnums (legacy, kept for compatibility)
-    "Backbone",
-    "Nucleobase",
-    "Phosphate",
-    "Sidechain",
-    # Legacy combined atom enums
-    "RibonucleicAcid",
-    "RibonucleicAcidNoPrefix",
-    "DeoxyribonucleicAcid",
-    "ModifiedNucleotides",
-    "AminoAcids",
     # Linking
     "LinkingDefinition",
     "NUCLEIC_ACID_LINK",
@@ -145,6 +119,4 @@ __all__ = [
     "PROTEIN_SIDECHAIN",
     "DIHEDRAL_NAME_TO_TYPE",
     "DIHEDRAL_ATOMS",
-    # Legacy (for backward compatibility)
-    "ResidueLegacy",
 ]

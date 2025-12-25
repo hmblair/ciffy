@@ -124,28 +124,8 @@ class TestBiochemistryConstants:
         assert Residue.ALA.O.value not in sidechain_values
 
 
-class TestHierarchicalEnum:
-    """Test HierarchicalEnum and atom group functionality."""
-
-    def test_build_hierarchical_enum(self):
-        """Test basic HierarchicalEnum creation."""
-        import numpy as np
-        from ciffy.utils import build_hierarchical_enum, IndexEnum
-
-        # Create nested structure
-        Inner = IndexEnum("Inner", {"X": 10, "Y": 20})
-        Outer = build_hierarchical_enum("Outer", {"inner": Inner, "leaf": 30})
-
-        # Test attribute access
-        assert Outer.inner is Inner
-        assert Outer.leaf == 30
-
-        # Test index aggregates all values
-        idx = Outer.index()
-        assert set(idx.tolist()) == {10, 20, 30}
-
-        # Test list returns member names
-        assert set(Outer.list()) == {"inner", "leaf"}
+class TestAtomGroup:
+    """Test AtomGroup and atom group functionality."""
 
     def test_build_atom_group(self):
         """Test build_atom_group creates correct structure."""
@@ -161,11 +141,11 @@ class TestHierarchicalEnum:
         assert hasattr(TestGroup, "N1")
         assert hasattr(TestGroup, "N9")
 
-        # Each should be an IndexEnum with A and G members
+        # Each should be an AtomGroup with A and G members
         assert hasattr(TestGroup.N1, "A")
         assert hasattr(TestGroup.N1, "G")
-        assert TestGroup.N1.A.value == Residue.A.N1.value
-        assert TestGroup.N1.G.value == Residue.G.N1.value
+        assert int(TestGroup.N1.A) == int(Residue.A.N1)
+        assert int(TestGroup.N1.G) == int(Residue.G.N1)
 
     def test_single_source_of_truth(self):
         """Test that hierarchical enums reference same values as Residue."""

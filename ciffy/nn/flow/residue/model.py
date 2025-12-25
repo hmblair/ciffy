@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
+from ciffy.utils import atoms_to_col_map
+
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
     from ciffy.utils import AtomGroup
@@ -374,7 +376,7 @@ class ResidueFlowModel:
         """
         from ciffy.biochemistry.linking import LINKING_BY_TYPE
 
-        atom_to_col = {a: i for i, a in enumerate(self._atom_indices)}
+        atom_to_col = atoms_to_col_map(self._atom_indices)
         link_def = LINKING_BY_TYPE.get(self.residue.molecule_type)
 
         if link_def is not None:

@@ -61,8 +61,14 @@ from .ensemble import Ensemble
 # Vocabulary sizes (for embedding layers)
 from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 
+# Re-export Residue for common use cases (reduce imports needed)
+from .biochemistry import Residue
+
 # Neural network utilities (requires PyTorch)
 from . import nn
+
+# High-level flow API
+from . import flow
 
 
 def load_flow_model(name: str = "rna", device: str = "cpu") -> "nn.flow.PolymerFlowModel":
@@ -155,6 +161,10 @@ __all__ = [
     "NUM_ELEMENTS",
     "NUM_RESIDUES",
     "NUM_ATOMS",
+    # Common biochemistry types
+    "Residue",
+    # High-level flow API
+    "flow",
     # Convenience aliases
     "ATOM",
     "RESIDUE",

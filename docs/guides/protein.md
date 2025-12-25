@@ -36,7 +36,7 @@ for chain in protein.chains():
 ### Residue Types
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Standard amino acids
 Residue.ALA  # Alanine
@@ -52,7 +52,7 @@ print(f"First residue: {Residue(sequence[0]).name}")
 ### Selecting by Residue Type
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Get all glycines
 glycines = protein.by_residue(Residue.GLY)
@@ -100,7 +100,7 @@ print(f"Sidechain atoms: {sidechains.size()}")
 Extract alpha-carbon coordinates:
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Get CA atoms for a specific residue type
 # Atoms are ints, so they work directly with by_atom
@@ -210,7 +210,7 @@ print(f"Beta sheet: {np.sum(beta_sheet)} residues ({100*np.sum(beta_sheet)/n_res
 ### Glycine and Proline Special Cases
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 protein = ciffy.load("structure.cif").by_type(ciffy.PROTEIN)
 
@@ -306,7 +306,7 @@ for i, j in pairs[:10]:  # First 10
 
 ```python
 import numpy as np
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 protein = ciffy.load("structure.cif").by_type(ciffy.PROTEIN)
 

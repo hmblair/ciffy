@@ -260,7 +260,51 @@ protein = ciffy.from_sequence("MGKLF")
 multi = ciffy.from_sequence(["acgu", "MGKLF"])  # RNA + protein
 ```
 
-Template polymers have correct atom types, elements, and residue sequences but zero coordinates. This is useful for generative modeling where coordinates are predicted separately.
+Template polymers have correct atom types, elements, and residue sequences but ideal coordinates. This is useful for generative modeling where coordinates are predicted separately.
+
+## Flow Models (Generative Modeling)
+
+ciffy includes a high-level API for generating polymer conformations using normalizing flows:
+
+```python
+from ciffy import flow
+
+# Sample conformations from a sequence
+polymer = flow.sample("acgu")
+polymer.write("output.cif")
+
+# Multiple samples
+samples = flow.sample("acgu", n_samples=10)
+
+# Encode existing structure to latent space
+import ciffy
+existing = ciffy.load("structure.cif").poly()
+latents = flow.encode(existing)
+
+# Decode modified latents
+new_polymer = flow.decode(latents, "acgu")
+```
+
+See the [Flow Models Guide](guides/flow-models.md) for training custom models and advanced usage.
+
+## Working with Residue Types
+
+The `Residue` enum provides access to all residue types:
+
+```python
+from ciffy import Residue  # Now available at top level
+
+# RNA residues
+adenine = Residue.A
+cytosine = Residue.C
+
+# Protein residues
+alanine = Residue.ALA
+glycine = Residue.GLY
+
+# Access residue properties
+print(f"{Residue.A.name}: {len(list(Residue.A))} atoms")
+```
 
 ## Saving Structures
 
@@ -353,6 +397,7 @@ for chain in polymer.chains():
 - [Selection Guide](guides/selection.md) - Molecule types, atom filtering, chain selection
 - [I/O Guide](guides/io.md) - Loading from URLs, metadata, writing files
 - [Analysis Guide](guides/analysis.md) - RMSD, alignment, distances, reductions
+- [Flow Models Guide](guides/flow-models.md) - Generative modeling with normalizing flows
 - [Deep Learning Guide](guides/deep-learning.md) - PyTorch, GPU, embeddings
 - [Visualization Guide](guides/visualization.md) - Plots and ChimeraX export
 - [API Reference](api.md) - Complete API documentation

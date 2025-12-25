@@ -52,8 +52,13 @@ __all__ = [
     "compute_n_frame",
     "compute_prev_frame",
     "compute_next_frame",
+    # Glycosidic frame (nucleotide-specific)
+    "compute_glycosidic_frame",
+    # Residue type detection
+    "is_purine",
     # Residue linking
     "position_residue",
+    "position_residue_fast",
 ]
 
 
@@ -1212,6 +1217,158 @@ def position_residue(
     # Compute rigid transformation to align next frame to target frame
     R_correction = target_R @ next_R.T
     t_correction = target_origin - R_correction @ next_origin
+
+    # Apply transformation
+    return (R_correction @ next_coords.T).T + t_correction
+
+
+# =============================================================================
+# Residue Type Detection
+# =============================================================================
+
+
+def is_purine(residue: "Residue") -> bool:
+    """
+    Check if a residue is a purine (has N9 atom).
+
+    Purines (A, G, DA, DG) have an N9 atom connecting the base to the sugar.
+    Pyrimidines (C, U, DC, DT) have an N1 atom instead.
+
+    Args:
+        residue: Residue type to check.
+
+    Returns:
+        True if purine (has N9), False if pyrimidine (has N1).
+    """
+    return hasattr(residue, 'N9')
+
+
+# =============================================================================
+# Glycosidic Frame (for nucleotide bases)
+# =============================================================================
+
+
+def compute_glycosidic_frame(
+    coords: Array,
+    atom_to_col: dict[int, int],
+    residue: "Residue",
+) -> tuple[Array, Array]:
+    """
+    Compute the glycosidic frame for a nucleotide residue.
+
+    Frame definition:
+    - Origin: C1' atom
+    - X-axis: Toward N9 (purines) or N1 (pyrimidines)
+    - Z-axis: Normal to the C1'-N9-C4 plane
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates (numpy or torch).
+        atom_to_col: Dict mapping atom type value to column index.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) C1' position.
+        R: (3, 3) rotation matrix [x, y, z] as columns.
+    """
+    c1p_idx = atom_to_col[residue.C1p.value]
+    c4_idx = atom_to_col[residue.C4.value]
+
+    # N9 for purines (A, G), N1 for pyrimidines (C, U)
+    if is_purine(residue):
+        n_idx = atom_to_col[residue.N9.value]
+    else:
+        n_idx = atom_to_col[residue.N1.value]
+
+    origin = clone(coords[c1p_idx])
+    n_pos = coords[n_idx]
+    c4_pos = coords[c4_idx]
+
+    x_axis = normalize(n_pos - origin)
+    y_temp = c4_pos - origin
+    z_axis = normalize(cross(x_axis, y_temp))
+    y_axis = cross(z_axis, x_axis)
+
+    # Build rotation matrix with columns [x, y, z]
+    if is_torch(coords):
+        import torch
+        R = torch.stack([x_axis, y_axis, z_axis], dim=1)
+    else:
+        import numpy as np
+        R = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float32)
+        origin = origin.astype(np.float32)
+
+    return origin, R
+
+
+# =============================================================================
+# Fast Residue Positioning (pre-resolved indices)
+# =============================================================================
+
+
+def position_residue_fast(
+    prev_coords: Array,
+    next_coords: Array,
+    transform: Array,
+    prev_frame_cols: tuple[int, int, int | None],
+    prev_z_toward_origin: bool,
+    next_frame_cols: tuple[int, int, int | None],
+    next_z_toward_origin: bool,
+) -> Array:
+    """
+    Position residue 2 relative to residue 1 using pre-resolved frame indices.
+
+    This is the fast path for residue positioning. Uses pre-resolved column
+    indices to compute frames with pure tensor math (no Python attribute lookups).
+    The frame indices should be computed once at model initialization.
+
+    Works with both NumPy and PyTorch arrays (auto-detected from input).
+
+    Args:
+        prev_coords: (n_atoms, 3) coordinates of previous residue.
+        next_coords: (n_atoms, 3) coordinates of next residue (in canonical frame).
+        transform: (6,) SE(3) transform [axis-angle, translation].
+        prev_frame_cols: Pre-resolved (origin, z_ref, perp_ref) column indices for
+            outgoing frame of prev_coords (e.g., O3' frame for RNA).
+        prev_z_toward_origin: Z-axis direction for prev frame.
+        next_frame_cols: Pre-resolved column indices for incoming frame of next_coords
+            (e.g., P frame for RNA).
+        next_z_toward_origin: Z-axis direction for next frame.
+
+    Returns:
+        (n_atoms, 3) positioned coordinates of next residue.
+
+    Example:
+        >>> # Pre-resolve indices at model init
+        >>> link_def = LINKING_BY_TYPE[residue.molecule_type]
+        >>> prev_cols = link_def.prev_frame.resolve(residue, atom_to_col)
+        >>> next_cols = link_def.next_frame.resolve(residue, atom_to_col)
+        >>>
+        >>> # Fast positioning at runtime
+        >>> positioned = position_residue_fast(
+        ...     prev_coords, next_coords, transform,
+        ...     prev_cols, link_def.prev_frame.z_toward_origin,
+        ...     next_cols, link_def.next_frame.z_toward_origin,
+        ... )
+    """
+    # Compute outgoing frame from prev_coords using pre-resolved indices
+    prev_origin, prev_R = compute_frame_from_indices(
+        prev_coords, prev_frame_cols, prev_z_toward_origin
+    )
+
+    # Apply transform to get target incoming frame
+    target_origin, target_R = apply_relative_transform(
+        prev_origin, prev_R, transform
+    )
+
+    # Compute current incoming frame from next_coords using pre-resolved indices
+    current_origin, current_R = compute_frame_from_indices(
+        next_coords, next_frame_cols, next_z_toward_origin
+    )
+
+    # Compute rigid transformation to align current frame to target frame
+    R_correction = target_R @ current_R.T
+    t_correction = target_origin - R_correction @ current_origin
 
     # Apply transformation
     return (R_correction @ next_coords.T).T + t_correction

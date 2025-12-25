@@ -18,6 +18,7 @@ from .polymer import Polymer
 from .types import Scale, Molecule
 from .biochemistry import Residue
 from .biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
+from .utils import atoms_to_col_map
 
 
 # =============================================================================
@@ -395,7 +396,7 @@ class _PrevResidueState:
 
 def _build_atom_to_col(expansion: ResidueExpansion) -> dict[int, int]:
     """Build atom type value -> column index mapping from expansion."""
-    return {atom_idx: i for i, atom_idx in enumerate(expansion.atom_indices)}
+    return atoms_to_col_map(expansion.atom_indices)
 
 
 def _position_residue(
@@ -466,31 +467,16 @@ def _validate_linking_atoms(
     link_def: "LinkingDefinition",
     which: str,
 ) -> None:
-    """Validate that required linking atoms are present."""
-    from .types import Molecule
+    """
+    Validate that required linking atoms are present.
 
-    mol = Molecule(residue.molecule_type)
-    atom_to_col = _build_atom_to_col(expansion)
+    Uses LinkingDefinition.validate_atoms() for centralized validation.
+    """
+    available = set(expansion.atom_indices)
+    missing = link_def.validate_atoms(residue, available, which=which)
 
-    if which == "next":
-        # Check incoming frame atoms (P frame for RNA, N frame for protein)
-        if mol in (Molecule.RNA, Molecule.DNA):
-            required = [residue.P, residue.O5p, residue.OP1]
-            frame_name = "P"
-        else:
-            required = [residue.N, residue.CA]
-            frame_name = "N"
-    else:  # which == "prev"
-        # Check outgoing frame atoms (O3' frame for RNA, C frame for protein)
-        if mol in (Molecule.RNA, Molecule.DNA):
-            required = [residue.C4p, residue.C3p, residue.O3p]
-            frame_name = "O3'"
-        else:
-            required = [residue.CA, residue.C, residue.O]
-            frame_name = "C"
-
-    missing = [a.name for a in required if a.value not in atom_to_col]
     if missing:
+        frame_name = "incoming" if which == "next" else "outgoing"
         raise ValueError(
             f"Cannot compute {frame_name} frame for {residue.name}: "
             f"missing atoms {missing}. "
@@ -498,7 +484,10 @@ def _validate_linking_atoms(
         )
 
 
-def _process_chain(sequence: str) -> ChainData:
+def _process_chain(
+    sequence: str,
+    atom_filter: dict[int, Sequence[int]] | None = None,
+) -> ChainData:
     """
     Process a single chain sequence into atom/element/residue/coordinate data.
 
@@ -510,6 +499,8 @@ def _process_chain(sequence: str) -> ChainData:
 
     Args:
         sequence: Single-letter sequence for one chain.
+        atom_filter: Optional dict mapping residue type (int) to atom values
+            to include. If provided, only these atoms are included.
 
     Returns:
         ChainData with all atom and coordinate information.
@@ -539,6 +530,21 @@ def _process_chain(sequence: str) -> ChainData:
             expansion, positioned_coords, config, is_first, is_last
         )
 
+        # Apply custom atom filter if provided
+        if atom_filter is not None and res_idx in atom_filter:
+            allowed_atoms = set(atom_filter[res_idx])
+            final_atoms = []
+            final_elements = []
+            final_coords = []
+            for atom, elem, coord in zip(filtered_atoms, filtered_elements, filtered_coords):
+                if atom in allowed_atoms:
+                    final_atoms.append(atom)
+                    final_elements.append(elem)
+                    final_coords.append(coord)
+            filtered_atoms = final_atoms
+            filtered_elements = final_elements
+            filtered_coords = final_coords
+
         all_atoms.extend(filtered_atoms)
         all_elements.extend(filtered_elements)
         all_coords.extend(filtered_coords)
@@ -561,6 +567,7 @@ def from_sequence(
     sequence: str | Sequence[str],
     backend: str = "numpy",
     id: str = "template",
+    atoms: dict[int, Sequence[int]] | None = None,
     sample_dihedrals: bool = False,
     clash_free: bool = True,
     seed: int | None = None,
@@ -589,6 +596,10 @@ def from_sequence(
             - Empty strings are filtered out; "" returns empty polymer with 0 chains
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
+        atoms: Optional dict mapping residue type (int) to atom values to include.
+            If provided, only atoms in the specified set are included for each
+            residue type. Useful for flow models that use a subset of atoms.
+            Example: {Residue.A.value: model_A._atom_indices, ...}
         sample_dihedrals: DEPRECATED. This parameter no longer works after the
             internal coordinate system was removed. Use PolymerFlowModel.sample()
             for generating realistic conformations.
@@ -646,7 +657,7 @@ def from_sequence(
     chain_names: list[str] = []
 
     for chain_idx, seq in enumerate(sequences):
-        chain_data = _process_chain(seq)
+        chain_data = _process_chain(seq, atom_filter=atoms)
 
         all_atoms.extend(chain_data.atom_indices)
         all_elements.extend(chain_data.element_indices)

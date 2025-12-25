@@ -94,7 +94,7 @@ print(f"Non-polymer atoms: {polymer.nonpoly}")
 Select specific residue types using `by_residue()`:
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Get all adenosine residues (use CIF residue name)
 adenosines = polymer.by_residue(Residue.A)
@@ -116,7 +116,7 @@ alanines = polymer.by_residue(Residue.ALA)
 Use `by_atom()` to select atoms by their type index:
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Get all N1 atoms from adenosines
 n1_atoms = polymer.by_atom(Residue.A.N1)
@@ -142,7 +142,7 @@ print(f"Backbone atoms: {backbone.size()}")
 ciffy provides enums for all standard atoms:
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Access nucleotide atoms via Residue enum
 # Residue.A = Adenosine, Residue.G = Guanosine, etc.

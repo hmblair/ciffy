@@ -244,6 +244,58 @@ vae_large             failed    N/A         cuda:0    5.3s
 Total: 2/3 succeeded in 2m51s
 ```
 
+## Flow Models for Generative Modeling
+
+ciffy provides a high-level API for generative modeling with normalizing flows. Generate new polymer conformations from sequences:
+
+```python
+from ciffy import flow
+
+# Sample a polymer conformation from sequence
+polymer = flow.sample("acgu")  # RNA sequence
+polymer.write("output.cif")
+
+# Generate multiple samples
+samples = flow.sample("acgu", n_samples=10)
+for i, p in enumerate(samples):
+    p.write(f"sample_{i}.cif")
+```
+
+### Training Custom Models
+
+```python
+from ciffy import flow
+
+# Train on your structures
+model = flow.train(
+    ["data/*.cif"],        # CIF files for training
+    residues="ACGU",       # Residue types to model
+    n_epochs=200,
+    device="cuda",
+)
+
+# Sample from trained model
+samples = flow.sample("acgu", n_samples=10, model=model)
+```
+
+### Latent Space Operations
+
+```python
+import ciffy
+from ciffy import flow
+
+# Encode existing structure to latent space
+polymer = ciffy.load("structure.cif").poly()
+latents = flow.encode(polymer)
+
+# Modify and decode back
+import torch
+modified = latents + torch.randn_like(latents) * 0.1
+new_polymer = flow.decode(modified, "acgu")
+```
+
+See the [flow models guide](docs/guides/flow-models.md) for comprehensive documentation.
+
 ## Testing
 
 ```bash

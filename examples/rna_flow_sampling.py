@@ -19,7 +19,7 @@ from pathlib import Path
 
 import ciffy
 from ciffy import Scale
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 from ciffy.nn.flow import (
     ResidueFlowModel,
     ResidueFlowConfig,
@@ -203,7 +203,7 @@ def main():
         print(f"  Sample {i+1}: {coords.shape[0]} atoms, Rg = {rg:.2f} Å")
 
     # =========================================================================
-    # Save Samples (using decode_to_polymer for proper atom mapping)
+    # Save Samples as CIF files
     # =========================================================================
 
     print("\n" + "=" * 60)
@@ -213,19 +213,19 @@ def main():
     output_dir = Path("/tmp/rna_flow_samples")
     output_dir.mkdir(exist_ok=True)
 
-    # Create a template polymer from a real structure
-    # Note: The flow model only uses atoms with sufficient coverage,
-    # so we need a compatible template. For simplicity, we'll save
-    # the raw coordinate arrays as numpy files.
-    print(f"\nNote: Flow models use a subset of atoms with sufficient coverage.")
-    print(f"      Model A has {models[Residue.A].n_atoms} atoms, G has {models[Residue.G].n_atoms} atoms.")
-    print(f"      Total sampled: {samples[0].shape[0]} atoms for 4 residues.")
+    # Create a template with ONLY the atoms the flow model uses
+    # This avoids hydrogens and other atoms that would have incorrect positions
+    template = ciffy.from_sequence(sequence_str, atoms=polymer_model.atom_filter)
+    print(f"\nTemplate polymer: {template.size()} atoms, {template.size(Scale.RESIDUE)} residues")
+    print(f"  (Using only atoms from flow model, excluding hydrogens)")
 
+    # Convert each sample to a polymer and save as CIF
     for i, coords in enumerate(samples):
-        # Save coordinates as numpy array
-        output_path = output_dir / f"sample_{i+1:03d}_coords.npy"
-        np.save(str(output_path), coords)
-        print(f"  Saved coordinates: {output_path}")
+        # Template already has the right atoms - just update coordinates
+        sampled_polymer = template.with_coordinates(coords)
+        output_path = output_dir / f"sample_{i+1:03d}.cif"
+        sampled_polymer.write(str(output_path))
+        print(f"  Saved: {output_path}")
 
     # =========================================================================
     # Encode and Reconstruct (using a real structure)
@@ -284,13 +284,16 @@ def main():
 Trained {len(models)} ResidueFlowModels on {len(cif_paths)} structures.
 Created PolymerFlowModel for sequences containing: {[r.name for r in models.keys()]}
 Sampled {n_samples} conformations for sequence '{sequence_str}'.
-Saved samples to: {output_dir}
+Saved CIF files to: {output_dir}
+
+The CIF files contain only atoms the flow model was trained on (heavy atoms
+with sufficient coverage). Hydrogens and rare atoms are excluded.
 
 Next steps:
 - Train with more data for better models (hundreds of structures)
 - Increase latent_dim (12-16) and n_layers (8) for more expressive models
 - Use ResidueFlowTrainer for batch training multiple residue types
-- Load pre-trained models with ciffy.load_flow_model() if available
+- Add hydrogens with a molecular dynamics package if needed
 """)
 
 

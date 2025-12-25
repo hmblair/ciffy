@@ -36,7 +36,7 @@ for chain in rna.chains():
 ### Residue Types
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Standard RNA residues
 Residue.A    # Adenosine
@@ -52,7 +52,7 @@ print(f"First residue: {Residue(sequence[0]).name}")
 ### Selecting by Residue Type
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 # Get all adenosines
 adenosines = rna.by_residue(Residue.A)
@@ -370,7 +370,7 @@ analyze_rna("structure.cif")
 RNA structures often contain modified nucleotides:
 
 ```python
-from ciffy.biochemistry import Residue
+from ciffy import Residue
 
 rna = ciffy.load("trna.cif").by_type(ciffy.RNA)
 

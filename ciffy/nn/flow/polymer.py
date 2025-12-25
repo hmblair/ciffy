@@ -52,10 +52,13 @@ from typing import TYPE_CHECKING, Union
 import numpy as np
 import torch
 
+# Import geometry functions directly (data.py wrappers still available for backward compat)
+from ciffy.geometry import position_residue_fast
+
+# Keep imports from data.py for functions that accept atoms array (ML-friendly signature)
 from ciffy.nn.flow.residue.data import (
     position_next_residue,
     position_next_residue_torch,
-    position_next_residue_fast,
 )
 
 if TYPE_CHECKING:
@@ -462,7 +465,7 @@ class PolymerFlowModel:
             else:
                 # Position relative to previous residue using its transform
                 # Use fast path with pre-resolved frame indices
-                positioned = position_next_residue_fast(
+                positioned = position_residue_fast(
                     prev_coords,
                     coords_i,
                     prev_transform,
@@ -528,6 +531,24 @@ class PolymerFlowModel:
         """List of residue types this model can handle (as AtomGroup)."""
         from ciffy.biochemistry import Residue
         return [Residue.from_index(v) for v in sorted(self.residue_models.keys())]
+
+    @property
+    def atom_filter(self) -> dict[int, list[int]]:
+        """
+        Get atom filter dict for use with ciffy.from_sequence(atoms=...).
+
+        Returns a dict mapping residue type (int) to the list of atom values
+        that this model uses. Pass this to from_sequence() to create templates
+        with only the atoms the flow model knows about.
+
+        Example:
+            >>> template = ciffy.from_sequence("acgu", atoms=polymer_model.atom_filter)
+            >>> # template now has only the atoms used by the flow models
+        """
+        return {
+            res_type: list(model._atom_indices)
+            for res_type, model in self.residue_models.items()
+        }
 
     # ─────────────────────────────────────────────────────────────────────────
     # Device Management

@@ -9,6 +9,7 @@ from .atom import (
 )
 
 from .helpers import filter_by_mask, all_equal
+from .mapping import atoms_to_col_map
 
 __all__ = [
     # Atom system (2 classes)
@@ -18,4 +19,6 @@ __all__ = [
     # Helpers
     "filter_by_mask",
     "all_equal",
+    # Mapping utilities
+    "atoms_to_col_map",
 ]

@@ -6,8 +6,8 @@ This module provides:
 - PyTorch functions for GPU-accelerated inference
 
 Frame computation and SE(3) transforms are implemented in ciffy.geometry.
-This module provides wrapper functions that accept atoms list (instead of
-atom_to_col dict) for backward compatibility with training code.
+This module provides wrapper functions that accept atoms arrays (instead of
+atom_to_col dict) for compatibility with training code.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from collections import Counter
 from typing import TYPE_CHECKING
 
 import ciffy
-from ciffy.backend import to_numpy
+from ciffy.backend import Array, to_numpy, is_torch
 from ciffy.types import Scale
 from ciffy.operations.reduction import Reduction
 
@@ -33,11 +33,60 @@ from ciffy.geometry import (
     rotation_to_axis_angle as _rotation_to_axis_angle_geometry,
     position_residue as _position_residue_geometry,
     compute_frame_from_indices as _compute_frame_from_indices_geometry,
+    # New unified functions
+    compute_glycosidic_frame as _compute_glycosidic_frame_geometry,
+    is_purine as _is_purine_geometry,
+    position_residue_fast as _position_residue_fast_geometry,
     cross, normalize, clone,
 )
 
+# Import shared utilities
+from ciffy.utils import atoms_to_col_map
+
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
+
+
+# =============================================================================
+# Residue Type Detection
+# =============================================================================
+
+
+def is_purine(residue: "Residue") -> bool:
+    """
+    Check if a residue is a purine (has N9 atom).
+
+    Purines (A, G, DA, DG) have an N9 atom connecting the base to the sugar.
+    Pyrimidines (C, U, DC, DT) have an N1 atom instead.
+
+    Args:
+        residue: Residue type to check.
+
+    Returns:
+        True if purine (has N9), False if pyrimidine (has N1).
+
+    Note:
+        This is a thin wrapper around ciffy.geometry.is_purine for
+        backward compatibility.
+    """
+    return _is_purine_geometry(residue)
+
+
+def _atoms_to_col_map(atoms: Array) -> dict[int, int]:
+    """
+    Build atom value to column index mapping from atoms array.
+
+    Args:
+        atoms: 1D array of atom type indices.
+
+    Returns:
+        Dict mapping atom value to column index.
+
+    Note:
+        This is a thin wrapper around ciffy.utils.atoms_to_col_map for
+        backward compatibility.
+    """
+    return atoms_to_col_map(atoms)
 
 
 # =============================================================================
@@ -46,12 +95,15 @@ if TYPE_CHECKING:
 
 
 def compute_glycosidic_frame(
-    coords: np.ndarray,
-    atoms: list[int],
+    coords: Array,
+    atoms: Array,
     residue: "Residue",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Array, Array]:
     """
     Compute the glycosidic frame for a residue.
+
+    This is a wrapper around ciffy.geometry.compute_glycosidic_frame that
+    accepts an atoms array instead of atom_to_col dict for convenience.
 
     Frame definition:
     - Origin: C1' atom
@@ -60,52 +112,28 @@ def compute_glycosidic_frame(
     - Y-axis: Completes right-handed system
 
     Args:
-        coords: (n_atoms, 3) coordinates.
-        atoms: List of atom type indices.
+        coords: (n_atoms, 3) coordinates (numpy or torch).
+        atoms: 1D array of atom type indices.
         residue: Residue type.
 
     Returns:
         origin: (3,) C1' position.
         R: (3, 3) rotation matrix [x, y, z] as columns.
     """
-    atom_to_col = {a: i for i, a in enumerate(atoms)}
-
-    c1p_idx = atom_to_col[residue.C1p.value]
-    c4_idx = atom_to_col[residue.C4.value]
-
-    # N9 for purines (A, G), N1 for pyrimidines (C, U)
-    try:
-        n_idx = atom_to_col[residue.N9.value]
-    except (KeyError, AttributeError):
-        n_idx = atom_to_col[residue.N1.value]
-
-    origin = coords[c1p_idx].copy()
-    n_pos = coords[n_idx]
-    c4_pos = coords[c4_idx]
-
-    x_axis = n_pos - origin
-    x_axis = x_axis / np.linalg.norm(x_axis)
-
-    y_temp = c4_pos - origin
-    z_axis = np.cross(x_axis, y_temp)
-    z_axis = z_axis / np.linalg.norm(z_axis)
-
-    y_axis = np.cross(z_axis, x_axis)
-
-    R = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float32)
-    return origin.astype(np.float32), R
+    atom_to_col = _atoms_to_col_map(atoms)
+    return _compute_glycosidic_frame_geometry(coords, atom_to_col, residue)
 
 
 def compute_o3p_frame(
-    coords: np.ndarray,
-    atoms: list[int],
+    coords: Array,
+    atoms: Array,
     residue: "Residue",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Array, Array]:
     """
     Compute the O3' frame for a residue (used for backbone linking).
 
     This is a wrapper around ciffy.geometry.compute_o3p_frame that accepts
-    an atoms list instead of atom_to_col dict for backward compatibility.
+    an atoms array instead of atom_to_col dict for convenience.
 
     Frame definition:
     - Origin: O3' atom
@@ -114,28 +142,28 @@ def compute_o3p_frame(
     - Y-axis: Completes right-handed system
 
     Args:
-        coords: (n_atoms, 3) coordinates.
-        atoms: List of atom type indices.
+        coords: (n_atoms, 3) coordinates (numpy or torch).
+        atoms: 1D array of atom type indices.
         residue: Residue type.
 
     Returns:
         origin: (3,) O3' position.
         R: (3, 3) rotation matrix.
     """
-    atom_to_col = {a: i for i, a in enumerate(atoms)}
+    atom_to_col = _atoms_to_col_map(atoms)
     return _compute_o3p_frame_geometry(coords, atom_to_col, residue)
 
 
 def compute_p_frame(
-    coords: np.ndarray,
-    atoms: list[int],
+    coords: Array,
+    atoms: Array,
     residue: "Residue",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[Array, Array]:
     """
     Compute the P frame for a residue (used for backbone linking).
 
     This is a wrapper around ciffy.geometry.compute_p_frame that accepts
-    an atoms list instead of atom_to_col dict for backward compatibility.
+    an atoms array instead of atom_to_col dict for convenience.
 
     Frame definition:
     - Origin: P atom
@@ -144,15 +172,15 @@ def compute_p_frame(
     - Y-axis: Completes right-handed system
 
     Args:
-        coords: (n_atoms, 3) coordinates.
-        atoms: List of atom type indices.
+        coords: (n_atoms, 3) coordinates (numpy or torch).
+        atoms: 1D array of atom type indices.
         residue: Residue type.
 
     Returns:
         origin: (3,) P position.
         R: (3, 3) rotation matrix.
     """
-    atom_to_col = {a: i for i, a in enumerate(atoms)}
+    atom_to_col = _atoms_to_col_map(atoms)
     return _compute_p_frame_geometry(coords, atom_to_col, residue)
 
 
@@ -361,6 +389,10 @@ def position_next_residue_fast(
     indices to compute frames with pure tensor math (no Python attribute lookups).
     The frame indices should be computed once at model initialization.
 
+    Note:
+        This is a thin wrapper around ciffy.geometry.position_residue_fast for
+        backward compatibility.
+
     Args:
         coords1: (n_atoms, 3) coordinates of first residue.
         coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
@@ -388,29 +420,11 @@ def position_next_residue_fast(
         ...     next_cols, link_def.next_frame.z_toward_origin,
         ... )
     """
-    # Compute outgoing frame from coords1 using pre-resolved indices
-    prev_origin, prev_R = _compute_frame_from_indices_geometry(
-        coords1, prev_frame_cols, prev_z_toward_origin
+    return _position_residue_fast_geometry(
+        coords1, coords2, rel_transform,
+        prev_frame_cols, prev_z_toward_origin,
+        next_frame_cols, next_z_toward_origin,
     )
-
-    # Apply transform to get target incoming frame
-    target_origin, target_R = apply_relative_transform_torch(
-        prev_origin, prev_R, rel_transform
-    )
-
-    # Compute current incoming frame from coords2 using pre-resolved indices
-    current_origin, current_R = _compute_frame_from_indices_geometry(
-        coords2, next_frame_cols, next_z_toward_origin
-    )
-
-    # Compute rigid transformation to align current frame to target frame
-    R_correction = target_R @ current_R.T
-    t_correction = target_origin - R_correction @ current_origin
-
-    # Apply transformation
-    coords2_positioned = (R_correction @ coords2.T).T + t_correction
-
-    return coords2_positioned
 
 
 # =============================================================================
@@ -423,7 +437,7 @@ def extract_residues(
     residue_type: "Residue",
     min_coverage: float = 0.9,
     verbose: bool = True,
-) -> tuple[np.ndarray, list[int]]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract all instances of a residue type from multiple structures.
 
@@ -436,7 +450,7 @@ def extract_residues(
 
     Returns:
         coords: (n_instances, n_atoms, 3) coordinate array.
-        atoms: List of atom type indices in column order.
+        atoms: 1D int64 array of atom type indices in column order.
 
     Example:
         >>> from ciffy.biochemistry import Residue
@@ -506,27 +520,31 @@ def extract_residues(
             if atom_idx in atom_to_col:
                 coords_out[i, atom_to_col[atom_idx]] = coord
 
-    return coords_out, common_atoms
+    return coords_out, np.array(common_atoms, dtype=np.int64)
 
 
 def align_to_frame(
-    coords: np.ndarray,
-    atoms: list[int],
+    coords: Array,
+    atoms: Array,
     residue: "Residue",
-) -> np.ndarray:
+) -> Array:
     """
     Align each residue to a canonical local frame (glycosidic frame).
 
     Args:
-        coords: (n_instances, n_atoms, 3) coordinate array.
-        atoms: List of atom type indices.
+        coords: (n_instances, n_atoms, 3) coordinate array (numpy or torch).
+        atoms: 1D array of atom type indices.
         residue: Residue type for looking up atom indices.
 
     Returns:
         Aligned coordinates with same shape as input.
     """
     n_instances = coords.shape[0]
-    aligned = np.zeros_like(coords)
+
+    if is_torch(coords):
+        aligned = torch.zeros_like(coords)
+    else:
+        aligned = np.zeros_like(coords)
 
     for i in range(n_instances):
         origin, R = compute_glycosidic_frame(coords[i], atoms, residue)
@@ -567,37 +585,46 @@ def compute_pca(
 
 
 def check_bond_lengths(
-    coords: np.ndarray,
-    atoms: list[int],
+    coords: Array,
+    atoms: Array,
     residue: "Residue",
 ) -> dict[str, float]:
     """
     Check C1'-N9/N1 glycosidic bond length statistics.
 
     Args:
-        coords: (n_instances, n_atoms, 3) coordinate array.
-        atoms: List of atom type indices.
+        coords: (n_instances, n_atoms, 3) coordinate array (numpy or torch).
+        atoms: 1D array of atom type indices.
         residue: Residue type.
 
     Returns:
         Dictionary with 'mean' and 'std' of the glycosidic bond length.
     """
-    c1p_idx = atoms.index(residue.C1p.value)
+    # Convert atoms to list for indexing
+    atoms_list = atoms.tolist() if hasattr(atoms, 'tolist') else list(atoms)
+    c1p_idx = atoms_list.index(residue.C1p.value)
 
-    try:
-        n_idx = atoms.index(residue.N9.value)
+    if is_purine(residue):
+        n_idx = atoms_list.index(residue.N9.value)
         bond_name = "C1'-N9"
-    except (ValueError, AttributeError):
-        n_idx = atoms.index(residue.N1.value)
+    else:
+        n_idx = atoms_list.index(residue.N1.value)
         bond_name = "C1'-N1"
 
-    dists = np.linalg.norm(coords[:, c1p_idx] - coords[:, n_idx], axis=-1)
-
-    return {
-        "bond": bond_name,
-        "mean": float(dists.mean()),
-        "std": float(dists.std()),
-    }
+    if is_torch(coords):
+        dists = torch.linalg.norm(coords[:, c1p_idx] - coords[:, n_idx], dim=-1)
+        return {
+            "bond": bond_name,
+            "mean": float(dists.mean().item()),
+            "std": float(dists.std().item()),
+        }
+    else:
+        dists = np.linalg.norm(coords[:, c1p_idx] - coords[:, n_idx], axis=-1)
+        return {
+            "bond": bond_name,
+            "mean": float(dists.mean()),
+            "std": float(dists.std()),
+        }
 
 
 # =============================================================================
@@ -638,7 +665,7 @@ def extract_residues_with_links(
     min_coverage: float = 0.9,
     max_bond_length: float = 2.0,
     verbose: bool = True,
-) -> tuple[np.ndarray, np.ndarray, list[int]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Extract residues with SE(3) transforms to next residue.
 
@@ -665,7 +692,7 @@ def extract_residues_with_links(
     Returns:
         coords: (n_instances, n_atoms, 3) aligned first-residue coordinates.
         transforms: (n_instances, 6) SE(3) transforms [axis-angle, translation].
-        atoms: List of atom type indices in column order.
+        atoms: 1D int64 array of atom type indices in column order.
     """
     # Required atoms for link computation
     required_link_atoms = {
@@ -785,16 +812,16 @@ def extract_residues_with_links(
         coords_out[i] = coords1_aligned
         transforms_out[i] = transform
 
-    return coords_out, transforms_out, common_atoms
+    return coords_out, transforms_out, np.array(common_atoms, dtype=np.int64)
 
 
 def position_next_residue(
-    coords1: np.ndarray,
-    coords2: np.ndarray,
-    rel_transform: np.ndarray,
-    atoms: list[int],
+    coords1: Array,
+    coords2: Array,
+    rel_transform: Array,
+    atoms: Array,
     residue: "Residue",
-) -> np.ndarray:
+) -> Array:
     """
     Position residue 2 relative to residue 1 using the link transform.
 
@@ -803,10 +830,10 @@ def position_next_residue(
     coords1's O3' frame + transform.
 
     Args:
-        coords1: (n_atoms, 3) coordinates of first residue.
+        coords1: (n_atoms, 3) coordinates of first residue (numpy or torch).
         coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
         rel_transform: (6,) SE(3) transform [axis-angle, translation].
-        atoms: List of atom type indices.
+        atoms: 1D array of atom type indices.
         residue: Residue type.
 
     Returns:
@@ -828,20 +855,31 @@ def position_next_residue(
     # Apply transformation
     coords2_positioned = (R_correction @ coords2.T).T + t_correction
 
-    return coords2_positioned.astype(np.float32)
+    if not is_torch(coords2_positioned):
+        coords2_positioned = coords2_positioned.astype(np.float32)
+
+    return coords2_positioned
 
 
-# Legacy compatibility aliases
 def compute_link_frames(
-    coords1: np.ndarray,
-    coords2: np.ndarray,
-    atoms: list[int],
+    coords1: Array,
+    coords2: Array,
+    atoms: Array,
     residue: "Residue",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[Array, Array, Array, Array]:
     """
     Compute frames at linking atoms (O3' of res1, P of res2).
 
     This is a convenience function that combines compute_o3p_frame and compute_p_frame.
+
+    Args:
+        coords1: (n_atoms, 3) coordinates of first residue (numpy or torch).
+        coords2: (n_atoms, 3) coordinates of second residue.
+        atoms: 1D array of atom type indices.
+        residue: Residue type.
+
+    Returns:
+        o3p_origin, o3p_R, p_origin, p_R: Frame positions and rotation matrices.
     """
     o3p_origin, o3p_R = compute_o3p_frame(coords1, atoms, residue)
     p_origin, p_R = compute_p_frame(coords2, atoms, residue)

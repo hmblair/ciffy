@@ -82,6 +82,22 @@ class FrameDefinition:
         )
         return origin_col, z_ref_col, perp_ref_col
 
+    def required_atoms(self, residue: "Residue") -> set[int]:
+        """
+        Get the set of atom values required for this frame.
+
+        Args:
+            residue: Residue type (e.g., Residue.A).
+
+        Returns:
+            Set of atom type values needed to compute this frame.
+        """
+        required = {getattr(residue, self.origin).value}
+        required.add(getattr(residue, self.z_ref).value)
+        if self.perp_ref:
+            required.add(getattr(residue, self.perp_ref).value)
+        return required
+
 
 @dataclass
 class LinkingDefinition:
@@ -106,6 +122,50 @@ class LinkingDefinition:
     bond_length: float
     prev_frame: FrameDefinition
     next_frame: FrameDefinition
+
+    def required_atoms(self, residue: "Residue") -> set[int]:
+        """
+        Get all atoms required for link computation (both frames).
+
+        Args:
+            residue: Residue type.
+
+        Returns:
+            Set of atom type values needed for linking.
+        """
+        return self.prev_frame.required_atoms(residue) | self.next_frame.required_atoms(residue)
+
+    def validate_atoms(
+        self,
+        residue: "Residue",
+        available_atoms: set[int],
+        which: str = "both",
+    ) -> list[str]:
+        """
+        Validate that required atoms are available for frame computation.
+
+        Args:
+            residue: Residue type.
+            available_atoms: Set of available atom type values.
+            which: "prev", "next", or "both" to check specific frames.
+
+        Returns:
+            List of missing atom names (empty if all present).
+        """
+        if which == "prev":
+            required = self.prev_frame.required_atoms(residue)
+        elif which == "next":
+            required = self.next_frame.required_atoms(residue)
+        else:
+            required = self.required_atoms(residue)
+
+        missing_values = required - available_atoms
+        if not missing_values:
+            return []
+
+        # Convert values back to names for error messages
+        value_to_name = {int(a): a.name for a in residue}
+        return [value_to_name.get(v, f"atom_{v}") for v in missing_values]
 
 
 # Phosphodiester bond: O3' of residue N to P of residue N+1

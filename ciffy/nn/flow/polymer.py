@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from ciffy.nn.flow.residue.data import position_next_residue
+from ciffy.nn.flow.residue.data import position_next_residue, position_next_residue_torch
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -304,19 +304,28 @@ class PolymerFlowModel:
 
     def encode(
         self,
-        coords: torch.Tensor,
+        coords: "torch.Tensor | np.ndarray",
         sequence: list["Residue"],
     ) -> torch.Tensor:
         """
         Encode polymer coordinates to per-residue latent vectors.
 
+        Accepts both NumPy arrays and PyTorch tensors. NumPy arrays are
+        converted to tensors internally.
+
         Args:
-            coords: (N, 3) flat coordinate array for all atoms.
+            coords: (N, 3) flat coordinate array for all atoms (NumPy or Tensor).
             sequence: List of Residue types, one per residue.
 
         Returns:
-            (n_residues, latent_dim) latent vectors.
+            (n_residues, latent_dim) latent vectors (always Tensor).
         """
+        import numpy as np
+
+        # Convert numpy to tensor if needed
+        if isinstance(coords, np.ndarray):
+            coords = torch.from_numpy(coords).float()
+
         self._validate_coords_shape(coords, sequence)
 
         latents = []
@@ -348,12 +357,14 @@ class PolymerFlowModel:
         """
         Decode latent vectors to positioned polymer coordinates.
 
+        Returns a PyTorch tensor. Call .numpy() if NumPy array is needed.
+
         Args:
             latents: (n_residues, latent_dim) latent vectors.
             sequence: List of Residue types, one per residue.
 
         Returns:
-            (N, 3) flat coordinate array with all residues positioned.
+            (N, 3) flat coordinate tensor with all residues positioned.
         """
         if latents.shape[0] != len(sequence):
             raise ValueError(
@@ -366,7 +377,8 @@ class PolymerFlowModel:
         all_coords = []
         prev_coords = None
         prev_transform = None
-        prev_model = None
+        prev_atom_to_col = None
+        prev_residue = None
 
         for i, res_type in enumerate(sequence):
             model = self.residue_models[res_type]
@@ -385,21 +397,23 @@ class PolymerFlowModel:
                 positioned = coords_i
             else:
                 # Position relative to previous residue using its transform
-                positioned = position_next_residue(
-                    prev_coords.numpy(),
-                    coords_i.numpy(),
-                    prev_transform.numpy(),
-                    prev_model._atom_indices,
-                    prev_model.residue,
+                # Use PyTorch version to stay on GPU
+                positioned = position_next_residue_torch(
+                    prev_coords,
+                    coords_i,
+                    prev_transform,
+                    prev_atom_to_col,
+                    prev_residue,
                 )
-                positioned = torch.from_numpy(positioned).to(coords_i.dtype)
 
             all_coords.append(positioned)
 
             # Store for next iteration
             prev_coords = positioned
             prev_transform = transform_i
-            prev_model = model
+            # Pre-compute atom_to_col dict for next iteration
+            prev_atom_to_col = {a: i for i, a in enumerate(model._atom_indices)}
+            prev_residue = model.residue
 
         return torch.cat(all_coords, dim=0)  # (N, 3)
 
@@ -506,6 +520,144 @@ class PolymerFlowModel:
             )
 
         return cls(residue_models)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Convenience Methods for Polymer Objects
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def encode_polymer(self, polymer: "Polymer") -> torch.Tensor:
+        """
+        Encode a Polymer object directly to latent vectors.
+
+        This is a convenience method that extracts coordinates and sequence
+        from a Polymer object and encodes them.
+
+        Args:
+            polymer: Polymer object to encode.
+
+        Returns:
+            (n_residues, latent_dim) latent vectors.
+
+        Raises:
+            ValueError: If the polymer contains unsupported residue types.
+
+        Example:
+            >>> polymer = ciffy.load("structure.cif").poly()
+            >>> latents = model.encode_polymer(polymer)
+        """
+        from ciffy.biochemistry import Residue
+
+        # Convert coordinates to tensor
+        coords = polymer.coordinates
+        if not isinstance(coords, torch.Tensor):
+            import numpy as np
+            if isinstance(coords, np.ndarray):
+                coords = torch.from_numpy(coords).float()
+            else:
+                coords = torch.tensor(coords, dtype=torch.float32)
+
+        # Extract sequence as Residue list
+        sequence = [Residue(int(idx)) for idx in polymer.sequence]
+
+        return self.encode(coords, sequence)
+
+    def decode_to_polymer(
+        self,
+        latents: torch.Tensor,
+        template: "Polymer",
+    ) -> "Polymer":
+        """
+        Decode latents to a new Polymer with same metadata as template.
+
+        Creates a new Polymer object with the decoded coordinates while
+        preserving all metadata (sequence, chain info, etc.) from the template.
+
+        Args:
+            latents: (n_residues, latent_dim) latent vectors.
+            template: Polymer to use as template for metadata.
+
+        Returns:
+            New Polymer with decoded coordinates.
+
+        Example:
+            >>> # Encode, modify latents, decode
+            >>> latents = model.encode_polymer(polymer)
+            >>> latents_modified = latents + torch.randn_like(latents) * 0.1
+            >>> polymer_new = model.decode_to_polymer(latents_modified, polymer)
+        """
+        from ciffy.biochemistry import Residue
+
+        sequence = [Residue(int(idx)) for idx in template.sequence]
+        coords = self.decode(latents, sequence)
+
+        # Convert to numpy for Polymer
+        import numpy as np
+        if isinstance(coords, torch.Tensor):
+            coords_np = coords.detach().cpu().numpy()
+        else:
+            coords_np = np.asarray(coords)
+
+        return template.with_coordinates(coords_np)
+
+    def interpolate(
+        self,
+        polymer1: "Polymer",
+        polymer2: "Polymer",
+        n_steps: int = 10,
+        include_endpoints: bool = True,
+    ) -> list["Polymer"]:
+        """
+        Generate interpolated conformations between two polymers.
+
+        Creates a smooth transition in latent space between two polymer
+        conformations.
+
+        Args:
+            polymer1: Starting polymer conformation.
+            polymer2: Ending polymer conformation.
+            n_steps: Number of interpolation steps.
+            include_endpoints: If True, include polymer1 and polymer2 in output.
+
+        Returns:
+            List of Polymer objects representing the interpolated conformations.
+
+        Raises:
+            ValueError: If polymers have different sequences.
+
+        Example:
+            >>> conformations = model.interpolate(polymer_open, polymer_closed, n_steps=20)
+            >>> for i, conf in enumerate(conformations):
+            ...     conf.write(f"frame_{i:03d}.cif")
+        """
+        import numpy as np
+
+        # Validate sequences match
+        seq1 = list(polymer1.sequence)
+        seq2 = list(polymer2.sequence)
+        if seq1 != seq2:
+            raise ValueError(
+                f"Polymers must have same sequence. "
+                f"Got lengths {len(seq1)} and {len(seq2)}"
+            )
+
+        # Encode both
+        z1 = self.encode_polymer(polymer1)
+        z2 = self.encode_polymer(polymer2)
+
+        # Generate interpolation weights
+        if include_endpoints:
+            weights = np.linspace(0, 1, n_steps)
+        else:
+            weights = np.linspace(0, 1, n_steps + 2)[1:-1]
+
+        # Interpolate and decode
+        results = []
+        for w in weights:
+            z_interp = (1 - w) * z1 + w * z2
+            polymer_interp = self.decode_to_polymer(z_interp, polymer1)
+            results.append(polymer_interp)
+
+        return results
 
     def __repr__(self) -> str:
         residues = [r.name for r in self.residue_models.keys()]

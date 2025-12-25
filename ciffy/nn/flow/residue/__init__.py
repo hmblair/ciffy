@@ -49,6 +49,7 @@ from .data import (
     compute_link_frames,
 )
 from .train import train_pca_flow
+from .trainer import ResidueFlowTrainer, TrainingConfig, TrainingResult
 
 __all__ = [
     # Models
@@ -71,4 +72,7 @@ __all__ = [
     "compute_link_frames",
     # Training
     "train_pca_flow",
+    "ResidueFlowTrainer",
+    "TrainingConfig",
+    "TrainingResult",
 ]

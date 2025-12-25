@@ -64,6 +64,41 @@ from .biochemistry import NUM_ELEMENTS, NUM_RESIDUES, NUM_ATOMS
 # Neural network utilities (requires PyTorch)
 from . import nn
 
+
+def load_flow_model(name: str = "rna", device: str = "cpu") -> "nn.flow.PolymerFlowModel":
+    """
+    Load a pre-trained PolymerFlowModel.
+
+    This is a convenience function that provides easy access to pre-trained
+    flow models for polymer conformation generation.
+
+    Args:
+        name: Name of the pre-trained model ('rna' for RNA residues A, C, G, U).
+        device: Device to load model to ('cpu' or 'cuda').
+
+    Returns:
+        PolymerFlowModel ready for encoding, decoding, and sampling.
+
+    Raises:
+        ValueError: If the model name is not recognized.
+        FileNotFoundError: If the model files are not found.
+
+    Example:
+        >>> import ciffy
+        >>>
+        >>> # Load pre-trained RNA model
+        >>> model = ciffy.load_flow_model("rna", device="cuda")
+        >>>
+        >>> # Encode a polymer's coordinates
+        >>> polymer = ciffy.load("structure.cif")
+        >>> latents = model.encode(polymer.coordinates, polymer.sequence)
+        >>>
+        >>> # Sample new conformations
+        >>> samples = model.sample(polymer.sequence, n_samples=10)
+    """
+    from .nn.flow import load_pretrained
+    return load_pretrained(name, device=device)
+
 # Visualization utilities
 from . import visualize
 from .visualize import to_defattr, plot_profile, contact_map
@@ -104,6 +139,7 @@ __all__ = [
     # Functions
     "load",
     "load_metadata",
+    "load_flow_model",
     "write_cif",
     "from_sequence",
     "from_extract",

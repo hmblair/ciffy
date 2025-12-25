@@ -4,18 +4,41 @@ Flow models for molecular conformations.
 This module provides normalizing flow-based models for learning distributions
 over molecular conformations:
 
-- `residue`: Per-residue flow models (ResidueFlowModel)
-- `polymer`: Multi-residue orchestration (PolymerFlowModel)
+- `ResidueFlowModel`: Per-residue flow model (PCA + normalizing flow)
+- `PolymerFlowModel`: Multi-residue orchestration with SE(3) positioning
+- `ResidueFlowTrainer`: Training infrastructure for multiple residue types
+- `load_pretrained`: Load pre-trained models
 
-Example:
-    >>> from ciffy.nn.flow import ResidueFlowModel, PolymerFlowModel
+Quick Start:
+    >>> import ciffy
+    >>> from ciffy.nn.flow import PolymerFlowModel
+    >>>
+    >>> # Load pre-trained model (if available)
+    >>> model = ciffy.load_flow_model("rna", device="cuda")
+    >>>
+    >>> # Encode polymer coordinates
+    >>> polymer = ciffy.load("structure.cif").poly()
+    >>> latents = model.encode_polymer(polymer)
+    >>>
+    >>> # Sample new conformations
+    >>> samples = model.sample(polymer.sequence, n_samples=10)
+    >>>
+    >>> # Interpolate between conformations
+    >>> path = model.interpolate(polymer1, polymer2, n_steps=20)
+
+Training Custom Models:
+    >>> from ciffy.nn.flow import ResidueFlowTrainer, TrainingConfig
     >>> from ciffy.biochemistry import Residue
     >>>
-    >>> # Train per-residue models
-    >>> model_A = ResidueFlowModel.from_structures(paths, Residue.A)
+    >>> config = TrainingConfig(latent_dim=12, n_epochs=200, device="cuda")
+    >>> trainer = ResidueFlowTrainer(config)
     >>>
-    >>> # Combine into polymer model
-    >>> polymer = PolymerFlowModel({Residue.A: model_A})
+    >>> # Train on your data
+    >>> results = trainer.train_all(cif_paths, [Residue.A, Residue.C, Residue.G, Residue.U])
+    >>>
+    >>> # Save and convert to PolymerFlowModel
+    >>> trainer.save(results, "models/my_rna")
+    >>> model = trainer.to_polymer_model(results)
 """
 
 from .residue import (
@@ -38,9 +61,13 @@ from .residue import (
     compute_link_frames,
     # Training
     train_pca_flow,
+    ResidueFlowTrainer,
+    TrainingConfig,
+    TrainingResult,
 )
 
 from .polymer import PolymerFlowModel
+from .pretrained import load_pretrained, list_pretrained, is_pretrained_available
 
 __all__ = [
     # Residue flow
@@ -63,6 +90,13 @@ __all__ = [
     "compute_link_frames",
     # Training
     "train_pca_flow",
+    "ResidueFlowTrainer",
+    "TrainingConfig",
+    "TrainingResult",
     # Polymer flow
     "PolymerFlowModel",
+    # Pre-trained models
+    "load_pretrained",
+    "list_pretrained",
+    "is_pretrained_available",
 ]

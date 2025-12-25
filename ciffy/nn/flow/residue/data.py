@@ -1,10 +1,19 @@
 """
 Data extraction and preprocessing for residue conformations.
+
+This module provides:
+- NumPy functions for training-time data extraction
+- PyTorch functions for GPU-accelerated inference
+
+The frame computation and positioning functions have both NumPy and PyTorch
+implementations. The PyTorch versions (suffixed with _torch) are GPU-compatible
+and should be used during inference to avoid GPU→CPU→GPU transfers.
 """
 
 from __future__ import annotations
 
 import numpy as np
+import torch
 from pathlib import Path
 from collections import Counter
 from typing import TYPE_CHECKING
@@ -242,6 +251,191 @@ def apply_relative_transform(
     t_world = R1 @ t_local
     origin2 = origin1 + t_world
     return origin2, R2
+
+
+# =============================================================================
+# PyTorch GPU-Compatible Implementations
+# =============================================================================
+# These functions mirror the NumPy versions above but operate on tensors.
+# Use these during inference to keep computation on GPU.
+
+
+def _axis_angle_to_rotation_matrix_torch(axis_angle: torch.Tensor) -> torch.Tensor:
+    """
+    Convert axis-angle to rotation matrix (Rodrigues' formula).
+
+    Args:
+        axis_angle: (3,) axis-angle vector.
+
+    Returns:
+        (3, 3) rotation matrix.
+    """
+    angle = torch.linalg.norm(axis_angle)
+    if angle < 1e-8:
+        return torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype)
+
+    axis = axis_angle / angle
+    K = torch.tensor([
+        [0, -axis[2], axis[1]],
+        [axis[2], 0, -axis[0]],
+        [-axis[1], axis[0], 0]
+    ], device=axis_angle.device, dtype=axis_angle.dtype)
+
+    return torch.eye(3, device=axis_angle.device, dtype=axis_angle.dtype) + \
+           torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
+
+
+def compute_o3p_frame_torch(
+    coords: torch.Tensor,
+    atom_to_col: dict[int, int],
+    residue: "Residue",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute the O3' frame for a residue (PyTorch version).
+
+    Frame definition:
+    - Origin: O3' atom
+    - Z-axis: Along C3'->O3' bond
+    - X-axis: Perpendicular, in the C4'-C3'-O3' plane
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates tensor.
+        atom_to_col: Dict mapping atom type index to column index.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) O3' position.
+        R: (3, 3) rotation matrix.
+    """
+    c4p = coords[atom_to_col[residue.C4p.value]]
+    c3p = coords[atom_to_col[residue.C3p.value]]
+    o3p = coords[atom_to_col[residue.O3p.value]]
+
+    origin = o3p.clone()
+
+    z_axis = o3p - c3p
+    z_axis = z_axis / (torch.linalg.norm(z_axis) + 1e-8)
+
+    y_temp = c4p - c3p
+    x_axis = torch.linalg.cross(y_temp, z_axis)
+    x_axis = x_axis / (torch.linalg.norm(x_axis) + 1e-8)
+
+    y_axis = torch.linalg.cross(z_axis, x_axis)
+
+    R = torch.stack([x_axis, y_axis, z_axis], dim=1)
+    return origin, R
+
+
+def compute_p_frame_torch(
+    coords: torch.Tensor,
+    atom_to_col: dict[int, int],
+    residue: "Residue",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute the P frame for a residue (PyTorch version).
+
+    Frame definition:
+    - Origin: P atom
+    - Z-axis: Along O5'->P bond
+    - X-axis: Perpendicular, toward OP1
+    - Y-axis: Completes right-handed system
+
+    Args:
+        coords: (n_atoms, 3) coordinates tensor.
+        atom_to_col: Dict mapping atom type index to column index.
+        residue: Residue type.
+
+    Returns:
+        origin: (3,) P position.
+        R: (3, 3) rotation matrix.
+    """
+    p = coords[atom_to_col[residue.P.value]]
+    o5p = coords[atom_to_col[residue.O5p.value]]
+    op1 = coords[atom_to_col[residue.OP1.value]]
+
+    origin = p.clone()
+
+    z_axis = p - o5p
+    z_axis = z_axis / (torch.linalg.norm(z_axis) + 1e-8)
+
+    y_temp = op1 - p
+    x_axis = torch.linalg.cross(y_temp, z_axis)
+    x_axis = x_axis / (torch.linalg.norm(x_axis) + 1e-8)
+
+    y_axis = torch.linalg.cross(z_axis, x_axis)
+
+    R = torch.stack([x_axis, y_axis, z_axis], dim=1)
+    return origin, R
+
+
+def apply_relative_transform_torch(
+    origin1: torch.Tensor,
+    R1: torch.Tensor,
+    rel_transform: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply relative transform to get frame 2 from frame 1 (PyTorch version).
+
+    Args:
+        origin1: (3,) source frame origin.
+        R1: (3, 3) source frame rotation.
+        rel_transform: (6,) vector [axis-angle (3), translation (3)].
+
+    Returns:
+        origin2, R2: Target frame origin and rotation.
+    """
+    axis_angle = rel_transform[:3]
+    t_local = rel_transform[3:]
+    R_rel = _axis_angle_to_rotation_matrix_torch(axis_angle)
+    R2 = R1 @ R_rel
+    t_world = R1 @ t_local
+    origin2 = origin1 + t_world
+    return origin2, R2
+
+
+def position_next_residue_torch(
+    coords1: torch.Tensor,
+    coords2: torch.Tensor,
+    rel_transform: torch.Tensor,
+    atom_to_col: dict[int, int],
+    residue: "Residue",
+) -> torch.Tensor:
+    """
+    Position residue 2 relative to residue 1 using the link transform (PyTorch version).
+
+    This is the GPU-compatible version of position_next_residue. It keeps all
+    computation on the same device as the input tensors.
+
+    Args:
+        coords1: (n_atoms, 3) coordinates of first residue.
+        coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
+        rel_transform: (6,) SE(3) transform [axis-angle, translation].
+        atom_to_col: Dict mapping atom type index to column index.
+        residue: Residue type.
+
+    Returns:
+        (n_atoms, 3) positioned coordinates of second residue.
+    """
+    # Compute O3' frame from coords1
+    o3p_origin, o3p_R = compute_o3p_frame_torch(coords1, atom_to_col, residue)
+
+    # Apply transform to get target P frame
+    target_p_origin, target_p_R = apply_relative_transform_torch(
+        o3p_origin, o3p_R, rel_transform
+    )
+
+    # Compute current P frame from coords2
+    current_p_origin, current_p_R = compute_p_frame_torch(coords2, atom_to_col, residue)
+
+    # Compute rigid transformation to align current P frame to target P frame
+    R_correction = target_p_R @ current_p_R.T
+    t_correction = target_p_origin - R_correction @ current_p_origin
+
+    # Apply transformation
+    coords2_positioned = (R_correction @ coords2.T).T + t_correction
+
+    return coords2_positioned
 
 
 # =============================================================================

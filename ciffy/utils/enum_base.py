@@ -1,13 +1,12 @@
 """
 Base enum classes with array conversion capabilities.
 
-Provides IndexEnum for enums that map to integer indices and PairEnum
-for storing pairs of enum values with array conversion.
+Provides IndexEnum for enums that map to integer indices.
 """
 
 from __future__ import annotations
 from enum import Enum
-import itertools
+import warnings
 import numpy as np
 
 
@@ -15,9 +14,10 @@ class PairEnum(list):
     """
     Store a set of pairs of atom enums with array conversion capabilities.
 
-    Useful for representing bonds or other pairwise relationships between
-    enum values. Provides methods to convert pairs to array indices and
-    to create pairwise lookup tables.
+    .. deprecated::
+        PairEnum is deprecated and will be removed in a future version.
+        Use numpy arrays of shape (n_bonds, 2) instead. AtomGroup.bonds
+        already provides bonds as numpy arrays.
 
     Example:
         >>> bonds = PairEnum([(Atom.C, Atom.O), (Atom.C, Atom.N)])
@@ -25,10 +25,12 @@ class PairEnum(list):
         array([[6, 8], [6, 7]])
     """
 
-    def __init__(
-        self: PairEnum,
-        bonds: list[tuple[Enum, Enum]],
-    ) -> None:
+    def __init__(self, bonds: list[tuple]) -> None:
+        warnings.warn(
+            "PairEnum is deprecated. Use numpy arrays instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(bonds)
 
     def __add__(
@@ -193,24 +195,3 @@ class IndexEnum(Enum):
             for field in cls
         }
 
-    @classmethod
-    def pairs(cls: type[IndexEnum]) -> PairEnum:
-        """
-        Return all unique pairs of enum values.
-
-        Pairs are unordered, so (A, B) and (B, A) are considered the same
-        and only one is included.
-
-        Returns:
-            PairEnum containing all unique pairs.
-        """
-        pairs = []
-        seen = set()
-        for x, y in itertools.product(cls, cls):
-            # Use sorted values as canonical key for unordered pair
-            key = (min(x.value, y.value), max(x.value, y.value))
-            if key not in seen:
-                seen.add(key)
-                pairs.append((x, y))
-
-        return PairEnum(pairs)

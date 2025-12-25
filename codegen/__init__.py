@@ -31,11 +31,8 @@ from .residue import (
 from .python_codegen import (
     generate_python_molecule,
     generate_python_elements,
-    generate_python_atoms,
-    generate_python_residues,
     generate_dihedral_arrays,
     generate_python_dihedraltypes,
-    # New AtomGroup-based generation
     generate_python_atoms_v2,
     generate_python_residues_v2,
 )
@@ -117,12 +114,10 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
     )
     generate_python_molecule(biochem_dir)
     generate_python_elements(biochem_dir)
-    generate_python_atoms(biochem_dir, atom_index, all_residues)
-    generate_python_residues(biochem_dir, all_residues)
     generate_dihedral_arrays(biochem_dir, all_residues, atom_index)
     generate_python_dihedraltypes(biochem_dir)
 
-    # Generate new AtomGroup-based files (v2)
+    # Generate AtomGroup-based files (v2)
     generate_python_atoms_v2(biochem_dir, atom_index, all_residues)
     generate_python_residues_v2(biochem_dir, all_residues)
 

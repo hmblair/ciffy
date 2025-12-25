@@ -8,10 +8,7 @@ from .atom import (
     build_atom_group,
 )
 
-from .enum_base import (
-    IndexEnum,
-    PairEnum,
-)
+from .enum_base import IndexEnum
 from .helpers import filter_by_mask, all_equal
 
 __all__ = [
@@ -21,7 +18,6 @@ __all__ = [
     "build_atom_group",
     # Enum utilities
     "IndexEnum",
-    "PairEnum",
     # Helpers
     "filter_by_mask",
     "all_equal",

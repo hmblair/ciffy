@@ -780,30 +780,37 @@ class ResidueFlowModel:
         atom_indices = self._atom_indices
         n_atoms = len(atom_indices)
 
-        # Map from atom enum value to local index in this model's subset
-        atom_to_local = {a: i for i, a in enumerate(atom_indices)}
+        # Map from global atom value to local index in this model's subset
+        global_to_model_local = {a: i for i, a in enumerate(atom_indices)}
         atom_set = set(atom_indices)
 
         # Get ideal coordinates and bonds from residue definition
         ideal_coords = residue.ideal  # (n_residue_atoms, 3)
-        bonds = residue.bonds  # PairEnum of (atom1, atom2) pairs
+        bonds = residue.bonds  # (n_bonds, 2) numpy array with local indices
+
+        # Build mapping: residue local index -> global atom value
+        local_to_global = {atom.local: int(atom) for atom in residue}
 
         # Build bond constraint data from residue's bond definitions
         # Only include bonds where both atoms are in our subset
         bond_pairs = []
         bond_targets = []
 
-        for atom1, atom2 in bonds:
-            if atom1.value in atom_set and atom2.value in atom_set:
+        for local1, local2 in bonds:
+            # Map residue local indices to global atom values
+            global1 = local_to_global[int(local1)]
+            global2 = local_to_global[int(local2)]
+
+            if global1 in atom_set and global2 in atom_set:
                 # Get local indices in the model's atom subset
-                local_i = atom_to_local[atom1.value]
-                local_j = atom_to_local[atom2.value]
-                bond_pairs.append((local_i, local_j))
+                model_i = global_to_model_local[global1]
+                model_j = global_to_model_local[global2]
+                bond_pairs.append((model_i, model_j))
 
                 # Compute ideal bond length from ideal coordinates
-                # Use .local for 0-indexed access into ideal_coords
-                pos1 = ideal_coords[atom1.local]
-                pos2 = ideal_coords[atom2.local]
+                # Use residue local indices for ideal_coords access
+                pos1 = ideal_coords[local1]
+                pos2 = ideal_coords[local2]
                 ideal_length = float(np.linalg.norm(pos2 - pos1))
                 bond_targets.append(ideal_length)
 

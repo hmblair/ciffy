@@ -34,7 +34,6 @@ from .python_codegen import (
     generate_python_atoms,
     generate_python_residues,
     generate_dihedral_arrays,
-    generate_zmatrix_arrays,
     generate_python_dihedraltypes,
 )
 
@@ -118,7 +117,6 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
     generate_python_atoms(biochem_dir, atom_index, all_residues)
     generate_python_residues(biochem_dir, all_residues)
     generate_dihedral_arrays(biochem_dir, all_residues, atom_index)
-    generate_zmatrix_arrays(biochem_dir, all_residues, atom_index)
     generate_python_dihedraltypes(biochem_dir)
 
     return hash_dir, atom_index

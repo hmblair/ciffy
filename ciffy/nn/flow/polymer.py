@@ -10,24 +10,30 @@ This module provides a wrapper around ResidueFlowModel that handles:
 Example (stateless API):
     >>> from ciffy.nn.flow import PolymerFlowModel, ResidueFlowModel
     >>> from ciffy.biochemistry import Residue
+    >>> import numpy as np
     >>>
     >>> # Load pre-trained per-residue models
     >>> models = {
     ...     Residue.A: ResidueFlowModel.load("models/A"),
     ...     Residue.G: ResidueFlowModel.load("models/G"),
     ... }
-    >>> polymer_flow = PolymerFlowModel(models)
+    >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
     >>>
-    >>> # Encode polymer coordinates
-    >>> sequence = [Residue.A, Residue.G, Residue.A]
+    >>> # Encode polymer coordinates (sequence as int array)
+    >>> sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
     >>> latents = polymer_flow.encode(coords, sequence)  # (3, k)
     >>>
     >>> # Decode back to positioned coordinates
     >>> coords_recon = polymer_flow.decode(latents, sequence)  # (N, 3)
 
+Example (with Polymer objects - recommended):
+    >>> polymer = ciffy.load("structure.cif").poly()
+    >>> latents = polymer_flow.encode_polymer(polymer)  # Uses polymer.sequence directly
+    >>> new_polymer = polymer_flow.decode_to_polymer(latents, polymer)
+
 Example (stateful lazy API):
     >>> # Bind to a sequence for lazy computation
-    >>> polymer_flow.bind(sequence)
+    >>> polymer_flow.bind(polymer.sequence)
     >>>
     >>> # Set coordinates - latents computed lazily
     >>> polymer_flow.coordinates = coords
@@ -41,8 +47,9 @@ Example (stateful lazy API):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
+import numpy as np
 import torch
 
 from ciffy.nn.flow.residue.data import (
@@ -54,6 +61,16 @@ from ciffy.nn.flow.residue.data import (
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
     from ciffy.nn.flow.residue import ResidueFlowModel
+
+# Type alias for sequence input (numpy array or torch tensor of int)
+SequenceArray = Union[np.ndarray, torch.Tensor]
+
+
+def _to_numpy_int64(sequence: SequenceArray) -> np.ndarray:
+    """Convert sequence to numpy int64 array."""
+    if isinstance(sequence, torch.Tensor):
+        return sequence.cpu().numpy().astype(np.int64)
+    return np.asarray(sequence, dtype=np.int64)
 
 
 class PolymerFlowModel:
@@ -71,34 +88,42 @@ class PolymerFlowModel:
     Supports two usage patterns:
 
     1. **Stateless API**: Pass coordinates/latents and sequence to encode()/decode().
-       Each call is independent with no state.
+       Each call is independent with no state. Sequence is an int array.
 
     2. **Stateful Lazy API**: Call bind(sequence), then use coordinates/latents
        properties. Values are cached and lazily recomputed only when needed.
 
     Attributes:
-        residue_models: Dict mapping Residue type to trained ResidueFlowModel.
-        latent_dim: Dimension of per-residue latent space (assumes all models match).
+        latent_dim: Dimension of per-residue latent space.
+        residue_models: Dict mapping residue type (int) to ResidueFlowModel.
 
-    Example (stateless):
-        >>> polymer = PolymerFlowModel(models)
-        >>> latents = polymer.encode(coords, sequence)
-        >>> coords_recon = polymer.decode(latents, sequence)
+    Example (with Polymer - recommended):
+        >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
+        >>> latents = polymer_flow.encode_polymer(polymer)
+        >>> new_polymer = polymer_flow.decode_to_polymer(latents, polymer)
+
+    Example (stateless with int array):
+        >>> seq = np.array([Residue.A.value, Residue.G.value])
+        >>> latents = polymer_flow.encode(coords, seq)
+        >>> coords_recon = polymer_flow.decode(latents, seq)
 
     Example (stateful):
-        >>> polymer = PolymerFlowModel(models)
-        >>> polymer.bind(sequence)
-        >>> polymer.coordinates = coords
-        >>> z = polymer.latents  # Lazily computed
+        >>> polymer_flow.bind(polymer.sequence)
+        >>> polymer_flow.coordinates = coords
+        >>> z = polymer_flow.latents  # Lazily computed
     """
 
-    def __init__(self, residue_models: dict["Residue", "ResidueFlowModel"]):
+    def __init__(self, residue_models: dict[int, "ResidueFlowModel"]):
         """
         Initialize with pre-trained per-residue models.
 
         Args:
-            residue_models: Dict mapping Residue enum to ResidueFlowModel.
+            residue_models: Dict mapping residue type (int) to ResidueFlowModel.
                             All models should have the same latent_dim.
+
+        Note:
+            For convenience, use from_residue_models() to create from a dict
+            keyed by Residue enum instead of int.
         """
         if not residue_models:
             raise ValueError("residue_models cannot be empty")
@@ -113,18 +138,50 @@ class PolymerFlowModel:
             )
         self.latent_dim = latent_dims[0]
 
+        # Cache atom counts and supported types for fast validation
+        self._atom_counts: dict[int, int] = {
+            res_type: model.n_atoms for res_type, model in residue_models.items()
+        }
+        self._supported_types_set: set[int] = set(residue_models.keys())
+
         # Stateful lazy computation attributes
-        self._sequence: list["Residue"] | None = None
+        self._sequence: np.ndarray | None = None
         self._cached_latents: torch.Tensor | None = None
         self._cached_coordinates: torch.Tensor | None = None
         self._latents_dirty: bool = True
         self._coords_dirty: bool = True
 
+    @classmethod
+    def from_residue_models(
+        cls,
+        models: dict["Residue", "ResidueFlowModel"],
+    ) -> "PolymerFlowModel":
+        """
+        Create from a dict keyed by Residue enum (convenience constructor).
+
+        This is the recommended way to create a PolymerFlowModel from
+        individually trained ResidueFlowModels.
+
+        Args:
+            models: Dict mapping Residue enum to ResidueFlowModel.
+
+        Returns:
+            New PolymerFlowModel instance.
+
+        Example:
+            >>> models = {
+            ...     Residue.A: ResidueFlowModel.load("models/A"),
+            ...     Residue.G: ResidueFlowModel.load("models/G"),
+            ... }
+            >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
+        """
+        return cls({r.value: m for r, m in models.items()})
+
     # ─────────────────────────────────────────────────────────────────────────
     # Stateful Lazy API
     # ─────────────────────────────────────────────────────────────────────────
 
-    def bind(self, sequence: list["Residue"]) -> "PolymerFlowModel":
+    def bind(self, sequence: SequenceArray) -> "PolymerFlowModel":
         """
         Bind the model to a specific sequence for stateful lazy computation.
 
@@ -132,23 +189,17 @@ class PolymerFlowModel:
         for lazy get/set access with automatic cache invalidation.
 
         Args:
-            sequence: List of Residue types defining the polymer.
+            sequence: Int array of residue types (e.g., polymer.sequence).
 
         Returns:
             Self for method chaining.
 
         Example:
-            >>> polymer_flow.bind(sequence).coordinates = coords
+            >>> polymer_flow.bind(polymer.sequence).coordinates = coords
             >>> z = polymer_flow.latents  # Lazily computed
         """
-        # Validate all residue types are supported
-        for res_type in sequence:
-            if res_type not in self.residue_models:
-                available = list(self.residue_models.keys())
-                raise ValueError(
-                    f"No model for residue type {res_type}. "
-                    f"Available: {[r.name for r in available]}"
-                )
+        sequence = _to_numpy_int64(sequence)
+        self._validate_sequence(sequence)
 
         self._sequence = sequence
         self._cached_latents = None
@@ -157,9 +208,23 @@ class PolymerFlowModel:
         self._coords_dirty = True
         return self
 
+    def _validate_sequence(self, sequence: np.ndarray) -> None:
+        """Validate sequence contains only supported residue types."""
+        unique_types = set(sequence.tolist())
+        unsupported = unique_types - self._supported_types_set
+
+        if unsupported:
+            from ciffy.biochemistry import Residue
+            names = [Residue(v).name for v in sorted(unsupported)]
+            available = [Residue(v).name for v in sorted(self._supported_types_set)]
+            raise ValueError(
+                f"Unsupported residue types: {names}. "
+                f"Available: {available}"
+            )
+
     @property
-    def sequence(self) -> list["Residue"] | None:
-        """The currently bound sequence, or None if unbound."""
+    def sequence(self) -> np.ndarray | None:
+        """The currently bound sequence (int array), or None if unbound."""
         return self._sequence
 
     @property
@@ -276,40 +341,32 @@ class PolymerFlowModel:
         self._coords_dirty = True
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Stateless API (original methods)
+    # Stateless API
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_atom_counts(self, sequence: list["Residue"]) -> list[int]:
+    def _get_atom_counts(self, sequence: np.ndarray) -> list[int]:
         """Get atom counts for each residue in sequence."""
-        counts = []
-        for res_type in sequence:
-            if res_type not in self.residue_models:
-                available = list(self.residue_models.keys())
-                raise ValueError(
-                    f"No model for residue type {res_type}. "
-                    f"Available: {[r.name for r in available]}"
-                )
-            counts.append(self.residue_models[res_type].n_atoms)
-        return counts
+        return [self._atom_counts[int(res_type)] for res_type in sequence]
 
     def _validate_coords_shape(
         self,
         coords: torch.Tensor,
-        sequence: list["Residue"],
+        sequence: np.ndarray,
     ) -> None:
         """Validate that coords shape matches sequence."""
-        expected_atoms = sum(self._get_atom_counts(sequence))
+        expected_atoms = sum(self._atom_counts[int(t)] for t in sequence)
         if coords.shape[0] != expected_atoms:
             raise ValueError(
-                f"coords has {coords.shape[0]} atoms but sequence expects {expected_atoms}"
+                f"coords has {coords.shape[0]} atoms but sequence expects {expected_atoms}. "
+                f"Sequence has {len(sequence)} residues."
             )
-        if coords.shape[1] != 3:
-            raise ValueError(f"coords must be (N, 3), got shape {coords.shape}")
+        if coords.ndim != 2 or coords.shape[1] != 3:
+            raise ValueError(f"coords must be (N, 3), got shape {tuple(coords.shape)}")
 
     def encode(
         self,
         coords: "torch.Tensor | np.ndarray",
-        sequence: list["Residue"],
+        sequence: SequenceArray,
     ) -> torch.Tensor:
         """
         Encode polymer coordinates to per-residue latent vectors.
@@ -319,14 +376,16 @@ class PolymerFlowModel:
 
         Args:
             coords: (N, 3) flat coordinate array for all atoms (NumPy or Tensor).
-            sequence: List of Residue types, one per residue.
+            sequence: Int array of residue types (e.g., polymer.sequence).
 
         Returns:
             (n_residues, latent_dim) latent vectors (always Tensor).
         """
-        import numpy as np
+        # Convert sequence to numpy
+        sequence = _to_numpy_int64(sequence)
+        self._validate_sequence(sequence)
 
-        # Convert numpy to tensor if needed
+        # Convert numpy coords to tensor if needed
         if isinstance(coords, np.ndarray):
             coords = torch.from_numpy(coords).float()
 
@@ -336,7 +395,7 @@ class PolymerFlowModel:
         offset = 0
 
         for res_type in sequence:
-            model = self.residue_models[res_type]
+            model = self.residue_models[int(res_type)]
             n_atoms = model.n_atoms
 
             # Extract this residue's coordinates
@@ -356,7 +415,7 @@ class PolymerFlowModel:
     def decode(
         self,
         latents: torch.Tensor,
-        sequence: list["Residue"],
+        sequence: SequenceArray,
     ) -> torch.Tensor:
         """
         Decode latent vectors to positioned polymer coordinates.
@@ -365,11 +424,13 @@ class PolymerFlowModel:
 
         Args:
             latents: (n_residues, latent_dim) latent vectors.
-            sequence: List of Residue types, one per residue.
+            sequence: Int array of residue types (e.g., polymer.sequence).
 
         Returns:
             (N, 3) flat coordinate tensor with all residues positioned.
         """
+        sequence = _to_numpy_int64(sequence)
+
         if latents.shape[0] != len(sequence):
             raise ValueError(
                 f"latents has {latents.shape[0]} rows but sequence has {len(sequence)} residues"
@@ -384,7 +445,7 @@ class PolymerFlowModel:
         prev_model = None
 
         for i, res_type in enumerate(sequence):
-            model = self.residue_models[res_type]
+            model = self.residue_models[int(res_type)]
 
             # Decode this residue
             with torch.no_grad():
@@ -405,10 +466,10 @@ class PolymerFlowModel:
                     prev_coords,
                     coords_i,
                     prev_transform,
-                    prev_model._prev_frame_cols,
-                    prev_model._prev_z_toward_origin,
-                    model._next_frame_cols,
-                    model._next_z_toward_origin,
+                    prev_model.prev_frame_cols,
+                    prev_model.prev_z_toward_origin,
+                    model.next_frame_cols,
+                    model.next_z_toward_origin,
                 )
 
             all_coords.append(positioned)
@@ -422,27 +483,29 @@ class PolymerFlowModel:
 
     def sample(
         self,
-        sequence: list["Residue"],
+        sequence: SequenceArray,
         n_samples: int = 1,
     ) -> torch.Tensor | list[torch.Tensor]:
         """
         Sample new polymer conformations.
 
         Args:
-            sequence: List of Residue types defining the polymer.
+            sequence: Int array of residue types (e.g., polymer.sequence).
             n_samples: Number of samples to generate.
 
         Returns:
             If n_samples=1: (N, 3) coordinate array.
             If n_samples>1: List of (N, 3) coordinate arrays.
         """
+        sequence = _to_numpy_int64(sequence)
+
         if len(sequence) == 0:
             if n_samples == 1:
                 return torch.empty(0, 3)
             return [torch.empty(0, 3) for _ in range(n_samples)]
 
         # Get device from first model
-        device = next(iter(self.residue_models.values())).flow.V.device
+        device = next(iter(self.residue_models.values())).device
 
         samples = []
         for _ in range(n_samples):
@@ -456,9 +519,50 @@ class PolymerFlowModel:
         return samples
 
     @property
+    def supported_residue_types(self) -> np.ndarray:
+        """Array of supported residue type indices (int)."""
+        return np.array(sorted(self.residue_models.keys()), dtype=np.int64)
+
+    @property
     def supported_residues(self) -> list["Residue"]:
-        """List of residue types this model can handle."""
-        return list(self.residue_models.keys())
+        """List of residue types this model can handle (as Residue enum)."""
+        from ciffy.biochemistry import Residue
+        return [Residue(v) for v in sorted(self.residue_models.keys())]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Device Management
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def device(self) -> "torch.device":
+        """Device where model parameters reside."""
+        return next(iter(self.residue_models.values())).device
+
+    def to(self, device: str | "torch.device") -> "PolymerFlowModel":
+        """
+        Move all residue models to specified device.
+
+        Args:
+            device: Target device (e.g., "cpu", "cuda", "cuda:0").
+
+        Returns:
+            Self for method chaining.
+        """
+        for model in self.residue_models.values():
+            model.to(device)
+        return self
+
+    def cuda(self, device_id: int = 0) -> "PolymerFlowModel":
+        """Move all residue models to CUDA device."""
+        return self.to(f"cuda:{device_id}")
+
+    def cpu(self) -> "PolymerFlowModel":
+        """Move all residue models to CPU."""
+        return self.to("cpu")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Persistence
+    # ─────────────────────────────────────────────────────────────────────────
 
     def save(self, path: str | Path) -> None:
         """
@@ -470,17 +574,21 @@ class PolymerFlowModel:
             path: Directory to save to.
         """
         import json
+        from ciffy.biochemistry import Residue
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
 
-        # Save each residue model
+        # Save each residue model (use residue name as subdirectory)
+        residue_names = []
         for res_type, model in self.residue_models.items():
-            model.save(path / res_type.name)
+            res_name = Residue(res_type).name
+            model.save(path / res_name)
+            residue_names.append(res_name)
 
         # Save metadata
         config = {
-            "residue_types": [r.name for r in self.residue_models.keys()],
+            "residue_types": residue_names,
             "latent_dim": self.latent_dim,
         }
         with open(path / "config.json", "w") as f:
@@ -513,9 +621,10 @@ class PolymerFlowModel:
         with open(path / "config.json") as f:
             config = json.load(f)
 
+        # Load models with int keys
         residue_models = {}
         for res_name in config["residue_types"]:
-            res_type = getattr(Residue, res_name)
+            res_type = getattr(Residue, res_name).value
             residue_models[res_type] = ResidueFlowModel.load(
                 path / res_name,
                 device=device,
@@ -532,8 +641,8 @@ class PolymerFlowModel:
         """
         Encode a Polymer object directly to latent vectors.
 
-        This is a convenience method that extracts coordinates and sequence
-        from a Polymer object and encodes them.
+        This is the recommended way to encode polymers, as it uses the
+        polymer's sequence directly without conversion.
 
         Args:
             polymer: Polymer object to encode.
@@ -548,21 +657,16 @@ class PolymerFlowModel:
             >>> polymer = ciffy.load("structure.cif").poly()
             >>> latents = model.encode_polymer(polymer)
         """
-        from ciffy.biochemistry import Residue
-
         # Convert coordinates to tensor
         coords = polymer.coordinates
         if not isinstance(coords, torch.Tensor):
-            import numpy as np
             if isinstance(coords, np.ndarray):
                 coords = torch.from_numpy(coords).float()
             else:
                 coords = torch.tensor(coords, dtype=torch.float32)
 
-        # Extract sequence as Residue list
-        sequence = [Residue(int(idx)) for idx in polymer.sequence]
-
-        return self.encode(coords, sequence)
+        # Use polymer.sequence directly (already int array)
+        return self.encode(coords, polymer.sequence)
 
     def decode_to_polymer(
         self,
@@ -588,10 +692,8 @@ class PolymerFlowModel:
             >>> latents_modified = latents + torch.randn_like(latents) * 0.1
             >>> polymer_new = model.decode_to_polymer(latents_modified, polymer)
         """
-        from ciffy.biochemistry import Residue
-
-        sequence = [Residue(int(idx)) for idx in template.sequence]
-        coords = self.decode(latents, sequence)
+        # Use template.sequence directly (already int array)
+        coords = self.decode(latents, template.sequence)
 
         # Convert to numpy for Polymer
         import numpy as np
@@ -663,5 +765,6 @@ class PolymerFlowModel:
         return results
 
     def __repr__(self) -> str:
-        residues = [r.name for r in self.residue_models.keys()]
+        from ciffy.biochemistry import Residue
+        residues = [Residue(r).name for r in self.residue_models.keys()]
         return f"PolymerFlowModel(residues={residues}, latent_dim={self.latent_dim})"

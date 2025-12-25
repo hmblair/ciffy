@@ -394,6 +394,10 @@ class ResidueFlowModel:
         self.var_explained = var_explained
         self._jit_decoder: torch.jit.ScriptModule | None = None
 
+        # Cached geometry projector (built lazily, invalidated on device change)
+        self._geometry_projector: callable | None = None
+        self._geometry_projector_device: torch.device | None = None
+
         # Pre-resolve frame column indices for fast frame computation
         self._init_frame_indices()
 
@@ -450,6 +454,43 @@ class ResidueFlowModel:
         if self._atoms_enum is None:
             self._atoms_enum = create_atom_subset(self.residue, self._atom_indices)
         return self._atoms_enum
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Frame Properties (for inter-residue positioning)
+    # ─────────────────────────────────────────────────────────────────────────
+    # These expose pre-resolved frame column indices for use by PolymerFlowModel.
+    # TODO: Consider extracting frame computation to a geometry helper module
+    # rather than coupling it with flow models.
+
+    @property
+    def prev_frame_cols(self) -> tuple[int, int, int | None] | None:
+        """
+        Pre-resolved column indices for the outgoing (prev) frame.
+
+        Returns (origin_col, z_ref_col, perp_ref_col) or None if not a polymer.
+        Used to compute the coordinate frame at the linking atom (e.g., O3' or C).
+        """
+        return self._prev_frame_cols
+
+    @property
+    def next_frame_cols(self) -> tuple[int, int, int | None] | None:
+        """
+        Pre-resolved column indices for the incoming (next) frame.
+
+        Returns (origin_col, z_ref_col, perp_ref_col) or None if not a polymer.
+        Used to compute the coordinate frame at the linking atom (e.g., P or N).
+        """
+        return self._next_frame_cols
+
+    @property
+    def prev_z_toward_origin(self) -> bool:
+        """Whether the Z-axis points toward the origin for the outgoing frame."""
+        return self._prev_z_toward_origin
+
+    @property
+    def next_z_toward_origin(self) -> bool:
+        """Whether the Z-axis points toward the origin for the incoming frame."""
+        return self._next_z_toward_origin
 
     @classmethod
     def from_structures(
@@ -668,128 +709,144 @@ class ResidueFlowModel:
         """Dimensionality of the latent space."""
         return self.flow.k
 
-    def _build_geometry_projector(self) -> callable:
-        """
-        Build a Newton projector for bond length and angle constraints.
+    # ─────────────────────────────────────────────────────────────────────────
+    # Device Management
+    # ─────────────────────────────────────────────────────────────────────────
 
-        Returns a function that projects coordinates onto ideal geometry using
-        Gauss-Newton optimization. This preserves conformational diversity while
-        fixing local geometry errors.
+    @property
+    def device(self) -> torch.device:
+        """Device where model parameters reside."""
+        return self.flow.V.device
+
+    def to(self, device: str | torch.device) -> "ResidueFlowModel":
+        """
+        Move model to specified device.
+
+        Clears cached geometry projector (will be rebuilt on first use).
+
+        Args:
+            device: Target device (e.g., "cpu", "cuda", "cuda:0").
+
+        Returns:
+            Self for method chaining.
+        """
+        device = torch.device(device) if isinstance(device, str) else device
+        self.flow = self.flow.to(device)
+        if self._jit_decoder is not None:
+            self._jit_decoder = self._jit_decoder.to(device)
+        # Clear cached projector - will be rebuilt for new device
+        self._geometry_projector = None
+        self._geometry_projector_device = None
+        return self
+
+    def cuda(self, device_id: int = 0) -> "ResidueFlowModel":
+        """Move model to CUDA device."""
+        return self.to(f"cuda:{device_id}")
+
+    def cpu(self) -> "ResidueFlowModel":
+        """Move model to CPU."""
+        return self.to("cpu")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Geometry Projection
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _get_geometry_projector(self, device: torch.device) -> callable:
+        """
+        Get cached geometry projector for device, building if needed.
+
+        The projector is cached and reused for subsequent calls on the same
+        device. Moving to a different device invalidates the cache.
+        """
+        if (self._geometry_projector is None or
+                self._geometry_projector_device != device):
+            self._geometry_projector = self._build_geometry_projector(device)
+            self._geometry_projector_device = device
+        return self._geometry_projector
+
+    def _build_geometry_projector(self, device: torch.device) -> callable:
+        """
+        Build a Newton projector for bond length constraints.
+
+        Uses the residue's bond definitions and ideal coordinates to compute
+        target bond lengths. Only includes bonds where both atoms are present
+        in the model's atom subset.
+
+        Returns a function that projects coordinates onto ideal bond lengths
+        using Gauss-Newton optimization. This preserves conformational diversity
+        while fixing local geometry errors.
         """
         residue = self.residue
-        atoms = self._atom_indices
+        atom_indices = self._atom_indices
+        n_atoms = len(atom_indices)
 
-        # Reference bond lengths (Å) from crystallographic data
-        ref_bonds = [
-            (residue.P, residue.OP1, 1.484),
-            (residue.P, residue.OP2, 1.484),
-            (residue.P, residue.O5p, 1.594),
-            (residue.O5p, residue.C5p, 1.430),
-            (residue.C5p, residue.C4p, 1.512),
-            (residue.C4p, residue.C3p, 1.520),
-            (residue.C3p, residue.O3p, 1.423),
-            (residue.C4p, residue.O4p, 1.448),
-            (residue.O4p, residue.C1p, 1.418),
-            (residue.C1p, residue.C2p, 1.529),
-            (residue.C2p, residue.C3p, 1.523),
-            (residue.C1p, residue.N9, 1.465),
-        ]
+        # Map from atom enum value to local index in this model's subset
+        atom_to_local = {a: i for i, a in enumerate(atom_indices)}
+        atom_set = set(atom_indices)
 
-        # Phosphate angle constraints (degrees)
-        ref_angles = [
-            (residue.OP1, residue.P, residue.OP2, 119.494),
-            (residue.O5p, residue.P, residue.OP1, 108.365),
-            (residue.O5p, residue.P, residue.OP2, 108.246),
-        ]
+        # Get ideal coordinates and bonds from residue definition
+        ideal_coords = residue.ideal  # (n_residue_atoms, 3)
+        bonds = residue.bonds  # PairEnum of (atom1, atom2) pairs
 
-        atom_to_idx = {a: i for i, a in enumerate(atoms)}
-        n_atoms = len(atoms)
+        # The first atom's enum value - used to convert global to local index
+        first_atom_value = list(residue)[0].value
 
-        # Build bond constraint data
+        # Build bond constraint data from residue's bond definitions
+        # Only include bonds where both atoms are in our subset
         bond_pairs = []
         bond_targets = []
-        for a1, a2, target in ref_bonds:
-            if a1.value in atom_to_idx and a2.value in atom_to_idx:
-                bond_pairs.append((atom_to_idx[a1.value], atom_to_idx[a2.value]))
-                bond_targets.append(target)
-        bond_pairs_t = torch.tensor(bond_pairs)
-        bond_targets_t = torch.tensor(bond_targets, dtype=torch.float32)
+
+        for atom1, atom2 in bonds:
+            if atom1.value in atom_set and atom2.value in atom_set:
+                # Get local indices in the model's atom subset
+                local_i = atom_to_local[atom1.value]
+                local_j = atom_to_local[atom2.value]
+                bond_pairs.append((local_i, local_j))
+
+                # Compute ideal bond length from ideal coordinates
+                # Convert global enum value to local index in ideal_coords
+                ideal_idx1 = atom1.value - first_atom_value
+                ideal_idx2 = atom2.value - first_atom_value
+                pos1 = ideal_coords[ideal_idx1]
+                pos2 = ideal_coords[ideal_idx2]
+                ideal_length = float(np.linalg.norm(pos2 - pos1))
+                bond_targets.append(ideal_length)
+
         n_bonds = len(bond_targets)
 
-        # Build angle constraint data
-        angle_triples = []
-        angle_targets = []
-        bond_length_map = {(a1.value, a2.value): d for a1, a2, d in ref_bonds}
-        bond_length_map.update({(a2.value, a1.value): d for a1, a2, d in ref_bonds})
+        if n_bonds == 0:
+            # No bonds to project - return identity function
+            def identity(coords: torch.Tensor) -> torch.Tensor:
+                return coords
+            return identity
 
-        for a_i, a_j, a_k, angle_deg in ref_angles:
-            if all(a.value in atom_to_idx for a in [a_i, a_j, a_k]):
-                i, j, k = atom_to_idx[a_i.value], atom_to_idx[a_j.value], atom_to_idx[a_k.value]
-                angle_triples.append((i, j, k))
-                d_ij = bond_length_map.get((a_i.value, a_j.value), 1.5)
-                d_jk = bond_length_map.get((a_j.value, a_k.value), 1.5)
-                cos_theta = np.cos(np.radians(angle_deg))
-                angle_targets.append(cos_theta * d_ij * d_jk)
+        # Pre-move constraint tensors to target device (cached for reuse)
+        bond_pairs_d = torch.tensor(bond_pairs, device=device, dtype=torch.long)
+        bond_targets_d = torch.tensor(bond_targets, device=device, dtype=torch.float32)
 
-        angle_triples_t = torch.tensor(angle_triples)
-        angle_targets_t = torch.tensor(angle_targets, dtype=torch.float32)
-        n_angles = len(angle_targets)
+        # Pre-compute constant index tensors
+        bond_idx = torch.arange(n_bonds, device=device)
+        dims = torch.arange(3, device=device)
 
         def newton_step(coords: torch.Tensor) -> torch.Tensor:
             """Single vectorized Newton step. coords: (n_atoms, 3)"""
-            device = coords.device
-            n_constraints = n_bonds + n_angles
-            residuals = torch.zeros(n_constraints, device=device)
-            J = torch.zeros(n_constraints, n_atoms * 3, device=device)
-
-            # Move constraint data to device (once per step, cached would be better)
-            bond_pairs_d = bond_pairs_t.to(device)
-            bond_targets_d = bond_targets_t.to(device)
+            residuals = torch.zeros(n_bonds, device=device)
+            J = torch.zeros(n_bonds, n_atoms * 3, device=device)
 
             # Vectorized bond length constraints
-            if n_bonds > 0:
-                a1_idx = bond_pairs_d[:, 0]  # (n_bonds,)
-                a2_idx = bond_pairs_d[:, 1]  # (n_bonds,)
-                diff = coords[a2_idx] - coords[a1_idx]  # (n_bonds, 3)
-                lengths = torch.norm(diff, dim=1)  # (n_bonds,)
-                residuals[:n_bonds] = lengths - bond_targets_d
-                units = diff / (lengths.unsqueeze(1) + 1e-8)  # (n_bonds, 3)
+            a1_idx = bond_pairs_d[:, 0]  # (n_bonds,)
+            a2_idx = bond_pairs_d[:, 1]  # (n_bonds,)
+            diff = coords[a2_idx] - coords[a1_idx]  # (n_bonds, 3)
+            lengths = torch.norm(diff, dim=1)  # (n_bonds,)
+            residuals = lengths - bond_targets_d
+            units = diff / (lengths.unsqueeze(1) + 1e-8)  # (n_bonds, 3)
 
-                # Build Jacobian for bonds (fully vectorized)
-                bond_idx = torch.arange(n_bonds, device=device)
-                # Create flat indices for all 3 dimensions at once
-                dims = torch.arange(3, device=device)
-                row_idx = bond_idx.unsqueeze(1).expand(-1, 3).reshape(-1)  # [0,0,0,1,1,1,...]
-                col_a1 = (a1_idx.unsqueeze(1) * 3 + dims).reshape(-1)  # [a1*3, a1*3+1, a1*3+2, ...]
-                col_a2 = (a2_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-                J[row_idx, col_a1] = -units.reshape(-1)
-                J[row_idx, col_a2] = units.reshape(-1)
-
-            # Vectorized angle constraints
-            if n_angles > 0:
-                angle_triples_d = angle_triples_t.to(device)
-                angle_targets_d = angle_targets_t.to(device)
-
-                i_idx = angle_triples_d[:, 0]  # (n_angles,)
-                j_idx = angle_triples_d[:, 1]  # (n_angles,)
-                k_idx = angle_triples_d[:, 2]  # (n_angles,)
-
-                v1 = coords[i_idx] - coords[j_idx]  # (n_angles, 3)
-                v2 = coords[k_idx] - coords[j_idx]  # (n_angles, 3)
-                dot_products = (v1 * v2).sum(dim=1)  # (n_angles,)
-                residuals[n_bonds:] = dot_products - angle_targets_d
-
-                # Jacobian for angles (fully vectorized)
-                # d(v1·v2)/d(x_i)=v2, d/d(x_k)=v1, d/d(x_j)=-v1-v2
-                angle_idx = torch.arange(n_angles, device=device) + n_bonds
-                dims = torch.arange(3, device=device)
-                row_idx = angle_idx.unsqueeze(1).expand(-1, 3).reshape(-1)
-                col_i = (i_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-                col_j = (j_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-                col_k = (k_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-                J[row_idx, col_i] = v2.reshape(-1)
-                J[row_idx, col_k] = v1.reshape(-1)
-                J[row_idx, col_j] = (-v1 - v2).reshape(-1)
+            # Build Jacobian for bonds (fully vectorized)
+            row_idx = bond_idx.unsqueeze(1).expand(-1, 3).reshape(-1)
+            col_a1 = (a1_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+            col_a2 = (a2_idx.unsqueeze(1) * 3 + dims).reshape(-1)
+            J[row_idx, col_a1] = -units.reshape(-1)
+            J[row_idx, col_a2] = units.reshape(-1)
 
             # Gauss-Newton: dx = -J^T @ (J @ J^T)^{-1} @ residuals
             JJT = J @ J.T
@@ -812,6 +869,8 @@ class ResidueFlowModel:
         preserving overall conformation. Typically 2 steps are sufficient
         for sub-0.01Å bond length accuracy.
 
+        The geometry projector is cached per device for efficiency.
+
         Args:
             coords: (N, n_atoms, 3) or (n_atoms, 3) coordinates.
             n_steps: Number of Newton steps (default 2).
@@ -819,7 +878,7 @@ class ResidueFlowModel:
         Returns:
             Projected coordinates with same shape as input.
         """
-        newton_step = self._build_geometry_projector()
+        newton_step = self._get_geometry_projector(coords.device)
 
         single = coords.dim() == 2
         if single:

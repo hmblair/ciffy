@@ -9,76 +9,71 @@ from ciffy.nn.flow.residue.data import compute_pca
 from ciffy.biochemistry import Residue
 
 
-class MockResidueFlowModel:
-    """Mock ResidueFlowModel for testing without training."""
+def create_test_residue_model(
+    residue: Residue,
+    n_atoms: int,
+    latent_dim: int = 6,
+    seed: int = 42,
+) -> ResidueFlowModel:
+    """
+    Create a ResidueFlowModel with synthetic random data for testing.
 
-    def __init__(self, residue: Residue, n_atoms: int, latent_dim: int = 8):
-        self.residue = residue
-        self.n_atoms = n_atoms
-        self.latent_dim = latent_dim
-        self._atom_indices = list(residue.index()[:n_atoms])
-        self.pca_rmsd = 0.1
-        self.var_explained = 0.95
+    This uses real ResidueFlowModel instances (not mocks) but with random
+    PCA data instead of real molecular conformations. This ensures tests
+    exercise the actual production code.
 
-        # Pre-resolved frame column indices (mock values for testing)
-        # These are set to sensible defaults for RNA nucleotides
-        # In real use, these are resolved from LinkingDefinition
-        self._prev_frame_cols = (0, 1, 2)  # Mock: first 3 atoms
-        self._prev_z_toward_origin = True
-        self._next_frame_cols = (3, 4, 5)  # Mock: next 3 atoms
-        self._next_z_toward_origin = True
+    Args:
+        residue: Residue type for this model.
+        n_atoms: Number of atoms in the residue subset.
+        latent_dim: Latent space dimension.
+        seed: Random seed for reproducibility.
 
-        # Create a simple PCAFlow
-        np.random.seed(42)
-        n_samples = 100
-        extended_dim = n_atoms * 3 + 6  # coords + transform
+    Returns:
+        A fully functional ResidueFlowModel.
+    """
+    np.random.seed(seed)
 
-        # Generate synthetic extended data
-        data = np.random.randn(n_samples, extended_dim).astype(np.float32)
-        V, mean, _, _ = compute_pca(data, n_components=latent_dim)
+    extended_dim = n_atoms * 3 + 6  # coords + transform
+    n_samples = 50
+    data = np.random.randn(n_samples, extended_dim).astype(np.float32)
+    V, mean, _, var_explained = compute_pca(data, n_components=latent_dim)
 
-        self.flow = PCAFlow(
-            torch.from_numpy(V).float(),
-            torch.from_numpy(mean).float(),
-            n_layers=2,
-            hidden_dim=16,
-            bound=3.0,
-        )
+    flow = PCAFlow(
+        torch.from_numpy(V).float(),
+        torch.from_numpy(mean).float(),
+        n_layers=2,
+        hidden_dim=16,
+        bound=3.0,
+    )
 
-    def encode(self, coords: torch.Tensor, transforms=None) -> torch.Tensor:
-        """Encode coordinates to latent space."""
-        if coords.dim() == 3:
-            coords = coords.reshape(coords.shape[0], -1)
-        if transforms is None:
-            transforms = torch.zeros(coords.shape[0], 6, device=coords.device)
-        extended = torch.cat([coords, transforms], dim=-1)
-        return self.flow.encode(extended)
+    return ResidueFlowModel(
+        flow=flow,
+        residue=residue,
+        atom_indices=list(residue.index()[:n_atoms]),
+        n_atoms=n_atoms,
+        pca_rmsd=0.1,
+        var_explained=float(var_explained[-1]),
+    )
 
-    def decode(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Decode latent to coordinates and transform."""
-        extended = self.flow.decode(z)
-        n_coord_dims = self.n_atoms * 3
-        coords_flat = extended[:, :n_coord_dims]
-        transforms = extended[:, n_coord_dims:]
-        coords = coords_flat.reshape(-1, self.n_atoms, 3)
-        return coords, transforms
+
+# Module-level fixture for reuse across test classes
+@pytest.fixture
+def residue_models():
+    """Create real ResidueFlowModels with synthetic data."""
+    return {
+        Residue.A: create_test_residue_model(Residue.A, n_atoms=10, latent_dim=6, seed=42),
+        Residue.G: create_test_residue_model(Residue.G, n_atoms=12, latent_dim=6, seed=43),
+    }
+
+
+@pytest.fixture
+def polymer_model(residue_models):
+    """Create a PolymerFlowModel for testing."""
+    return PolymerFlowModel.from_residue_models(residue_models)
 
 
 class TestPolymerFlowModel:
     """Tests for PolymerFlowModel."""
-
-    @pytest.fixture
-    def mock_models(self):
-        """Create mock residue models for testing."""
-        return {
-            Residue.A: MockResidueFlowModel(Residue.A, n_atoms=10, latent_dim=6),
-            Residue.G: MockResidueFlowModel(Residue.G, n_atoms=12, latent_dim=6),
-        }
-
-    @pytest.fixture
-    def polymer_model(self, mock_models):
-        """Create a PolymerFlowModel for testing."""
-        return PolymerFlowModel(mock_models)
 
     def test_init_validates_empty(self):
         """Test that empty models dict raises error."""
@@ -88,11 +83,11 @@ class TestPolymerFlowModel:
     def test_init_validates_latent_dim(self):
         """Test that mismatched latent dims raises error."""
         models = {
-            Residue.A: MockResidueFlowModel(Residue.A, n_atoms=10, latent_dim=6),
-            Residue.G: MockResidueFlowModel(Residue.G, n_atoms=12, latent_dim=8),
+            Residue.A: create_test_residue_model(Residue.A, n_atoms=10, latent_dim=6),
+            Residue.G: create_test_residue_model(Residue.G, n_atoms=12, latent_dim=8),
         }
         with pytest.raises(ValueError, match="same latent_dim"):
-            PolymerFlowModel(models)
+            PolymerFlowModel.from_residue_models(models)
 
     def test_init_stores_latent_dim(self, polymer_model):
         """Test that latent_dim is correctly set."""
@@ -107,19 +102,19 @@ class TestPolymerFlowModel:
 
     def test_get_atom_counts(self, polymer_model):
         """Test atom count computation."""
-        sequence = [Residue.A, Residue.G, Residue.A]
+        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
         counts = polymer_model._get_atom_counts(sequence)
         assert counts == [10, 12, 10]
 
     def test_get_atom_counts_missing_residue(self, polymer_model):
         """Test error on unsupported residue type."""
-        sequence = [Residue.A, Residue.C]  # C not in mock_models
-        with pytest.raises(ValueError, match="No model for residue type"):
+        sequence = np.array([Residue.A.value, Residue.C.value])  # C not in models
+        with pytest.raises(KeyError):
             polymer_model._get_atom_counts(sequence)
 
     def test_encode_shape(self, polymer_model):
         """Test encode output shape."""
-        sequence = [Residue.A, Residue.G, Residue.A]
+        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
         n_atoms = 10 + 12 + 10
         coords = torch.randn(n_atoms, 3)
 
@@ -129,7 +124,7 @@ class TestPolymerFlowModel:
 
     def test_encode_validates_coords_shape(self, polymer_model):
         """Test encode validates coordinate shape."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         coords = torch.randn(5, 3)  # Wrong number of atoms
 
         with pytest.raises(ValueError, match="atoms but sequence expects"):
@@ -137,7 +132,7 @@ class TestPolymerFlowModel:
 
     def test_decode_shape(self, polymer_model):
         """Test decode output shape."""
-        sequence = [Residue.A, Residue.G, Residue.A]
+        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
         n_atoms = 10 + 12 + 10
         latents = torch.randn(3, 6)
 
@@ -147,7 +142,7 @@ class TestPolymerFlowModel:
 
     def test_decode_validates_latents_shape(self, polymer_model):
         """Test decode validates latents shape."""
-        sequence = [Residue.A, Residue.G]
+        sequence = np.array([Residue.A.value, Residue.G.value])
         latents = torch.randn(3, 6)  # 3 latents but 2 residues
 
         with pytest.raises(ValueError, match="rows but sequence has"):
@@ -156,12 +151,12 @@ class TestPolymerFlowModel:
     def test_decode_empty_sequence(self, polymer_model):
         """Test decode with empty sequence."""
         latents = torch.randn(0, 6)
-        coords = polymer_model.decode(latents, [])
+        coords = polymer_model.decode(latents, np.array([], dtype=np.int64))
         assert coords.shape == (0, 3)
 
     def test_sample_shape(self, polymer_model):
         """Test sample output shape."""
-        sequence = [Residue.A, Residue.G]
+        sequence = np.array([Residue.A.value, Residue.G.value])
         n_atoms = 10 + 12
 
         coords = polymer_model.sample(sequence)
@@ -170,7 +165,7 @@ class TestPolymerFlowModel:
 
     def test_sample_multiple(self, polymer_model):
         """Test sampling multiple conformations."""
-        sequence = [Residue.A, Residue.G]
+        sequence = np.array([Residue.A.value, Residue.G.value])
         n_atoms = 10 + 12
 
         samples = polymer_model.sample(sequence, n_samples=5)
@@ -181,10 +176,11 @@ class TestPolymerFlowModel:
 
     def test_sample_empty_sequence(self, polymer_model):
         """Test sample with empty sequence."""
-        coords = polymer_model.sample([])
+        empty_seq = np.array([], dtype=np.int64)
+        coords = polymer_model.sample(empty_seq)
         assert coords.shape == (0, 3)
 
-        samples = polymer_model.sample([], n_samples=3)
+        samples = polymer_model.sample(empty_seq, n_samples=3)
         assert len(samples) == 3
         for s in samples:
             assert s.shape == (0, 3)
@@ -199,66 +195,26 @@ class TestPolymerFlowModel:
 class TestPolymerFlowModelRoundtrip:
     """Tests for encode-decode roundtrip behavior."""
 
-    @pytest.fixture
-    def real_models(self):
-        """Create minimal real ResidueFlowModels for roundtrip testing."""
-        np.random.seed(42)
-        n_atoms_a = 10
-        n_atoms_g = 12
-        latent_dim = 6
-
-        def create_model(residue, n_atoms):
-            extended_dim = n_atoms * 3 + 6
-            n_samples = 50
-            data = np.random.randn(n_samples, extended_dim).astype(np.float32)
-            V, mean, _, var_explained = compute_pca(data, n_components=latent_dim)
-
-            flow = PCAFlow(
-                torch.from_numpy(V).float(),
-                torch.from_numpy(mean).float(),
-                n_layers=2,
-                hidden_dim=16,
-                bound=3.0,
-            )
-
-            return ResidueFlowModel(
-                flow=flow,
-                residue=residue,
-                atom_indices=list(residue.index()[:n_atoms]),
-                n_atoms=n_atoms,
-                pca_rmsd=0.1,
-                var_explained=float(var_explained[-1]),
-            )
-
-        return {
-            Residue.A: create_model(Residue.A, n_atoms_a),
-            Residue.G: create_model(Residue.G, n_atoms_g),
-        }
-
-    def test_encode_decode_preserves_structure(self, real_models):
+    def test_encode_decode_preserves_structure(self, polymer_model):
         """Test that encode-decode approximately preserves input."""
-        polymer = PolymerFlowModel(real_models)
-
         # Single residue (no positioning needed)
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         n_atoms = 10
         coords = torch.randn(n_atoms, 3)
 
-        latents = polymer.encode(coords, sequence)
-        coords_recon = polymer.decode(latents, sequence)
+        latents = polymer_model.encode(coords, sequence)
+        coords_recon = polymer_model.decode(latents, sequence)
 
         # Should be close for single residue (only PCA truncation error)
-        # Note: The mock data doesn't have real structure, so we just check shapes
+        # Note: The synthetic data doesn't have real structure, so we just check shapes
         assert coords_recon.shape == coords.shape
 
-    def test_multi_residue_decode(self, real_models):
+    def test_multi_residue_decode(self, polymer_model):
         """Test decoding multi-residue sequence produces valid output."""
-        polymer = PolymerFlowModel(real_models)
-
-        sequence = [Residue.A, Residue.G, Residue.A]
+        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
         latents = torch.randn(3, 6)
 
-        coords = polymer.decode(latents, sequence)
+        coords = polymer_model.decode(latents, sequence)
 
         # Check output has correct total atoms
         expected_atoms = 10 + 12 + 10
@@ -272,38 +228,16 @@ class TestPolymerFlowModelSaveLoad:
     """Tests for save/load functionality."""
 
     @pytest.fixture
-    def real_models(self):
-        """Create minimal real ResidueFlowModels."""
-        np.random.seed(42)
-
-        def create_model(residue, n_atoms):
-            extended_dim = n_atoms * 3 + 6
-            data = np.random.randn(30, extended_dim).astype(np.float32)
-            V, mean, _, var_explained = compute_pca(data, n_components=6)
-
-            flow = PCAFlow(
-                torch.from_numpy(V).float(),
-                torch.from_numpy(mean).float(),
-                n_layers=2,
-                hidden_dim=16,
-            )
-
-            return ResidueFlowModel(
-                flow=flow,
-                residue=residue,
-                atom_indices=list(residue.index()[:n_atoms]),
-                n_atoms=n_atoms,
-                pca_rmsd=0.1,
-                var_explained=float(var_explained[-1]),
-            )
-
-        return {
-            Residue.A: create_model(Residue.A, 10),
+    def single_residue_model(self):
+        """Create a single-residue PolymerFlowModel for save/load testing."""
+        models = {
+            Residue.A: create_test_residue_model(Residue.A, n_atoms=10, latent_dim=6),
         }
+        return PolymerFlowModel.from_residue_models(models)
 
-    def test_save_load_roundtrip(self, real_models, tmp_path):
+    def test_save_load_roundtrip(self, single_residue_model, tmp_path):
         """Test save and load produces equivalent model."""
-        polymer = PolymerFlowModel(real_models)
+        polymer = single_residue_model
 
         # Save
         save_path = tmp_path / "polymer_model"
@@ -321,7 +255,7 @@ class TestPolymerFlowModelSaveLoad:
         assert set(loaded.supported_residues) == set(polymer.supported_residues)
 
         # Test outputs match
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         latents = torch.randn(1, 6)
 
         with torch.no_grad():
@@ -334,19 +268,6 @@ class TestPolymerFlowModelSaveLoad:
 class TestPolymerFlowModelLazyComputation:
     """Tests for stateful lazy computation API."""
 
-    @pytest.fixture
-    def mock_models(self):
-        """Create mock residue models for testing."""
-        return {
-            Residue.A: MockResidueFlowModel(Residue.A, n_atoms=10, latent_dim=6),
-            Residue.G: MockResidueFlowModel(Residue.G, n_atoms=12, latent_dim=6),
-        }
-
-    @pytest.fixture
-    def polymer_model(self, mock_models):
-        """Create a PolymerFlowModel for testing."""
-        return PolymerFlowModel(mock_models)
-
     def test_initial_state_unbound(self, polymer_model):
         """Test model starts unbound."""
         assert not polymer_model.is_bound
@@ -354,26 +275,26 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_bind_sets_sequence(self, polymer_model):
         """Test bind sets the sequence."""
-        sequence = [Residue.A, Residue.G]
+        sequence = np.array([Residue.A.value, Residue.G.value])
         polymer_model.bind(sequence)
 
         assert polymer_model.is_bound
-        assert polymer_model.sequence == sequence
+        assert np.array_equal(polymer_model.sequence, sequence)
 
     def test_bind_returns_self(self, polymer_model):
         """Test bind returns self for method chaining."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         result = polymer_model.bind(sequence)
         assert result is polymer_model
 
     def test_bind_validates_residue_types(self, polymer_model):
         """Test bind validates all residue types are supported."""
-        with pytest.raises(ValueError, match="No model for residue type"):
-            polymer_model.bind([Residue.A, Residue.C])  # C not in mock_models
+        with pytest.raises(ValueError, match="Unsupported residue types"):
+            polymer_model.bind(np.array([Residue.A.value, Residue.C.value]))  # C not in models
 
     def test_unbind_clears_state(self, polymer_model):
         """Test unbind clears all cached state."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
         polymer_model.coordinates = torch.randn(10, 3)
         _ = polymer_model.latents  # Compute latents
@@ -405,7 +326,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_set_coordinates_marks_latents_dirty(self, polymer_model):
         """Test setting coordinates marks latents as needing recomputation."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         # Set coordinates
@@ -418,7 +339,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_set_latents_marks_coords_dirty(self, polymer_model):
         """Test setting latents marks coordinates as needing recomputation."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         # Set latents
@@ -431,7 +352,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_lazy_latents_computation(self, polymer_model):
         """Test latents are computed lazily from coordinates."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         coords = torch.randn(10, 3)
@@ -445,7 +366,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_lazy_coords_computation(self, polymer_model):
         """Test coordinates are computed lazily from latents."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         latents = torch.randn(1, 6)
@@ -459,7 +380,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_cached_latents_not_recomputed(self, polymer_model):
         """Test cached latents are returned without recomputation."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         coords = torch.randn(10, 3)
@@ -475,7 +396,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_cached_coords_not_recomputed(self, polymer_model):
         """Test cached coordinates are returned without recomputation."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         latents = torch.randn(1, 6)
@@ -491,7 +412,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_latents_error_when_no_coords(self, polymer_model):
         """Test accessing latents without coordinates raises error."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         with pytest.raises(RuntimeError, match="no coordinates set"):
@@ -499,7 +420,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_coords_error_when_no_latents(self, polymer_model):
         """Test accessing coordinates without latents raises error."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         with pytest.raises(RuntimeError, match="no latents set"):
@@ -507,7 +428,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_latents_setter_validates_shape(self, polymer_model):
         """Test latents setter validates shape matches sequence."""
-        sequence = [Residue.A, Residue.G]  # 2 residues
+        sequence = np.array([Residue.A.value, Residue.G.value])  # 2 residues
         polymer_model.bind(sequence)
 
         with pytest.raises(ValueError, match="rows but sequence has"):
@@ -515,7 +436,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_latents_setter_validates_dim(self, polymer_model):
         """Test latents setter validates latent dimension."""
-        sequence = [Residue.A]
+        sequence = np.array([Residue.A.value])
         polymer_model.bind(sequence)
 
         with pytest.raises(ValueError, match="dim .* but model expects"):
@@ -523,7 +444,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_coordinates_setter_validates_shape(self, polymer_model):
         """Test coordinates setter validates shape matches sequence."""
-        sequence = [Residue.A]  # 10 atoms
+        sequence = np.array([Residue.A.value])  # 10 atoms
         polymer_model.bind(sequence)
 
         with pytest.raises(ValueError, match="atoms but sequence expects"):
@@ -531,13 +452,13 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_rebind_clears_cache(self, polymer_model):
         """Test rebinding clears cached values."""
-        sequence1 = [Residue.A]
+        sequence1 = np.array([Residue.A.value])
         polymer_model.bind(sequence1)
         polymer_model.coordinates = torch.randn(10, 3)
         _ = polymer_model.latents
 
         # Rebind to different sequence
-        sequence2 = [Residue.G]
+        sequence2 = np.array([Residue.G.value])
         polymer_model.bind(sequence2)
 
         assert polymer_model._cached_latents is None
@@ -547,7 +468,7 @@ class TestPolymerFlowModelLazyComputation:
 
     def test_multi_residue_lazy_roundtrip(self, polymer_model):
         """Test lazy computation with multi-residue sequence."""
-        sequence = [Residue.A, Residue.G, Residue.A]
+        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
         n_atoms = 10 + 12 + 10
         polymer_model.bind(sequence)
 
@@ -566,3 +487,22 @@ class TestPolymerFlowModelLazyComputation:
         # Get coordinates (lazy recomputed)
         new_coords = polymer_model.coordinates
         assert new_coords.shape == (n_atoms, 3)
+
+
+class TestPolymerFlowModelDevice:
+    """Tests for device management."""
+
+    def test_device_property(self, polymer_model):
+        """Test device property returns correct device."""
+        assert polymer_model.device == torch.device("cpu")
+
+    def test_to_returns_self(self, polymer_model):
+        """Test to() returns self for method chaining."""
+        result = polymer_model.to("cpu")
+        assert result is polymer_model
+
+    def test_cpu_method(self, polymer_model):
+        """Test cpu() method."""
+        result = polymer_model.cpu()
+        assert result is polymer_model
+        assert polymer_model.device == torch.device("cpu")

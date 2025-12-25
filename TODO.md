@@ -113,6 +113,27 @@ def replace_residue(chain: Polymer, position: int, residue_coords: Array,
 
 ## LOW Priority
 
+### Extract Frame Computation to Geometry Helper
+
+**Goal**: Decouple frame computation from flow models.
+
+**Context**: Currently `ResidueFlowModel` stores pre-resolved frame column indices (`prev_frame_cols`, `next_frame_cols`) and `PolymerFlowModel.decode()` uses these to position residues. This couples geometry computation with the flow model.
+
+**Proposed refactor**:
+- Create a `ResidueFrameResolver` or similar helper in `ciffy/geometry.py`
+- Move frame index pre-resolution there
+- Flow models would use the helper rather than storing frame indices
+- This allows frame computation to be reused outside of flow models
+
+**Benefits**:
+- Separation of concerns (flow = encoding/decoding, geometry = positioning)
+- Frame computation reusable for other use cases
+- Cleaner flow model API
+
+**Note**: Frame cols could also be stored as `np.ndarray` shape `(3,)` with `-1` sentinel for `None`, enabling vectorized operations across multiple residues.
+
+---
+
 ### Clean Up Deprecated C Code
 
 **Goal**: Remove unused internal coordinate C functions from the extension module.

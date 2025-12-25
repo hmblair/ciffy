@@ -56,6 +56,13 @@ from .constants import (
     PurinePyrimidine,
     PurineBase,
     PyrimidineBase,
+    # New AtomGroup-based hierarchical groups (v2)
+    Sugar2,
+    PhosphateGroup2,
+    PurineImidazole2,
+    PurinePyrimidine2,
+    PurineBase2,
+    PyrimidineBase2,
 )
 from .linking import (
     LinkingDefinition,
@@ -64,6 +71,15 @@ from .linking import (
     LINKING_BY_TYPE,
 )
 from ._generated_molecule import Molecule, molecule_type
+
+# =============================================================================
+# NEW ATOM SYSTEM (v2) - using plain classes instead of metaclasses
+# =============================================================================
+# These are the new implementations that will eventually replace the legacy system.
+# Import with different names during migration to avoid breaking existing code.
+from ._generated_atoms_v2 import ATOM_NAMES as ATOM_NAMES_V2
+from ._generated_residues_v2 import Residue as Residue2
+from ._generated_residues_v2 import CIF_RESIDUE_NAMES as CIF_RESIDUE_NAMES_V2
 
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)
@@ -130,4 +146,15 @@ __all__ = [
     "PROTEIN_SIDECHAIN",
     "DIHEDRAL_NAME_TO_TYPE",
     "DIHEDRAL_ATOMS",
+    # New atom system (v2) - during migration
+    "Residue2",
+    "ATOM_NAMES_V2",
+    "CIF_RESIDUE_NAMES_V2",
+    # New hierarchical groups (v2)
+    "Sugar2",
+    "PhosphateGroup2",
+    "PurineImidazole2",
+    "PurinePyrimidine2",
+    "PurineBase2",
+    "PyrimidineBase2",
 ]

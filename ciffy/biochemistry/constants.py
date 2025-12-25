@@ -47,9 +47,9 @@ To add a new atom group (e.g., aromatic sidechain atoms):
         'ND1', 'CE1', 'NE2',  # HIS imidazole
     }
 
-3. **Build the group** using `build_atom_group`::
+3. **Build the group** using `build_atom_group_legacy`::
 
-    AromaticRing = build_atom_group(
+    AromaticRing = build_atom_group_legacy(
         "AromaticRing",
         _AROMATIC_RESIDUES,
         _AROMATIC_RING_NAMES
@@ -86,7 +86,7 @@ Existing Groups
 
 from typing import Callable
 
-from ..utils import IndexEnum, build_atom_group
+from ..utils import IndexEnum, build_atom_group_legacy
 from ._generated_residues import Residue
 
 # Residue groupings (prefix, residue) - atoms accessed via residue.atoms
@@ -242,15 +242,50 @@ _PYRIMIDINE_BASE_NAMES = {
 # =============================================================================
 
 # Sugar atoms - present in all nucleotides
-Sugar = build_atom_group("Sugar", _ALL_NUCLEOTIDES, _SUGAR_NAMES)
+Sugar = build_atom_group_legacy("Sugar", _ALL_NUCLEOTIDES, _SUGAR_NAMES)
 
 # Phosphate atoms - present in all nucleotides
-PhosphateGroup = build_atom_group("PhosphateGroup", _ALL_NUCLEOTIDES, _PHOSPHATE_NAMES)
+PhosphateGroup = build_atom_group_legacy("PhosphateGroup", _ALL_NUCLEOTIDES, _PHOSPHATE_NAMES)
 
 # Purine hierarchy - A, G, DA, DG only
-PurineImidazole = build_atom_group("PurineImidazole", _PURINES, _PURINE_IMIDAZOLE_NAMES)
-PurinePyrimidine = build_atom_group("PurinePyrimidine", _PURINES, _PURINE_PYRIMIDINE_NAMES)
-PurineBase = build_atom_group("PurineBase", _PURINES, _PURINE_BASE_NAMES)
+PurineImidazole = build_atom_group_legacy("PurineImidazole", _PURINES, _PURINE_IMIDAZOLE_NAMES)
+PurinePyrimidine = build_atom_group_legacy("PurinePyrimidine", _PURINES, _PURINE_PYRIMIDINE_NAMES)
+PurineBase = build_atom_group_legacy("PurineBase", _PURINES, _PURINE_BASE_NAMES)
 
 # Pyrimidine base - C, U, DC, DT only
-PyrimidineBase = build_atom_group("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BASE_NAMES)
+PyrimidineBase = build_atom_group_legacy("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BASE_NAMES)
+
+
+# =============================================================================
+# NEW ATOM SYSTEM (v2) - Hierarchical AtomGroups
+# =============================================================================
+# These use the new AtomGroup-based system and will eventually replace the
+# legacy HierarchicalEnum-based groups above.
+
+from ..utils import build_atom_group as build_atom_group_new
+from ._generated_residues_v2 import Residue as Residue2
+
+# Residue groupings for v2 hierarchical access
+_PURINES_V2 = [
+    ("A", Residue2.A), ("G", Residue2.G),
+    ("DA", Residue2.DA), ("DG", Residue2.DG),
+]
+_PYRIMIDINES_V2 = [
+    ("C", Residue2.C), ("U", Residue2.U),
+    ("DC", Residue2.DC), ("DT", Residue2.DT),
+]
+_ALL_NUCLEOTIDES_V2 = _PURINES_V2 + _PYRIMIDINES_V2
+
+# Sugar atoms - present in all nucleotides
+Sugar2 = build_atom_group_new("Sugar2", _ALL_NUCLEOTIDES_V2, _SUGAR_NAMES)
+
+# Phosphate atoms - present in all nucleotides
+PhosphateGroup2 = build_atom_group_new("PhosphateGroup2", _ALL_NUCLEOTIDES_V2, _PHOSPHATE_NAMES)
+
+# Purine hierarchy - A, G, DA, DG only
+PurineImidazole2 = build_atom_group_new("PurineImidazole2", _PURINES_V2, _PURINE_IMIDAZOLE_NAMES)
+PurinePyrimidine2 = build_atom_group_new("PurinePyrimidine2", _PURINES_V2, _PURINE_PYRIMIDINE_NAMES)
+PurineBase2 = build_atom_group_new("PurineBase2", _PURINES_V2, _PURINE_BASE_NAMES)
+
+# Pyrimidine base - C, U, DC, DT only
+PyrimidineBase2 = build_atom_group_new("PyrimidineBase2", _PYRIMIDINES_V2, _PYRIMIDINE_BASE_NAMES)

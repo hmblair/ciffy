@@ -255,3 +255,64 @@ def compute_atom_dihedral_ownership(
     return atom_dihedral_type, atom_dihedral_refs
 
 
+def compute_canonical_zmatrix_refs(
+    all_residues: list[ResidueDefinition],
+    atom_index: dict[tuple[str, str], int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute canonical Z-matrix reference atoms for each atom type.
+
+    Returns:
+        atom_canonical_refs: (num_atoms, 6) array with reference info
+        atom_has_canonical_refs: (num_atoms,) bool array
+    """
+    # Find max atom index
+    num_atoms = max(atom_index.values()) + 1
+
+    # Initialize empty arrays (stub - not yet implemented)
+    atom_canonical_refs = np.zeros((num_atoms, 6), dtype=np.int16)
+    atom_has_canonical_refs = np.zeros(num_atoms, dtype=bool)
+
+    return atom_canonical_refs, atom_has_canonical_refs
+
+
+def compute_residue_backbone_atoms(
+    all_residues: list[ResidueDefinition],
+    atom_index: dict[tuple[str, str], int],
+) -> np.ndarray:
+    """
+    Compute backbone atom types for each residue type.
+
+    Returns:
+        (num_residues, max_backbone_atoms) array with backbone atom indices
+    """
+    from .config import Molecule
+
+    num_residues = len(all_residues)
+    max_backbone = 6  # Conservative max (N, CA, C, O for protein; P, O5', C5', C4', C3', O3' for nucleic)
+
+    backbone_atoms = np.full((num_residues, max_backbone), -1, dtype=np.int16)
+
+    for res_idx, res in enumerate(all_residues):
+        if not res.atoms:
+            continue
+
+        primary_cif = res.cif_names[0]
+
+        # Define backbone atoms by molecule type
+        if res.molecule_type == Molecule.PROTEIN:
+            backbone_names = ['N', 'CA', 'C', 'O']
+        elif res.molecule_type in (Molecule.RNA, Molecule.DNA, Molecule.HYBRID):
+            backbone_names = ["P", "O5'", "C5'", "C4'", "C3'", "O3'"]
+        else:
+            continue
+
+        for i, atom_name in enumerate(backbone_names):
+            if i >= max_backbone:
+                break
+            key = (primary_cif, atom_name)
+            if key in atom_index:
+                backbone_atoms[res_idx, i] = atom_index[key]
+
+    return backbone_atoms
+

@@ -1,0 +1,422 @@
+"""
+Atom and AtomGroup classes for biochemistry entity representation.
+
+Minimal 2-class design:
+- Atom: int subclass with name and local position (self-documenting, works directly in arrays)
+- AtomGroup: unified container with optional geometry (handles residues, groups, and subsets)
+
+Example:
+    >>> from ciffy.biochemistry import Residue
+    >>> Residue.A.P            # Atom(P, 2) - IS an int
+    >>> Residue.A.P == 2       # True
+    >>> array[Residue.A.P]     # Works directly, no .value needed
+    >>> Residue.A.P.name       # "P" (for debugging)
+    >>> Residue.A.P.local      # 0 (position in residue)
+
+    >>> Residue.A.ideal        # (37, 3) float32 array
+    >>> Residue.A.bonds        # (n, 2) int64 array
+
+    >>> subset = Residue.A.subset({2, 3, 5})
+    >>> subset.ideal           # (3, 3) filtered coords
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable, Iterator
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+
+class Atom(int):
+    """
+    An int that knows its name and local position.
+
+    Subclasses int so atoms work directly in array indexing and comparisons,
+    while remaining self-documenting for debugging.
+
+    Attributes:
+        name: Atom name (e.g., "P", "C3p", "CA").
+        local: 0-indexed position within the residue for array access.
+
+    Example:
+        >>> atom = Atom("P", 2, 0)
+        >>> atom == 2           # True (IS an int)
+        >>> array[atom]         # Works directly
+        >>> int(atom)           # 2
+        >>> atom.name           # "P"
+        >>> atom.local          # 0
+        >>> repr(atom)          # "Atom(P, 2)"
+    """
+
+    # Note: int subclasses can't use __slots__, attributes stored in __dict__
+
+    def __new__(cls, name: str, value: int, local: int = 0) -> Atom:
+        obj = super().__new__(cls, value)
+        obj.name = name
+        obj.local = local
+        return obj
+
+    def __repr__(self) -> str:
+        return f"Atom({self.name}, {int(self)})"
+
+    # Preserve name/local through arithmetic (though rarely needed)
+    def __add__(self, other: int) -> int:
+        return int.__add__(int(self), other)
+
+    def __radd__(self, other: int) -> int:
+        return int.__add__(other, int(self))
+
+    def __sub__(self, other: int) -> int:
+        return int.__sub__(int(self), other)
+
+    def __rsub__(self, other: int) -> int:
+        return int.__sub__(other, int(self))
+
+    # For compatibility with code that uses .value
+    @property
+    def value(self) -> int:
+        """The integer value (for compatibility). Prefer using the Atom directly."""
+        return int(self)
+
+
+class AtomGroup:
+    """
+    Container for atoms, optionally with geometry.
+
+    Unified class that handles:
+    - Residues: AtomGroup with value, molecule_type, ideal, bonds
+    - Groups (Sugar, etc.): AtomGroup without geometry
+    - Subsets: AtomGroup with filtered geometry
+
+    Attributes:
+        name: Group name (e.g., "A", "Sugar", "A_subset").
+        value: Residue index (None for plain groups).
+        molecule_type: Molecule type index (None for plain groups).
+        abbrev: Single-letter abbreviation (None for plain groups).
+        ideal: Ideal coordinates, shape (n_atoms, 3) float32 (None if no geometry).
+        bonds: Bond pairs, shape (n_bonds, 2) int64 (None if no geometry).
+
+    Example:
+        >>> # Residue with geometry
+        >>> Residue.A.P          # Atom(P, 2)
+        >>> Residue.A.value      # 0 (residue index)
+        >>> Residue.A.ideal      # (37, 3) array
+        >>> Residue.A.bonds      # (n, 2) array
+
+        >>> # Hierarchical group without geometry
+        >>> Sugar.C5p.A          # Atom(C5p, 6)
+        >>> Sugar.C5p.index()    # array([6, 43, 152, ...])
+
+        >>> # Subset with filtered geometry
+        >>> subset = Residue.A.subset({2, 3, 5})
+        >>> subset.ideal         # (3, 3) filtered
+    """
+
+    __slots__ = (
+        'name', '_members', '_index_cache',
+        'value', 'molecule_type', 'abbrev', 'ideal', 'bonds',
+        '_orig_locals',  # For subset geometry filtering
+    )
+
+    def __init__(
+        self,
+        name: str,
+        members: dict[str, Atom | AtomGroup],
+        *,
+        value: int | None = None,
+        molecule_type: int | None = None,
+        abbrev: str | None = None,
+        ideal: NDArray[np.float32] | None = None,
+        bonds: NDArray[np.int64] | None = None,
+        _orig_locals: dict[int, int] | None = None,
+    ) -> None:
+        """
+        Create an AtomGroup.
+
+        Args:
+            name: Group name.
+            members: Dict mapping names to Atom or nested AtomGroup.
+            value: Residue index (for residues only).
+            molecule_type: Molecule type (for residues only).
+            abbrev: Single-letter abbreviation (for residues only).
+            ideal: Ideal coordinates, (n_atoms, 3) float32.
+            bonds: Bond pairs, (n_bonds, 2) int64.
+            _orig_locals: Internal - maps atom value to original local index.
+        """
+        self.name = name
+        self._members = members
+        self._index_cache: NDArray[np.int64] | None = None
+        self.value = value
+        self.molecule_type = molecule_type
+        self.abbrev = abbrev
+        self.ideal = ideal
+        self.bonds = bonds
+        self._orig_locals = _orig_locals
+
+    def __getattr__(self, name: str) -> Atom | AtomGroup:
+        """Access member by name: group.P -> Atom or nested AtomGroup."""
+        if name.startswith('_'):
+            raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+        members = object.__getattribute__(self, '_members')
+        if name in members:
+            return members[name]
+        group_name = object.__getattribute__(self, 'name')
+        raise AttributeError(f"'{group_name}' has no member '{name}'")
+
+    def index(self) -> NDArray[np.int64]:
+        """
+        All atom values as a sorted array.
+
+        Returns:
+            Sorted array of unique atom values.
+        """
+        if self._index_cache is None:
+            values = []
+            for v in self._members.values():
+                if isinstance(v, AtomGroup):
+                    values.extend(v.index().tolist())
+                elif isinstance(v, Atom):
+                    values.append(int(v))
+            self._index_cache = np.array(sorted(set(values)), dtype=np.int64)
+        return self._index_cache
+
+    def __iter__(self) -> Iterator[Atom]:
+        """Iterate over Atom members (skips nested AtomGroups)."""
+        for v in self._members.values():
+            if isinstance(v, Atom):
+                yield v
+
+    def __len__(self) -> int:
+        """Number of direct members."""
+        return len(self._members)
+
+    def __contains__(self, item: str | int | Atom) -> bool:
+        """Check if name, value, or Atom is in group."""
+        if isinstance(item, str):
+            return item in self._members
+        if isinstance(item, int):
+            return item in set(self.index())
+        if isinstance(item, Atom):
+            return int(item) in set(self.index())
+        return False
+
+    def __repr__(self) -> str:
+        if self.value is not None:
+            return f"Residue.{self.name}"
+        n_atoms = sum(1 for v in self._members.values() if isinstance(v, Atom))
+        n_groups = sum(1 for v in self._members.values() if isinstance(v, AtomGroup))
+        if n_groups > 0:
+            return f"AtomGroup({self.name}, {n_atoms} atoms, {n_groups} subgroups)"
+        return f"AtomGroup({self.name}, {n_atoms} atoms)"
+
+    def items(self) -> Iterator[tuple[str, Atom]]:
+        """Iterate over (name, Atom) pairs (skips nested AtomGroups)."""
+        for k, v in self._members.items():
+            if isinstance(v, Atom):
+                yield k, v
+
+    def dict(self) -> dict[str, int]:
+        """Name -> value mapping for leaf atoms."""
+        return {k: int(v) for k, v in self.items()}
+
+    def list(self) -> list[str]:
+        """List of atom names."""
+        return list(self._members.keys())
+
+    @property
+    def n_atoms(self) -> int:
+        """Number of atoms (leaf members only)."""
+        return sum(1 for _ in self)
+
+    @property
+    def n_bonds(self) -> int:
+        """Number of bonds (0 if no geometry)."""
+        return 0 if self.bonds is None else len(self.bonds)
+
+    @property
+    def bond_lengths(self) -> NDArray[np.float64] | None:
+        """
+        Compute ideal bond lengths from stored geometry.
+
+        Returns:
+            (n_bonds,) float64 array, or None if no geometry.
+        """
+        if self.ideal is None or self.bonds is None or len(self.bonds) == 0:
+            return None
+        lengths = np.linalg.norm(
+            self.ideal[self.bonds[:, 0]] - self.ideal[self.bonds[:, 1]],
+            axis=1
+        )
+        return lengths.astype(np.float64)
+
+    # =========================================================================
+    # Filtering methods
+    # =========================================================================
+
+    def subset(self, indices: set[int]) -> AtomGroup:
+        """
+        Create subset containing only atoms with specified values.
+
+        If this group has geometry (ideal, bonds), the subset will have
+        filtered geometry with renumbered local indices.
+
+        Args:
+            indices: Set of global atom values to include.
+
+        Returns:
+            New AtomGroup with filtered atoms and geometry.
+        """
+        # Filter atoms with renumbered locals
+        filtered = {}
+        new_local = 0
+        orig_locals: dict[int, int] = {}
+
+        for k, v in self._members.items():
+            if isinstance(v, Atom) and int(v) in indices:
+                filtered[k] = Atom(v.name, int(v), new_local)
+                # Track original local for geometry filtering
+                if self._orig_locals is not None:
+                    orig_locals[int(v)] = self._orig_locals[int(v)]
+                else:
+                    orig_locals[int(v)] = v.local
+                new_local += 1
+
+        # Filter geometry if present
+        new_ideal = None
+        new_bonds = None
+
+        if self.ideal is not None and filtered:
+            # Get original local indices in order of new locals
+            ideal_rows = []
+            for atom in sorted(filtered.values(), key=lambda a: a.local):
+                ideal_rows.append(self.ideal[orig_locals[int(atom)]])
+            new_ideal = np.array(ideal_rows, dtype=np.float32)
+
+        if self.bonds is not None and filtered:
+            # Bonds are stored as local indices - we need to:
+            # 1. Map old local -> atom value (using orig_locals reverse)
+            # 2. Check if both atoms are in filtered set
+            # 3. Map to new local indices
+
+            # Build old_local -> atom_value mapping
+            old_local_to_value: dict[int, int] = {}
+            for atom in self._members.values():
+                if isinstance(atom, Atom):
+                    if self._orig_locals is not None:
+                        old_local_to_value[self._orig_locals[int(atom)]] = int(atom)
+                    else:
+                        old_local_to_value[atom.local] = int(atom)
+
+            # Map atom values to new local indices
+            val_to_new_local = {int(a): a.local for a in filtered.values()}
+
+            new_bonds_list = []
+            for old_local1, old_local2 in self.bonds:
+                val1 = old_local_to_value.get(old_local1)
+                val2 = old_local_to_value.get(old_local2)
+                if val1 is not None and val2 is not None:
+                    if val1 in val_to_new_local and val2 in val_to_new_local:
+                        new_bonds_list.append([val_to_new_local[val1], val_to_new_local[val2]])
+            if new_bonds_list:
+                new_bonds = np.array(new_bonds_list, dtype=np.int64)
+
+        return AtomGroup(
+            f"{self.name}_subset",
+            filtered,
+            ideal=new_ideal,
+            bonds=new_bonds,
+            _orig_locals=orig_locals if self.ideal is not None else None,
+        )
+
+    def exclude(self, names: set[str]) -> AtomGroup:
+        """
+        Create subset excluding atoms with specified names.
+
+        Args:
+            names: Set of atom names to exclude.
+
+        Returns:
+            New AtomGroup with filtered atoms and geometry.
+        """
+        keep_indices = {int(v) for k, v in self._members.items()
+                        if isinstance(v, Atom) and k not in names}
+        return self.subset(keep_indices)
+
+    def include(self, indices: set[int]) -> AtomGroup:
+        """Alias for subset() for compatibility."""
+        return self.subset(indices)
+
+    def exclude_names(self, names: set[str]) -> AtomGroup:
+        """Alias for exclude() for compatibility."""
+        return self.exclude(names)
+
+    def filter(self, predicate: Callable[[Atom], bool]) -> AtomGroup:
+        """
+        Create subset based on arbitrary predicate.
+
+        Args:
+            predicate: Function taking Atom, returning True to include.
+
+        Returns:
+            New AtomGroup with filtered atoms and geometry.
+        """
+        keep_indices = {int(v) for v in self._members.values()
+                        if isinstance(v, Atom) and predicate(v)}
+        return self.subset(keep_indices)
+
+    # =========================================================================
+    # Subset-specific properties (for ML workflows)
+    # =========================================================================
+
+    @property
+    def atom_to_local(self) -> dict[int, int]:
+        """Map global atom value -> local position."""
+        return {int(a): a.local for a in self}
+
+
+def build_atom_group(
+    name: str,
+    sources: list[tuple[str, AtomGroup]],
+    atom_filter: set[str] | None = None,
+) -> AtomGroup:
+    """
+    Build a hierarchical AtomGroup grouping atoms by name across residue types.
+
+    Creates an AtomGroup where each atom name maps to a nested AtomGroup containing
+    all residues that have that atom.
+
+    Args:
+        name: Name for the created AtomGroup.
+        sources: List of (residue_name, AtomGroup) pairs.
+        atom_filter: Optional set of atom names to include.
+
+    Returns:
+        AtomGroup with nested AtomGroups for each atom position.
+
+    Example:
+        >>> purines = [("A", Residue.A), ("G", Residue.G)]
+        >>> PurineBase = build_atom_group("PurineBase", purines, {"N1", "N9"})
+        >>> PurineBase.N1.A      # Atom(N1, 20)
+        >>> PurineBase.N1.index()  # array of all N1 values
+    """
+    from collections import defaultdict
+
+    atoms_by_name: dict[str, dict[str, Atom]] = defaultdict(dict)
+
+    for residue_name, source in sources:
+        for atom in source:
+            atom_name = atom.name
+            if atom_filter is None or atom_name in atom_filter:
+                atoms_by_name[atom_name][residue_name] = atom
+
+    members: dict[str, AtomGroup] = {}
+    for atom_name, residue_atoms in sorted(atoms_by_name.items()):
+        inner_members = {
+            res_name: atom for res_name, atom in sorted(residue_atoms.items())
+        }
+        members[atom_name] = AtomGroup(atom_name, inner_members)
+
+    return AtomGroup(name, members)

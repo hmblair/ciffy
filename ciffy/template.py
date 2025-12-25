@@ -513,7 +513,14 @@ def from_sequence(
 
     Creates a Polymer with correct atom types, elements, and residue sequence
     using ideal CCD coordinates. Useful for generative modeling where coordinates
-    are generated separately, or for generating realistic conformations.
+    are generated separately.
+
+    For realistic conformations, use PolymerFlowModel after creating the template:
+
+        >>> from ciffy.nn.flow import PolymerFlowModel
+        >>> template = from_sequence("acgu")
+        >>> model = PolymerFlowModel.load("path/to/model")
+        >>> samples = model.sample(template.sequence, n_samples=10)
 
     Args:
         sequence: Single-letter sequence string, or list of strings for multi-chain.
@@ -525,14 +532,11 @@ def from_sequence(
             - Empty strings are filtered out; "" returns empty polymer with 0 chains
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
-        sample_dihedrals: If True, randomize backbone dihedrals using empirical
-            distributions fitted to PDB data. Supports proteins and RNA/DNA.
-        clash_free: If True (default), use autoregressive sampling with clash
-            detection to ensure no steric overlaps. If False, use independent
-            sampling (faster but may have overlapping atoms). Only used when
-            sample_dihedrals=True.
-        seed: Random seed for reproducible dihedral sampling. Only used when
-            sample_dihedrals=True.
+        sample_dihedrals: DEPRECATED. This parameter no longer works after the
+            internal coordinate system was removed. Use PolymerFlowModel.sample()
+            for generating realistic conformations.
+        clash_free: DEPRECATED. Only used with sample_dihedrals.
+        seed: DEPRECATED. Only used with sample_dihedrals.
 
     Returns:
         Polymer with:
@@ -540,13 +544,12 @@ def from_sequence(
         - elements: Atomic numbers (H=1, C=6, N=7, O=8, P=15, S=16)
         - sequence: Residue type indices (matching Residue enum)
         - sizes: Atoms per residue/chain/molecule
-        - coordinates: Ideal CCD coordinates (or randomized if sample_dihedrals=True)
+        - coordinates: Ideal CCD coordinates
         Empty sequence returns an empty Polymer with 0 atoms and 0 chains.
 
     Raises:
         ValueError: If sequence is mixed case, contains both 'u' and 't',
             or contains invalid characters.
-        ClashSamplingError: If clash_free=True and clash-free sampling fails.
 
     Examples:
         >>> rna = from_sequence("acgu")
@@ -566,12 +569,6 @@ def from_sequence(
         >>> multi = from_sequence(["acgu", "acgu"])  # Two RNA chains
         >>> multi.size(Scale.CHAIN)
         2
-
-        >>> # Generate protein with clash-free backbone conformations (default)
-        >>> protein = from_sequence("MGKLF", sample_dihedrals=True, seed=42)
-
-        >>> # Generate protein with independent sampling (no clash checking)
-        >>> protein = from_sequence("MGKLF", sample_dihedrals=True, clash_free=False, seed=42)
     """
     # Normalize input and filter out empty sequences
     sequences = [sequence] if isinstance(sequence, str) else list(sequence)
@@ -623,14 +620,15 @@ def from_sequence(
         polymer_count=n_atoms,
     )
 
-    # Apply backbone dihedral sampling if requested
+    # Deprecated dihedral sampling - warn and ignore
     if sample_dihedrals:
-        if clash_free:
-            from .sampling.backbone import sample_autoregressive
-            polymer = sample_autoregressive(polymer, seed=seed)
-        else:
-            from .sampling.backbone import randomize_backbone
-            polymer = randomize_backbone(polymer, seed=seed)
+        warnings.warn(
+            "sample_dihedrals is deprecated and no longer works. "
+            "Use ciffy.nn.flow.PolymerFlowModel.sample() for generating "
+            "realistic conformations. The template will use ideal CCD coordinates.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     return polymer.torch() if backend == "torch" else polymer
 

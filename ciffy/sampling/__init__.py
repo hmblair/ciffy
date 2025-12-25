@@ -1,11 +1,21 @@
 """
 Sampling utilities for generating realistic polymer conformations.
 
-This module provides functions for sampling backbone dihedrals from
-empirical distributions fitted to PDB data. Supports proteins and RNA.
+.. deprecated::
+    This module is deprecated. The dihedral-based sampling functions no longer
+    work after the internal coordinate system was removed.
 
-Includes both rejection sampling and Langevin dynamics methods for
-clash-aware autoregressive sampling.
+    **Migration path**: Use :class:`ciffy.nn.flow.PolymerFlowModel` for generating
+    realistic polymer conformations:
+
+        >>> from ciffy.nn.flow import PolymerFlowModel
+        >>> model = PolymerFlowModel.load("path/to/model")
+        >>> samples = model.sample(sequence, n_samples=10)
+
+    The flow-based approach provides:
+    - Direct Cartesian coordinate generation
+    - Latent space interpolation and sampling
+    - No ring closure or DOF discovery issues
 """
 
 from .backbone import (

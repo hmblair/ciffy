@@ -52,7 +52,7 @@ from .io.writer import write_cif
 # Template generation
 from .template import from_sequence, from_extract
 
-# Sampling utilities
+# Sampling utilities (DEPRECATED - use ciffy.nn.flow.PolymerFlowModel instead)
 from .sampling import randomize_backbone
 
 # Ensemble for conformational analysis

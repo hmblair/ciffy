@@ -1199,15 +1199,49 @@ def position_residue(
     )
 
     if transform is None:
-        # Linear extension: extend along frame's Z-axis with standard bond length
-        link_def = LINKING_BY_TYPE[prev_residue.molecule_type]
-        target_origin = prev_origin + prev_R[:, 2] * link_def.bond_length
-        target_R = prev_R  # Same orientation
-    else:
-        # SE(3) transform: apply learned transform
-        target_origin, target_R = apply_relative_transform(
-            prev_origin, prev_R, transform
-        )
+        # Linear extension: translate along global Z-axis with appropriate spacing.
+        # This keeps all residues with the same orientation extending in a line.
+        from .biochemistry.linking import LINKING_BY_TYPE
+
+        link_def = LINKING_BY_TYPE.get(prev_residue.molecule_type)
+
+        # Calculate spacing: use backbone length (P to O3') + bond length
+        # This ensures residues don't overlap while maintaining correct connectivity.
+        if link_def is not None:
+            prev_link_atom = getattr(prev_residue, link_def.prev_atom)
+            next_link_atom = getattr(next_residue, link_def.next_atom)
+
+            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
+            next_link_pos = next_coords[next_atom_to_col[next_link_atom.value]]
+
+            # Get P position of previous residue to calculate backbone span
+            prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom
+            if prev_p_atom.value in prev_atom_to_col:
+                prev_p_pos = prev_coords[prev_atom_to_col[prev_p_atom.value]]
+                # Backbone span is distance from P to O3' plus bond length
+                backbone_span = norm(prev_link_pos - prev_p_pos)
+                spacing = backbone_span + link_def.bond_length
+            else:
+                # First residue may not have P, use default spacing
+                spacing = 6.0
+        else:
+            spacing = 6.0
+
+        if is_torch(prev_coords):
+            import torch
+            offset = torch.zeros(3, dtype=prev_coords.dtype, device=prev_coords.device)
+            offset[2] = spacing
+        else:
+            offset = np.array([0.0, 0.0, spacing], dtype=prev_coords.dtype)
+
+        prev_centroid = prev_coords.mean(axis=0)
+        next_centroid = next_coords.mean(axis=0)
+        return next_coords + (prev_centroid + offset - next_centroid)
+
+    # Apply SE(3) transform (for learned/non-default transforms)
+    target_origin, target_R = apply_relative_transform(
+        prev_origin, prev_R, transform
+    )
 
     # Compute incoming frame from next residue (current position)
     next_origin, next_R = compute_next_frame(

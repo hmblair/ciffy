@@ -44,6 +44,7 @@ from .types import (
 from .operations.reduction import Reduction
 from .operations.alignment import kabsch_distance as rmsd, kabsch_rotation, kabsch_align, align
 from .operations.metrics import tm_score, lddt
+from .operations.chain import join
 
 # I/O
 from .io.loader import load, load_metadata
@@ -117,6 +118,7 @@ __all__ = [
     "align",
     "tm_score",
     "lddt",
+    "join",
     # Vocabulary sizes
     "NUM_ELEMENTS",
     "NUM_RESIDUES",

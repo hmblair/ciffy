@@ -47,10 +47,15 @@
         - to
         - write
         - with_coordinates
+        - extend
 
 ---
 
 ## Operations
+
+### join
+
+::: ciffy.join
 
 ### rmsd
 

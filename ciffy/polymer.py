@@ -1199,6 +1199,192 @@ class Polymer:
         return self.by_atom(Sidechain.index())
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Chain Operations
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def extend(
+        self: Polymer,
+        residue: Residue,
+        coords: Array | None = None,
+        transform: Array | None = None,
+    ) -> Polymer:
+        """
+        Append a residue to the end of a single-chain polymer.
+
+        Creates a new Polymer with an additional residue positioned at the
+        C-terminus (proteins) or 3' end (nucleic acids).
+
+        Args:
+            residue: Residue type being added (e.g., Residue.ALA, Residue.A).
+            coords: Optional (n_atoms, 3) coordinates of the residue to append.
+                If None (default), uses the residue's ideal coordinates.
+                For custom conformations (e.g., from a flow model), pass
+                explicit coordinates.
+            transform: Optional (6,) SE(3) transform [axis-angle, translation]
+                for positioning. If None, uses linear extension along the
+                Z-axis with appropriate spacing.
+
+        Returns:
+            New Polymer with the residue appended to the end.
+
+        Raises:
+            ValueError: If polymer has multiple chains, has HETATM atoms,
+                or lacks required linking atoms.
+
+        Example:
+            >>> from ciffy import Residue
+            >>> from ciffy.template import from_sequence
+            >>>
+            >>> # Create initial polymer and extend
+            >>> p = from_sequence("ac")
+            >>> p = p.extend(Residue.G)
+            >>> p = p.extend(Residue.U)
+            >>> p.sequence_str()
+            'acgu'
+            >>>
+            >>> # With custom coordinates (e.g., from a flow model)
+            >>> custom_coords = model.predict_residue()
+            >>> p = p.extend(Residue.A, coords=custom_coords)
+        """
+        # Use ideal coordinates if none provided
+        if coords is None:
+            coords = residue.ideal
+            # Convert to backend if needed
+            if self.backend == "torch":
+                import torch
+                coords = torch.from_numpy(coords).to(
+                    dtype=self.coordinates.dtype,
+                    device=self.coordinates.device
+                )
+        from .geometry import position_residue
+        from .biochemistry.linking import LINKING_BY_TYPE
+        from .utils import atoms_to_col_map
+
+        # Validate single chain and poly-only
+        if self.size(Scale.CHAIN) != 1:
+            raise ValueError(
+                f"extend() requires a single-chain polymer. "
+                f"Got {self.size(Scale.CHAIN)} chains."
+            )
+        if self.nonpoly > 0:
+            raise ValueError(
+                "extend() requires a poly-only polymer (no HETATM atoms). "
+                "Use polymer.poly() first."
+            )
+
+        # Validate backend compatibility
+        check_compatible(self.coordinates, coords, "coords")
+
+        # Get last residue's state
+        n_residues = self.size(Scale.RESIDUE)
+        last_res_idx = n_residues - 1
+        last_res_type = Residue.from_index(self.sequence[last_res_idx].item())
+
+        # Compute atom offset for last residue
+        res_sizes = self._sizes[Scale.RESIDUE]
+        atom_offset = res_sizes[:last_res_idx].sum().item()
+        last_res_n_atoms = res_sizes[last_res_idx].item()
+
+        # Extract last residue's coordinates and build atom_to_col
+        last_res_coords = self.coordinates[atom_offset:atom_offset + last_res_n_atoms]
+        last_res_atoms = self.atoms[atom_offset:atom_offset + last_res_n_atoms]
+        last_res_atom_to_col = atoms_to_col_map(last_res_atoms)
+
+        # Build atom_to_col for new residue
+        # The new residue's atoms must correspond to the coords columns
+        new_res_atoms = [a.value for a in residue.atoms] if residue.atoms else []
+        if len(new_res_atoms) != coords.shape[0]:
+            raise ValueError(
+                f"Coordinate shape {coords.shape} doesn't match residue {residue.name} "
+                f"which has {len(new_res_atoms)} atoms."
+            )
+        new_res_atom_to_col = atoms_to_col_map(new_res_atoms)
+
+        # Get linking definition
+        link_def = LINKING_BY_TYPE.get(last_res_type.molecule_type)
+        if link_def is None:
+            raise ValueError(
+                f"No linking definition for molecule type {last_res_type.molecule_type}. "
+                f"Cannot extend chains of this type."
+            )
+
+        # Position the new residue
+        positioned_coords = position_residue(
+            prev_coords=last_res_coords,
+            next_coords=coords,
+            prev_atom_to_col=last_res_atom_to_col,
+            next_atom_to_col=new_res_atom_to_col,
+            prev_residue=last_res_type,
+            next_residue=residue,
+            transform=transform,
+        )
+
+        # Build element indices for new residue
+        def atom_name_to_element(name: str) -> int:
+            element_map = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'P': 15, 'S': 16}
+            return element_map.get(name[0].upper(), 0)
+
+        new_elements = [atom_name_to_element(a.name) for a in residue.atoms]
+
+        # Concatenate arrays
+        new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)
+        new_atoms_arr = ops.cat([
+            self.atoms,
+            ops.to_backend(np.array(new_res_atoms, dtype=np.int64), self.atoms)
+        ], axis=0)
+        new_elements_arr = ops.cat([
+            self.elements,
+            ops.to_backend(np.array(new_elements, dtype=np.int64), self.elements)
+        ], axis=0)
+        new_sequence = ops.cat([
+            self.sequence,
+            ops.to_backend(np.array([residue.value], dtype=np.int64), self.sequence)
+        ], axis=0)
+
+        # Update sizes
+        n_new_atoms = len(new_res_atoms)
+        new_res_sizes = ops.cat([
+            self._sizes[Scale.RESIDUE],
+            ops.to_backend(np.array([n_new_atoms], dtype=np.int64), self._sizes[Scale.RESIDUE])
+        ], axis=0)
+        # Chain size increases by new atoms
+        new_chn_sizes = ops.to_backend(
+            np.array([self._sizes[Scale.CHAIN][0].item() + n_new_atoms], dtype=np.int64),
+            self._sizes[Scale.CHAIN]
+        )
+        new_mol_sizes = ops.to_backend(
+            np.array([self.size() + n_new_atoms], dtype=np.int64),
+            self._sizes[Scale.MOLECULE]
+        )
+
+        sizes = {
+            Scale.RESIDUE: new_res_sizes,
+            Scale.CHAIN: new_chn_sizes,
+            Scale.MOLECULE: new_mol_sizes,
+        }
+
+        # Update lengths
+        new_lengths = ops.to_backend(
+            np.array([self.lengths[0].item() + 1], dtype=np.int64),
+            self.lengths
+        )
+
+        return Polymer(
+            coordinates=new_coords,
+            atoms=new_atoms_arr,
+            elements=new_elements_arr,
+            sequence=new_sequence,
+            sizes=sizes,
+            id=self.pdb_id,
+            names=list(self.names),
+            strands=list(self.strands),
+            lengths=new_lengths,
+            polymer_count=self.polymer_count + n_new_atoms,
+            molecule_types=ops.clone(self._molecule_types) if self._molecule_types is not None else None,
+            descriptions=list(self.descriptions) if self.descriptions else None,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
     # String Representations
     # ─────────────────────────────────────────────────────────────────────────
 

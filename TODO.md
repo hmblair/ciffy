@@ -19,6 +19,40 @@
 
 ---
 
+### Handle Missing Atoms in PolymerFlowModel (Imputation)
+
+**Goal**: Allow flow model to encode/decode structures with missing atoms.
+
+**Context**: Currently, structures with missing atoms are filtered out during training because the flow model expects a fixed number of atoms per residue type. This can discard a significant portion of real PDB structures.
+
+**Proposed approach (imputation)**:
+1. During encoding, identify missing atoms by comparing actual vs expected count
+2. Fill missing positions with the residue's mean coordinates (stored in PCA)
+3. Encode the "completed" residue normally
+4. On decode, complete structures are generated naturally
+
+**Implementation**:
+```python
+def encode(self, coords, sequence):
+    # For each residue, check if atoms are missing
+    for i, res_type in enumerate(sequence):
+        expected = self._atom_counts[res_type]
+        actual = len(residue_coords)
+        if actual < expected:
+            # Impute missing atoms with mean positions
+            residue_coords = self._impute_missing(residue_coords, res_type)
+    # Continue with normal encoding...
+```
+
+**Files affected**:
+- `ciffy/nn/flow/polymer.py` - Add `_impute_missing()` method to `PolymerFlowModel.encode()`
+- `ciffy/nn/flow/residue/model.py` - Store atom masks or expected positions
+
+**Effort**: ~50-100 lines, 2-4 hours
+**Impact**: Fewer samples filtered during training, better data utilization
+
+---
+
 ## MEDIUM Priority
 
 ### Chain-Level Positioning Primitives (Partial)

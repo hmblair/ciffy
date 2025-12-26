@@ -503,6 +503,8 @@ def train_epoch(
     diag_snapshot: dict[str, float] = {}  # Diagnostic metrics (not averaged)
     n_samples = 0
     n_skipped = 0
+    # Track skip reasons for debugging
+    skip_reasons: dict[str, int] = {"none": 0, "nan": 0, "inf": 0, "error": 0}
 
     # Progress bar (only rank 0 in distributed)
     show_progress = progress_bar and (rank is None or rank == 0)
@@ -515,6 +517,7 @@ def train_epoch(
         # Skip None samples (filtered by collate_fn)
         if sample is None:
             n_skipped += 1
+            skip_reasons["none"] += 1
             continue
 
         try:
@@ -531,8 +534,12 @@ def train_epoch(
             if torch.isnan(loss) or torch.isinf(loss):
                 n_skipped += 1
                 # Log debug info about the bad loss
-                loss_type = "NaN" if torch.isnan(loss) else "Inf"
-                _log_bad_loss(loss_type, sample, losses, model, n_samples, n_skipped)
+                if torch.isnan(loss):
+                    skip_reasons["nan"] += 1
+                    _log_bad_loss("NaN", sample, losses, model, n_samples, n_skipped)
+                else:
+                    skip_reasons["inf"] += 1
+                    _log_bad_loss("Inf", sample, losses, model, n_samples, n_skipped)
                 continue
 
             # Backward pass
@@ -575,8 +582,12 @@ def train_epoch(
                 pbar.set_postfix(postfix)
 
         except Exception as e:
-            logger.debug(f"Skipping sample due to error: {e}")
             n_skipped += 1
+            skip_reasons["error"] += 1
+            # Log the actual error for debugging
+            import sys
+            print(f"Sample error: {type(e).__name__}: {e}", file=sys.stderr)
+            logger.debug(f"Skipping sample due to error: {e}")
             continue
 
     # Average metrics
@@ -587,10 +598,25 @@ def train_epoch(
     else:
         # All samples were skipped - this is a training failure
         total_samples = n_samples + n_skipped
+
+        # Build skip reason breakdown
+        reasons = []
+        if skip_reasons["none"] > 0:
+            reasons.append(f"  - None/empty samples: {skip_reasons['none']}")
+        if skip_reasons["nan"] > 0:
+            reasons.append(f"  - NaN loss: {skip_reasons['nan']}")
+        if skip_reasons["inf"] > 0:
+            reasons.append(f"  - Inf loss: {skip_reasons['inf']}")
+        if skip_reasons["error"] > 0:
+            reasons.append(f"  - Errors: {skip_reasons['error']}")
+
+        reason_str = "\n".join(reasons) if reasons else "  - Unknown reason"
+
         msg = (
             f"\n{'='*60}\n"
             f"TRAINING FAILURE: All {total_samples} samples were skipped!\n"
-            f"This typically indicates:\n"
+            f"\nSkip breakdown:\n{reason_str}\n"
+            f"\nPossible causes:\n"
             f"  1. Empty dataset (no valid samples)\n"
             f"  2. Model producing NaN/Inf from the start\n"
             f"  3. Data preprocessing issue (NaN/Inf in inputs)\n"

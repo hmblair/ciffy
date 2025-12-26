@@ -22,14 +22,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-dependencies = ["numpy"]
+dependencies = ["numpy", "rich"]
 
 [project.optional-dependencies]
 torch = ["torch"]
-geometric = ["sphericart[torch]"]
 vis = ["matplotlib"]
-ml = ["torch", "safetensors"]
-dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "sphericart[torch]", "safetensors", "biopython"]
+dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "biopython"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"
@@ -47,18 +45,12 @@ packages = [
     "ciffy.datasets",
     "ciffy.geometry",
     "ciffy.io",
-    "ciffy.nn",
-    "ciffy.nn.diffusion",
-    "ciffy.nn.flow",
-    "ciffy.nn.flow.residue",
-    "ciffy.nn.geometric",
-    "ciffy.nn.layers",
-    "ciffy.nn.runners",
     "ciffy.operations",
-    "ciffy.sampling",
     "ciffy.selection",
     "ciffy.utils",
     "ciffy.visualize",
+    # Excluded from distribution (research code):
+    # ciffy.nn, ciffy.sampling
 ]
 
 [tool.setuptools.package-data]

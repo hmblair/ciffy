@@ -1,7 +1,7 @@
 """Trainer for latent diffusion models on polymer structures.
 
 This module provides the LatentDiffusionTrainer, which handles:
-- Pre-encoding of polymer coordinates to latent space for efficient training
+- On-the-fly encoding of polymer coordinates to latent space
 - Variable-length sequence batching with padding
 - EMA weight tracking for the denoiser
 - RMSD-based validation via sample generation
@@ -69,20 +69,16 @@ class LatentDiffusionDataConfig:
     Attributes:
         data_dir: Directory containing CIF files.
         batch_size: Training batch size.
-        num_workers: DataLoader workers.
         molecule_types: Filter to specific molecule types (e.g., ["RNA"]).
         min_residues: Minimum residues per chain.
         max_residues: Maximum residues per chain.
-        cache_latents: Pre-encode all latents (faster training, more memory).
     """
 
     data_dir: str = ""
     batch_size: int = 32
-    num_workers: int = 4
     molecule_types: tuple[str, ...] = ("RNA",)
     min_residues: int = 10
     max_residues: int = 500
-    cache_latents: bool = True
 
 
 @dataclass
@@ -115,26 +111,79 @@ class LatentDiffusionTrainingConfig(BaseConfig):
     val_steps: int = 50  # DDIM steps for validation sampling
 
 
-class LatentCacheDataset(Dataset):
-    """Dataset wrapping pre-cached latents for efficient training."""
+class LatentEncodingDataset(Dataset):
+    """Dataset that encodes polymers to latent space on-the-fly.
+
+    Filters polymers by residue count and encodes coordinates using
+    the flow model during __getitem__. This avoids memory overhead
+    of caching all latents.
+    """
 
     def __init__(
         self,
-        cache: dict[int, tuple["torch.Tensor", "torch.Tensor"]],
+        polymer_dataset: "PolymerDataset",
+        flow_model: "nn.Module",
+        min_residues: int = 10,
+        max_residues: int = 500,
+        device: str = "cpu",
     ) -> None:
-        """Initialize with a cache dictionary.
+        """Initialize the encoding dataset.
 
         Args:
-            cache: Dict mapping index to (latents, sequence) tuples.
+            polymer_dataset: Source dataset of Polymer objects.
+            flow_model: Flow model for encoding coordinates to latents.
+            min_residues: Minimum residues per chain.
+            max_residues: Maximum residues per chain.
+            device: Device for encoding.
         """
-        self.cache = cache
-        self.indices = list(cache.keys())
+        self.polymer_dataset = polymer_dataset
+        self.flow_model = flow_model
+        self.min_residues = min_residues
+        self.max_residues = max_residues
+        self.device = device
+
+        # Build index of valid samples (filter by residue count)
+        self.valid_indices: list[int] = []
+        for idx in range(len(polymer_dataset)):
+            try:
+                polymer = polymer_dataset[idx]
+                if polymer is None:
+                    continue
+                n_res = polymer.size(Scale.RESIDUE)
+                if min_residues <= n_res <= max_residues:
+                    self.valid_indices.append(idx)
+            except Exception:
+                continue
 
     def __len__(self) -> int:
-        return len(self.indices)
+        return len(self.valid_indices)
 
     def __getitem__(self, idx: int) -> tuple["torch.Tensor", "torch.Tensor"]:
-        return self.cache[self.indices[idx]]
+        """Get encoded latents and sequence for a sample.
+
+        Returns:
+            Tuple of (latents, sequence) where:
+                - latents: (n_residues, latent_dim) tensor
+                - sequence: (n_residues,) long tensor of residue types
+        """
+        polymer_idx = self.valid_indices[idx]
+        polymer = self.polymer_dataset[polymer_idx]
+
+        coords = polymer.coordinates
+        sequence = polymer.sequence
+
+        # Convert to tensors
+        if not isinstance(coords, torch.Tensor):
+            coords = torch.from_numpy(coords).float()
+        if not isinstance(sequence, torch.Tensor):
+            sequence = torch.tensor(sequence, dtype=torch.long)
+
+        # Encode to latent space (no gradient needed)
+        with torch.no_grad():
+            coords = coords.to(self.device)
+            latents = self.flow_model.encode(coords, sequence.numpy())
+
+        return latents.cpu(), sequence
 
 
 def latent_collate_fn(
@@ -179,7 +228,7 @@ class LatentDiffusionTrainer(BaseTrainer):
     """Trainer for latent diffusion models on polymer structures.
 
     Extends BaseTrainer with:
-        - Pre-encoding of latents for efficient training
+        - On-the-fly encoding of coordinates to latent space
         - Custom loss function for diffusion
         - EMA weight tracking for denoiser
         - RMSD-based validation via sample generation
@@ -222,10 +271,6 @@ class LatentDiffusionTrainer(BaseTrainer):
         if dataset is None:
             dataset = self._create_polymer_dataset(config)
 
-        # Cache for pre-encoded latents
-        self._latent_cache: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
-        self._cache_dataset: LatentCacheDataset | None = None
-
         # Initialize base trainer
         super().__init__(
             config=config,
@@ -243,16 +288,22 @@ class LatentDiffusionTrainer(BaseTrainer):
             warmup_steps=config.ema_warmup_steps,
         )
 
-        # Pre-encode latents if configured
-        if config.data.cache_latents:
-            self._pre_encode_latents()
+        # Create encoding dataset (filters and encodes on-the-fly)
+        self._encoding_dataset = LatentEncodingDataset(
+            polymer_dataset=dataset,
+            flow_model=self.model.flow_model,
+            min_residues=config.data.min_residues,
+            max_residues=config.data.max_residues,
+            device=str(self.device),
+        )
+
+        if not quiet:
+            logger.info(f"Found {len(self._encoding_dataset)} valid samples")
 
     @property
     def train_dataset_size(self) -> int:
         """Return total training dataset size for progress reporting."""
-        if self._cache_dataset is not None:
-            return len(self._cache_dataset)
-        return 0
+        return len(self._encoding_dataset)
 
     def _create_polymer_dataset(
         self,
@@ -272,68 +323,6 @@ class LatentDiffusionTrainer(BaseTrainer):
             backend="torch",
         )
 
-    def _pre_encode_latents(self) -> None:
-        """Pre-encode all polymers to latent space for faster training."""
-        if not self.quiet:
-            logger.info("Pre-encoding latents...")
-
-        self.model.eval()
-        valid_count = 0
-
-        with torch.no_grad():
-            for idx in range(len(self.dataset)):
-                try:
-                    polymer = self.dataset[idx]
-                except Exception:
-                    continue
-
-                if polymer is None:
-                    continue
-
-                # Filter by residue count
-                try:
-                    n_res = polymer.size(Scale.RESIDUE)
-                except Exception:
-                    continue
-
-                if n_res < self.config.data.min_residues:
-                    continue
-                if n_res > self.config.data.max_residues:
-                    continue
-
-                # Get coordinates and sequence
-                try:
-                    coords = polymer.coordinates
-                    sequence = polymer.sequence
-                except Exception:
-                    continue
-
-                # Convert to tensors
-                if not isinstance(coords, torch.Tensor):
-                    coords = torch.from_numpy(coords).float()
-                if not isinstance(sequence, torch.Tensor):
-                    sequence = torch.tensor(sequence, dtype=torch.long)
-
-                # Encode to latent space
-                try:
-                    coords = coords.to(self.device)
-                    latents = self.model.encode(coords, sequence.numpy())
-                    self._latent_cache[idx] = (latents.cpu(), sequence)
-                    valid_count += 1
-                except Exception as e:
-                    if not self.quiet:
-                        logger.debug(f"Failed to encode sample {idx}: {e}")
-                    continue
-
-        if not self.quiet:
-            logger.info(f"Cached {valid_count} latent samples")
-
-        # Create cache dataset
-        if valid_count > 0:
-            self._cache_dataset = LatentCacheDataset(self._latent_cache)
-
-        self.model.train()
-
     def create_optimizer(self) -> "optim.Optimizer":
         """Create optimizer for denoiser only (flow model is frozen)."""
         return optim.AdamW(
@@ -344,20 +333,11 @@ class LatentDiffusionTrainer(BaseTrainer):
 
     def create_dataloader(self) -> "DataLoader":
         """Create DataLoader for training."""
-        if self._cache_dataset is not None:
-            dataset = self._cache_dataset
-        else:
-            # Would need to implement on-the-fly encoding
-            raise ValueError(
-                "Non-cached training not yet implemented. "
-                "Set config.data.cache_latents=True"
-            )
-
         return DataLoader(
-            dataset,
+            self._encoding_dataset,
             batch_size=self.config.data.batch_size,
             shuffle=True,
-            num_workers=self.config.training.num_workers,
+            num_workers=0,  # Encoding uses GPU, can't use multiple workers
             collate_fn=latent_collate_fn,
             drop_last=True,
         )

@@ -55,7 +55,7 @@ from .latent_diffusion import (
 from .latent_trainer import (
     LatentDiffusionDataConfig,
     LatentDiffusionTrainingConfig,
-    LatentCacheDataset,
+    LatentEncodingDataset,
     latent_collate_fn,
     LatentDiffusionTrainer,
 )
@@ -96,7 +96,7 @@ __all__ = [
     "LatentDiffusionModel",
     "LatentDiffusionDataConfig",
     "LatentDiffusionTrainingConfig",
-    "LatentCacheDataset",
+    "LatentEncodingDataset",
     "latent_collate_fn",
     "LatentDiffusionTrainer",
 ]

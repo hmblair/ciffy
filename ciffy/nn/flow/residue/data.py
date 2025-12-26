@@ -830,3 +830,91 @@ def compute_link_frames(
     o3p_origin, o3p_R = compute_o3p_frame(coords1, atoms, residue)
     p_origin, p_R = compute_p_frame(coords2, atoms, residue)
     return o3p_origin, o3p_R, p_origin, p_R
+
+
+# =============================================================================
+# Dataset Classes
+# =============================================================================
+
+
+class ResidueDataset:
+    """
+    Dataset of residue conformations extracted from CIF files.
+
+    Extracts residues of a specific type with SE(3) transforms to the next
+    residue, suitable for training flow models.
+
+    Example:
+        >>> from ciffy.nn.flow.residue import ResidueDataset
+        >>> from ciffy.biochemistry import Residue
+        >>> dataset = ResidueDataset(cif_paths, Residue.A)
+        >>> print(f"Found {len(dataset)} adenine residues")
+        >>> coords, transform = dataset[0]
+    """
+
+    def __init__(
+        self,
+        cif_paths: list[Path],
+        residue: "Residue",
+        min_coverage: float = 0.9,
+        max_bond_length: float = 2.0,
+        verbose: bool = True,
+    ):
+        """
+        Initialize dataset by extracting residues from CIF files.
+
+        Args:
+            cif_paths: List of paths to CIF files.
+            residue: Residue type to extract (e.g., Residue.A).
+            min_coverage: Minimum fraction of instances an atom must appear in.
+            max_bond_length: Maximum O3'-P distance for valid linkage.
+            verbose: Print extraction progress.
+        """
+        self.residue = residue
+        self.min_coverage = min_coverage
+        self.max_bond_length = max_bond_length
+
+        # Extract data
+        coords, transforms, atoms = extract_residues_with_links(
+            cif_paths,
+            residue,
+            min_coverage=min_coverage,
+            max_bond_length=max_bond_length,
+            verbose=verbose,
+        )
+
+        self.coords = coords  # (n_instances, n_atoms, 3)
+        self.transforms = transforms  # (n_instances, 6)
+        self.atoms = atoms  # (n_atoms,) atom type indices
+        self.n_atoms = len(atoms)
+
+        # Create extended representation (flattened coords + transforms)
+        n_instances = len(coords)
+        coords_flat = coords.reshape(n_instances, -1)
+        self._data = np.concatenate([coords_flat, transforms], axis=1)
+
+    def __len__(self) -> int:
+        """Number of residue instances."""
+        return len(self.coords)
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        """
+        Get extended representation for a residue.
+
+        Args:
+            idx: Instance index.
+
+        Returns:
+            1D array of [flattened_coords, transform] (n_atoms*3 + 6,).
+        """
+        return self._data[idx]
+
+    @property
+    def data(self) -> np.ndarray:
+        """Full dataset as (n_instances, n_atoms*3 + 6) array."""
+        return self._data
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Shape of the dataset (n_instances, n_dims)."""
+        return self._data.shape

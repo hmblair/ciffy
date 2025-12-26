@@ -247,6 +247,13 @@ class LatentDiffusionTrainer(BaseTrainer):
         if config.data.cache_latents:
             self._pre_encode_latents()
 
+    @property
+    def train_dataset_size(self) -> int:
+        """Return total training dataset size for progress reporting."""
+        if self._cache_dataset is not None:
+            return len(self._cache_dataset)
+        return 0
+
     def _create_polymer_dataset(
         self,
         config: LatentDiffusionTrainingConfig,

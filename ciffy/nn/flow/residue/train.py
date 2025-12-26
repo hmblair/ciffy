@@ -36,6 +36,9 @@ def _compute_aligned_rmsd(coords1: np.ndarray, coords2: np.ndarray, n_atoms: int
     return float(np.mean(rmsds))
 
 
+from typing import Callable
+
+
 def train_pca_flow(
     train_data: np.ndarray,
     test_data: np.ndarray | None = None,
@@ -50,6 +53,7 @@ def train_pca_flow(
     device: str = "cpu",
     verbose: bool = True,
     progress_tracker: "TrainingProgress | None" = None,
+    progress_callback: Callable[[int, int, dict], None] | None = None,
 ) -> tuple[PCAFlow, dict]:
     """
     Train a PCA + Flow model on data with proper train/test evaluation.
@@ -70,6 +74,9 @@ def train_pca_flow(
         lr: Learning rate.
         device: Device to train on.
         verbose: Print progress.
+        progress_tracker: Internal progress tracker (for verbose output).
+        progress_callback: External callback for progress updates.
+            Signature: callback(epoch, total_epochs, metrics)
 
     Returns:
         flow: Trained PCAFlow model.
@@ -123,6 +130,9 @@ def train_pca_flow(
     # Prepare training data
     X_train = torch.from_numpy(train_data).float().to(device)
 
+    # Count parameters
+    n_params = sum(p.numel() for p in flow.parameters() if p.requires_grad)
+
     # Training loop
     optimizer = optim.Adam(flow.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
@@ -167,6 +177,14 @@ def train_pca_flow(
 
         if progress_tracker:
             progress_tracker.update(epoch, {"loss": avg_loss})
+
+        # Call external progress callback
+        if progress_callback is not None:
+            progress_callback(epoch + 1, n_epochs, {
+                "loss": avg_loss,
+                "n_params": n_params,
+                "n_samples": n_train,
+            })
 
     # Import metrics functions
     from ..metrics import compute_nll, compute_latent_moments

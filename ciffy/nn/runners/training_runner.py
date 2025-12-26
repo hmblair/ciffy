@@ -172,10 +172,11 @@ def _run_training_job(
         total: int = 0,
         loss: Optional[float] = None,
         trainer_type: str = "",
+        extra_metrics: Optional[dict] = None,
     ):
         if progress_queue is not None:
             try:
-                progress_queue.put({
+                msg = {
                     "name": job_name,
                     "status": status,
                     "epoch": epoch,
@@ -184,7 +185,10 @@ def _run_training_job(
                     "device": device,
                     "trainer_type": trainer_type,
                     "time": time.time() - start_time,
-                })
+                }
+                if extra_metrics:
+                    msg.update(extra_metrics)
+                progress_queue.put(msg)
             except Exception:
                 pass
 
@@ -204,12 +208,15 @@ def _run_training_job(
 
         # Create progress callback
         def progress_callback(epoch: int, total: int, metrics: dict):
+            # Extract loss, pass rest as extra metrics
+            loss = metrics.pop("loss", None)
             send_progress(
                 "running",
                 epoch,
                 total,
-                metrics.get("loss"),
+                loss,
                 trainer_type,
+                extra_metrics=metrics if metrics else None,
             )
 
         # Import trainer and config class from registry
@@ -221,6 +228,12 @@ def _run_training_job(
 
         # Instantiate and run trainer
         trainer = trainer_cls(trainer_config, quiet=True)
+
+        # Get initial dataset size if available (for progress display)
+        n_samples = getattr(trainer, 'train_dataset_size', 0)
+        if n_samples > 0:
+            send_progress("running", 0, 0, trainer_type=trainer_type,
+                          extra_metrics={"n_samples": n_samples})
 
         # Run training
         result = trainer.train(progress_callback=progress_callback)
@@ -274,16 +287,29 @@ def _run_training_job(
                 f.write(log_buffer.getvalue())
 
 
+def _format_count(n: int | None) -> str:
+    """Format large numbers with K/M suffix."""
+    if n is None:
+        return "-"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
 def _create_training_progress_table(states: dict[str, dict]) -> "Table":
     """Create a rich Table showing training progress."""
     table = Table(title="Training Progress", show_header=True, header_style="bold")
-    table.add_column("Config", style="cyan", width=20)
-    table.add_column("Trainer", width=15)
+    table.add_column("Config", style="cyan", width=18)
+    table.add_column("Trainer", width=12)
     table.add_column("Status", width=10)
     table.add_column("Progress", width=15)
-    table.add_column("Loss", width=12)
-    table.add_column("Device", width=10)
-    table.add_column("Time", width=10)
+    table.add_column("Loss", width=10)
+    table.add_column("Params", width=8)
+    table.add_column("Samples", width=8)
+    table.add_column("Device", width=8)
+    table.add_column("Time", width=8)
 
     for name, state in states.items():
         status = state.get("status", "pending")
@@ -291,6 +317,8 @@ def _create_training_progress_table(states: dict[str, dict]) -> "Table":
         epoch = state.get("epoch", 0)
         total = state.get("total_epochs", 0)
         loss = state.get("loss")
+        n_params = state.get("n_params")
+        n_samples = state.get("n_samples")
         dev = state.get("device", "")
         elapsed = state.get("time", 0)
 
@@ -300,6 +328,8 @@ def _create_training_progress_table(states: dict[str, dict]) -> "Table":
             format_status(status),
             format_progress_bar(epoch, total) if total > 0 else "...",
             f"{loss:.4f}" if loss is not None else "-",
+            _format_count(n_params),
+            _format_count(n_samples),
             dev,
             format_duration(elapsed),
         )

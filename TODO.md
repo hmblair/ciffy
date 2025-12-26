@@ -55,6 +55,116 @@ def encode(self, coords, sequence):
 
 ## MEDIUM Priority
 
+### Refactor Dataset Validation into Reusable Helpers
+
+**Goal**: Extract error checking and logging from `LatentEncodingDataset` into reusable modules.
+
+**Context**: `latent_trainer.py` now has extensive validation logic (residue count filtering, unknown residue detection, atom count validation, detailed logging). This should be reusable across different trainers and datasets.
+
+**Proposed refactor**:
+```python
+# ciffy/nn/dataset_validation.py
+@dataclass
+class ValidationStats:
+    total: int
+    valid: int
+    too_small: int
+    too_large: int
+    unknown_residues: int
+    incomplete: int
+    errors: int
+
+def validate_polymer_for_flow(
+    polymer: Polymer,
+    flow_model: PolymerFlowModel,
+    min_residues: int,
+    max_residues: int,
+) -> tuple[bool, str]:
+    """Check if polymer is valid for flow model training.
+
+    Returns (is_valid, reason) tuple.
+    """
+
+def filter_dataset(
+    dataset: PolymerDataset,
+    validator: Callable[[Polymer], tuple[bool, str]],
+) -> tuple[list[int], ValidationStats]:
+    """Filter dataset and return valid indices with stats."""
+```
+
+**Files affected**:
+- `ciffy/nn/dataset_validation.py` (new)
+- `ciffy/nn/diffusion/latent_trainer.py` - Use new helpers
+- `ciffy/nn/base_trainer.py` - Optional integration
+
+**Effort**: 2-3 hours
+**Impact**: Cleaner code, reusable validation, consistent error reporting
+
+---
+
+### Enhanced Training Diagnostics and Metric Tracking
+
+**Goal**: Add comprehensive metric tracking to diagnose NaN/Inf, convergence issues, and training instabilities.
+
+**Context**: Currently we detect NaN/Inf after they occur. Better to track warning signs (gradient norms, loss variance, parameter statistics) to catch issues early.
+
+**Proposed features**:
+
+1. **Gradient health tracking**:
+   - Per-layer gradient norms
+   - Gradient explosion detection (norm > threshold)
+   - Gradient vanishing detection (norm < threshold)
+
+2. **Loss stability metrics**:
+   - Rolling loss variance
+   - Loss spike detection
+   - Early stopping on divergence
+
+3. **Parameter statistics**:
+   - Weight norm tracking
+   - Parameter update magnitudes
+   - Dead neuron detection
+
+4. **Convergence diagnostics**:
+   - Learning rate vs loss correlation
+   - Plateau detection
+   - Suggested interventions (reduce LR, increase batch size)
+
+**Implementation**:
+```python
+# ciffy/nn/diagnostics.py
+class TrainingDiagnostics:
+    def __init__(self, model, check_every: int = 100):
+        self.gradient_history = []
+        self.loss_history = []
+
+    def on_backward(self, loss):
+        """Called after loss.backward()."""
+        self._check_gradients()
+        self._update_loss_stats(loss)
+
+    def get_warnings(self) -> list[str]:
+        """Return list of current warning messages."""
+
+    def should_stop_early(self) -> bool:
+        """Return True if training should stop due to instability."""
+```
+
+**Integration with wandb/tensorboard**:
+- Auto-log diagnostic metrics
+- Alert on anomalies
+- Visualization of health metrics
+
+**Files affected**:
+- `ciffy/nn/diagnostics.py` (new or extend existing)
+- `ciffy/nn/training.py` - Integrate diagnostics
+- `ciffy/nn/base_trainer.py` - Add diagnostics config
+
+**Effort**: 4-6 hours
+**Impact**: Earlier detection of training issues, better debugging, more stable training
+
+---
+
 ### Chain-Level Positioning Primitives (Partial)
 
 **Completed**:

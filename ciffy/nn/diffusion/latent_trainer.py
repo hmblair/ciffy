@@ -142,11 +142,12 @@ class LatentEncodingDataset(Dataset):
         self.max_residues = max_residues
         self.device = device
 
-        # Build index of valid samples (filter by residue count)
+        # Build index of valid samples (filter by residue count and unknown residues)
         self.valid_indices: list[int] = []
         n_none = 0
         n_too_small = 0
         n_too_large = 0
+        n_unknown_residues = 0
         n_errors = 0
 
         for idx in range(len(polymer_dataset)):
@@ -155,13 +156,27 @@ class LatentEncodingDataset(Dataset):
                 if polymer is None:
                     n_none += 1
                     continue
+
+                # Filter to polymer atoms only
+                polymer = polymer.poly()
+
                 n_res = polymer.size(Scale.RESIDUE)
                 if n_res < min_residues:
                     n_too_small += 1
-                elif n_res > max_residues:
+                    continue
+                if n_res > max_residues:
                     n_too_large += 1
-                else:
-                    self.valid_indices.append(idx)
+                    continue
+
+                # Check for unknown residues (index -1)
+                seq = polymer.sequence
+                if hasattr(seq, 'numpy'):
+                    seq = seq.numpy()
+                if any(r < 0 for r in seq):
+                    n_unknown_residues += 1
+                    continue
+
+                self.valid_indices.append(idx)
             except Exception as e:
                 n_errors += 1
                 logger.debug(f"Error loading sample {idx}: {e}")
@@ -173,7 +188,7 @@ class LatentEncodingDataset(Dataset):
         logger.info(
             f"LatentEncodingDataset: {valid}/{total} samples valid "
             f"(filtered: {n_too_small} too small, {n_too_large} too large, "
-            f"{n_none} None, {n_errors} errors)"
+            f"{n_unknown_residues} unknown residues, {n_none} None, {n_errors} errors)"
         )
 
         if valid == 0:
@@ -182,6 +197,7 @@ class LatentEncodingDataset(Dataset):
                 f"  Total samples: {total}\n"
                 f"  Too small (<{min_residues} residues): {n_too_small}\n"
                 f"  Too large (>{max_residues} residues): {n_too_large}\n"
+                f"  Unknown residues: {n_unknown_residues}\n"
                 f"  None/empty: {n_none}\n"
                 f"  Load errors: {n_errors}\n"
                 f"Consider adjusting min_residues/max_residues in config."

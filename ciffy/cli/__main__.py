@@ -283,10 +283,11 @@ def _experiment_command(args):
 
 def _download_command(args):
     """Handle the download subcommand."""
-    from ciffy.datasets import download_rna_cli
+    from ciffy.datasets import download_cli
 
-    download_rna_cli(
+    download_cli(
         pdb_ids=args.id,
+        polymer_types=args.type,
         output_dir=args.output_dir,
         max_count=args.max_count,
         max_resolution=args.max_resolution,
@@ -665,10 +666,10 @@ def main():
     # Download subcommand
     download_parser = subparsers.add_parser(
         "download",
-        help="Download RNA structures from RCSB PDB",
+        help="Download structures from RCSB PDB",
         description=(
-            "Download mmCIF files for RNA-containing structures from RCSB PDB.\n"
-            "Supports filtering by resolution, polymer length, and experimental method."
+            "Download mmCIF files from RCSB PDB.\n"
+            "Supports filtering by polymer type, resolution, length, and method."
         ),
     )
     download_parser.add_argument(
@@ -677,6 +678,14 @@ def main():
         nargs="+",
         default=None,
         help="Download specific PDB ID(s) instead of searching (e.g., --id 1EHZ 4V9F)",
+    )
+    download_parser.add_argument(
+        "--type", "-t",
+        type=str,
+        nargs="+",
+        default=None,
+        choices=["rna", "dna", "protein", "hybrid", "other"],
+        help="Polymer type(s) to search for (default: rna, dna, protein).",
     )
     download_parser.add_argument(
         "--output-dir", "-o",
@@ -705,13 +714,13 @@ def main():
         "--min-length",
         type=int,
         default=None,
-        help="Minimum RNA polymer length in nucleotides",
+        help="Minimum polymer length (nucleotides for RNA/DNA, residues for protein)",
     )
     download_parser.add_argument(
         "--max-length",
         type=int,
         default=None,
-        help="Maximum RNA polymer length in nucleotides",
+        help="Maximum polymer length (nucleotides for RNA/DNA, residues for protein)",
     )
     download_parser.add_argument(
         "--method", "-m",

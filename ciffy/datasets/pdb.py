@@ -42,6 +42,15 @@ EXPERIMENTAL_METHODS = {
     "neutron": "NEUTRON DIFFRACTION",
 }
 
+# Polymer type mapping (short name -> RCSB value)
+POLYMER_TYPES = {
+    "rna": "RNA",
+    "dna": "DNA",
+    "protein": "Protein",
+    "hybrid": "NA-hybrid",  # DNA/RNA hybrid
+    "other": "Other",
+}
+
 
 @dataclass
 class DownloadResult:
@@ -78,26 +87,54 @@ class DownloadResult:
         return f"DownloadResult({self.summary()})"
 
 
-def _build_rna_query(
+def _build_search_query(
+    polymer_types: list[str] | None = None,
     min_resolution: float | None = None,
     max_resolution: float | None = None,
     min_length: int | None = None,
     max_length: int | None = None,
     experimental_method: str | None = None,
 ) -> dict:
-    """Build RCSB search query for RNA structures."""
-    # Base query: must contain RNA polymer
-    nodes = [
-        {
-            "type": "terminal",
-            "service": "text",
-            "parameters": {
-                "attribute": "entity_poly.rcsb_entity_polymer_type",
-                "operator": "exact_match",
-                "value": "RNA",
-            },
-        }
-    ]
+    """Build RCSB search query for structures containing specified polymer types.
+
+    Args:
+        polymer_types: List of polymer types (e.g., ["RNA", "DNA", "Protein"]).
+            If None, no polymer type filter is applied.
+    """
+    nodes = []
+
+    # Polymer type filter
+    if polymer_types:
+        if len(polymer_types) == 1:
+            # Single type: exact match
+            nodes.append({
+                "type": "terminal",
+                "service": "text",
+                "parameters": {
+                    "attribute": "entity_poly.rcsb_entity_polymer_type",
+                    "operator": "exact_match",
+                    "value": polymer_types[0],
+                },
+            })
+        else:
+            # Multiple types: OR group
+            type_nodes = [
+                {
+                    "type": "terminal",
+                    "service": "text",
+                    "parameters": {
+                        "attribute": "entity_poly.rcsb_entity_polymer_type",
+                        "operator": "exact_match",
+                        "value": ptype,
+                    },
+                }
+                for ptype in polymer_types
+            ]
+            nodes.append({
+                "type": "group",
+                "logical_operator": "or",
+                "nodes": type_nodes,
+            })
 
     # Resolution filter
     if min_resolution is not None or max_resolution is not None:
@@ -173,6 +210,105 @@ def _build_rna_query(
     }
 
 
+def search_structures(
+    polymer_types: list[str] | str | None = None,
+    min_resolution: float | None = None,
+    max_resolution: float | None = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    experimental_method: Literal[
+        "X-RAY DIFFRACTION",
+        "ELECTRON MICROSCOPY",
+        "SOLUTION NMR",
+        "NEUTRON DIFFRACTION",
+    ]
+    | None = None,
+    timeout: float = 60.0,
+) -> list[str]:
+    """
+    Search RCSB PDB for structures containing specified polymer types.
+
+    Queries the RCSB search API for structures containing the specified
+    polymer entities. Returns PDB IDs sorted by deposit date (newest first).
+
+    Args:
+        polymer_types: Polymer type(s) to search for. Can be a single type
+            or a list of types. Valid types: "RNA", "DNA", "Protein",
+            "NA-hybrid", "Other". If None, no polymer type filter is applied.
+        min_resolution: Minimum resolution in Ångströms (inclusive).
+        max_resolution: Maximum resolution in Ångströms (inclusive).
+        min_length: Minimum polymer length.
+        max_length: Maximum polymer length.
+        experimental_method: Filter by experimental method.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        List of PDB IDs matching the query.
+
+    Raises:
+        URLError: If the search request fails.
+        ValueError: If the response cannot be parsed.
+
+    Example:
+        >>> # Find high-resolution RNA structures
+        >>> pdb_ids = search_structures(
+        ...     polymer_types="RNA",
+        ...     max_resolution=2.5,
+        ... )
+        >>> print(f"Found {len(pdb_ids)} structures")
+
+        >>> # Find structures with RNA or DNA
+        >>> pdb_ids = search_structures(
+        ...     polymer_types=["RNA", "DNA"],
+        ...     max_resolution=3.0,
+        ... )
+    """
+    # Normalize polymer_types to list
+    if polymer_types is None:
+        types_list = None
+    elif isinstance(polymer_types, str):
+        types_list = [polymer_types]
+    else:
+        types_list = list(polymer_types)
+
+    query = _build_search_query(
+        polymer_types=types_list,
+        min_resolution=min_resolution,
+        max_resolution=max_resolution,
+        min_length=min_length,
+        max_length=max_length,
+        experimental_method=experimental_method,
+    )
+
+    query_json = json.dumps(query).encode("utf-8")
+
+    request = Request(
+        RCSB_SEARCH_URL,
+        data=query_json,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    type_desc = ", ".join(types_list) if types_list else "all"
+    logger.info(f"Searching RCSB PDB for {type_desc} structures...")
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as e:
+        raise URLError(f"RCSB search failed with status {e.code}: {e.reason}") from e
+
+    # Extract PDB IDs from results
+    pdb_ids = []
+    for result in data.get("result_set", []):
+        pdb_id = result.get("identifier")
+        if pdb_id:
+            pdb_ids.append(pdb_id.upper())
+
+    logger.info(f"Found {len(pdb_ids)} structures")
+    return pdb_ids
+
+
 def search_rna_structures(
     min_resolution: float | None = None,
     max_resolution: float | None = None,
@@ -190,8 +326,7 @@ def search_rna_structures(
     """
     Search RCSB PDB for RNA-containing structures.
 
-    Queries the RCSB search API for structures containing RNA polymer entities.
-    Returns PDB IDs sorted by deposit date (newest first).
+    Convenience wrapper around search_structures() for RNA.
 
     Args:
         min_resolution: Minimum resolution in Ångströms (inclusive).
@@ -203,53 +338,16 @@ def search_rna_structures(
 
     Returns:
         List of PDB IDs matching the query.
-
-    Raises:
-        URLError: If the search request fails.
-        ValueError: If the response cannot be parsed.
-
-    Example:
-        >>> # Find high-resolution X-ray structures
-        >>> pdb_ids = search_rna_structures(
-        ...     max_resolution=2.5,
-        ...     experimental_method="X-RAY DIFFRACTION",
-        ... )
-        >>> print(f"Found {len(pdb_ids)} structures")
     """
-    query = _build_rna_query(
+    return search_structures(
+        polymer_types="RNA",
         min_resolution=min_resolution,
         max_resolution=max_resolution,
         min_length=min_length,
         max_length=max_length,
         experimental_method=experimental_method,
+        timeout=timeout,
     )
-
-    query_json = json.dumps(query).encode("utf-8")
-
-    request = Request(
-        RCSB_SEARCH_URL,
-        data=query_json,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    logger.info("Searching RCSB PDB for RNA structures...")
-
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as e:
-        raise URLError(f"RCSB search failed with status {e.code}: {e.reason}") from e
-
-    # Extract PDB IDs from results
-    pdb_ids = []
-    for result in data.get("result_set", []):
-        pdb_id = result.get("identifier")
-        if pdb_id:
-            pdb_ids.append(pdb_id.upper())
-
-    logger.info(f"Found {len(pdb_ids)} RNA structures")
-    return pdb_ids
 
 
 def download_structure(
@@ -458,8 +556,9 @@ def download_rna_dataset(
     return result
 
 
-def download_rna_cli(
+def download_cli(
     pdb_ids: list[str] | None = None,
+    polymer_types: list[str] | None = None,
     output_dir: Path | str = ".",
     max_count: int | None = None,
     max_resolution: float | None = None,
@@ -479,13 +578,16 @@ def download_rna_cli(
     This is the main entry point for the `ciffy download` command.
 
     Args:
-        pdb_ids: Specific PDB IDs to download. If None, searches for RNA structures.
+        pdb_ids: Specific PDB IDs to download. If None, searches for structures.
+        polymer_types: Polymer type(s) to search for (e.g., ["rna", "dna"]).
+            Valid types: rna, dna, protein, hybrid, other.
+            If None, defaults to ["rna"] for backwards compatibility.
         output_dir: Directory to save mmCIF files.
         max_count: Maximum number of structures to download.
         max_resolution: Maximum resolution in Ångströms.
         min_resolution: Minimum resolution in Ångströms.
-        min_length: Minimum RNA polymer length.
-        max_length: Maximum RNA polymer length.
+        min_length: Minimum polymer length.
+        max_length: Maximum polymer length.
         method: Experimental method shorthand (xray, em, nmr, neutron).
         overwrite: Overwrite existing files.
         max_workers: Maximum concurrent downloads.
@@ -511,20 +613,38 @@ def download_rna_cli(
                     f"Choose from: {list(EXPERIMENTAL_METHODS.keys())}"
                 )
 
+        # Convert polymer type shorthands to full names
+        # Default to RNA, DNA, and protein
+        if polymer_types is None:
+            polymer_types = ["rna", "dna", "protein"]
+
+        rcsb_types = []
+        for ptype in polymer_types:
+            rcsb_type = POLYMER_TYPES.get(ptype.lower())
+            if rcsb_type is None:
+                raise ValueError(
+                    f"Unknown polymer type '{ptype}'. "
+                    f"Choose from: {list(POLYMER_TYPES.keys())}"
+                )
+            rcsb_types.append(rcsb_type)
+
+        type_desc = ", ".join(rcsb_types)
+
         # Search for structures
-        print("Searching RCSB PDB for RNA structures...")
+        print(f"Searching RCSB PDB for {type_desc} structures...")
         if max_resolution:
             print(f"  Max resolution: {max_resolution} Å")
         if min_resolution:
             print(f"  Min resolution: {min_resolution} Å")
         if min_length:
-            print(f"  Min length: {min_length} nt")
+            print(f"  Min length: {min_length}")
         if max_length:
-            print(f"  Max length: {max_length} nt")
+            print(f"  Max length: {max_length}")
         if experimental_method:
             print(f"  Method: {experimental_method}")
 
-        pdb_ids = search_rna_structures(
+        pdb_ids = search_structures(
+            polymer_types=rcsb_types,
             min_resolution=min_resolution,
             max_resolution=max_resolution,
             min_length=min_length,
@@ -629,9 +749,11 @@ def download_rna_cli(
 __all__ = [
     "DownloadResult",
     "EXPERIMENTAL_METHODS",
+    "POLYMER_TYPES",
+    "search_structures",
     "search_rna_structures",
     "download_structure",
     "download_structures",
     "download_rna_dataset",
-    "download_rna_cli",
+    "download_cli",
 ]

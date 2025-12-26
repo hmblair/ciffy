@@ -302,15 +302,16 @@ def _format_count(n: int | None) -> str:
 def _create_training_progress_table(states: dict[str, dict]) -> "Table":
     """Create a rich Table showing training progress."""
     table = Table(title="Training Progress", show_header=True, header_style="bold")
-    table.add_column("Config", style="cyan", width=18)
-    table.add_column("Trainer", width=12)
-    table.add_column("Status", width=10)
-    table.add_column("Progress", width=15)
-    table.add_column("Loss", width=10)
-    table.add_column("Params", width=8)
-    table.add_column("Samples", width=8)
-    table.add_column("Device", width=8)
-    table.add_column("Time", width=8)
+    # Use no_wrap=True and let Rich auto-size columns based on content
+    table.add_column("Config", style="cyan", no_wrap=True)
+    table.add_column("Trainer", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Progress", no_wrap=True, min_width=12)
+    table.add_column("Loss", no_wrap=True, justify="right")
+    table.add_column("Params", no_wrap=True, justify="right")
+    table.add_column("Samples", no_wrap=True, justify="right")
+    table.add_column("Device", no_wrap=True)
+    table.add_column("Time", no_wrap=True, justify="right")
 
     for name, state in states.items():
         status = state.get("status", "pending")

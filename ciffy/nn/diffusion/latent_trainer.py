@@ -263,13 +263,32 @@ class LatentDiffusionTrainer(BaseTrainer):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for LatentDiffusionTrainer")
 
+        # Determine device early (needed for encoding dataset)
+        if device is None:
+            device = torch.device(config.training.device)
+            if device.type == "auto":
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         # Create model if not provided
         if model is None:
             model = LatentDiffusionModel(config.model)
+        model = model.to(device)
 
         # Create dataset if not provided
         if dataset is None:
             dataset = self._create_polymer_dataset(config)
+
+        # Create encoding dataset BEFORE super().__init__ (which calls create_dataloader)
+        self._encoding_dataset = LatentEncodingDataset(
+            polymer_dataset=dataset,
+            flow_model=model.flow_model,
+            min_residues=config.data.min_residues,
+            max_residues=config.data.max_residues,
+            device=str(device),
+        )
+
+        if not quiet:
+            logger.info(f"Found {len(self._encoding_dataset)} valid samples")
 
         # Initialize base trainer
         super().__init__(
@@ -287,18 +306,6 @@ class LatentDiffusionTrainer(BaseTrainer):
             decay=config.ema_decay,
             warmup_steps=config.ema_warmup_steps,
         )
-
-        # Create encoding dataset (filters and encodes on-the-fly)
-        self._encoding_dataset = LatentEncodingDataset(
-            polymer_dataset=dataset,
-            flow_model=self.model.flow_model,
-            min_residues=config.data.min_residues,
-            max_residues=config.data.max_residues,
-            device=str(self.device),
-        )
-
-        if not quiet:
-            logger.info(f"Found {len(self._encoding_dataset)} valid samples")
 
     @property
     def train_dataset_size(self) -> int:

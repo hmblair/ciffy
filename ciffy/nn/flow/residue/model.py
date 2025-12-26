@@ -130,6 +130,228 @@ class AffineCoupling(nn.Module):
         return x
 
 
+def _rational_quadratic_spline(
+    x: torch.Tensor,
+    widths: torch.Tensor,
+    heights: torch.Tensor,
+    derivatives: torch.Tensor,
+    inverse: bool = False,
+    bound: float = 3.0,
+    min_bin_width: float = 1e-3,
+    min_bin_height: float = 1e-3,
+    min_derivative: float = 1e-3,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply rational-quadratic spline transform.
+
+    Based on Neural Spline Flows (Durkan et al., 2019).
+
+    Args:
+        x: Input tensor (..., d).
+        widths: Unnormalized bin widths (..., d, K).
+        heights: Unnormalized bin heights (..., d, K).
+        derivatives: Unnormalized derivatives at knots (..., d, K+1).
+        inverse: If True, compute inverse transform.
+        bound: Symmetric bound for the spline domain [-bound, bound].
+        min_bin_width: Minimum bin width.
+        min_bin_height: Minimum bin height.
+        min_derivative: Minimum derivative at knots.
+
+    Returns:
+        y: Transformed tensor (..., d).
+        log_det: Log determinant of Jacobian (...,).
+    """
+    K = widths.shape[-1]
+
+    # Normalize widths and heights to sum to 2*bound
+    widths = torch.softmax(widths, dim=-1) * 2 * bound
+    widths = min_bin_width + (1 - min_bin_width * K) * widths
+    heights = torch.softmax(heights, dim=-1) * 2 * bound
+    heights = min_bin_height + (1 - min_bin_height * K) * heights
+
+    # Derivatives must be positive
+    derivatives = min_derivative + torch.nn.functional.softplus(derivatives)
+
+    # Cumulative widths and heights (knot positions)
+    cumwidths = torch.cumsum(widths, dim=-1)
+    cumwidths = torch.nn.functional.pad(cumwidths, (1, 0), value=0.0)
+    cumwidths = (cumwidths - bound)  # Shift to [-bound, bound]
+
+    cumheights = torch.cumsum(heights, dim=-1)
+    cumheights = torch.nn.functional.pad(cumheights, (1, 0), value=0.0)
+    cumheights = (cumheights - bound)
+
+    # Handle values outside the spline domain with identity
+    inside_mask = (x >= -bound) & (x <= bound)
+
+    # Find which bin each x falls into
+    # For inverse, use cumheights since input is y-space
+    x_clamped = torch.clamp(x, -bound + 1e-6, bound - 1e-6)
+    if inverse:
+        bin_idx = torch.searchsorted(cumheights[..., 1:].contiguous(), x_clamped.unsqueeze(-1))
+    else:
+        bin_idx = torch.searchsorted(cumwidths[..., 1:].contiguous(), x_clamped.unsqueeze(-1))
+    bin_idx = bin_idx.squeeze(-1).clamp(0, K - 1)
+
+    # Gather bin parameters
+    # Shape manipulation for gather
+    batch_shape = x.shape[:-1]
+    d = x.shape[-1]
+
+    # Flatten for easier indexing
+    flat_idx = bin_idx.reshape(-1, d)
+    n_batch = flat_idx.shape[0]
+
+    # Get bin widths, heights, and derivatives
+    widths_flat = widths.reshape(-1, d, K)
+    heights_flat = heights.reshape(-1, d, K)
+    cumwidths_flat = cumwidths.reshape(-1, d, K + 1)
+    cumheights_flat = cumheights.reshape(-1, d, K + 1)
+    derivatives_flat = derivatives.reshape(-1, d, K + 1)
+
+    # Index into each dimension
+    idx_expanded = flat_idx.unsqueeze(-1)  # (n_batch, d, 1)
+    w = widths_flat.gather(-1, idx_expanded).squeeze(-1)  # (n_batch, d)
+    h = heights_flat.gather(-1, idx_expanded).squeeze(-1)
+    xk = cumwidths_flat.gather(-1, idx_expanded).squeeze(-1)
+    yk = cumheights_flat.gather(-1, idx_expanded).squeeze(-1)
+    dk = derivatives_flat.gather(-1, idx_expanded).squeeze(-1)
+    dk1 = derivatives_flat.gather(-1, idx_expanded + 1).squeeze(-1)
+
+    # Reshape back
+    w = w.reshape(*batch_shape, d)
+    h = h.reshape(*batch_shape, d)
+    xk = xk.reshape(*batch_shape, d)
+    yk = yk.reshape(*batch_shape, d)
+    dk = dk.reshape(*batch_shape, d)
+    dk1 = dk1.reshape(*batch_shape, d)
+
+    # Slope of the linear segment
+    s = h / w
+
+    if inverse:
+        # Inverse transform: given y, find x
+        y = x_clamped
+        y_rel = y - yk
+
+        # Quadratic coefficients for inverse
+        a = h * (s - dk) + y_rel * (dk + dk1 - 2 * s)
+        b = h * dk - y_rel * (dk + dk1 - 2 * s)
+        c = -s * y_rel
+
+        # Solve quadratic: xi = (-b + sqrt(b^2 - 4ac)) / (2a)
+        discriminant = b ** 2 - 4 * a * c
+        discriminant = torch.clamp(discriminant, min=0)  # Numerical stability
+        xi = (-b + torch.sqrt(discriminant)) / (2 * a + 1e-8)
+        xi = torch.clamp(xi, 0, 1)
+
+        x_out = xi * w + xk
+
+        # Log derivative (inverse of forward)
+        numerator = s ** 2 * (dk1 * xi ** 2 + 2 * s * xi * (1 - xi) + dk * (1 - xi) ** 2)
+        denominator = (s + (dk + dk1 - 2 * s) * xi * (1 - xi)) ** 2
+        log_det = -torch.log(numerator / (denominator + 1e-8) + 1e-8).sum(dim=-1)
+    else:
+        # Forward transform: given x, find y
+        xi = (x_clamped - xk) / w
+
+        # Rational quadratic formula
+        numerator = h * (s * xi ** 2 + dk * xi * (1 - xi))
+        denominator = s + (dk + dk1 - 2 * s) * xi * (1 - xi)
+        y_out = yk + numerator / (denominator + 1e-8)
+
+        # Log derivative
+        numerator_deriv = s ** 2 * (dk1 * xi ** 2 + 2 * s * xi * (1 - xi) + dk * (1 - xi) ** 2)
+        log_det = torch.log(numerator_deriv / (denominator ** 2 + 1e-8) + 1e-8).sum(dim=-1)
+        x_out = y_out
+
+    # Apply identity for values outside domain
+    x_out = torch.where(inside_mask, x_out, x)
+    log_det = log_det.reshape(*batch_shape)
+
+    return x_out, log_det
+
+
+class SplineCoupling(nn.Module):
+    """
+    Neural spline coupling layer using rational-quadratic splines.
+
+    More expressive than affine coupling - can learn arbitrary monotonic
+    transformations within each bin. Uses the same amount of compute per
+    layer but captures more complex distributions.
+
+    Based on Neural Spline Flows (Durkan et al., 2019).
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int = 64,
+        even_mask: bool = True,
+        n_bins: int = 8,
+        bound: float = 3.0,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.n_bins = n_bins
+        self.bound = bound
+        self.register_buffer("mask", torch.arange(dim) % 2 == (0 if even_mask else 1))
+
+        n_masked = int(self.mask.sum())
+        n_unmasked = dim - n_masked
+        # Output: widths (K), heights (K), derivatives (K+1) per unmasked dim
+        n_params = n_unmasked * (3 * n_bins + 1)
+        self.net = CouplingNetwork(n_masked, n_params, hidden_dim)
+
+    def _get_spline_params(self, context: torch.Tensor, n_unmasked: int):
+        """Extract spline parameters from network output."""
+        params = self.net(context)
+        K = self.n_bins
+
+        # Reshape to (batch, n_unmasked, 3K+1)
+        params = params.reshape(-1, n_unmasked, 3 * K + 1)
+
+        widths = params[..., :K]
+        heights = params[..., K:2*K]
+        derivatives = params[..., 2*K:]
+
+        return widths, heights, derivatives
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x_a = x[:, self.mask]
+        x_b = x[:, ~self.mask]
+        n_unmasked = x_b.shape[-1]
+
+        widths, heights, derivatives = self._get_spline_params(x_a, n_unmasked)
+
+        y_b, log_det = _rational_quadratic_spline(
+            x_b, widths, heights, derivatives,
+            inverse=False, bound=self.bound
+        )
+
+        y = torch.empty_like(x)
+        y[:, self.mask] = x_a
+        y[:, ~self.mask] = y_b
+        return y, log_det
+
+    def inverse(self, y: torch.Tensor) -> torch.Tensor:
+        y_a = y[:, self.mask]
+        y_b = y[:, ~self.mask]
+        n_unmasked = y_b.shape[-1]
+
+        widths, heights, derivatives = self._get_spline_params(y_a, n_unmasked)
+
+        x_b, _ = _rational_quadratic_spline(
+            y_b, widths, heights, derivatives,
+            inverse=True, bound=self.bound
+        )
+
+        x = torch.empty_like(y)
+        x[:, self.mask] = y_a
+        x[:, ~self.mask] = x_b
+        return x
+
+
 # =============================================================================
 # PCA + Flow Model
 # =============================================================================
@@ -149,6 +371,7 @@ class PCAFlow(nn.Module):
         hidden_dim: Hidden dimension in coupling networks.
         bound: Tanh bound (in std devs) for decode(). None (default) disables
                bounding, preserving exact invertibility.
+        coupling_type: Type of coupling layer ('affine' or 'spline').
     """
 
     def __init__(
@@ -158,11 +381,13 @@ class PCAFlow(nn.Module):
         n_layers: int = 8,
         hidden_dim: int = 64,
         bound: float | None = None,
+        coupling_type: str = "affine",
     ):
         super().__init__()
         self.k = V.shape[0]  # Latent dimension
         self.d = V.shape[1]  # Coordinate dimension (n_atoms * 3 + 6)
         self.bound = bound
+        self.coupling_type = coupling_type
 
         # PCA parameters (fixed, not learned)
         self.register_buffer("V", V)
@@ -172,7 +397,10 @@ class PCAFlow(nn.Module):
         self.layers = nn.ModuleList()
         for i in range(n_layers):
             self.layers.append(ActNorm(self.k))
-            self.layers.append(AffineCoupling(self.k, hidden_dim, even_mask=(i % 2 == 0)))
+            if coupling_type == "spline":
+                self.layers.append(SplineCoupling(self.k, hidden_dim, even_mask=(i % 2 == 0)))
+            else:
+                self.layers.append(AffineCoupling(self.k, hidden_dim, even_mask=(i % 2 == 0)))
 
     def coords_to_pca(self, x: torch.Tensor) -> torch.Tensor:
         """Project coordinates to PCA space."""

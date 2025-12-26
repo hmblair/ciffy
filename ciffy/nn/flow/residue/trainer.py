@@ -32,9 +32,12 @@ class ResidueFlowTrainingConfig:
         n_layers: Number of normalizing flow layers.
         hidden_dim: Hidden dimension in coupling networks.
         bound: Tanh bound for decode (in std devs). None for unbounded.
+        coupling_type: Type of coupling layer ('affine' or 'spline').
         n_epochs: Number of training epochs.
         batch_size: Batch size for training.
         lr: Learning rate.
+        gaussianity_weight: Weight for Gaussianity regularization loss. Encourages
+            latent space to match N(0, I), improving sampling quality. Default 0.0.
         min_coverage: Minimum fraction of instances an atom must appear in.
         max_bond_length: Maximum O3'-P distance to accept as connected.
         device: Device to train on ('cpu' or 'cuda').
@@ -47,9 +50,11 @@ class ResidueFlowTrainingConfig:
     n_layers: int = 8
     hidden_dim: int = 64
     bound: float | None = None
+    coupling_type: str = "affine"
     n_epochs: int = 200
     batch_size: int = 256
     lr: float = 1e-3
+    gaussianity_weight: float = 0.0
     min_coverage: float = 0.9
     max_bond_length: float = 2.0
     device: str = "cpu"
@@ -231,9 +236,11 @@ class ResidueFlowTrainer:
             n_layers=self.config.n_layers,
             hidden_dim=self.config.hidden_dim,
             bound=self.config.bound,
+            coupling_type=self.config.coupling_type,
             n_epochs=self.config.n_epochs,
             batch_size=self.config.batch_size,
             lr=self.config.lr,
+            gaussianity_weight=self.config.gaussianity_weight,
             device=self.config.device,
             verbose=verbose,
         )
@@ -344,9 +351,11 @@ class ResidueFlowTrainer:
             n_layers=self.config.n_layers,
             hidden_dim=self.config.hidden_dim,
             bound=self.config.bound,
+            coupling_type=self.config.coupling_type,
             n_epochs=self.config.n_epochs,
             batch_size=self.config.batch_size,
             lr=self.config.lr,
+            gaussianity_weight=self.config.gaussianity_weight,
             device=self.config.device,
             verbose=verbose,
         )

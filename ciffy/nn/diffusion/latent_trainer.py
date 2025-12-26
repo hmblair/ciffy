@@ -495,6 +495,9 @@ class LatentDiffusionTrainer(BaseTrainer):
                             logger.debug(f"Sample generation for seq {seq_idx} failed: {e}")
                         continue
 
+                if not self.quiet:
+                    logger.info(f"Saved validation samples to: {sample_dir}")
+
         except Exception as e:
             if not self.quiet:
                 logger.warning(f"Sample generation failed: {e}")

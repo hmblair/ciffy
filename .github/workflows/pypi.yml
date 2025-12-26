@@ -10,11 +10,18 @@ on:
 
 jobs:
   # ============================================================================
-  # TEST
-  # Run tests before building to catch issues early.
+  # BUILD WHEELS
+  # Build binary wheels for all supported platforms using cibuildwheel.
   # ============================================================================
-  test:
-    runs-on: ubuntu-latest
+  build-wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+        # macos-13 = Intel, macos-14 = Apple Silicon
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,24 +32,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y gperf
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
 
-      - name: Install dependencies
-        run: |
-          pip install numpy pytest
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e .
+      - name: Build wheels
+        run: cibuildwheel --output-dir wheelhouse
 
-      - name: Run tests
-        run: pytest tests/ -v --ignore=tests/profile.py
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
 
   # ============================================================================
   # BUILD SOURCE DISTRIBUTION
   # Platform-independent source archive.
   # ============================================================================
   build-sdist:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,9 +66,6 @@ jobs:
       - name: Install build tools
         run: pip install build numpy
 
-      - name: Generate hash tables
-        run: python -m codegen.generate
-
       - name: Build sdist
         run: python -m build --sdist
 
@@ -74,16 +77,23 @@ jobs:
 
   # ============================================================================
   # PUBLISH TO PYPI
-  # Upload source distribution using trusted publishing (OIDC).
+  # Upload wheels and sdist using trusted publishing (OIDC).
   # Requires PyPI project to be configured for GitHub Actions publishing.
   # ============================================================================
   publish:
-    needs: build-sdist
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for trusted publishing
 
     steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
       - name: Download sdist
         uses: actions/download-artifact@v4
         with:

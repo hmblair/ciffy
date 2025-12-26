@@ -1,10 +1,19 @@
 include README.md
+include LICENSE.md
+
+# C extension sources
 include ciffy/src/*.c
 include ciffy/src/*.h
+include ciffy/src/cif/*.c
+include ciffy/src/cif/*.h
 include ciffy/src/hash/*.c
 include ciffy/src/hash/*.h
+include ciffy/src/internal/*.c
+include ciffy/src/internal/*.h
+
+# Code generation (needed for building from source)
 include codegen/*.py
 
 # Tests and test data
-include tests/*.py
-include tests/data/*.cif
+recursive-include tests *.py
+recursive-include tests/data *.cif

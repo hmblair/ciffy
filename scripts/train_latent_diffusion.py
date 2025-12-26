@@ -406,7 +406,7 @@ def main() -> None:
         n_params = sum(p.numel() for p in trainer.model.denoiser.parameters())
         logger.info(f"Denoiser parameters: {n_params:,}")
         logger.info(f"Latent dimension: {trainer.model.latent_dim}")
-        logger.info(f"Cached samples: {len(trainer._latent_cache)}")
+        logger.info(f"Valid samples: {len(trainer._encoding_dataset)}")
 
     # Train
     try:

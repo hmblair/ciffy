@@ -385,7 +385,7 @@ class LatentDiffusionTrainer(BaseTrainer):
 
     def _validate(self) -> dict[str, float]:
         """Compute validation metrics via sample generation."""
-        if len(self._latent_cache) == 0:
+        if len(self._encoding_dataset) == 0:
             return {}
 
         self.model.eval()
@@ -394,12 +394,10 @@ class LatentDiffusionTrainer(BaseTrainer):
         try:
             with self.ema.apply(self.model.denoiser):
                 # Sample a few structures and compute RMSD
-                sample_indices = list(self._latent_cache.keys())[
-                    : self.config.val_samples
-                ]
+                n_samples = min(self.config.val_samples, len(self._encoding_dataset))
 
-                for idx in sample_indices:
-                    latents, sequence = self._latent_cache[idx]
+                for idx in range(n_samples):
+                    latents, sequence = self._encoding_dataset[idx]
                     latents = latents.to(self.device)
                     sequence_np = sequence.numpy()
 
@@ -455,24 +453,25 @@ class LatentDiffusionTrainer(BaseTrainer):
                 ├── ground_truth.cif
                 └── ...
         """
-        if len(self._latent_cache) == 0:
+        if len(self._encoding_dataset) == 0:
             return
 
         sample_dir = self.sample_dir / f"epoch_{epoch + 1:04d}"
 
         # Use multiple validation sequences (up to val_samples)
-        sample_indices = list(self._latent_cache.keys())[: self.config.val_samples]
+        n_samples = min(self.config.val_samples, len(self._encoding_dataset))
 
         self.model.eval()
         try:
             with torch.no_grad(), self.ema.apply(self.model.denoiser):
-                for seq_idx, cache_idx in enumerate(sample_indices):
+                for seq_idx in range(n_samples):
                     seq_dir = sample_dir / f"seq_{seq_idx}"
                     seq_dir.mkdir(parents=True, exist_ok=True)
 
                     try:
                         # Get original polymer for ground truth
-                        polymer = self.dataset[cache_idx]
+                        polymer_idx = self._encoding_dataset.valid_indices[seq_idx]
+                        polymer = self._encoding_dataset.polymer_dataset[polymer_idx]
 
                         # Save ground truth
                         polymer.write(str(seq_dir / "ground_truth.cif"))
@@ -506,7 +505,7 @@ class LatentDiffusionTrainer(BaseTrainer):
 __all__ = [
     "LatentDiffusionDataConfig",
     "LatentDiffusionTrainingConfig",
-    "LatentCacheDataset",
+    "LatentEncodingDataset",
     "latent_collate_fn",
     "LatentDiffusionTrainer",
 ]

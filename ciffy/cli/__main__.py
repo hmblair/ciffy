@@ -10,6 +10,7 @@ Usage:
     ciffy split <file.cif>        # Split into per-chain files
     ciffy template <sequence>     # Create template from sequence with sampled dihedrals
     ciffy experiment configs/*.yaml  # Run multiple training experiments
+    ciffy download --max_count 100   # Download RNA structures from RCSB PDB
 """
 
 import argparse
@@ -279,6 +280,27 @@ def _experiment_command(args):
         sys.exit(1)
 
 
+def _download_command(args):
+    """Handle the download subcommand."""
+    from ciffy.datasets import download_rna_cli
+
+    download_rna_cli(
+        pdb_ids=args.id,
+        output_dir=args.output_dir,
+        max_count=args.max_count,
+        max_resolution=args.max_resolution,
+        min_resolution=args.min_resolution,
+        min_length=args.min_length,
+        max_length=args.max_length,
+        method=args.method,
+        overwrite=args.overwrite,
+        max_workers=args.max_workers,
+        search_only=args.search_only,
+        list_ids=args.list_ids,
+        quiet=args.quiet,
+    )
+
+
 def _inference_command(args):
     """Handle the inference subcommand."""
     try:
@@ -355,7 +377,7 @@ def _inference_command(args):
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "experiment", "inference"}
+    subcommands = {"map", "info", "split", "template", "experiment", "inference", "download"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command
@@ -539,6 +561,90 @@ def main():
         help="Device strategy (default: auto)",
     )
 
+    # Download subcommand
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download RNA structures from RCSB PDB",
+        description=(
+            "Download mmCIF files for RNA-containing structures from RCSB PDB.\n"
+            "Supports filtering by resolution, polymer length, and experimental method."
+        ),
+    )
+    download_parser.add_argument(
+        "--id",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Download specific PDB ID(s) instead of searching (e.g., --id 1EHZ 4V9F)",
+    )
+    download_parser.add_argument(
+        "--output-dir", "-o",
+        default=".",
+        help="Directory to save mmCIF files (default: current directory)",
+    )
+    download_parser.add_argument(
+        "--max-count", "-n",
+        type=int,
+        default=None,
+        help="Maximum number of structures to download (default: all)",
+    )
+    download_parser.add_argument(
+        "--max-resolution",
+        type=float,
+        default=None,
+        help="Maximum resolution in Ångströms (e.g., 3.0)",
+    )
+    download_parser.add_argument(
+        "--min-resolution",
+        type=float,
+        default=None,
+        help="Minimum resolution in Ångströms",
+    )
+    download_parser.add_argument(
+        "--min-length",
+        type=int,
+        default=None,
+        help="Minimum RNA polymer length in nucleotides",
+    )
+    download_parser.add_argument(
+        "--max-length",
+        type=int,
+        default=None,
+        help="Maximum RNA polymer length in nucleotides",
+    )
+    download_parser.add_argument(
+        "--method", "-m",
+        choices=["xray", "em", "nmr", "neutron"],
+        default=None,
+        help="Filter by experimental method",
+    )
+    download_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing files (default: skip)",
+    )
+    download_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum concurrent downloads (default: 4)",
+    )
+    download_parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help="Only search and print count, don't download",
+    )
+    download_parser.add_argument(
+        "--list-ids",
+        action="store_true",
+        help="Print all PDB IDs (use with --search-only)",
+    )
+    download_parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress progress output",
+    )
+
     args = parser.parse_args()
 
     # Route to appropriate handler
@@ -548,6 +654,8 @@ def main():
         _template_command(args)
     elif args.command == "inference":
         _inference_command(args)
+    elif args.command == "download":
+        _download_command(args)
     elif args.command == "map":
         _map_command(args)
     elif args.command == "split":

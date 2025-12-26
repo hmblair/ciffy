@@ -72,6 +72,7 @@ from .protocols import PolymerGenerativeModel, PolymerEncoder
 from .model_registry import register_model, get_model_class
 from .inference import load_model_from_checkpoint, generate_samples
 from .inference_config import InferenceConfig
+from .split import DataSplit, split_by_structure
 
 # Diffusion (moved from root to diffusion/)
 from .diffusion import (
@@ -145,6 +146,9 @@ __all__ = [
     "InferenceResult",
     "run_inference_jobs",
     "format_inference_results_table",
+    # Data splitting
+    "DataSplit",
+    "split_by_structure",
     # Diffusion utilities (from diffusion/)
     "FixedSinusoidalEmbedding",
     "NoiseSchedule",

@@ -16,15 +16,28 @@ from .utils import (
     format_status,
     format_progress_bar,
     ProgressDisplayThread,
+    ParallelRunner,
+    BaseJobRunner,  # Legacy alias for ParallelRunner
 )
 from .experiment_runner import (
+    ExperimentRunner,
     run_experiments,
     format_results_table,
 )
 from .inference_runner import (
     InferenceResult,
+    InferenceRunner,
     run_inference_jobs,
     format_inference_results_table,
+)
+from .flow_runner import (
+    FlowExperimentConfig,
+    FlowExperimentResult,
+    FlowExperimentRunner,
+    run_flow_experiments,
+    format_flow_results_table,
+    create_latent_dim_sweep,
+    create_layer_sweep,
 )
 
 # Re-export ExperimentResult from training module for convenience
@@ -37,12 +50,24 @@ __all__ = [
     "format_status",
     "format_progress_bar",
     "ProgressDisplayThread",
+    "ParallelRunner",
+    "BaseJobRunner",  # Legacy alias
     # Experiment running
     "ExperimentResult",
+    "ExperimentRunner",
     "run_experiments",
     "format_results_table",
     # Inference running
     "InferenceResult",
+    "InferenceRunner",
     "run_inference_jobs",
     "format_inference_results_table",
+    # Flow experiments
+    "FlowExperimentConfig",
+    "FlowExperimentResult",
+    "FlowExperimentRunner",
+    "run_flow_experiments",
+    "format_flow_results_table",
+    "create_latent_dim_sweep",
+    "create_layer_sweep",
 ]

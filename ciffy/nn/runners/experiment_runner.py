@@ -17,21 +17,15 @@ Example:
 
 from __future__ import annotations
 
-import logging
-import multiprocessing as mp
+import io
+import os
+import sys
+import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-try:
-    import torch
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-
-# Check for rich library
 try:
     from rich.table import Table
 
@@ -41,49 +35,39 @@ except ImportError:
 
 from ..training import ExperimentResult
 from .utils import (
-    get_num_gpus,
     format_duration,
     format_status,
     format_progress_bar,
-    ProgressDisplayThread,
+    ParallelRunner,
 )
 
 if TYPE_CHECKING:
     from multiprocessing import Queue
 
-logger = logging.getLogger(__name__)
 
-
-def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
+def _run_vae_experiment(
+    config_path: Path,
+    device: str,
+    progress_queue: "Queue",
+    scripts_dir: str,
+) -> ExperimentResult:
     """
     Run a single training experiment in a subprocess with progress reporting.
 
-    This function is designed to be called by ProcessPoolExecutor.
-    It imports the training script and runs training with the given config,
-    sending progress updates to a queue. All stdout/stderr is captured to a temp log file.
-
-    Args:
-        args: Tuple of (config_path, experiment_name, device, scripts_dir, progress_queue)
-
-    Returns:
-        ExperimentResult with training outcomes.
+    This is a module-level function for pickling compatibility.
     """
-    import io
-    import sys
-    import tempfile
-    import traceback
-
-    config_path, experiment_name, device, scripts_dir, progress_queue = args
-
+    experiment_name = config_path.stem
     start_time = time.time()
 
-    # Create temp log file (deleted=False so it persists for user to inspect)
-    log_fd, log_file = tempfile.mkstemp(prefix=f"ciffy_{experiment_name}_", suffix=".log")
-    import os
-    os.close(log_fd)  # Close the file descriptor, we'll write via StringIO
+    # Create temp log file
+    log_fd, log_file = tempfile.mkstemp(
+        prefix=f"ciffy_{experiment_name}_", suffix=".log"
+    )
+    os.close(log_fd)
 
-    def send_progress(status: str, epoch: int = 0, total_epochs: int = 0, loss: float | None = None):
-        """Send progress update to queue."""
+    def send_progress(
+        status: str, epoch: int = 0, total_epochs: int = 0, loss: float | None = None
+    ):
         if progress_queue is not None:
             try:
                 progress_queue.put({
@@ -96,14 +80,13 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
                     "time": time.time() - start_time,
                 })
             except Exception:
-                pass  # Ignore queue errors
+                pass
 
     # Capture stdout/stderr to log file
     log_buffer = io.StringIO()
     old_stdout, old_stderr = sys.stdout, sys.stderr
 
     try:
-        # Redirect output to buffer
         sys.stdout = log_buffer
         sys.stderr = log_buffer
 
@@ -114,10 +97,9 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
         from train_vae import train_vae, load_config
 
         # Load config to get total epochs
-        config = load_config(config_path)
+        config = load_config(str(config_path))
         total_epochs = config.training.epochs
 
-        # Send initial status
         send_progress("running", 0, total_epochs)
 
         # Create progress callback
@@ -126,10 +108,10 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
 
         # Run training
         result = train_vae(
-            config_path=config_path,
+            config_path=str(config_path),
             device_override=device,
             experiment_name=experiment_name,
-            quiet=True,  # Suppress per-experiment progress bars
+            quiet=True,
             progress_callback=progress_callback,
         )
 
@@ -139,7 +121,7 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
             send_progress("failed", 0, total_epochs)
             return ExperimentResult(
                 name=experiment_name,
-                config_path=config_path,
+                config_path=str(config_path),
                 status="failed",
                 device=device or "unknown",
                 duration_seconds=duration,
@@ -151,7 +133,7 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
         send_progress("complete", total_epochs, total_epochs, result.get("best_loss"))
         return ExperimentResult(
             name=experiment_name,
-            config_path=config_path,
+            config_path=str(config_path),
             status="success",
             final_loss=result.get("final_loss"),
             best_loss=result.get("best_loss"),
@@ -167,13 +149,12 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
         )
 
     except Exception as e:
-        # Capture the full traceback
         traceback.print_exc()
         duration = time.time() - start_time
         send_progress("failed", 0, 0)
         return ExperimentResult(
             name=experiment_name,
-            config_path=config_path,
+            config_path=str(config_path),
             status="failed",
             device=device or "unknown",
             duration_seconds=duration,
@@ -182,16 +163,14 @@ def _run_single_experiment_with_progress(args: tuple) -> ExperimentResult:
         )
 
     finally:
-        # Restore stdout/stderr
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
-        # Write captured output to log file
         if log_file:
             with open(log_file, "w") as f:
                 f.write(log_buffer.getvalue())
 
 
-def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
+def _create_experiment_progress_table(states: dict[str, dict]) -> "Table":
     """Create a rich Table showing experiment progress."""
     table = Table(title="Experiment Progress", show_header=True, header_style="bold")
     table.add_column("Experiment", style="cyan", width=20)
@@ -201,7 +180,7 @@ def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
     table.add_column("Device", width=10)
     table.add_column("Time", width=10)
 
-    for name, state in experiment_states.items():
+    for name, state in states.items():
         status = state.get("status", "pending")
         epoch = state.get("epoch", 0)
         total = state.get("total_epochs", 0)
@@ -217,6 +196,63 @@ def _create_progress_table(experiment_states: dict[str, dict]) -> "Table":
         table.add_row(name, status_str, progress_str, loss_str, device, time_str)
 
     return table
+
+
+class ExperimentRunner(ParallelRunner[Path, ExperimentResult]):
+    """Runner for VAE training experiments.
+
+    Runs multiple training configurations in parallel across GPUs.
+
+    Example:
+        >>> runner = ExperimentRunner(parallel=True, device="auto")
+        >>> results = runner.run([Path("config1.yaml"), Path("config2.yaml")])
+    """
+
+    def __init__(
+        self,
+        parallel: bool = True,
+        max_workers: int | None = None,
+        device: str = "auto",
+    ):
+        super().__init__(parallel=parallel, max_workers=max_workers, device=device)
+        self.scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
+
+    def run_job(
+        self,
+        config: Path,
+        device: str,
+        progress_queue: "Queue",
+    ) -> ExperimentResult:
+        """Run a single training experiment."""
+        return _run_vae_experiment(config, device, progress_queue, self.scripts_dir)
+
+    def get_job_name(self, config: Path) -> str:
+        """Get experiment name from config path."""
+        return config.stem
+
+    def create_progress_table(self, states: dict[str, dict]) -> "Table":
+        """Create experiment progress table."""
+        return _create_experiment_progress_table(states)
+
+    def create_failed_result(
+        self,
+        config: Path,
+        device: str,
+        error: str,
+    ) -> ExperimentResult:
+        """Create a failed experiment result."""
+        return ExperimentResult(
+            name=config.stem,
+            config_path=str(config),
+            status="failed",
+            device=device,
+            error=error,
+        )
+
+    def validate_config(self, config: Path) -> None:
+        """Validate config file exists."""
+        if not config.exists():
+            raise FileNotFoundError(f"Config not found: {config}")
 
 
 def run_experiments(
@@ -261,123 +297,13 @@ def run_experiments(
         >>> for r in results:
         ...     print(f"{r.name}: {r.best_loss:.4f}")
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch is required for run_experiments")
-
-    if not RICH_AVAILABLE:
-        raise ImportError(
-            "rich is required for experiment progress display. "
-            "Install with: pip install rich"
-        )
-
-    config_paths = [Path(p) for p in config_paths]
-
-    # Validate all configs exist
-    for path in config_paths:
-        if not path.exists():
-            raise FileNotFoundError(f"Config not found: {path}")
-
-    # Determine device strategy and worker count
-    num_gpus = get_num_gpus()
-
-    if device == "auto":
-        if num_gpus > 0:
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-
-    # Determine max workers
-    if max_workers is None:
-        if device == "cuda":
-            max_workers = num_gpus if num_gpus > 0 else 1
-        elif device == "mps":
-            max_workers = 1  # MPS doesn't support multiprocessing well
-        else:
-            max_workers = min(len(config_paths), mp.cpu_count())
-
-    # Find the scripts directory for importing train_vae
-    scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
-
-    # Prepare experiment arguments
-    experiment_names = []
-    experiments = []
-
-    # Create a multiprocessing manager for the queue
-    manager = mp.Manager()
-    progress_queue = manager.Queue()
-
-    for i, config_path in enumerate(config_paths):
-        # Extract experiment name from filename
-        exp_name = config_path.stem
-        experiment_names.append(exp_name)
-
-        # Assign device based on strategy
-        if device == "cuda" and num_gpus > 0:
-            exp_device = f"cuda:{i % num_gpus}"
-        else:
-            exp_device = device
-
-        experiments.append((str(config_path), exp_name, exp_device, scripts_dir, progress_queue))
-
-    results: list[ExperimentResult] = []
-
-    # Start progress display thread
-    progress_display = ProgressDisplayThread(
-        progress_queue, experiment_names, _create_progress_table
+    runner = ExperimentRunner(
+        parallel=parallel,
+        max_workers=max_workers,
+        device=device,
     )
-    progress_display.start()
-
-    try:
-        if not parallel or max_workers == 1:
-            # Sequential execution
-            for exp_args in experiments:
-                result = _run_single_experiment_with_progress(exp_args)
-                results.append(result)
-        else:
-            # Parallel execution with ProcessPoolExecutor
-            # Use 'spawn' context for CUDA compatibility
-            ctx = mp.get_context("spawn")
-
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-                # Submit all experiments
-                future_to_exp = {
-                    executor.submit(_run_single_experiment_with_progress, exp): exp
-                    for exp in experiments
-                }
-
-                # Collect results as they complete
-                for future in as_completed(future_to_exp):
-                    exp_args = future_to_exp[future]
-                    exp_name = exp_args[1]
-
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        # Handle unexpected executor errors (log file may not exist)
-                        result = ExperimentResult(
-                            name=exp_name,
-                            config_path=exp_args[0],
-                            status="failed",
-                            device=exp_args[2],
-                            error=f"Executor error: {e}",
-                        )
-                        results.append(result)
-    finally:
-        # Stop display thread
-        progress_display.stop()
-
-    # Sort results to match input order
-    name_to_result = {r.name: r for r in results}
-    ordered_results = []
-    for config_path in config_paths:
-        exp_name = config_path.stem
-        if exp_name in name_to_result:
-            ordered_results.append(name_to_result[exp_name])
-
-    return ordered_results
+    configs = [Path(p) for p in config_paths]
+    return runner.run(configs)
 
 
 def format_results_table(results: list[ExperimentResult], show_errors: bool = True) -> str:
@@ -400,7 +326,6 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
     if not results:
         return "No results to display."
 
-    # Define columns
     columns = [
         ("Experiment", 20),
         ("Status", 8),
@@ -412,7 +337,6 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
         ("Time", 10),
     ]
 
-    # Build header
     lines = []
     header = "  ".join(f"{name:<{width}}" for name, width in columns)
     separator = "  ".join("-" * width for _, width in columns)
@@ -420,10 +344,9 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
     lines.append(header)
     lines.append(separator)
 
-    # Build rows
     for r in results:
         row_values = [
-            r.name[:20],  # Truncate long names
+            r.name[:20],
             r.status[:8],
             f"{r.best_loss:.4f}" if r.best_loss is not None else "N/A",
             f"{r.recon_loss:.4f}" if r.recon_loss is not None else "N/A",
@@ -436,13 +359,11 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
         row = "  ".join(f"{val:<{width}}" for val, (_, width) in zip(row_values, columns))
         lines.append(row)
 
-    # Summary line
     lines.append(separator)
     successful = sum(1 for r in results if r.status == "success")
     total_time = sum(r.duration_seconds for r in results)
     lines.append(f"Total: {successful}/{len(results)} succeeded in {format_duration(total_time)}")
 
-    # Show errors for failed experiments
     if show_errors:
         failed = [r for r in results if r.status == "failed"]
         if failed:
@@ -458,6 +379,7 @@ def format_results_table(results: list[ExperimentResult], show_errors: bool = Tr
 
 
 __all__ = [
+    "ExperimentRunner",
     "run_experiments",
     "format_results_table",
     "ExperimentResult",

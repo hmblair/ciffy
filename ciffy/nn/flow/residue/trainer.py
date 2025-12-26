@@ -1,7 +1,8 @@
 """
 Training infrastructure for ResidueFlowModel.
 
-Provides a unified interface for training models across multiple residue types.
+Provides a unified interface for training models across multiple residue types
+with proper train/test splitting by structure to avoid data leakage.
 """
 
 from __future__ import annotations
@@ -10,11 +11,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 
 from .model import ResidueFlowModel
 from .data import extract_residues_with_links
 from .train import train_pca_flow
+from ...split import split_by_structure
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -35,18 +38,24 @@ class ResidueFlowTrainingConfig:
         min_coverage: Minimum fraction of instances an atom must appear in.
         max_bond_length: Maximum O3'-P distance to accept as connected.
         device: Device to train on ('cpu' or 'cuda').
+        train_split: Fraction of structures for training (default: 0.8).
+        test_split: Fraction of structures for testing (default: 0.2).
+        split_seed: Random seed for reproducible splits (default: 42).
     """
 
     latent_dim: int = 12
     n_layers: int = 8
     hidden_dim: int = 64
-    bound: float | None = 3.0
+    bound: float | None = None
     n_epochs: int = 200
     batch_size: int = 256
     lr: float = 1e-3
     min_coverage: float = 0.9
     max_bond_length: float = 2.0
     device: str = "cpu"
+    train_split: float = 0.8
+    test_split: float = 0.2
+    split_seed: int | None = 42
 
 
 @dataclass
@@ -56,22 +65,45 @@ class TrainingResult:
     Attributes:
         model: The trained ResidueFlowModel.
         residue: The residue type.
-        n_instances: Number of training instances.
+        n_train: Number of training instances.
+        n_test: Number of test instances.
         n_atoms: Number of atoms per residue.
-        pca_rmsd: PCA reconstruction RMSD.
-        flow_rmsd: Flow reconstruction RMSD.
+        pca_rmsd: PCA reconstruction RMSD (on train data).
+        train_rmsd: Flow reconstruction RMSD on training data.
+        test_rmsd: Flow reconstruction RMSD on held-out test data.
+        flow_rmsd: Alias for test_rmsd (legacy compatibility).
         var_explained: Variance explained by PCA.
         n_params: Number of model parameters.
+        train_nll: Negative log-likelihood on training data.
+        test_nll: Negative log-likelihood on test data.
+        train_gaussianity: Gaussianity score on training data (0-1).
+        test_gaussianity: Gaussianity score on test data (0-1).
     """
 
     model: ResidueFlowModel
     residue: "Residue"
-    n_instances: int
+    n_train: int
+    n_test: int
     n_atoms: int
     pca_rmsd: float
-    flow_rmsd: float
+    train_rmsd: float
+    test_rmsd: float
     var_explained: float
     n_params: int
+    train_nll: float = 0.0
+    test_nll: float = 0.0
+    train_gaussianity: float = 0.0
+    test_gaussianity: float = 0.0
+
+    @property
+    def flow_rmsd(self) -> float:
+        """Legacy alias for test_rmsd."""
+        return self.test_rmsd
+
+    @property
+    def n_instances(self) -> int:
+        """Legacy alias for total instances (train + test)."""
+        return self.n_train + self.n_test
 
 
 class ResidueFlowTrainer:
@@ -115,13 +147,17 @@ class ResidueFlowTrainer:
         """
         Train a ResidueFlowModel for a single residue type.
 
+        Data is split by structure (CIF file) to avoid leakage. Residues from
+        the same structure are correlated and should not appear in both
+        training and test sets.
+
         Args:
             cif_paths: List of paths to CIF files.
             residue: Residue type to train on.
             verbose: Print progress information.
 
         Returns:
-            TrainingResult with trained model and metrics.
+            TrainingResult with trained model and metrics on held-out test set.
 
         Raises:
             ValueError: If no residues of the specified type are found.
@@ -131,32 +167,66 @@ class ResidueFlowTrainer:
             print(f"Training {residue.name}")
             print(f"{'='*60}")
 
-        # Extract data with link transforms
-        coords, transforms, atoms = extract_residues_with_links(
+        # Split structures into train/test sets
+        split = split_by_structure(
             cif_paths,
+            train=self.config.train_split,
+            val=0.0,  # No validation set for now
+            test=self.config.test_split,
+            seed=self.config.split_seed,
+        )
+
+        if verbose:
+            print(f"Split: {len(split.train)} train, {len(split.test)} test structures")
+
+        # Extract training data
+        train_coords, train_transforms, atoms = extract_residues_with_links(
+            split.train,
             residue,
             min_coverage=self.config.min_coverage,
             max_bond_length=self.config.max_bond_length,
             verbose=verbose,
         )
 
-        n_instances = len(coords)
+        n_train = len(train_coords)
         n_atoms = len(atoms)
 
+        if n_train == 0:
+            raise ValueError(f"No {residue.name} residues found in training structures")
+
+        # Flatten and create extended representation for training
+        train_flat = train_coords.reshape(n_train, -1)
+        train_extended = np.concatenate([train_flat, train_transforms], axis=1)
+
+        # Extract test data (if any test structures)
+        test_extended = None
+        n_test = 0
+        if len(split.test) > 0:
+            try:
+                test_coords, test_transforms, _ = extract_residues_with_links(
+                    split.test,
+                    residue,
+                    min_coverage=self.config.min_coverage,
+                    max_bond_length=self.config.max_bond_length,
+                    verbose=False,  # Quiet for test extraction
+                )
+                n_test = len(test_coords)
+                if n_test > 0:
+                    test_flat = test_coords.reshape(n_test, -1)
+                    test_extended = np.concatenate([test_flat, test_transforms], axis=1)
+            except ValueError:
+                # No test residues found - this is okay
+                pass
+
         if verbose:
-            print(f"\nExtracted {n_instances} instances with {n_atoms} atoms each")
+            print(f"Extracted {n_train} train, {n_test} test instances with {n_atoms} atoms each")
+            print(f"Extended representation: {train_extended.shape[1]} dimensions")
 
-        # Flatten coords and concatenate with transforms for extended representation
-        coords_flat = coords.reshape(n_instances, -1)  # (N, n_atoms*3)
-        import numpy as np
-        extended_data = np.concatenate([coords_flat, transforms], axis=1)  # (N, n_atoms*3 + 6)
-
-        if verbose:
-            print(f"Extended representation: {extended_data.shape[1]} dimensions")
-
-        # Train
+        # Train with proper train/test split
         flow, info = train_pca_flow(
-            extended_data,
+            train_data=train_extended,
+            test_data=test_extended,
+            n_atoms=n_atoms,
             latent_dim=self.config.latent_dim,
             n_layers=self.config.n_layers,
             hidden_dim=self.config.hidden_dim,
@@ -173,17 +243,26 @@ class ResidueFlowTrainer:
             flow=flow,
             residue=residue,
             atom_indices=atoms,
+            n_atoms=n_atoms,
+            pca_rmsd=info["pca_rmsd"],
+            var_explained=info["var_explained"],
         )
 
         return TrainingResult(
             model=model,
             residue=residue,
-            n_instances=n_instances,
+            n_train=n_train,
+            n_test=n_test,
             n_atoms=n_atoms,
             pca_rmsd=info["pca_rmsd"],
-            flow_rmsd=info["flow_rmsd"],
+            train_rmsd=info["train_rmsd"],
+            test_rmsd=info["test_rmsd"],
             var_explained=info["var_explained"],
             n_params=info["n_params"],
+            train_nll=info["train_nll"],
+            test_nll=info["test_nll"],
+            train_gaussianity=info["train_gaussianity"],
+            test_gaussianity=info["test_gaussianity"],
         )
 
     def train_all(
@@ -220,23 +299,25 @@ class ResidueFlowTrainer:
 
     def _print_summary(self, results: dict["Residue", TrainingResult]) -> None:
         """Print summary table of training results."""
-        print(f"\n{'='*80}")
+        print(f"\n{'='*95}")
         print("TRAINING SUMMARY")
-        print(f"{'='*80}")
+        print(f"{'='*95}")
         print(
-            f"{'Residue':<10} {'N':<8} {'Atoms':<8} {'Var%':<8} "
-            f"{'PCA RMSD':<12} {'Flow RMSD':<12} {'Params':<10}"
+            f"{'Residue':<10} {'Train':<8} {'Test':<8} {'Atoms':<6} {'Var%':<7} "
+            f"{'PCA':<10} {'Train RMSD':<12} {'Test RMSD':<12} {'Params':<10}"
         )
-        print("-" * 80)
+        print("-" * 95)
 
         for residue, result in results.items():
             print(
                 f"{residue.name:<10} "
-                f"{result.n_instances:<8} "
-                f"{result.n_atoms:<8} "
-                f"{result.var_explained*100:.1f}%{'':<4} "
-                f"{result.pca_rmsd:.4f}Å{'':<5} "
-                f"{result.flow_rmsd:.4f}Å{'':<5} "
+                f"{result.n_train:<8} "
+                f"{result.n_test:<8} "
+                f"{result.n_atoms:<6} "
+                f"{result.var_explained*100:.1f}%{'':<3} "
+                f"{result.pca_rmsd:.4f}Å{'':<3} "
+                f"{result.train_rmsd:.4f}Å{'':<5} "
+                f"{result.test_rmsd:.4f}Å{'':<5} "
                 f"{result.n_params:,}"
             )
 

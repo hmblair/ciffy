@@ -84,8 +84,8 @@ def generate_hash_tables(force=False):
         'atom.c', 'element.c', 'entity.c', 'ion.c', 'molecule.c', 'residue.c', 'reverse.h'
     ]
     required_python_files = [
-        '_generated_atoms.py', '_generated_dihedrals.py', '_generated_elements.py',
-        '_generated_residues.py', '_generated_zmatrix.py'
+        '_generated_atoms.py', '_generated_dihedrals.py', '_generated_dihedraltypes.py',
+        '_generated_elements.py', '_generated_molecule.py', '_generated_residues.py'
     ]
 
     def check_generated_files_exist():

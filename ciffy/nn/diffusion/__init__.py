@@ -33,6 +33,17 @@ from .trainer import (
     DiffusionConfig,
     DiffusionTrainer,
 )
+from .metrics import (
+    TimestepLossProfile,
+    SampleQualityMetrics,
+    DiffusionMetrics,
+    compute_denoising_loss,
+    compute_timestep_loss_profile,
+    compute_elbo,
+    compute_sample_rmsd,
+    evaluate_samples,
+    compute_diffusion_metrics,
+)
 
 __all__ = [
     # Noise schedules
@@ -53,4 +64,14 @@ __all__ = [
     "DiffusionDataConfig",
     "DiffusionConfig",
     "DiffusionTrainer",
+    # Metrics
+    "TimestepLossProfile",
+    "SampleQualityMetrics",
+    "DiffusionMetrics",
+    "compute_denoising_loss",
+    "compute_timestep_loss_profile",
+    "compute_elbo",
+    "compute_sample_rmsd",
+    "evaluate_samples",
+    "compute_diffusion_metrics",
 ]

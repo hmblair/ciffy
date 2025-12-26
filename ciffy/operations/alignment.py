@@ -2,23 +2,25 @@
 Structural alignment using the Kabsch algorithm.
 
 Provides functions for computing optimal rotations and RMSD between
-polymer structures.
+polymer structures or coordinate arrays.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Tuple
+from functools import singledispatch
+from typing import TYPE_CHECKING, Tuple, overload
 
 import numpy as np
 
 from ..backend import is_torch, Array, svd, svdvals, det, multiply
 
 if TYPE_CHECKING:
+    import torch
     from ..polymer import Polymer
     from ..biochemistry import Scale
 
 
 # =============================================================================
-# Core Kabsch alignment functions
+# Core Kabsch alignment functions (work on raw coordinate arrays)
 # =============================================================================
 
 def kabsch_rotation(coords1: Array, coords2: Array) -> Array:
@@ -99,6 +101,147 @@ def kabsch_align(
     return aligned, R, centroid2
 
 
+def _rmsd_single(coords1: Array, coords2: Array) -> float:
+    """
+    Compute Kabsch-aligned RMSD between two coordinate sets.
+
+    This is the core RMSD computation used by both Polymer and array versions.
+
+    Args:
+        coords1: First coordinates, shape (N, 3).
+        coords2: Second coordinates, shape (N, 3).
+
+    Returns:
+        RMSD value (float).
+    """
+    aligned, _, _ = kabsch_align(coords1, coords2, center=True)
+    diff = aligned - coords2
+
+    if is_torch(diff):
+        import torch
+        msd = (diff ** 2).mean()
+        return torch.sqrt(torch.clamp(msd, min=0.0)).item()
+    else:
+        msd = (diff ** 2).mean()
+        return float(np.sqrt(max(msd, 0.0)))
+
+
+# =============================================================================
+# Unified RMSD interface using singledispatch
+# =============================================================================
+
+# Type stubs for static type checking
+@overload
+def rmsd(a: Array, b: Array, scale: None = None) -> Array | float: ...
+
+@overload
+def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None) -> Array: ...
+
+
+@singledispatch
+def rmsd(a, b, scale=None):
+    """
+    Compute Kabsch-aligned RMSD between structures or coordinate arrays.
+
+    This function dispatches based on the input type:
+    - Polymer objects: Uses optimized hierarchical computation
+    - numpy/torch arrays: Direct coordinate-based computation
+
+    Args:
+        a: First structure (Polymer) or coordinates (array).
+        b: Second structure (Polymer) or coordinates (array).
+        scale: For Polymer inputs, the scale at which to compute RMSD
+            (default: MOLECULE). Ignored for array inputs.
+
+    Returns:
+        For Polymer: Array of RMSD values, one per scale unit.
+        For arrays (N, 3): Single RMSD value (float).
+        For arrays (B, N, 3): Array of B RMSD values.
+
+    Examples:
+        >>> import ciffy
+        >>> # Polymer RMSD
+        >>> p1 = ciffy.load("struct1.cif")
+        >>> p2 = ciffy.load("struct2.cif")
+        >>> rmsd_val = ciffy.rmsd(p1, p2)
+        >>>
+        >>> # Array RMSD (single pair)
+        >>> coords1 = np.random.randn(100, 3)
+        >>> coords2 = np.random.randn(100, 3)
+        >>> rmsd_val = ciffy.rmsd(coords1, coords2)
+        >>>
+        >>> # Batched array RMSD
+        >>> batch1 = np.random.randn(32, 100, 3)
+        >>> batch2 = np.random.randn(32, 100, 3)
+        >>> rmsd_vals = ciffy.rmsd(batch1, batch2)  # shape (32,)
+    """
+    raise TypeError(
+        f"rmsd() not supported for type {type(a).__name__}. "
+        f"Expected Polymer or numpy/torch array."
+    )
+
+
+@rmsd.register(np.ndarray)
+def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None) -> np.ndarray | float:
+    """RMSD for numpy arrays."""
+    if not isinstance(b, np.ndarray):
+        raise TypeError(f"Both inputs must be numpy arrays, got {type(b).__name__}")
+
+    if a.shape != b.shape:
+        raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
+
+    if a.ndim == 2:
+        # Single pair: (N, 3)
+        if a.shape[1] != 3:
+            raise ValueError(f"Expected shape (N, 3), got {a.shape}")
+        return _rmsd_single(a, b)
+
+    elif a.ndim == 3:
+        # Batch: (B, N, 3)
+        if a.shape[2] != 3:
+            raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
+        return np.array([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+
+    else:
+        raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
+
+
+# Register torch.Tensor if available
+try:
+    import torch
+
+    @rmsd.register(torch.Tensor)
+    def _rmsd_tensor(a: torch.Tensor, b: torch.Tensor, scale=None) -> torch.Tensor | float:
+        """RMSD for torch tensors."""
+        if not isinstance(b, torch.Tensor):
+            raise TypeError(f"Both inputs must be torch tensors, got {type(b).__name__}")
+
+        if a.shape != b.shape:
+            raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
+
+        if a.ndim == 2:
+            # Single pair: (N, 3)
+            if a.shape[1] != 3:
+                raise ValueError(f"Expected shape (N, 3), got {a.shape}")
+            return _rmsd_single(a, b)
+
+        elif a.ndim == 3:
+            # Batch: (B, N, 3)
+            if a.shape[2] != 3:
+                raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
+            return torch.tensor([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+
+        else:
+            raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) tensor, got {a.ndim}D")
+
+except ImportError:
+    pass
+
+
+# =============================================================================
+# Polymer-specific functions
+# =============================================================================
+
 def coordinate_covariance(
     polymer1: "Polymer",
     polymer2: "Polymer",
@@ -125,7 +268,7 @@ def coordinate_covariance(
     return polymer1.reduce(outer_prod, scale)
 
 
-def kabsch_distance(
+def _rmsd_polymer(
     polymer1: "Polymer",
     polymer2: "Polymer",
     scale: "Scale" = None,
@@ -188,6 +331,75 @@ def kabsch_distance(
         return torch.sqrt(torch.clamp(msd, min=0.0))
     else:
         return np.sqrt(np.maximum(msd, 0.0))
+
+
+# Register Polymer type - must be done after Polymer is importable
+# We use a lazy registration pattern to avoid circular imports
+_polymer_registered = False
+_rmsd_dispatch = rmsd  # Keep reference to singledispatch object
+
+
+def _ensure_polymer_registered():
+    """Lazily register Polymer type with rmsd dispatcher."""
+    global _polymer_registered
+    if _polymer_registered:
+        return
+
+    from ..polymer import Polymer
+    _rmsd_dispatch.register(Polymer, _rmsd_polymer)
+    _polymer_registered = True
+
+
+# Type stubs for the public wrapper function
+@overload
+def rmsd(a: Array, b: Array, scale: None = None) -> Array | float: ...
+
+@overload
+def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None) -> Array: ...
+
+
+def rmsd(a: "Array | Polymer", b: "Array | Polymer", scale: "Scale | None" = None) -> Array | float:
+    """
+    Compute Kabsch-aligned RMSD between structures or coordinate arrays.
+
+    This function dispatches based on the input type:
+    - Polymer objects: Uses optimized hierarchical computation
+    - numpy/torch arrays: Direct coordinate-based computation
+
+    Args:
+        a: First structure (Polymer) or coordinates (array).
+        b: Second structure (Polymer) or coordinates (array).
+        scale: For Polymer inputs, the scale at which to compute RMSD
+            (default: MOLECULE). Ignored for array inputs.
+
+    Returns:
+        For Polymer: Array of RMSD values, one per scale unit.
+        For arrays (N, 3): Single RMSD value (float).
+        For arrays (B, N, 3): Array of B RMSD values.
+
+    Examples:
+        >>> import ciffy
+        >>> # Polymer RMSD
+        >>> p1 = ciffy.load("struct1.cif")
+        >>> p2 = ciffy.load("struct2.cif")
+        >>> rmsd_val = ciffy.rmsd(p1, p2)
+        >>>
+        >>> # Array RMSD (single pair)
+        >>> coords1 = np.random.randn(100, 3)
+        >>> coords2 = np.random.randn(100, 3)
+        >>> rmsd_val = ciffy.rmsd(coords1, coords2)
+        >>>
+        >>> # Batched array RMSD
+        >>> batch1 = np.random.randn(32, 100, 3)
+        >>> batch2 = np.random.randn(32, 100, 3)
+        >>> rmsd_vals = ciffy.rmsd(batch1, batch2)  # shape (32,)
+    """
+    _ensure_polymer_registered()
+    return _rmsd_dispatch(a, b, scale)
+
+
+# Legacy alias for backwards compatibility
+kabsch_distance = rmsd
 
 
 def align(

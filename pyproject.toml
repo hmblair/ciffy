@@ -42,18 +42,22 @@ Repository = "https://github.com/hmblair/ciffy"
 packages = [
     "ciffy",
     "ciffy.backend",
-    "ciffy.utils",
-    "ciffy.types",
     "ciffy.biochemistry",
-    "ciffy.operations",
+    "ciffy.cli",
+    "ciffy.geometry",
     "ciffy.io",
     "ciffy.nn",
+    "ciffy.nn.diffusion",
     "ciffy.nn.flow",
     "ciffy.nn.flow.residue",
     "ciffy.nn.geometric",
-    "ciffy.visualize",
-    "ciffy.cli",
+    "ciffy.nn.layers",
+    "ciffy.nn.runners",
+    "ciffy.operations",
     "ciffy.sampling",
+    "ciffy.selection",
+    "ciffy.utils",
+    "ciffy.visualize",
 ]
 
 [tool.setuptools.package-data]

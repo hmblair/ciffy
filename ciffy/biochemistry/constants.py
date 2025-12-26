@@ -45,7 +45,7 @@ Hierarchical groups:
 from typing import Callable
 
 from .atom import Atom, AtomGroup, build_atom_group
-from ._generated_residues_v2 import Residue
+from ._generated_residues import Residue
 
 
 # =============================================================================

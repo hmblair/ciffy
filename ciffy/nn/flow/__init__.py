@@ -65,6 +65,15 @@ from .residue import (
     TrainingResult,
 )
 
+from .metrics import (
+    LatentMoments,
+    FlowMetrics,
+    compute_nll,
+    compute_latent_moments,
+    compute_flow_metrics,
+    estimate_kl_divergence,
+)
+
 from .polymer import PolymerFlowModel
 from .pretrained import load_pretrained, list_pretrained, is_pretrained_available
 
@@ -91,6 +100,13 @@ __all__ = [
     "ResidueFlowTrainer",
     "ResidueFlowTrainingConfig",
     "TrainingResult",
+    # Metrics
+    "LatentMoments",
+    "FlowMetrics",
+    "compute_nll",
+    "compute_latent_moments",
+    "compute_flow_metrics",
+    "estimate_kl_divergence",
     # Polymer flow
     "PolymerFlowModel",
     # Pre-trained models

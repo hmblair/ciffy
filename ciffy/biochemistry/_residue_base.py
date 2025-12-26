@@ -1,7 +1,7 @@
 """
 Base class for Residue namespace with static methods.
 
-The generated _generated_residues_v2.py imports this and adds the actual residue members.
+The generated _generated_residues.py imports this and adds the actual residue members.
 """
 
 from typing import ClassVar, Iterator, TYPE_CHECKING

@@ -20,20 +20,15 @@ Example:
 
 from __future__ import annotations
 
-import logging
-import multiprocessing as mp
+import io
+import os
+import sys
+import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
-
-try:
-    import torch
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+from typing import TYPE_CHECKING, Optional
 
 try:
     from rich.table import Table
@@ -43,14 +38,14 @@ except ImportError:
     RICH_AVAILABLE = False
 
 from .utils import (
-    get_num_gpus,
     format_duration,
     format_status,
     format_progress_bar,
-    ProgressDisplayThread,
+    ParallelRunner,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from multiprocessing import Queue
 
 
 @dataclass
@@ -82,47 +77,33 @@ class InferenceResult:
     log_file: Optional[str] = None
 
 
-def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
-    """
-    Run a single inference job in a subprocess with progress reporting.
-
-    Args:
-        args: Tuple of (config_path, job_name, device, scripts_dir, progress_queue)
-
-    Returns:
-        InferenceResult with inference outcomes.
-    """
-    import io
-    import sys
-    import tempfile
-    import traceback
-
-    config_path, job_name, device, scripts_dir, progress_queue = args
-
+def _run_inference_job(
+    config_path: Path,
+    device: str,
+    progress_queue: "Queue",
+    scripts_dir: str,
+) -> InferenceResult:
+    """Run a single inference job. Module-level function for pickling."""
+    job_name = config_path.stem
     start_time = time.time()
 
     # Create temp log file
     log_fd, log_file = tempfile.mkstemp(
         prefix=f"ciffy_inference_{job_name}_", suffix=".log"
     )
-    import os
-
     os.close(log_fd)
 
     def send_progress(status: str, n_done: int = 0, n_total: int = 0):
-        """Send progress update to queue."""
         if progress_queue is not None:
             try:
-                progress_queue.put(
-                    {
-                        "name": job_name,
-                        "status": status,
-                        "n_done": n_done,
-                        "n_total": n_total,
-                        "device": device,
-                        "time": time.time() - start_time,
-                    }
-                )
+                progress_queue.put({
+                    "name": job_name,
+                    "status": status,
+                    "n_done": n_done,
+                    "n_total": n_total,
+                    "device": device,
+                    "time": time.time() - start_time,
+                })
             except Exception:
                 pass
 
@@ -144,7 +125,7 @@ def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
 
         # Run inference
         result = run_inference(
-            config_path=config_path,
+            config_path=str(config_path),
             device_override=device,
             job_name=job_name,
             quiet=True,
@@ -156,7 +137,7 @@ def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
             send_progress("failed", 0, 0)
             return InferenceResult(
                 name=job_name,
-                config_path=config_path,
+                config_path=str(config_path),
                 status="failed",
                 device=device or "unknown",
                 duration_seconds=duration,
@@ -172,7 +153,7 @@ def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
 
         return InferenceResult(
             name=job_name,
-            config_path=config_path,
+            config_path=str(config_path),
             status="success",
             n_structures=result["n_structures"],
             n_sequences=result["n_sequences"],
@@ -188,7 +169,7 @@ def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
         send_progress("failed", 0, 0)
         return InferenceResult(
             name=job_name,
-            config_path=config_path,
+            config_path=str(config_path),
             status="failed",
             device=device or "unknown",
             duration_seconds=duration,
@@ -204,7 +185,7 @@ def _run_single_inference_with_progress(args: tuple) -> InferenceResult:
                 f.write(log_buffer.getvalue())
 
 
-def _create_progress_table(job_states: dict[str, dict]) -> Table:
+def _create_inference_progress_table(states: dict[str, dict]) -> "Table":
     """Create a rich Table showing inference progress."""
     table = Table(title="Inference Progress", show_header=True, header_style="bold")
     table.add_column("Job", style="cyan", width=20)
@@ -213,7 +194,7 @@ def _create_progress_table(job_states: dict[str, dict]) -> Table:
     table.add_column("Device", width=10)
     table.add_column("Time", width=10)
 
-    for name, state in job_states.items():
+    for name, state in states.items():
         status = state.get("status", "pending")
         n_done = state.get("n_done", 0)
         n_total = state.get("n_total", 0)
@@ -229,10 +210,67 @@ def _create_progress_table(job_states: dict[str, dict]) -> Table:
     return table
 
 
+class InferenceRunner(ParallelRunner[Path, InferenceResult]):
+    """Runner for inference jobs.
+
+    Runs multiple inference configurations in parallel across GPUs.
+
+    Example:
+        >>> runner = InferenceRunner(parallel=True, device="auto")
+        >>> results = runner.run([Path("config1.yaml"), Path("config2.yaml")])
+    """
+
+    def __init__(
+        self,
+        parallel: bool = True,
+        max_workers: int | None = None,
+        device: str = "auto",
+    ):
+        super().__init__(parallel=parallel, max_workers=max_workers, device=device)
+        self.scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
+
+    def run_job(
+        self,
+        config: Path,
+        device: str,
+        progress_queue: "Queue",
+    ) -> InferenceResult:
+        """Run a single inference job."""
+        return _run_inference_job(config, device, progress_queue, self.scripts_dir)
+
+    def get_job_name(self, config: Path) -> str:
+        """Get job name from config path."""
+        return config.stem
+
+    def create_progress_table(self, states: dict[str, dict]) -> "Table":
+        """Create inference progress table."""
+        return _create_inference_progress_table(states)
+
+    def create_failed_result(
+        self,
+        config: Path,
+        device: str,
+        error: str,
+    ) -> InferenceResult:
+        """Create a failed inference result."""
+        return InferenceResult(
+            name=config.stem,
+            config_path=str(config),
+            status="failed",
+            device=device,
+            error=error,
+        )
+
+    def validate_config(self, config: Path) -> None:
+        """Validate config file exists."""
+        if not config.exists():
+            raise FileNotFoundError(f"Config not found: {config}")
+
+
 def run_inference_jobs(
     config_paths: list[str | Path],
     parallel: bool = True,
-    max_workers: Optional[int] = None,
+    max_workers: int | None = None,
     device: str = "auto",
 ) -> list[InferenceResult]:
     """
@@ -263,110 +301,13 @@ def run_inference_jobs(
         >>> for r in results:
         ...     print(f"{r.name}: {r.status}")
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch is required for run_inference_jobs")
-
-    config_paths = [Path(p) for p in config_paths]
-
-    # Validate all configs exist
-    for path in config_paths:
-        if not path.exists():
-            raise FileNotFoundError(f"Config not found: {path}")
-
-    # Determine device strategy and worker count
-    num_gpus = get_num_gpus()
-
-    if device == "auto":
-        if num_gpus > 0:
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-
-    # Determine max workers
-    if max_workers is None:
-        if device == "cuda":
-            max_workers = num_gpus if num_gpus > 0 else 1
-        elif device == "mps":
-            max_workers = 1
-        else:
-            max_workers = min(len(config_paths), mp.cpu_count())
-
-    # Find the scripts directory
-    scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
-
-    # Prepare job arguments
-    job_names = []
-    jobs = []
-
-    manager = mp.Manager()
-    progress_queue = manager.Queue()
-
-    for i, config_path in enumerate(config_paths):
-        job_name = config_path.stem
-        job_names.append(job_name)
-
-        # Assign device based on strategy
-        if device == "cuda" and num_gpus > 0:
-            job_device = f"cuda:{i % num_gpus}"
-        else:
-            job_device = device
-
-        jobs.append((str(config_path), job_name, job_device, scripts_dir, progress_queue))
-
-    results: list[InferenceResult] = []
-
-    # Start progress display thread
-    progress_display = ProgressDisplayThread(
-        progress_queue, job_names, _create_progress_table
+    runner = InferenceRunner(
+        parallel=parallel,
+        max_workers=max_workers,
+        device=device,
     )
-    progress_display.start()
-
-    try:
-        if not parallel or max_workers == 1:
-            # Sequential execution
-            for job_args in jobs:
-                result = _run_single_inference_with_progress(job_args)
-                results.append(result)
-        else:
-            # Parallel execution
-            ctx = mp.get_context("spawn")
-
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-                future_to_job = {
-                    executor.submit(_run_single_inference_with_progress, job): job
-                    for job in jobs
-                }
-
-                for future in as_completed(future_to_job):
-                    job_args = future_to_job[future]
-                    job_name = job_args[1]
-
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        result = InferenceResult(
-                            name=job_name,
-                            config_path=job_args[0],
-                            status="failed",
-                            device=job_args[2],
-                            error=f"Executor error: {e}",
-                        )
-                        results.append(result)
-    finally:
-        progress_display.stop()
-
-    # Sort results to match input order
-    name_to_result = {r.name: r for r in results}
-    ordered_results = []
-    for config_path in config_paths:
-        job_name = config_path.stem
-        if job_name in name_to_result:
-            ordered_results.append(name_to_result[job_name])
-
-    return ordered_results
+    configs = [Path(p) for p in config_paths]
+    return runner.run(configs)
 
 
 def format_inference_results_table(
@@ -440,6 +381,7 @@ def format_inference_results_table(
 
 __all__ = [
     "InferenceResult",
+    "InferenceRunner",
     "run_inference_jobs",
     "format_inference_results_table",
 ]

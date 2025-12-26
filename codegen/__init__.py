@@ -33,8 +33,8 @@ from .python_codegen import (
     generate_python_elements,
     generate_dihedral_arrays,
     generate_python_dihedraltypes,
-    generate_python_atoms_v2,
-    generate_python_residues_v2,
+    generate_python_atoms,
+    generate_python_residues,
 )
 
 
@@ -117,9 +117,9 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
     generate_dihedral_arrays(biochem_dir, all_residues, atom_index)
     generate_python_dihedraltypes(biochem_dir)
 
-    # Generate AtomGroup-based files (v2)
-    generate_python_atoms_v2(biochem_dir, atom_index, all_residues)
-    generate_python_residues_v2(biochem_dir, all_residues)
+    # Generate AtomGroup-based files
+    generate_python_atoms(biochem_dir, atom_index, all_residues)
+    generate_python_residues(biochem_dir, all_residues)
 
     return hash_dir, atom_index
 

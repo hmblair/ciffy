@@ -137,6 +137,9 @@ def train_pca_flow(
         bound=bound,
     ).to(device)
 
+    # Keep reference to original for saving (compiled wrapper has different state_dict keys)
+    flow_original = flow
+
     # Compile model for faster training (PyTorch 2.0+)
     # Use reduce-overhead mode for small models with many iterations
     if hasattr(torch, 'compile') and device != "cpu":
@@ -276,4 +279,4 @@ def train_pca_flow(
         "test_moments": test_moments,
     }
 
-    return flow, info
+    return flow_original, info

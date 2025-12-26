@@ -290,6 +290,8 @@ class ResidueFlowTrainer:
             "total_epochs": self.config.training.epochs,
             "n_samples": result.n_train,
             "checkpoint_path": str(output_dir),
+            "final_loss": result.test_nll,
+            "best_loss": result.test_nll,  # Flow models don't track best, use final
             "extra_metrics": {
                 "residue": residue.name,
                 "n_train": result.n_train,

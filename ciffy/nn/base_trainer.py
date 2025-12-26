@@ -259,15 +259,32 @@ class BaseConfig:
 
         return config
 
-    @staticmethod
-    def _dict_to_dataclass(dc_class: type, data: dict) -> Any:
-        """Convert a dictionary to a dataclass instance."""
+    @classmethod
+    def _dict_to_dataclass(cls, dc_class: type, data: dict) -> Any:
+        """Convert a dictionary to a dataclass instance, recursively handling nested dataclasses."""
+        from typing import get_type_hints
+
         if data is None:
             return dc_class()
 
-        valid_fields = {f.name for f in fields(dc_class)}
-        filtered = {k: v for k, v in data.items() if k in valid_fields}
-        return dc_class(**filtered)
+        # Resolve type hints for this dataclass
+        try:
+            type_hints = get_type_hints(dc_class)
+        except Exception:
+            type_hints = {}
+
+        kwargs = {}
+        for f in fields(dc_class):
+            if f.name in data:
+                value = data[f.name]
+                field_type = type_hints.get(f.name, f.type)
+                # Recursively convert nested dataclasses
+                if hasattr(field_type, "__dataclass_fields__") and isinstance(value, dict):
+                    kwargs[f.name] = cls._dict_to_dataclass(field_type, value)
+                else:
+                    kwargs[f.name] = value
+
+        return dc_class(**kwargs)
 
     def to_dict(self) -> dict:
         """Convert configuration to dictionary."""

@@ -144,16 +144,48 @@ class LatentEncodingDataset(Dataset):
 
         # Build index of valid samples (filter by residue count)
         self.valid_indices: list[int] = []
+        n_none = 0
+        n_too_small = 0
+        n_too_large = 0
+        n_errors = 0
+
         for idx in range(len(polymer_dataset)):
             try:
                 polymer = polymer_dataset[idx]
                 if polymer is None:
+                    n_none += 1
                     continue
                 n_res = polymer.size(Scale.RESIDUE)
-                if min_residues <= n_res <= max_residues:
+                if n_res < min_residues:
+                    n_too_small += 1
+                elif n_res > max_residues:
+                    n_too_large += 1
+                else:
                     self.valid_indices.append(idx)
-            except Exception:
+            except Exception as e:
+                n_errors += 1
+                logger.debug(f"Error loading sample {idx}: {e}")
                 continue
+
+        # Log filtering statistics
+        total = len(polymer_dataset)
+        valid = len(self.valid_indices)
+        logger.info(
+            f"LatentEncodingDataset: {valid}/{total} samples valid "
+            f"(filtered: {n_too_small} too small, {n_too_large} too large, "
+            f"{n_none} None, {n_errors} errors)"
+        )
+
+        if valid == 0:
+            raise ValueError(
+                f"No valid samples in dataset!\n"
+                f"  Total samples: {total}\n"
+                f"  Too small (<{min_residues} residues): {n_too_small}\n"
+                f"  Too large (>{max_residues} residues): {n_too_large}\n"
+                f"  None/empty: {n_none}\n"
+                f"  Load errors: {n_errors}\n"
+                f"Consider adjusting min_residues/max_residues in config."
+            )
 
     def __len__(self) -> int:
         return len(self.valid_indices)
@@ -318,17 +350,36 @@ class LatentDiffusionTrainer(BaseTrainer):
     ) -> PolymerDataset:
         """Create the polymer dataset from config."""
         from ciffy import Molecule
+        from pathlib import Path
+
+        data_dir = Path(config.data.data_dir)
+        if not data_dir.exists():
+            raise ValueError(f"Data directory does not exist: {data_dir}")
 
         mol_types = tuple(
             getattr(Molecule, m) for m in config.data.molecule_types
         )
 
-        return PolymerDataset(
+        dataset = PolymerDataset(
             directory=config.data.data_dir,
             scale=Scale.CHAIN,
             molecule_types=mol_types,
             backend="torch",
         )
+
+        if len(dataset) == 0:
+            # List files in directory for debugging
+            cif_files = list(data_dir.glob("*.cif"))[:10]
+            raise ValueError(
+                f"No samples found in dataset!\n"
+                f"  Directory: {data_dir}\n"
+                f"  Molecule types: {config.data.molecule_types}\n"
+                f"  CIF files found: {len(list(data_dir.glob('*.cif')))}\n"
+                f"  First few: {[f.name for f in cif_files]}"
+            )
+
+        logger.info(f"PolymerDataset: {len(dataset)} chains from {data_dir}")
+        return dataset
 
     def create_optimizer(self) -> "optim.Optimizer":
         """Create optimizer for denoiser only (flow model is frozen)."""

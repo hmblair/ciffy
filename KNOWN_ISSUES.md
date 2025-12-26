@@ -13,3 +13,18 @@ The PCA + Flow architecture requires a fixed set of atoms per residue type. Miss
 
 **Potential Fix**: Replace PCA with a set-based encoder (e.g., PointNet-style shared MLP + pooling). The normalizing flow layers would remain unchanged - only the coordinate-to-latent projection needs modification.
 
+## Multi-Model Structures: Only Model 1 Supported
+
+- **Severity**: LOW (limitation)
+- **Location**: `ciffy/io/loader.py`, `ciffy/src/cif/registry.c`
+
+For multi-model structures (e.g., NMR ensembles), only model 1 is loaded. Attempting to load other models raises `NotImplementedError`.
+
+**Root Cause**: Loading arbitrary models requires filtering atoms by model number throughout the parsing pipeline. The current implementation scans to find where model 1 ends and truncates there.
+
+**Current Behavior**: The `model` parameter in `load()` defaults to 1. Passing any other value raises:
+```python
+NotImplementedError: Only model 1 is currently supported, got model=N.
+```
+
+**Potential Fix**: Add a `is_wrong_model` mask (similar to the existing `is_excluded` chain filter) that marks atoms not belonging to the target model, then filter during batch parsing and counting.

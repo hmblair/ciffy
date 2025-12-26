@@ -697,7 +697,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         }
     }
     if (nan_count > 0) {
-        LOG_WARNING("Found %d atoms with invalid (NaN) coordinates", nan_count);
+        LOG_WARNING("[%s] Found %d atoms with invalid (NaN) coordinates",
+                    cif->id ? cif->id : "unknown", nan_count);
     }
     PROFILE_END(batch_parse);
 

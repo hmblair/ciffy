@@ -195,7 +195,8 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
     /* Get attribute index for struct_asym.entity_id */
     int sa_entity_idx = _get_attr_index(chain_block, "entity_id", ctx);
     if (sa_entity_idx < 0) {
-        LOG_WARNING("_struct_asym missing entity_id attribute");
+        LOG_WARNING("[%s] _struct_asym missing entity_id attribute",
+                    cif->id ? cif->id : "unknown");
         free(entity_map);
         return CIF_OK;
     }
@@ -756,8 +757,8 @@ static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
     int atom_count = block->size;
     if (cif->models > 1) {
         if (block->size % cif->models != 0) {
-            LOG_WARNING("Atom count %d not evenly divisible by model count %d",
-                        block->size, cif->models);
+            LOG_WARNING("[%s] Atom count %d not evenly divisible by model count %d",
+                        cif->id ? cif->id : "unknown", block->size, cif->models);
         }
         atom_count = block->size / cif->models;
         /* Note: We modify block->size here for subsequent operations */

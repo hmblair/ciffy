@@ -67,8 +67,6 @@ def create_mock_residue_model(residue, n_atoms: int = 20, latent_dim: int = 8):
         residue=residue,
         atom_indices=atom_indices,
         n_atoms=n_atoms,
-        pca_rmsd=0.1,
-        var_explained=float(var_explained[latent_dim - 1]),
     )
 
 
@@ -200,11 +198,15 @@ def benchmark_polymer_encode(
     _move_polymer_model_to_device(model, device)
 
     results = {}
+    # Keys are already int after normalization
     residue_types = list(model.residue_models.keys())
 
     for seq_len in sequence_lengths:
-        # Create random sequence using available residue types
-        sequence = [residue_types[i % len(residue_types)] for i in range(seq_len)]
+        # Create random sequence using available residue types (already ints)
+        sequence = np.array(
+            [residue_types[i % len(residue_types)] for i in range(seq_len)],
+            dtype=np.int64
+        )
 
         # Create random coordinates (sum of atoms for sequence)
         n_atoms = sum(model.residue_models[r].n_atoms for r in sequence)
@@ -234,8 +236,11 @@ def benchmark_polymer_decode(
     latent_dim = model.latent_dim
 
     for seq_len in sequence_lengths:
-        # Create random sequence
-        sequence = [residue_types[i % len(residue_types)] for i in range(seq_len)]
+        # Create random sequence (keys are already ints)
+        sequence = np.array(
+            [residue_types[i % len(residue_types)] for i in range(seq_len)],
+            dtype=np.int64
+        )
 
         # Create random latents
         latents = torch.randn(seq_len, latent_dim, device=device)
@@ -263,8 +268,11 @@ def benchmark_polymer_sample(
     residue_types = list(model.residue_models.keys())
 
     for seq_len in sequence_lengths:
-        # Create random sequence
-        sequence = [residue_types[i % len(residue_types)] for i in range(seq_len)]
+        # Create random sequence (keys are already ints)
+        sequence = np.array(
+            [residue_types[i % len(residue_types)] for i in range(seq_len)],
+            dtype=np.int64
+        )
 
         def run():
             with torch.no_grad():

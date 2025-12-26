@@ -76,6 +76,14 @@ def _to_numpy_int64(sequence: SequenceArray) -> np.ndarray:
     return np.asarray(sequence, dtype=np.int64)
 
 
+def _normalize_key(key) -> int:
+    """Convert a residue key to int, accepting both Residue and int."""
+    if isinstance(key, int):
+        return key
+    # Assume it's a Residue (AtomGroup) with .value attribute
+    return key.value
+
+
 class PolymerFlowModel:
     """
     Orchestrates per-residue flow models for full polymer encoding/decoding.
@@ -116,25 +124,30 @@ class PolymerFlowModel:
         >>> z = polymer_flow.latents  # Lazily computed
     """
 
-    def __init__(self, residue_models: dict[int, "ResidueFlowModel"]):
+    def __init__(self, residue_models: dict["int | Residue", "ResidueFlowModel"]):
         """
         Initialize with pre-trained per-residue models.
 
         Args:
-            residue_models: Dict mapping residue type (int) to ResidueFlowModel.
+            residue_models: Dict mapping residue type to ResidueFlowModel.
+                            Keys can be either int values or Residue enums.
                             All models should have the same latent_dim.
 
-        Note:
-            For convenience, use from_residue_models() to create from a dict
-            keyed by Residue enum instead of int.
+        Example:
+            >>> # Either of these works:
+            >>> PolymerFlowModel({Residue.A: model_a, Residue.G: model_g})
+            >>> PolymerFlowModel({0: model_a, 4: model_g})
         """
         if not residue_models:
             raise ValueError("residue_models cannot be empty")
 
-        self.residue_models = residue_models
+        # Normalize keys to int (accept both Residue and int)
+        self.residue_models: dict[int, "ResidueFlowModel"] = {
+            _normalize_key(k): v for k, v in residue_models.items()
+        }
 
         # Validate all models have same latent dim
-        latent_dims = [m.latent_dim for m in residue_models.values()]
+        latent_dims = [m.latent_dim for m in self.residue_models.values()]
         if len(set(latent_dims)) > 1:
             raise ValueError(
                 f"All ResidueFlowModels must have same latent_dim, got {latent_dims}"
@@ -143,9 +156,9 @@ class PolymerFlowModel:
 
         # Cache atom counts and supported types for fast validation
         self._atom_counts: dict[int, int] = {
-            res_type: model.n_atoms for res_type, model in residue_models.items()
+            res_type: model.n_atoms for res_type, model in self.residue_models.items()
         }
-        self._supported_types_set: set[int] = set(residue_models.keys())
+        self._supported_types_set: set[int] = set(self.residue_models.keys())
 
         # Stateful lazy computation attributes
         self._sequence: np.ndarray | None = None
@@ -160,25 +173,19 @@ class PolymerFlowModel:
         models: dict["Residue", "ResidueFlowModel"],
     ) -> "PolymerFlowModel":
         """
-        Create from a dict keyed by Residue enum (convenience constructor).
+        Create from a dict keyed by Residue enum.
 
-        This is the recommended way to create a PolymerFlowModel from
-        individually trained ResidueFlowModels.
+        .. deprecated::
+            Use ``PolymerFlowModel(models)`` directly instead.
+            The constructor now accepts both Residue and int keys.
 
         Args:
             models: Dict mapping Residue enum to ResidueFlowModel.
 
         Returns:
             New PolymerFlowModel instance.
-
-        Example:
-            >>> models = {
-            ...     Residue.A: ResidueFlowModel.load("models/A"),
-            ...     Residue.G: ResidueFlowModel.load("models/G"),
-            ... }
-            >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
         """
-        return cls({r.value: m for r, m in models.items()})
+        return cls(models)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Stateful Lazy API

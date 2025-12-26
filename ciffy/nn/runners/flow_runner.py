@@ -215,11 +215,17 @@ def _run_flow_job(
 
         trainer = ResidueFlowTrainer(training_config)
 
-        # Train all residue types
-        results = trainer.train_all(
-            cif_paths, residues, verbose=False,
-            train_paths=train_paths, test_paths=test_paths,
-        )
+        # Train residues one at a time with progress updates
+        results = {}
+        for i, residue in enumerate(residues):
+            send_progress("running", i, len(residues))
+            if train_paths is not None and test_paths is not None:
+                result = trainer.train_single_presplit(
+                    train_paths, test_paths, residue, verbose=False
+                )
+            else:
+                result = trainer.train_single(cif_paths, residue, verbose=False)
+            results[residue] = result
 
         duration = time.time() - start_time
 

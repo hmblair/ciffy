@@ -51,8 +51,6 @@ def create_test_residue_model(
         residue=residue,
         atom_indices=list(residue.index()[:n_atoms]),
         n_atoms=n_atoms,
-        pca_rmsd=0.1,
-        var_explained=float(var_explained[-1]),
     )
 
 

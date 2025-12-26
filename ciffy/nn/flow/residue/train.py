@@ -36,39 +36,17 @@ def _compute_aligned_rmsd(coords1: np.ndarray, coords2: np.ndarray, n_atoms: int
     return float(np.mean(rmsds))
 
 
-def _gaussianity_loss(z: torch.Tensor) -> torch.Tensor:
-    """
-    Compute loss penalizing deviation from standard normal N(0, I).
-
-    This encourages the latent space to be Gaussian, which improves
-    sampling quality since we sample from N(0, I) at inference time.
-
-    Args:
-        z: Latent vectors (N, d).
-
-    Returns:
-        Scalar loss value.
-    """
-    # Penalize non-zero mean
-    mean_loss = z.mean(dim=0).pow(2).mean()
-    # Penalize non-unit variance
-    var_loss = (z.var(dim=0) - 1).pow(2).mean()
-    return mean_loss + var_loss
-
-
 def train_pca_flow(
     train_data: np.ndarray,
     test_data: np.ndarray | None = None,
     n_atoms: int | None = None,
     latent_dim: int = 12,
-    n_layers: int = 8,
-    hidden_dim: int = 64,
+    n_layers: int = 4,
+    hidden_dim: int = 56,
     bound: float | None = None,
-    coupling_type: str = "affine",
     n_epochs: int = 200,
     batch_size: int = 256,
     lr: float = 1e-3,
-    gaussianity_weight: float = 0.0,
     device: str = "cpu",
     verbose: bool = True,
 ) -> tuple[PCAFlow, dict]:
@@ -83,15 +61,12 @@ def train_pca_flow(
         test_data: (n_test, d) test data array for evaluation. If None, uses train_data.
         n_atoms: Number of atoms (for aligned RMSD). If None, inferred from data dims.
         latent_dim: Number of PCA components / latent dimensions.
-        n_layers: Number of flow layers.
-        hidden_dim: Hidden dimension in coupling networks.
+        n_layers: Number of flow layers (default 4 for spline).
+        hidden_dim: Hidden dimension in coupling networks (default 56).
         bound: Tanh bound for decode (in std devs). Prevents extrapolation.
-        coupling_type: Type of coupling layer ('affine' or 'spline').
         n_epochs: Number of training epochs.
         batch_size: Batch size for training.
         lr: Learning rate.
-        gaussianity_weight: Weight for Gaussianity regularization loss. Encourages
-            latent space to match N(0, I), improving sampling quality. Default 0.0.
         device: Device to train on.
         verbose: Print progress.
 
@@ -142,7 +117,6 @@ def train_pca_flow(
         n_layers=n_layers,
         hidden_dim=hidden_dim,
         bound=bound,
-        coupling_type=coupling_type,
     ).to(device)
 
     # Prepare training data
@@ -165,14 +139,7 @@ def train_pca_flow(
             optimizer.zero_grad()
             z, log_det = flow(batch)
             log_pz = -0.5 * (z ** 2 + np.log(2 * np.pi)).sum(dim=-1)
-            nll = -(log_pz + log_det).mean()
-
-            # Add Gaussianity regularization if enabled
-            if gaussianity_weight > 0:
-                gauss_loss = _gaussianity_loss(z)
-                loss = nll + gaussianity_weight * gauss_loss
-            else:
-                loss = nll
+            loss = -(log_pz + log_det).mean()
 
             loss.backward()
             optimizer.step()

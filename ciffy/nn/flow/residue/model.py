@@ -78,58 +78,6 @@ class CouplingNetwork(nn.Module):
         return self.net(x)
 
 
-class AffineCoupling(nn.Module):
-    """
-    Affine coupling layer.
-
-    Splits input into two halves and transforms one conditioned on the other:
-        y_a = x_a
-        y_b = x_b * exp(s(x_a)) + t(x_a)
-
-    This is exactly invertible by construction.
-    """
-
-    def __init__(self, dim: int, hidden_dim: int = 64, even_mask: bool = True):
-        super().__init__()
-        self.dim = dim
-        self.register_buffer("mask", torch.arange(dim) % 2 == (0 if even_mask else 1))
-
-        n_masked = int(self.mask.sum())
-        n_unmasked = dim - n_masked
-        self.net = CouplingNetwork(n_masked, 2 * n_unmasked, hidden_dim)
-
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x_a = x[:, self.mask]
-        x_b = x[:, ~self.mask]
-
-        st = self.net(x_a)
-        s, t = st.chunk(2, dim=-1)
-        s = torch.tanh(s) * 0.5  # Bound scale for stability
-
-        y_b = x_b * torch.exp(s) + t
-        log_det = s.sum(dim=-1)
-
-        y = torch.empty_like(x)
-        y[:, self.mask] = x_a
-        y[:, ~self.mask] = y_b
-        return y, log_det
-
-    def inverse(self, y: torch.Tensor) -> torch.Tensor:
-        y_a = y[:, self.mask]
-        y_b = y[:, ~self.mask]
-
-        st = self.net(y_a)
-        s, t = st.chunk(2, dim=-1)
-        s = torch.tanh(s) * 0.5
-
-        x_b = (y_b - t) * torch.exp(-s)
-
-        x = torch.empty_like(y)
-        x[:, self.mask] = y_a
-        x[:, ~self.mask] = x_b
-        return x
-
-
 def _rational_quadratic_spline(
     x: torch.Tensor,
     widths: torch.Tensor,
@@ -163,11 +111,13 @@ def _rational_quadratic_spline(
     """
     K = widths.shape[-1]
 
-    # Normalize widths and heights to sum to 2*bound
-    widths = torch.softmax(widths, dim=-1) * 2 * bound
-    widths = min_bin_width + (1 - min_bin_width * K) * widths
-    heights = torch.softmax(heights, dim=-1) * 2 * bound
-    heights = min_bin_height + (1 - min_bin_height * K) * heights
+    # Normalize widths and heights to sum to 2*bound with minimum bin sizes
+    # After softmax: sums to 1
+    # After adjustment: min_bin + (2*bound - K*min_bin) * softmax sums to 2*bound
+    widths = torch.softmax(widths, dim=-1)
+    widths = min_bin_width + (2 * bound - K * min_bin_width) * widths
+    heights = torch.softmax(heights, dim=-1)
+    heights = min_bin_height + (2 * bound - K * min_bin_height) * heights
 
     # Derivatives must be positive
     derivatives = min_derivative + torch.nn.functional.softplus(derivatives)
@@ -194,37 +144,18 @@ def _rational_quadratic_spline(
     bin_idx = bin_idx.squeeze(-1).clamp(0, K - 1)
 
     # Gather bin parameters
-    # Shape manipulation for gather
-    batch_shape = x.shape[:-1]
+    # Input is always 2D (batch, dim) from coupling layers
+    n_batch = x.shape[0]
     d = x.shape[-1]
 
-    # Flatten for easier indexing
-    flat_idx = bin_idx.reshape(-1, d)
-    n_batch = flat_idx.shape[0]
-
-    # Get bin widths, heights, and derivatives
-    widths_flat = widths.reshape(-1, d, K)
-    heights_flat = heights.reshape(-1, d, K)
-    cumwidths_flat = cumwidths.reshape(-1, d, K + 1)
-    cumheights_flat = cumheights.reshape(-1, d, K + 1)
-    derivatives_flat = derivatives.reshape(-1, d, K + 1)
-
     # Index into each dimension
-    idx_expanded = flat_idx.unsqueeze(-1)  # (n_batch, d, 1)
-    w = widths_flat.gather(-1, idx_expanded).squeeze(-1)  # (n_batch, d)
-    h = heights_flat.gather(-1, idx_expanded).squeeze(-1)
-    xk = cumwidths_flat.gather(-1, idx_expanded).squeeze(-1)
-    yk = cumheights_flat.gather(-1, idx_expanded).squeeze(-1)
-    dk = derivatives_flat.gather(-1, idx_expanded).squeeze(-1)
-    dk1 = derivatives_flat.gather(-1, idx_expanded + 1).squeeze(-1)
-
-    # Reshape back
-    w = w.reshape(*batch_shape, d)
-    h = h.reshape(*batch_shape, d)
-    xk = xk.reshape(*batch_shape, d)
-    yk = yk.reshape(*batch_shape, d)
-    dk = dk.reshape(*batch_shape, d)
-    dk1 = dk1.reshape(*batch_shape, d)
+    idx_expanded = bin_idx.unsqueeze(-1)  # (n_batch, d, 1)
+    w = widths.gather(-1, idx_expanded).squeeze(-1)  # (n_batch, d)
+    h = heights.gather(-1, idx_expanded).squeeze(-1)
+    xk = cumwidths.gather(-1, idx_expanded).squeeze(-1)
+    yk = cumheights.gather(-1, idx_expanded).squeeze(-1)
+    dk = derivatives.gather(-1, idx_expanded).squeeze(-1)
+    dk1 = derivatives.gather(-1, idx_expanded + 1).squeeze(-1)
 
     # Slope of the linear segment
     s = h / w
@@ -267,7 +198,7 @@ def _rational_quadratic_spline(
 
     # Apply identity for values outside domain
     x_out = torch.where(inside_mask, x_out, x)
-    log_det = log_det.reshape(*batch_shape)
+    # log_det already has shape (n_batch,) after sum(dim=-1)
 
     return x_out, log_det
 
@@ -361,46 +292,50 @@ class PCAFlow(nn.Module):
     """
     PCA for dimensionality reduction + normalizing flow for density estimation.
 
+    Uses neural spline flows (rational-quadratic splines) for expressive
+    density modeling with good Gaussianity properties.
+
     The model is exactly invertible: decode(encode(x)) reconstructs x
     with error bounded only by PCA truncation.
 
     Args:
         V: PCA components matrix (k, d) where k is latent dim, d is coord dim.
         mean: Mean coordinates (d,).
-        n_layers: Number of flow layers (ActNorm + Coupling pairs).
+        n_layers: Number of flow layers (ActNorm + SplineCoupling pairs).
         hidden_dim: Hidden dimension in coupling networks.
         bound: Tanh bound (in std devs) for decode(). None (default) disables
                bounding, preserving exact invertibility.
-        coupling_type: Type of coupling layer ('affine' or 'spline').
+        n_bins: Number of spline bins (default 8).
+        spline_bound: Spline domain bound (default 3.0).
     """
 
     def __init__(
         self,
         V: torch.Tensor,
         mean: torch.Tensor,
-        n_layers: int = 8,
-        hidden_dim: int = 64,
+        n_layers: int = 4,
+        hidden_dim: int = 56,
         bound: float | None = None,
-        coupling_type: str = "affine",
+        n_bins: int = 8,
+        spline_bound: float = 3.0,
     ):
         super().__init__()
         self.k = V.shape[0]  # Latent dimension
         self.d = V.shape[1]  # Coordinate dimension (n_atoms * 3 + 6)
         self.bound = bound
-        self.coupling_type = coupling_type
 
         # PCA parameters (fixed, not learned)
         self.register_buffer("V", V)
         self.register_buffer("mean", mean)
 
-        # Flow layers: alternating ActNorm + Coupling
+        # Flow layers: alternating ActNorm + SplineCoupling
         self.layers = nn.ModuleList()
         for i in range(n_layers):
             self.layers.append(ActNorm(self.k))
-            if coupling_type == "spline":
-                self.layers.append(SplineCoupling(self.k, hidden_dim, even_mask=(i % 2 == 0)))
-            else:
-                self.layers.append(AffineCoupling(self.k, hidden_dim, even_mask=(i % 2 == 0)))
+            self.layers.append(SplineCoupling(
+                self.k, hidden_dim, even_mask=(i % 2 == 0),
+                n_bins=n_bins, bound=spline_bound
+            ))
 
     def coords_to_pca(self, x: torch.Tensor) -> torch.Tensor:
         """Project coordinates to PCA space."""
@@ -536,7 +471,7 @@ class ResidueFlowConfig:
     min_coverage: float = 0.9
 
 
-class ResidueFlowModel:
+class ResidueFlowModel(nn.Module):
     """
     Residue flow model that captures conformation and backbone link geometry.
 
@@ -548,13 +483,14 @@ class ResidueFlowModel:
     where transform = [axis-angle (3), translation (3)] defines the relative
     position and orientation of the next residue's P atom.
 
+    As an nn.Module subclass, this model can be composed into larger networks
+    and its parameters will be automatically included in optimizer updates.
+
     Attributes:
-        flow: The underlying PCAFlow model.
+        flow: The underlying PCAFlow model (registered as submodule).
         residue: The source residue type.
         atoms: AtomGroup subset containing the atoms used.
         n_atoms: Number of atoms per residue.
-        pca_rmsd: Reconstruction RMSD from PCA truncation.
-        var_explained: Fraction of variance explained.
 
     Example:
         >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
@@ -562,6 +498,15 @@ class ResidueFlowModel:
         >>> # Position next residue using the transform
         >>> from ciffy.nn.residue_flow import position_next_residue
         >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
+
+        # Can be used as part of a larger module:
+        >>> class MolecularModel(nn.Module):
+        ...     def __init__(self):
+        ...         super().__init__()
+        ...         self.residue_flow = ResidueFlowModel.load("model_dir")
+        ...         self.head = nn.Linear(12, 64)
+        >>> # Parameters from residue_flow are automatically included
+        >>> optimizer = Adam(molecular_model.parameters())
     """
 
     def __init__(
@@ -570,17 +515,17 @@ class ResidueFlowModel:
         residue: "Residue",
         atom_indices: list[int],
         n_atoms: int,
-        pca_rmsd: float,
-        var_explained: float,
         jit: bool = False,
     ):
+        super().__init__()
+        # Register flow as submodule - parameters auto-included in .parameters()
         self.flow = flow
+
+        # Non-tensor metadata (not registered as buffers/parameters)
         self.residue = residue
         self._atom_indices = atom_indices
         self.n_atoms = n_atoms
         self._atoms_group: "AtomGroup | None" = None
-        self.pca_rmsd = pca_rmsd
-        self.var_explained = var_explained
         self._jit_decoder: torch.jit.ScriptModule | None = None
 
         # Cached geometry projector (built lazily, invalidated on device change)
@@ -748,8 +693,6 @@ class ResidueFlowModel:
             residue=residue,
             atom_indices=atoms,
             n_atoms=n_atoms,
-            pca_rmsd=info["pca_rmsd"],
-            var_explained=info["var_explained"],
         )
 
     def encode(
@@ -836,8 +779,6 @@ class ResidueFlowModel:
             "n_layers": len(self.flow.layers) // 2,
             "hidden_dim": self.flow.layers[1].net.net[0].out_features,
             "bound": float(self.flow.bound) if self.flow.bound is not None else None,
-            "pca_rmsd": float(self.pca_rmsd),
-            "var_explained": float(self.var_explained),
         }
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=2)
@@ -888,8 +829,6 @@ class ResidueFlowModel:
             residue=residue,
             atom_indices=config["atom_indices"],
             n_atoms=config["n_atoms"],
-            pca_rmsd=config["pca_rmsd"],
-            var_explained=config["var_explained"],
             jit=jit,
         )
 
@@ -907,34 +846,21 @@ class ResidueFlowModel:
         """Device where model parameters reside."""
         return self.flow.V.device
 
-    def to(self, device: str | torch.device) -> "ResidueFlowModel":
+    def _apply(self, fn):
         """
-        Move model to specified device.
+        Override _apply to clear cached state when moving devices.
 
-        Clears cached geometry projector (will be rebuilt on first use).
-
-        Args:
-            device: Target device (e.g., "cpu", "cuda", "cuda:0").
-
-        Returns:
-            Self for method chaining.
+        This is called by to(), cuda(), cpu(), etc.
         """
-        device = torch.device(device) if isinstance(device, str) else device
-        self.flow = self.flow.to(device)
-        if self._jit_decoder is not None:
-            self._jit_decoder = self._jit_decoder.to(device)
         # Clear cached projector - will be rebuilt for new device
         self._geometry_projector = None
         self._geometry_projector_device = None
-        return self
 
-    def cuda(self, device_id: int = 0) -> "ResidueFlowModel":
-        """Move model to CUDA device."""
-        return self.to(f"cuda:{device_id}")
+        # Move JIT decoder if present
+        if self._jit_decoder is not None:
+            self._jit_decoder = self._jit_decoder._apply(fn)
 
-    def cpu(self) -> "ResidueFlowModel":
-        """Move model to CPU."""
-        return self.to("cpu")
+        return super()._apply(fn)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Geometry Projection
@@ -1089,7 +1015,5 @@ class ResidueFlowModel:
         return (
             f"ResidueFlowModel({self.residue.name}, "
             f"atoms={self.n_atoms}, "
-            f"latent_dim={self.flow.k}, "
-            f"var={self.var_explained*100:.1f}%, "
-            f"rmsd={self.pca_rmsd:.3f}Å)"
+            f"latent_dim={self.flow.k})"
         )

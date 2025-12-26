@@ -174,8 +174,6 @@ class TestPCAFlow:
             residue=Residue.A,
             atom_indices=atom_indices,
             n_atoms=len(atom_indices),
-            pca_rmsd=info["pca_rmsd"],
-            var_explained=info["var_explained"],
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,16 +217,12 @@ class TestPCAFlow:
         mean_t = torch.from_numpy(mean).float()
         flow = PCAFlow(V_t, mean_t, n_layers=4, hidden_dim=32, bound=3.0)
 
-        pca_rmsd = float(np.sqrt(((extended - (extended - mean) @ V.T @ V - mean) ** 2).mean()))
-
         # Create model without JIT
         model_no_jit = ResidueFlowModel(
             flow=flow,
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
             n_atoms=n_atoms,
-            pca_rmsd=pca_rmsd,
-            var_explained=float(var_explained[-1]),
             jit=False,
         )
 
@@ -238,8 +232,6 @@ class TestPCAFlow:
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
             n_atoms=n_atoms,
-            pca_rmsd=pca_rmsd,
-            var_explained=float(var_explained[-1]),
             jit=True,
         )
 
@@ -369,8 +361,6 @@ class TestResidueFlowModel:
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
             n_atoms=n_atoms,
-            pca_rmsd=0.1,
-            var_explained=0.95,
         )
 
         # Test decode
@@ -463,8 +453,6 @@ class TestResidueFlowModel:
             residue=Residue.A,
             atom_indices=list(Residue.A.index()[:n_atoms]),
             n_atoms=n_atoms,
-            pca_rmsd=0.1,
-            var_explained=float(var_explained[-1]),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:

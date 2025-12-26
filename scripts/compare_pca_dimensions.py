@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Compare flow model performance across different PCA dimensions.
+Compare flow model performance across different PCA dimensions and training set sizes.
 
 This script trains flow models with different latent dimensions and compares
-their reconstruction quality and variance explained.
+their reconstruction quality and variance explained. Optionally, it can sweep
+over training set sizes to study data scaling behavior.
 
 Example:
     python scripts/compare_pca_dimensions.py --data_dir data/rna_training/ --output_dir experiments/pca_sweep
 
 For quick testing:
     python scripts/compare_pca_dimensions.py --data_dir tests/data/ --dims 4,8,12 --epochs 50
+
+Data scaling sweep (consistent test set across all sizes):
+    python scripts/compare_pca_dimensions.py --data_dir data/ --dims 8,12 --train_sizes 50,100,200
 """
 
 import argparse
@@ -22,6 +26,10 @@ from ciffy.nn.runners import (
     format_flow_results_table,
     create_latent_dim_sweep,
     FlowExperimentConfig,
+    # Data scaling
+    create_data_scaling_sweep,
+    run_data_scaling_experiments,
+    format_scaling_results_table,
 )
 
 
@@ -128,6 +136,19 @@ def main():
         default=42,
         help="Random seed for train/test split (default: 42)",
     )
+    parser.add_argument(
+        "--train_sizes",
+        type=str,
+        default=None,
+        help="Comma-separated training set sizes for data scaling sweep (e.g., 50,100,200). "
+             "When set, creates a grid of experiments over dims × train_sizes with consistent test set.",
+    )
+    parser.add_argument(
+        "--test_fraction",
+        type=float,
+        default=0.2,
+        help="Fraction of data for test set in data scaling mode (default: 0.2)",
+    )
 
     args = parser.parse_args()
 
@@ -165,7 +186,12 @@ def main():
         print(f"Error: No CIF files found in {data_dir}")
         return 1
 
-    # Limit number of structures if requested
+    # Parse training sizes for data scaling sweep
+    train_sizes = None
+    if args.train_sizes:
+        train_sizes = [int(s.strip()) for s in args.train_sizes.split(",")]
+
+    # Limit number of structures if requested (for non-scaling mode)
     total_found = len(cif_files)
     if args.max_structures is not None and total_found > args.max_structures:
         cif_files = cif_files[:args.max_structures]
@@ -174,38 +200,76 @@ def main():
         print(f"Found {total_found} CIF files")
     print(f"Training on residues: {[r.name for r in residues]}")
     print(f"Testing dimensions: {latent_dims}")
-    print(f"Train/test split: {args.train_split:.0%}/{args.test_split:.0%} (seed={args.split_seed})")
-    print()
 
-    # Create experiment configurations
-    configs = create_latent_dim_sweep(
-        base_name="pca",
-        latent_dims=latent_dims,
-        n_layers=args.layers,
-        n_epochs=args.epochs,
-        train_split=args.train_split,
-        test_split=args.test_split,
-        split_seed=args.split_seed,
-    )
-
-    # Run experiments
     parallel = args.parallel and not args.no_parallel
-    results = run_flow_experiments(
-        configs,
-        cif_paths=cif_files,
-        residues=residues,
-        device=args.device,
-        output_dir=args.output_dir,
-        parallel=parallel,
-        max_workers=args.max_workers,
-        verbose=not args.quiet,
-    )
 
-    # Print final comparison
-    print("\n" + "=" * 80)
-    print("FINAL COMPARISON")
-    print("=" * 80)
-    print(format_flow_results_table(results, show_residues=args.show_residues))
+    # Data scaling mode vs standard mode
+    if train_sizes:
+        print(f"Data scaling sweep: {train_sizes} structures × {latent_dims} dimensions")
+        print(f"Test fraction: {args.test_fraction:.0%} (seed={args.split_seed})")
+        print()
+
+        # Create data scaling experiment configs
+        configs = create_data_scaling_sweep(
+            base_name="scale",
+            train_sizes=train_sizes,
+            latent_dims=latent_dims,
+            n_layers=args.layers,
+            n_epochs=args.epochs,
+        )
+
+        # Run with consistent test set
+        results = run_data_scaling_experiments(
+            configs,
+            cif_paths=cif_files,
+            residues=residues,
+            test_fraction=args.test_fraction,
+            seed=args.split_seed,
+            device=args.device,
+            output_dir=args.output_dir,
+            parallel=parallel,
+            max_workers=args.max_workers,
+            verbose=not args.quiet,
+        )
+
+        # Print final comparison
+        print("\n" + "=" * 100)
+        print("FINAL COMPARISON (DATA SCALING)")
+        print("=" * 100)
+        print(format_scaling_results_table(results))
+
+    else:
+        print(f"Train/test split: {args.train_split:.0%}/{args.test_split:.0%} (seed={args.split_seed})")
+        print()
+
+        # Create experiment configurations
+        configs = create_latent_dim_sweep(
+            base_name="pca",
+            latent_dims=latent_dims,
+            n_layers=args.layers,
+            n_epochs=args.epochs,
+            train_split=args.train_split,
+            test_split=args.test_split,
+            split_seed=args.split_seed,
+        )
+
+        # Run experiments
+        results = run_flow_experiments(
+            configs,
+            cif_paths=cif_files,
+            residues=residues,
+            device=args.device,
+            output_dir=args.output_dir,
+            parallel=parallel,
+            max_workers=args.max_workers,
+            verbose=not args.quiet,
+        )
+
+        # Print final comparison
+        print("\n" + "=" * 80)
+        print("FINAL COMPARISON")
+        print("=" * 80)
+        print(format_flow_results_table(results, show_residues=args.show_residues))
 
     # Find best configuration
     successful = [r for r in results if r.status == "success"]
@@ -214,20 +278,33 @@ def main():
         best_rmsd = min(successful, key=lambda r: r.mean_test_rmsd)
         # Best by variance explained
         best_var = max(successful, key=lambda r: r.mean_var_explained)
+        # Best by gaussianity (for sampling quality)
+        best_gauss = max(successful, key=lambda r: r.mean_test_gaussianity)
 
-        print("\n" + "-" * 40)
+        print("\n" + "-" * 50)
         print("RECOMMENDATIONS")
-        print("-" * 40)
+        print("-" * 50)
         print(f"Best reconstruction (Test RMSD): {best_rmsd.name}")
         print(f"  Train RMSD: {best_rmsd.mean_train_rmsd:.4f}")
         print(f"  Test RMSD:  {best_rmsd.mean_test_rmsd:.4f}")
         print(f"  Variance: {best_rmsd.mean_var_explained*100:.1f}%")
-        print(f"  Params: {best_rmsd.total_params:,}")
+        print(f"  Gaussianity: {best_rmsd.mean_test_gaussianity:.3f}")
+        if train_sizes:
+            print(f"  Train structures: {best_rmsd.n_train_structures}")
         print()
         print(f"Highest variance explained: {best_var.name}")
         print(f"  Train RMSD: {best_var.mean_train_rmsd:.4f}")
         print(f"  Test RMSD:  {best_var.mean_test_rmsd:.4f}")
         print(f"  Variance: {best_var.mean_var_explained*100:.1f}%")
+        print(f"  Gaussianity: {best_var.mean_test_gaussianity:.3f}")
+        print()
+        print(f"Best for sampling (Gaussianity): {best_gauss.name}")
+        print(f"  Train RMSD: {best_gauss.mean_train_rmsd:.4f}")
+        print(f"  Test RMSD:  {best_gauss.mean_test_rmsd:.4f}")
+        print(f"  Variance: {best_gauss.mean_var_explained*100:.1f}%")
+        print(f"  Gaussianity: {best_gauss.mean_test_gaussianity:.3f}")
+        if train_sizes:
+            print(f"  Train structures: {best_gauss.n_train_structures}")
 
     return 0
 

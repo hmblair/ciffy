@@ -38,6 +38,11 @@ from .flow_runner import (
     format_flow_results_table,
     create_latent_dim_sweep,
     create_layer_sweep,
+    # Data scaling experiments
+    create_data_scaling_sweep,
+    prepare_scaling_jobs,
+    run_data_scaling_experiments,
+    format_scaling_results_table,
 )
 
 # Re-export ExperimentResult from training module for convenience
@@ -70,4 +75,9 @@ __all__ = [
     "format_flow_results_table",
     "create_latent_dim_sweep",
     "create_layer_sweep",
+    # Data scaling experiments
+    "create_data_scaling_sweep",
+    "prepare_scaling_jobs",
+    "run_data_scaling_experiments",
+    "format_scaling_results_table",
 ]

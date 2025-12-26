@@ -265,28 +265,152 @@ class ResidueFlowTrainer:
             test_gaussianity=info["test_gaussianity"],
         )
 
+    def train_single_presplit(
+        self,
+        train_paths: list[Path],
+        test_paths: list[Path],
+        residue: "Residue",
+        verbose: bool = True,
+    ) -> TrainingResult:
+        """
+        Train a ResidueFlowModel with pre-split train/test paths.
+
+        Use this for data scaling experiments where you want the same test set
+        across experiments with different training set sizes.
+
+        Args:
+            train_paths: List of training structure paths.
+            test_paths: List of test structure paths.
+            residue: Residue type to train on.
+            verbose: Print progress information.
+
+        Returns:
+            TrainingResult with trained model and metrics on test set.
+        """
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Training {residue.name}")
+            print(f"{'='*60}")
+            print(f"Pre-split: {len(train_paths)} train, {len(test_paths)} test structures")
+
+        # Extract training data
+        train_coords, train_transforms, atoms = extract_residues_with_links(
+            train_paths,
+            residue,
+            min_coverage=self.config.min_coverage,
+            max_bond_length=self.config.max_bond_length,
+            verbose=verbose,
+        )
+
+        n_train = len(train_coords)
+        n_atoms = len(atoms)
+
+        if n_train == 0:
+            raise ValueError(f"No {residue.name} residues found in training structures")
+
+        # Flatten and create extended representation for training
+        train_flat = train_coords.reshape(n_train, -1)
+        train_extended = np.concatenate([train_flat, train_transforms], axis=1)
+
+        # Extract test data
+        test_extended = None
+        n_test = 0
+        if len(test_paths) > 0:
+            try:
+                test_coords, test_transforms, _ = extract_residues_with_links(
+                    test_paths,
+                    residue,
+                    min_coverage=self.config.min_coverage,
+                    max_bond_length=self.config.max_bond_length,
+                    verbose=False,
+                )
+                n_test = len(test_coords)
+                if n_test > 0:
+                    test_flat = test_coords.reshape(n_test, -1)
+                    test_extended = np.concatenate([test_flat, test_transforms], axis=1)
+            except ValueError:
+                pass
+
+        if verbose:
+            print(f"Extracted {n_train} train, {n_test} test instances with {n_atoms} atoms each")
+            print(f"Extended representation: {train_extended.shape[1]} dimensions")
+
+        # Train with provided split
+        flow, info = train_pca_flow(
+            train_data=train_extended,
+            test_data=test_extended,
+            n_atoms=n_atoms,
+            latent_dim=self.config.latent_dim,
+            n_layers=self.config.n_layers,
+            hidden_dim=self.config.hidden_dim,
+            bound=self.config.bound,
+            n_epochs=self.config.n_epochs,
+            batch_size=self.config.batch_size,
+            lr=self.config.lr,
+            device=self.config.device,
+            verbose=verbose,
+        )
+
+        # Create ResidueFlowModel wrapper
+        model = ResidueFlowModel(
+            flow=flow,
+            residue=residue,
+            atom_indices=atoms,
+            n_atoms=n_atoms,
+            pca_rmsd=info["pca_rmsd"],
+            var_explained=info["var_explained"],
+        )
+
+        return TrainingResult(
+            model=model,
+            residue=residue,
+            n_train=n_train,
+            n_test=n_test,
+            n_atoms=n_atoms,
+            pca_rmsd=info["pca_rmsd"],
+            train_rmsd=info["train_rmsd"],
+            test_rmsd=info["test_rmsd"],
+            var_explained=info["var_explained"],
+            n_params=info["n_params"],
+            train_nll=info["train_nll"],
+            test_nll=info["test_nll"],
+            train_gaussianity=info["train_gaussianity"],
+            test_gaussianity=info["test_gaussianity"],
+        )
+
     def train_all(
         self,
         cif_paths: list[Path],
         residues: list["Residue"],
         verbose: bool = True,
+        train_paths: list[Path] | None = None,
+        test_paths: list[Path] | None = None,
     ) -> dict["Residue", TrainingResult]:
         """
         Train ResidueFlowModels for multiple residue types.
 
         Args:
-            cif_paths: List of paths to CIF files.
+            cif_paths: List of paths to CIF files (used if train/test_paths not set).
             residues: List of residue types to train.
             verbose: Print progress information.
+            train_paths: Pre-split training paths (optional).
+            test_paths: Pre-split test paths (optional).
 
         Returns:
             Dict mapping residue type to TrainingResult.
         """
         results = {}
 
+        use_presplit = train_paths is not None and test_paths is not None
+
         for residue in residues:
             try:
-                result = self.train_single(cif_paths, residue, verbose=verbose)
+                if use_presplit:
+                    result = self.train_single_presplit(
+                        train_paths, test_paths, residue, verbose=verbose
+                    )
+                else:
+                    result = self.train_single(cif_paths, residue, verbose=verbose)
                 results[residue] = result
             except ValueError as e:
                 if verbose:

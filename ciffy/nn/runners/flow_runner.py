@@ -70,6 +70,7 @@ class FlowExperimentConfig:
         train_split: Fraction of structures for training (default: 0.8).
         test_split: Fraction of structures for testing (default: 0.2).
         split_seed: Random seed for reproducible splits (default: 42).
+        max_structures: Maximum training structures (None = use all).
     """
 
     name: str
@@ -85,6 +86,7 @@ class FlowExperimentConfig:
     train_split: float = 0.8
     test_split: float = 0.2
     split_seed: int | None = 42
+    max_structures: int | None = None
 
 
 @dataclass
@@ -105,6 +107,7 @@ class FlowExperimentResult:
         mean_test_nll: Mean test NLL across residues.
         mean_test_gaussianity: Mean gaussianity score on test data.
         total_params: Total parameters across all residue models.
+        n_train_structures: Number of training structures used.
         duration_seconds: Training time.
         error: Error message if failed.
         output_dir: Directory where models were saved.
@@ -122,6 +125,7 @@ class FlowExperimentResult:
     mean_test_nll: float = 0.0
     mean_test_gaussianity: float = 0.0
     total_params: int = 0
+    n_train_structures: int = 0
     duration_seconds: float = 0.0
     error: Optional[str] = None
     output_dir: Optional[str] = None
@@ -138,12 +142,18 @@ class _FlowJobConfig:
 
     This is what gets passed to the parallel runner. We bundle the experiment
     config with the CIF paths and residues so each worker has everything it needs.
+
+    For data scaling experiments, train_paths and test_paths can be set directly
+    to use a pre-computed split (e.g., from DataScalingSplit).
     """
 
     experiment: FlowExperimentConfig
-    cif_paths: list[str]  # Strings for pickling
+    cif_paths: list[str]  # Strings for pickling (used if train/test_paths not set)
     residue_names: list[str]  # Names for pickling
     output_dir: Optional[str] = None
+    # Pre-split paths (optional, for data scaling experiments)
+    train_paths: Optional[list[str]] = None
+    test_paths: Optional[list[str]] = None
 
 
 def _run_flow_job(
@@ -162,6 +172,10 @@ def _run_flow_job(
     cif_paths = [Path(p) for p in job_config.cif_paths]
     residues = [getattr(Residue, name) for name in job_config.residue_names]
     output_dir = Path(job_config.output_dir) if job_config.output_dir else None
+
+    # Pre-split paths (for data scaling experiments)
+    train_paths = [Path(p) for p in job_config.train_paths] if job_config.train_paths else None
+    test_paths = [Path(p) for p in job_config.test_paths] if job_config.test_paths else None
 
     start_time = time.time()
 
@@ -202,7 +216,10 @@ def _run_flow_job(
         trainer = ResidueFlowTrainer(training_config)
 
         # Train all residue types
-        results = trainer.train_all(cif_paths, residues, verbose=False)
+        results = trainer.train_all(
+            cif_paths, residues, verbose=False,
+            train_paths=train_paths, test_paths=test_paths,
+        )
 
         duration = time.time() - start_time
 
@@ -249,6 +266,13 @@ def _run_flow_job(
 
         send_progress("complete", len(residues), len(residues))
 
+        # Determine number of training structures
+        if train_paths is not None:
+            n_train_structures = len(train_paths)
+        else:
+            # Estimate from split ratio
+            n_train_structures = int(len(cif_paths) * config.train_split)
+
         return FlowExperimentResult(
             name=config.name,
             config=config,
@@ -262,6 +286,7 @@ def _run_flow_job(
             mean_test_nll=float(np.mean(test_nlls)) if test_nlls else 0.0,
             mean_test_gaussianity=float(np.mean(test_gaussianities)) if test_gaussianities else 0.0,
             total_params=total_params,
+            n_train_structures=n_train_structures,
             duration_seconds=duration,
             output_dir=str(save_dir) if save_dir else None,
         )
@@ -641,6 +666,287 @@ def create_layer_sweep(
     ]
 
 
+def create_data_scaling_sweep(
+    base_name: str = "scale",
+    train_sizes: list[int] | None = None,
+    latent_dims: list[int] | None = None,
+    **kwargs,
+) -> list[FlowExperimentConfig]:
+    """
+    Create configurations for a data scaling sweep (train_size × latent_dim grid).
+
+    Creates a grid of experiments varying training set size and latent dimension.
+    Use with `prepare_scaling_jobs` to ensure consistent test sets across experiments.
+
+    Args:
+        base_name: Base name for experiments.
+        train_sizes: List of training set sizes. Default [50, 100, 200, 500].
+        latent_dims: List of latent dimensions. Default [12] (single value for data scaling).
+        **kwargs: Additional config parameters.
+
+    Returns:
+        List of FlowExperimentConfig objects with names like "scale_n50_dim12".
+
+    Example:
+        >>> configs = create_data_scaling_sweep(
+        ...     "scale", train_sizes=[50, 100, 200], latent_dims=[8, 12]
+        ... )
+        >>> # Creates: scale_n50_dim8, scale_n50_dim12, scale_n100_dim8, ...
+    """
+    if train_sizes is None:
+        train_sizes = [50, 100, 200, 500]
+    if latent_dims is None:
+        latent_dims = [12]
+
+    configs = []
+    for n_train in train_sizes:
+        for dim in latent_dims:
+            configs.append(
+                FlowExperimentConfig(
+                    name=f"{base_name}_n{n_train}_dim{dim}",
+                    latent_dim=dim,
+                    max_structures=n_train,
+                    **kwargs,
+                )
+            )
+
+    return configs
+
+
+def prepare_scaling_jobs(
+    configs: list[FlowExperimentConfig],
+    cif_paths: list[str | Path],
+    residues: list["Residue"],
+    test_fraction: float = 0.2,
+    seed: int | None = 42,
+    output_dir: Optional[str | Path] = None,
+) -> list[_FlowJobConfig]:
+    """
+    Prepare job configs for data scaling experiments with consistent test set.
+
+    Uses DataScalingSplit to create a shuffled training pool where smaller sizes
+    are prefixes of larger sizes. All experiments use the same held-out test set.
+
+    Args:
+        configs: List of experiment configurations (should have max_structures set).
+        cif_paths: List of CIF file paths or glob patterns.
+        residues: List of residue types to train.
+        test_fraction: Fraction of data for test set (default: 0.2).
+        seed: Random seed for reproducibility.
+        output_dir: Optional base directory to save models.
+
+    Returns:
+        List of _FlowJobConfig with pre-split train/test paths.
+
+    Example:
+        >>> configs = create_data_scaling_sweep("scale", [50, 100, 200])
+        >>> jobs = prepare_scaling_jobs(
+        ...     configs, cif_paths, residues, test_fraction=0.2
+        ... )
+        >>> runner = FlowExperimentRunner()
+        >>> results = runner.run(jobs)
+    """
+    from ..split import create_scaling_split
+
+    # Expand glob patterns
+    expanded_paths = []
+    for path in cif_paths:
+        path_str = str(path)
+        if "*" in path_str:
+            expanded_paths.extend(glob(path_str))
+        else:
+            expanded_paths.append(path_str)
+
+    if not expanded_paths:
+        raise ValueError("No CIF files found")
+
+    # Create data scaling split with shuffled training pool
+    scaling_split = create_scaling_split(
+        expanded_paths,
+        test_fraction=test_fraction,
+        seed=seed,
+    )
+
+    # Convert residues to names for pickling
+    residue_names = [r.name for r in residues]
+    output_str = str(output_dir) if output_dir else None
+
+    # Create job configs with pre-split paths
+    job_configs = []
+    for config in configs:
+        train_size = config.max_structures
+        if train_size is None:
+            # Use full training pool
+            train_size = scaling_split.max_train_size
+
+        train_paths = [str(p) for p in scaling_split.get_train(train_size)]
+        test_paths = [str(p) for p in scaling_split.test]
+
+        job_configs.append(
+            _FlowJobConfig(
+                experiment=config,
+                cif_paths=expanded_paths,  # Keep for compatibility
+                residue_names=residue_names,
+                output_dir=output_str,
+                train_paths=train_paths,
+                test_paths=test_paths,
+            )
+        )
+
+    return job_configs
+
+
+def run_data_scaling_experiments(
+    configs: list[FlowExperimentConfig],
+    cif_paths: list[str | Path],
+    residues: list["Residue"],
+    test_fraction: float = 0.2,
+    seed: int | None = 42,
+    parallel: bool = True,
+    max_workers: int | None = None,
+    device: str = "cpu",
+    output_dir: Optional[str | Path] = None,
+    verbose: bool = True,
+) -> list[FlowExperimentResult]:
+    """
+    Run data scaling experiments with consistent test set across all sizes.
+
+    This is a convenience wrapper that combines create_data_scaling_sweep,
+    prepare_scaling_jobs, and FlowExperimentRunner.run().
+
+    Args:
+        configs: Experiment configs (should have max_structures set).
+        cif_paths: List of CIF file paths or glob patterns.
+        residues: List of residue types to train.
+        test_fraction: Fraction of data for test set (default: 0.2).
+        seed: Random seed for reproducibility.
+        parallel: If True, run experiments in parallel.
+        max_workers: Maximum parallel workers.
+        device: Device to train on.
+        output_dir: Optional directory to save models.
+        verbose: Print progress and results.
+
+    Returns:
+        List of FlowExperimentResult in the same order as configs.
+
+    Example:
+        >>> configs = create_data_scaling_sweep("scale", [50, 100, 200], [8, 12])
+        >>> results = run_data_scaling_experiments(
+        ...     configs,
+        ...     cif_paths=["data/*.cif"],
+        ...     residues=[Residue.A, Residue.C, Residue.G, Residue.U],
+        ...     test_fraction=0.2,
+        ... )
+    """
+    job_configs = prepare_scaling_jobs(
+        configs=configs,
+        cif_paths=cif_paths,
+        residues=residues,
+        test_fraction=test_fraction,
+        seed=seed,
+        output_dir=output_dir,
+    )
+
+    runner = FlowExperimentRunner(
+        parallel=parallel,
+        max_workers=max_workers,
+        device=device,
+    )
+
+    results = runner.run(job_configs)
+
+    if verbose:
+        print("\n" + format_scaling_results_table(results))
+
+    return results
+
+
+def format_scaling_results_table(results: list[FlowExperimentResult]) -> str:
+    """
+    Format data scaling experiment results as an ASCII table.
+
+    Shows training set size, latent dimension, and all metrics.
+
+    Args:
+        results: List of FlowExperimentResult objects.
+
+    Returns:
+        Formatted table string.
+    """
+    if not results:
+        return "No results to display."
+
+    lines = []
+
+    lines.append("=" * 100)
+    lines.append("DATA SCALING EXPERIMENT RESULTS")
+    lines.append("=" * 100)
+
+    columns = [
+        ("Experiment", 18),
+        ("N Train", 8),
+        ("Dim", 5),
+        ("Var%", 7),
+        ("Test RMSD", 10),
+        ("Train NLL", 10),
+        ("Test NLL", 10),
+        ("Gauss", 7),
+        ("Params", 10),
+        ("Time", 8),
+    ]
+
+    header = "  ".join(f"{name:<{width}}" for name, width in columns)
+    separator = "  ".join("-" * width for _, width in columns)
+
+    lines.append(header)
+    lines.append(separator)
+
+    for r in results:
+        if r.status == "success":
+            row_values = [
+                r.name[:18],
+                str(r.n_train_structures),
+                str(r.config.latent_dim),
+                f"{r.mean_var_explained*100:.1f}%",
+                f"{r.mean_test_rmsd:.4f}",
+                f"{r.mean_train_nll:.2f}",
+                f"{r.mean_test_nll:.2f}",
+                f"{r.mean_test_gaussianity:.3f}",
+                f"{r.total_params:,}",
+                format_duration(r.duration_seconds),
+            ]
+        else:
+            row_values = [
+                r.name[:18],
+                "N/A",
+                str(r.config.latent_dim),
+                "N/A",
+                "N/A",
+                "N/A",
+                "N/A",
+                "N/A",
+                "N/A",
+                format_duration(r.duration_seconds),
+            ]
+
+        row = "  ".join(
+            f"{val:<{width}}" for val, (_, width) in zip(row_values, columns)
+        )
+        lines.append(row)
+
+    lines.append(separator)
+
+    # Show errors
+    failed = [r for r in results if r.status == "failed"]
+    if failed:
+        lines.append("")
+        lines.append("Errors:")
+        for r in failed:
+            lines.append(f"  {r.name}: {r.error}")
+
+    return "\n".join(lines)
+
+
 __all__ = [
     "FlowExperimentConfig",
     "FlowExperimentResult",
@@ -649,4 +955,9 @@ __all__ = [
     "format_flow_results_table",
     "create_latent_dim_sweep",
     "create_layer_sweep",
+    # Data scaling experiments
+    "create_data_scaling_sweep",
+    "prepare_scaling_jobs",
+    "run_data_scaling_experiments",
+    "format_scaling_results_table",
 ]

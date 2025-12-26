@@ -256,7 +256,191 @@ def split_by_structure(
     return DataSplit.from_paths(paths, train=train, val=val, test=test, seed=seed)
 
 
+@dataclass
+class DataScalingSplit(Generic[T]):
+    """
+    Container for data scaling experiments with consistent test set.
+
+    For experiments comparing model performance across different training
+    set sizes, this ensures all experiments use the same held-out test set.
+    Training subsets are nested: smaller sizes are prefixes of the shuffled
+    training pool.
+
+    Attributes:
+        train_pool: Shuffled training items (request any prefix via get_train).
+        test: Test set items (same for all experiments).
+        seed: Random seed used for splitting.
+
+    Example:
+        >>> scaling = DataScalingSplit.from_items(
+        ...     items=cif_files,
+        ...     test_fraction=0.2,
+        ...     seed=42,
+        ... )
+        >>> # Get any training size up to max
+        >>> train_50 = scaling.get_train(50)
+        >>> train_200 = scaling.get_train(200)
+        >>> # Smaller sets are always prefixes of larger ones
+        >>> assert train_50 == train_200[:50]
+    """
+
+    train_pool: list[T]
+    test: list[T]
+    seed: int | None = None
+
+    @classmethod
+    def from_items(
+        cls,
+        items: Sequence[T],
+        test_fraction: float = 0.2,
+        seed: int | None = 42,
+    ) -> "DataScalingSplit[T]":
+        """
+        Create a data scaling split with shuffled training pool and fixed test set.
+
+        Args:
+            items: Full dataset to split.
+            test_fraction: Fraction of data for test set (default: 0.2).
+            seed: Random seed for reproducibility.
+
+        Returns:
+            DataScalingSplit with shuffled train_pool and fixed test set.
+
+        Example:
+            >>> scaling = DataScalingSplit.from_items(
+            ...     items=list(range(1000)),
+            ...     test_fraction=0.2,
+            ... )
+            >>> len(scaling.test)  # 200 items
+            200
+            >>> len(scaling.train_pool)  # 800 items
+            800
+            >>> scaling.get_train(100)  # First 100 of shuffled pool
+        """
+        items_list = list(items)
+        n_total = len(items_list)
+
+        if n_total == 0:
+            return cls(train_pool=[], test=[], seed=seed)
+
+        # Shuffle deterministically
+        if seed is not None:
+            rng = random.Random(seed)
+            rng.shuffle(items_list)
+        else:
+            random.shuffle(items_list)
+
+        # Split into train pool and test set
+        n_test = int(n_total * test_fraction)
+
+        train_pool = items_list[:n_total - n_test]
+        test_items = items_list[n_total - n_test:]
+
+        return cls(
+            train_pool=train_pool,
+            test=test_items,
+            seed=seed,
+        )
+
+    @classmethod
+    def from_paths(
+        cls,
+        paths: Sequence[str | Path],
+        test_fraction: float = 0.2,
+        seed: int | None = 42,
+    ) -> "DataScalingSplit[Path]":
+        """
+        Create a data scaling split from file paths.
+
+        Args:
+            paths: Sequence of file paths.
+            test_fraction: Fraction of data for test set.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            DataScalingSplit with Path objects.
+        """
+        path_list = [Path(p) if isinstance(p, str) else p for p in paths]
+        return cls.from_items(path_list, test_fraction, seed)
+
+    def get_train(self, size: int) -> list[T]:
+        """
+        Get training subset of specified size.
+
+        Returns the first `size` items from the shuffled training pool.
+        Smaller sizes are always prefixes of larger sizes.
+
+        Args:
+            size: Number of training items to return.
+
+        Returns:
+            List of training items.
+
+        Raises:
+            ValueError: If size exceeds available training data.
+        """
+        if size > len(self.train_pool):
+            raise ValueError(
+                f"Requested size {size} exceeds available training data {len(self.train_pool)}"
+            )
+        return self.train_pool[:size]
+
+    @property
+    def max_train_size(self) -> int:
+        """Maximum available training set size."""
+        return len(self.train_pool)
+
+    def summary(self) -> str:
+        """Return a summary string."""
+        return (
+            f"DataScalingSplit(train_pool={len(self.train_pool)}, "
+            f"test={len(self.test)}, seed={self.seed})"
+        )
+
+    def __repr__(self) -> str:
+        return self.summary()
+
+
+def create_scaling_split(
+    paths: Sequence[str | Path],
+    test_fraction: float = 0.2,
+    seed: int | None = 42,
+) -> DataScalingSplit[Path]:
+    """
+    Create a data scaling split for comparing performance across training set sizes.
+
+    This is the recommended way to compare model performance across different
+    training set sizes. The test set is fixed across all experiments, and
+    smaller training sets are prefixes of the shuffled training pool.
+
+    Args:
+        paths: Sequence of file paths (e.g., CIF files).
+        test_fraction: Fraction of data for test set (default: 0.2).
+        seed: Random seed for reproducibility (default: 42).
+
+    Returns:
+        DataScalingSplit with shuffled training pool.
+
+    Example:
+        >>> from ciffy.nn.split import create_scaling_split
+        >>> from glob import glob
+        >>>
+        >>> cif_files = glob("data/*.cif")
+        >>> scaling = create_scaling_split(cif_files, test_fraction=0.2)
+        >>>
+        >>> # Run experiments with consistent test set
+        >>> for size in [50, 100, 200, 500]:
+        ...     train_paths = scaling.get_train(size)
+        ...     model = train(train_paths)
+        ...     metrics = evaluate(model, scaling.test)
+        ...     print(f"Size {size}: {metrics}")
+    """
+    return DataScalingSplit.from_paths(paths, test_fraction, seed)
+
+
 __all__ = [
     "DataSplit",
+    "DataScalingSplit",
     "split_by_structure",
+    "create_scaling_split",
 ]

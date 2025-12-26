@@ -224,11 +224,11 @@ class TestLoad:
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_molecule_type_classification(self, cif_file, backend):
-        """Test that molecule_type property correctly classifies chains."""
+        """Test that molecule_types property correctly classifies chains."""
         from ciffy import load, Molecule, Scale
 
         polymer = load(cif_file, backend=backend)
-        mol_types = polymer.molecule_type
+        mol_types = polymer.molecule_types
 
         # Should have one type per chain
         assert len(mol_types) == polymer.size(Scale.CHAIN)
@@ -242,7 +242,7 @@ class TestLoad:
         # Verify RNA chains are classified correctly
         rna_subset = polymer.by_type(Molecule.RNA)
         if not rna_subset.empty():
-            rna_types = rna_subset.molecule_type
+            rna_types = rna_subset.molecule_types
             for i, mol_val in enumerate(rna_types):
                 val = int(mol_val.item() if hasattr(mol_val, 'item') else mol_val)
                 assert val == Molecule.RNA.value, f"RNA subset chain {i} should be RNA"
@@ -449,8 +449,8 @@ class TestCifSave:
             empty.write("/tmp/should_not_exist.cif")
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_round_trip_preserves_molecule_type(self, cif_file, backend):
-        """Test that round-trip preserves molecule type for all chains.
+    def test_round_trip_preserves_molecule_types(self, cif_file, backend):
+        """Test that round-trip preserves molecule types for all chains.
 
         With the _entity block written, both polymer and non-polymer chains
         should preserve their molecule types exactly.
@@ -469,8 +469,8 @@ class TestCifSave:
             reloaded = load(output_path, backend=backend)
 
             # Molecule types should match exactly (ION round-trips via _pdbx_entity_nonpoly)
-            orig_types = np.asarray(original.molecule_type)
-            reload_types = np.asarray(reloaded.molecule_type)
+            orig_types = np.asarray(original.molecule_types)
+            reload_types = np.asarray(reloaded.molecule_types)
 
             assert np.array_equal(orig_types, reload_types), \
                 f"Molecule types mismatch: original={orig_types}, reloaded={reload_types}"
@@ -494,7 +494,7 @@ class TestMoleculeTypeDetection:
         assert polymer.size(Scale.CHAIN) == 8
 
         # All chains should be RNA
-        mol_types = polymer.molecule_type
+        mol_types = polymer.molecule_types
         for i in range(8):
             assert mol_types[i] == Molecule.RNA.value, \
                 f"Chain {i} should be RNA, got {Molecule(mol_types[i])}"
@@ -510,7 +510,7 @@ class TestMoleculeTypeDetection:
         assert polymer.size(Scale.CHAIN) == 4
 
         # Chain A is RNA, chains B/C/D are protein
-        mol_types = polymer.molecule_type
+        mol_types = polymer.molecule_types
         names = polymer.names
 
         expected = {

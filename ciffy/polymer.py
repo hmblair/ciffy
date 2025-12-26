@@ -12,7 +12,7 @@ from copy import copy
 
 import numpy as np
 
-from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
+from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy, Dtype
 from .backend import ops
 from .biochemistry import Scale, Molecule
 from .biochemistry._generated_molecule import molecule_type
@@ -32,37 +32,102 @@ from .utils.formatting import format_chain_table
 UNKNOWN = "UNKNOWN"
 
 
-def _classify_chain_type(min_idx: int, max_idx: int,
-                         large_sentinel: int, small_sentinel: int) -> int:
+class _BaseDescriptor:
+    """Base class for Polymer field/metadata descriptors."""
+
+    __slots__ = ('scale', 'required', 'is_list', 'name', 'private_name')
+
+    def __init__(
+        self,
+        scale: Scale,
+        required: bool = True,
+        is_list: bool = False,
+    ):
+        self.scale = scale
+        self.required = required
+        self.is_list = is_list
+        self.name = ""
+        self.private_name = ""
+
+    def __set_name__(self, owner, name):
+        self.name = name
+        self.private_name = f"_{name}"
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self  # Class-level access returns descriptor
+        value = getattr(obj, self.private_name, None)
+        if value is None and self.required:
+            raise AttributeError(f"'{self.name}' is not available on this Polymer")
+        return value
+
+    def __set__(self, obj, value):
+        setattr(obj, self.private_name, value)
+
+
+class Field(_BaseDescriptor):
     """
-    Classify a chain's molecule type from its min/max residue indices.
+    Descriptor for Polymer array fields with automatic slicing and backend conversion.
+
+    Fields describe arrays at different scales (atom, residue, chain) with dtype
+    information for backend conversion between NumPy and PyTorch.
 
     Args:
-        min_idx: Minimum residue index in the chain.
-        max_idx: Maximum residue index in the chain.
-        large_sentinel: Sentinel value indicating all residues were unknown (for min).
-        small_sentinel: Sentinel value indicating all residues were unknown (for max).
+        scale: Scale at which the field is defined (Scale.ATOM, RESIDUE, CHAIN).
+        dtype: Target dtype for backend conversion (Dtype.FLOAT32, INT64, etc.).
+        required: Whether the field must have a value (raises AttributeError if None).
+        validate: Whether to validate backend/device compatibility on set.
 
-    Returns:
-        Molecule enum value as int.
+    Example:
+        >>> coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT32)
+        >>> bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT32, required=False)
     """
-    # Handle case where all residues were unknown
-    if min_idx == large_sentinel or max_idx == small_sentinel:
-        return Molecule.UNKNOWN.value
 
-    try:
-        min_type = Molecule(Residue.from_index(min_idx).molecule_type)
-    except (ValueError, KeyError):
-        min_type = Molecule.UNKNOWN
-    try:
-        max_type = Molecule(Residue.from_index(max_idx).molecule_type)
-    except (ValueError, KeyError):
-        max_type = Molecule.UNKNOWN
+    __slots__ = ('dtype', 'validate')
 
-    # If min and max agree, use that type; otherwise mark as OTHER (mixed)
-    if min_type == max_type:
-        return min_type.value
-    return Molecule.OTHER.value
+    def __init__(
+        self,
+        scale: Scale,
+        dtype: Dtype | None = None,
+        required: bool = True,
+        validate: bool = True,
+    ):
+        super().__init__(scale, required, is_list=False)
+        self.dtype = dtype
+        self.validate = validate
+
+    def __set__(self, obj, value):
+        # Validate backend/device compatibility if enabled and reference exists
+        if self.validate and value is not None:
+            ref = getattr(obj, '_coordinates', None)
+            if ref is not None:
+                check_compatible(ref, value, self.name)
+        setattr(obj, self.private_name, value)
+
+    def __repr__(self):
+        return f"Field({self.scale.name}, dtype={self.dtype}, required={self.required})"
+
+
+class Metadata(_BaseDescriptor):
+    """
+    Descriptor for Polymer metadata (non-array values passed through without conversion).
+
+    Metadata describes simple values like scalars, strings, or lists that don't need
+    backend conversion but still need proper slicing behavior.
+
+    Args:
+        scale: Scale at which the metadata is defined (Scale.CHAIN, MOLECULE).
+        required: Whether the metadata must have a value.
+        is_list: True for Python list fields (names, strands, descriptions).
+
+    Example:
+        >>> pdb_id = Metadata(Scale.MOLECULE)
+        >>> names = Metadata(Scale.CHAIN, is_list=True)
+        >>> descriptions = Metadata(Scale.CHAIN, is_list=True, required=False)
+    """
+
+    def __repr__(self):
+        return f"Metadata({self.scale.name}, required={self.required}, is_list={self.is_list})"
 
 
 class Polymer:
@@ -88,6 +153,37 @@ class Polymer:
         polymer_count: Number of polymer atoms (first polymer_count atoms).
         nonpoly: Count of non-polymer atoms (last nonpoly atoms).
     """
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Field Descriptors - arrays with dtype conversion
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Per-atom arrays
+    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT32)
+    atoms = Field(Scale.ATOM, dtype=Dtype.INT64)
+    elements = Field(Scale.ATOM, dtype=Dtype.INT64)
+    bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT32, required=False)
+
+    # Per-residue arrays
+    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT64)
+
+    # Per-chain arrays
+    lengths = Field(Scale.CHAIN, dtype=Dtype.INT64)
+    molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT64, required=False, validate=False)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Metadata Descriptors - values passed through without conversion
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Molecule-level
+    pdb_id = Metadata(Scale.MOLECULE)
+    polymer_count = Metadata(Scale.MOLECULE)
+    resolution = Metadata(Scale.MOLECULE, required=False)
+
+    # Per-chain lists
+    names = Metadata(Scale.CHAIN, is_list=True)
+    strands = Metadata(Scale.CHAIN, is_list=True)
+    descriptions = Metadata(Scale.CHAIN, is_list=True, required=False)
 
     def __init__(
         self: Polymer,
@@ -172,7 +268,7 @@ class Polymer:
         self._sequence = sequence
         self._sizes = sizes
         self._lengths = lengths
-        self._molecule_types = molecule_types
+        self.molecule_types = molecule_types
         self.descriptions = descriptions
         self._bfactors = bfactors
         self._resolution = resolution
@@ -184,6 +280,101 @@ class Polymer:
         # Store coordinates directly (no internal coordinate system)
         self._coordinates = coordinates
         self._bonds: np.ndarray | None = None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Descriptor Helpers - for automatic slicing and backend conversion
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def _get_fields(cls) -> dict[str, Field]:
+        """Return all Field descriptors (arrays needing conversion)."""
+        return {
+            name: attr for name, attr in vars(cls).items()
+            if isinstance(attr, Field)
+        }
+
+    @classmethod
+    def _get_metadata(cls) -> dict[str, Metadata]:
+        """Return all Metadata descriptors (values passed through)."""
+        return {
+            name: attr for name, attr in vars(cls).items()
+            if isinstance(attr, Metadata)
+        }
+
+    @classmethod
+    def _get_descriptors(cls) -> dict[str, _BaseDescriptor]:
+        """Return all descriptors (Field and Metadata)."""
+        return {
+            name: attr for name, attr in vars(cls).items()
+            if isinstance(attr, _BaseDescriptor)
+        }
+
+    def _slice_all(
+        self,
+        atom_mask: Array,
+        res_mask: Array,
+        chain_mask: Array,
+    ) -> dict:
+        """
+        Slice all descriptor-based attributes according to their scale.
+
+        Args:
+            atom_mask: Boolean mask for atoms.
+            res_mask: Boolean mask for residues.
+            chain_mask: Boolean mask for chains.
+
+        Returns:
+            Dict mapping descriptor names to sliced values.
+        """
+        result = {}
+        for name, desc in self._get_descriptors().items():
+            value = getattr(self, desc.private_name, None)
+            if value is None:
+                result[name] = None
+            elif desc.scale == Scale.ATOM:
+                result[name] = value[atom_mask]
+            elif desc.scale == Scale.RESIDUE:
+                result[name] = value[res_mask]
+            elif desc.scale == Scale.CHAIN:
+                if desc.is_list:
+                    result[name] = filter_by_mask(value, chain_mask)
+                else:
+                    result[name] = value[chain_mask]
+            else:  # Scale.MOLECULE - scalars, no slicing
+                result[name] = value
+        return result
+
+    def _convert_backend(self, to_func) -> dict:
+        """
+        Convert all Field arrays to a target backend, pass through Metadata.
+
+        Args:
+            to_func: Function to convert arrays (e.g., to_numpy, to_torch).
+
+        Returns:
+            Dict mapping all descriptor names to converted/passed values.
+        """
+        result = {}
+
+        # Convert Field arrays with dtype
+        for name, field in self._get_fields().items():
+            value = getattr(self, field.private_name, None)
+            if value is None:
+                result[name] = None
+            elif field.dtype is not None:
+                result[name] = to_func(value, dtype=field.dtype)
+            else:
+                result[name] = to_func(value)
+
+        # Pass through Metadata unchanged (copy lists)
+        for name, meta in self._get_metadata().items():
+            value = getattr(self, meta.private_name, None)
+            if meta.is_list and value is not None:
+                result[name] = value.copy()
+            else:
+                result[name] = value
+
+        return result
 
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
@@ -230,68 +421,8 @@ class Polymer:
         return polymer.torch() if backend == "torch" else polymer
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Array Properties (with backend/device validation)
+    # Computed Properties
     # ─────────────────────────────────────────────────────────────────────────
-
-    @property
-    def coordinates(self) -> Array:
-        """(N, 3) tensor of atom positions."""
-        return self._coordinates
-
-    @coordinates.setter
-    def coordinates(self, value: Array) -> None:
-        """Set coordinates with backend/device validation."""
-        if self._coordinates is not None:
-            check_compatible(self._coordinates, value, "coordinates")
-        self._coordinates = value
-
-    @property
-    def atoms(self) -> Array:
-        """(N,) tensor of atom type indices."""
-        return self._atoms
-
-    @atoms.setter
-    def atoms(self, value: Array) -> None:
-        """Set atoms with backend/device validation."""
-        if self._coordinates is not None:
-            check_compatible(self._coordinates, value, "atoms")
-        self._atoms = value
-
-    @property
-    def elements(self) -> Array:
-        """(N,) tensor of element indices."""
-        return self._elements
-
-    @elements.setter
-    def elements(self, value: Array) -> None:
-        """Set elements with backend/device validation."""
-        if self._coordinates is not None:
-            check_compatible(self._coordinates, value, "elements")
-        self._elements = value
-
-    @property
-    def sequence(self) -> Array:
-        """(R,) tensor of residue type indices."""
-        return self._sequence
-
-    @sequence.setter
-    def sequence(self, value: Array) -> None:
-        """Set sequence with backend/device validation."""
-        if self._coordinates is not None:
-            check_compatible(self._coordinates, value, "sequence")
-        self._sequence = value
-
-    @property
-    def lengths(self) -> Array:
-        """(C,) tensor of residues per chain."""
-        return self._lengths
-
-    @lengths.setter
-    def lengths(self, value: Array) -> None:
-        """Set lengths with backend/device validation."""
-        if self._coordinates is not None:
-            check_compatible(self._coordinates, value, "lengths")
-        self._lengths = value
 
     @property
     def bonds(self) -> np.ndarray:
@@ -312,50 +443,6 @@ class Polymer:
             # Filter to i < j to avoid duplicates
             self._bonds = edges[edges[:, 0] < edges[:, 1]]
         return self._bonds
-
-    @property
-    def bfactors(self) -> Array | None:
-        """
-        B-factors (temperature factors) per atom.
-
-        B-factors quantify the uncertainty in atomic positions due to
-        thermal motion and static disorder. Higher values indicate
-        greater atomic mobility or structural heterogeneity.
-
-        Returns:
-            (N,) array of B-factors in Angstroms squared, or None if not
-            available (e.g., template structures, some NMR structures).
-
-        Example:
-            >>> p = ciffy.load("structure.cif")
-            >>> if p.bfactors is not None:
-            ...     mean_b = p.bfactors.mean()
-            ...     print(f"Mean B-factor: {mean_b:.1f} A^2")
-        """
-        return self._bfactors
-
-    @property
-    def resolution(self) -> float | None:
-        """
-        Structure resolution in Angstroms.
-
-        The resolution indicates the level of detail visible in the
-        electron density map. Lower values indicate higher resolution:
-        - < 1.0 A: Atomic resolution (individual atoms visible)
-        - 1.0-2.0 A: High resolution (most atoms resolvable)
-        - 2.0-3.0 A: Medium resolution (secondary structure clear)
-        - > 3.0 A: Low resolution (overall shape/fold visible)
-
-        Returns:
-            Resolution in Angstroms, or None if not available
-            (e.g., NMR structures, theoretical models).
-
-        Example:
-            >>> p = ciffy.load("structure.cif")
-            >>> if p.resolution is not None:
-            ...     print(f"Resolution: {p.resolution:.2f} A")
-        """
-        return self._resolution
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -452,77 +539,6 @@ class Polymer:
 
         raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
 
-    @property
-    def molecule_type(self: Polymer) -> Array:
-        """
-        Get the molecule type of each chain.
-
-        If molecule types were parsed from the CIF file (_entity_poly.type),
-        returns those directly. Otherwise, infers types from residue indices:
-        - RNA: indices 0-3 (A, C, G, U)
-        - DNA: index 4 (T/DT)
-        - Protein: indices 5-24 (amino acids)
-        - Water: index 25 (HOH)
-        - Ion: indices 26-27 (MG, CS)
-        - Other: modified nucleotides (28+)
-
-        Returns:
-            Array of Molecule enum values, one per chain.
-        """
-        # Use stored molecule types if available (from CIF parsing)
-        if self._molecule_types is not None:
-            return self._molecule_types
-
-        # Fallback: infer from residue indices
-        return self._infer_molecule_type()
-
-    def _infer_molecule_type(self: Polymer) -> Array:
-        """
-        Infer molecule type from residue indices (fallback when CIF doesn't have _entity_poly).
-
-        Uses both MIN and MAX residue index per chain to robustly detect type.
-        Unknown residues (index -1) are ignored when determining molecule type.
-        If min and max map to different molecule types, the chain is classified
-        as OTHER (mixed/heterogeneous composition).
-
-        Returns:
-            Array of Molecule enum values, one per chain.
-        """
-        n_chains = self.size(Scale.CHAIN)
-
-        # Sentinel values for masking unknown residues (-1) during min/max reduction.
-        # Values chosen to be outside valid Residue enum range (~0-500), ensuring
-        # unknowns are never selected as min/max when valid residues exist.
-        LARGE_SENTINEL = 9999
-        SMALL_SENTINEL = -9999
-
-        # Create masked copies for min/max reduction
-        unknown_mask = self.sequence == -1
-        seq_for_min = ops.to_backend(
-            np.where(to_numpy(unknown_mask), LARGE_SENTINEL, to_numpy(self.sequence)),
-            self.sequence
-        )
-        seq_for_max = ops.to_backend(
-            np.where(to_numpy(unknown_mask), SMALL_SENTINEL, to_numpy(self.sequence)),
-            self.sequence
-        )
-
-        # Get min and max residue index per chain (ignoring unknowns)
-        min_res, _ = self.rreduce(seq_for_min, Scale.CHAIN, Reduction.MIN)
-        max_res, _ = self.rreduce(seq_for_max, Scale.CHAIN, Reduction.MAX)
-
-        # Convert to numpy for classification (simpler than per-element backend checks)
-        min_np = to_numpy(min_res)
-        max_np = to_numpy(max_res)
-
-        # Classify each chain
-        result = np.empty(n_chains, dtype=np.int64)
-        for i in range(n_chains):
-            result[i] = _classify_chain_type(int(min_np[i]), int(max_np[i]),
-                                              LARGE_SENTINEL, SMALL_SENTINEL)
-
-        return ops.to_backend(result, self.coordinates)
-
     def istype(self: Polymer, mol: Molecule) -> bool:
         """
         Check if this is a single chain of the specified type.
@@ -532,8 +548,13 @@ class Polymer:
 
         Returns:
             True if single chain matches type, False otherwise.
+
+        Raises:
+            ValueError: If molecule_types is not available on this polymer.
         """
-        types = self.molecule_type
+        types = self.molecule_types
+        if types is None:
+            raise ValueError("Cannot check type: molecule_types not available on this polymer")
         if arr_size(types, 0) != 1:
             return False
         return types[0].item() == mol.value
@@ -1382,7 +1403,7 @@ class Polymer:
         Returns:
             List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
         """
-        types_np = to_numpy(self.molecule_type)
+        types_np = to_numpy(self.molecule_types) if self.molecule_types is not None else None
         lengths_np = to_numpy(self.lengths)
         atoms_np = to_numpy(self._sizes[Scale.CHAIN])
         elements_np = to_numpy(self.elements)
@@ -1390,7 +1411,7 @@ class Polymer:
         rows = []
         atom_offset = 0
         for ix in range(self.size(Scale.CHAIN)):
-            mol = molecule_type(int(types_np[ix]))
+            mol = molecule_type(int(types_np[ix])) if types_np is not None else Molecule.UNKNOWN
             res = int(lengths_np[ix])
             atoms = int(atoms_np[ix])
 

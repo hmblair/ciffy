@@ -18,6 +18,7 @@ def tm_score(
     pred: Polymer,
     ref: Polymer,
     scale: Scale = Scale.RESIDUE,
+    molecule_type: Molecule | None = None,
 ) -> float:
     """
     Compute TM-score between two structures.
@@ -30,6 +31,9 @@ def tm_score(
         pred: Predicted structure.
         ref: Reference structure (used for length normalization).
         scale: Scale at which to compute (typically RESIDUE for Cα).
+        molecule_type: Molecule type for d_0 calculation. If None,
+            auto-detected from ref.molecule_types (raises ValueError
+            if not available).
 
     Returns:
         TM-score value between 0 and 1.
@@ -59,7 +63,7 @@ def tm_score(
         )
 
     # Determine molecule type for d_0 calculation
-    mol_type = _get_molecule_type(ref)
+    mol_type = molecule_type if molecule_type is not None else _get_molecule_type(ref)
 
     # Compute d_0 based on molecule type
     d_0 = _compute_d0(L, mol_type)
@@ -216,10 +220,16 @@ def lddt(
 
 
 def _get_molecule_type(polymer: Polymer) -> Molecule:
-    """Get the predominant molecule type of a polymer."""
+    """Get the predominant molecule type of a polymer.
+
+    Raises:
+        ValueError: If molecule_types is not available on the polymer.
+    """
     from ..biochemistry._generated_molecule import molecule_type
 
-    mol_types = polymer.molecule_type
+    mol_types = polymer.molecule_types
+    if mol_types is None:
+        raise ValueError("Cannot determine molecule type: molecule_types not available on this polymer")
     if is_torch(mol_types):
         mol_types = mol_types.cpu().numpy()
 

@@ -54,8 +54,9 @@ except ImportError as e:
     ) from e
 
 # Core types
-from .polymer import Polymer
+from .polymer import Polymer, Field, Metadata
 from .biochemistry import Scale, Molecule, Residue
+from .backend import Dtype
 
 # Primary I/O
 from .io.loader import load, load_metadata
@@ -107,9 +108,11 @@ __all__ = [
     "__version__",
     # Core types
     "Polymer",
+    "Field",
     "Scale",
     "Molecule",
     "Residue",
+    "Dtype",
     # I/O
     "load",
     "load_metadata",

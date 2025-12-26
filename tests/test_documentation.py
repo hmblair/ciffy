@@ -185,7 +185,7 @@ class TestPolymerMethods:
             "size",
             "sizes",
             "per",
-            "molecule_type",
+            "molecule_types",
             "istype",
             "reduce",
             "rreduce",

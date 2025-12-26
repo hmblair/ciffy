@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 import ciffy
-from ciffy import Scale, tm_score, lddt
+from ciffy import Scale, Molecule, tm_score, lddt
 
 from tests.utils import (
     get_test_cif,
@@ -162,7 +162,8 @@ class TestTMScoreEdgeCases:
         # Attach random non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
 
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        # Templates don't have molecule_types, so specify explicitly
+        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
 
         assert 0.0 <= score <= 1.0
         # Self-comparison should be ~1.0
@@ -178,7 +179,8 @@ class TestTMScoreEdgeCases:
         # Attach non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
 
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        # Templates don't have molecule_types, so specify explicitly
+        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
 
         # TM-score should always return a valid float in [0, 1]
         assert 0.0 <= score <= 1.0
@@ -193,10 +195,22 @@ class TestTMScoreEdgeCases:
         # Attach non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
 
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        # Templates don't have molecule_types, so specify explicitly
+        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
 
         # TM-score should always return a valid float in [0, 1]
         assert 0.0 <= score <= 1.0
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_tm_score_requires_molecule_types(self, backend):
+        """TM-score raises ValueError when molecule_types not available and not specified."""
+        skip_if_no_torch(backend)
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        p.coordinates = random_coordinates(p.size(), backend)
+
+        with pytest.raises(ValueError, match="molecule_types not available"):
+            tm_score(p, p, scale=Scale.RESIDUE)
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_tm_score_at_residue_scale(self, backend):

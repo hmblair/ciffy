@@ -164,6 +164,11 @@ def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
 
     Returns:
         New Polymer with chains of that type.
+
+    Raises:
+        ValueError: If molecule_types is not available on the polymer.
     """
-    ix = ops.nonzero_1d(polymer.molecule_type == mol.value)
+    if polymer.molecule_types is None:
+        raise ValueError("Cannot filter by type: molecule_types not available on this polymer")
+    ix = ops.nonzero_1d(polymer.molecule_types == mol.value)
     return by_index(polymer, ix)

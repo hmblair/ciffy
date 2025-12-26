@@ -264,10 +264,21 @@ class TestChainsGenerator:
         import ciffy
         from ciffy import Molecule
 
-        p = ciffy.from_sequence("acgu", backend=backend)  # RNA only
+        # Use real CIF with known molecule types (9MDS is all RNA)
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend)
         dna_chains = list(p.chains(mol=Molecule.DNA))
 
         assert len(dna_chains) == 0
+
+    def test_chains_filter_requires_molecule_types(self, backend):
+        """chains(mol=...) raises ValueError when molecule_types not available."""
+        import ciffy
+        from ciffy import Molecule
+        import pytest
+
+        p = ciffy.from_sequence("acgu", backend=backend)  # Template, no molecule_types
+        with pytest.raises(ValueError, match="molecule_types not available"):
+            list(p.chains(mol=Molecule.DNA))
 
 
 class TestResolvedStrip:

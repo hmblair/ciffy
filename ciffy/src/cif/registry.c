@@ -234,6 +234,9 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
                     entity_map[entity_id] = result->value;
                     LOG_DEBUG("Entity %d: _entity.type='%s' -> %d",
                               entity_id, type_buf, result->value);
+                } else {
+                    LOG_INFO("Unknown entity type '%s' for entity %d, using UNKNOWN",
+                             type_buf, entity_id);
                 }
             }
         }
@@ -309,7 +312,14 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
 
                 /* Look up molecule type via hash table */
                 struct _LOOKUP *result = _lookup_molecule(type_buf, src_len);
-                int mol_type = result ? result->value : 11;  /* OTHER if not found */
+                int mol_type;
+                if (result) {
+                    mol_type = result->value;
+                } else {
+                    mol_type = 11;  /* OTHER if not found */
+                    LOG_INFO("Unknown polymer type '%s' for entity %d, using OTHER",
+                             type_buf, entity_id);
+                }
 
                 entity_map[entity_id] = mol_type;
                 LOG_DEBUG("Entity %d: _entity_poly.type='%s' -> %d",

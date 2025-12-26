@@ -115,10 +115,21 @@ class TestByType:
         import ciffy
         from ciffy import Molecule
 
-        p = ciffy.from_sequence("acgu", backend=backend)  # RNA
+        # Use real CIF with known molecule types (9MDS is all RNA)
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend)
         result = p.by_type(Molecule.DNA)
 
         assert result.empty()
+
+    def test_by_type_requires_molecule_types(self, backend):
+        """by_type raises ValueError when molecule_types not available."""
+        import ciffy
+        from ciffy import Molecule
+        import pytest
+
+        p = ciffy.from_sequence("acgu", backend=backend)  # Template, no molecule_types
+        with pytest.raises(ValueError, match="molecule_types not available"):
+            p.by_type(Molecule.DNA)
 
     def test_by_type_all_match(self, backend):
         """by_type on matching type returns full structure."""

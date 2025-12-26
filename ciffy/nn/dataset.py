@@ -357,8 +357,10 @@ class PolymerDataset(Dataset):
         from ..backend import ops
 
         # Build mask for matching types (backend-agnostic)
+        if polymer.molecule_types is None:
+            raise ValueError("Cannot filter by type: molecule_types not available on this polymer")
         type_values = [m.value for m in self.molecule_types]
-        mask = ops.isin(polymer.molecule_type, type_values)
+        mask = ops.isin(polymer.molecule_types, type_values)
 
         # Get matching chain indices (backend-agnostic)
         matching_indices = ops.nonzero_1d(mask)

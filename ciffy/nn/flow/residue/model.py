@@ -143,13 +143,14 @@ def _rational_quadratic_spline(
     inside_mask = (x >= -bound) & (x <= bound)
 
     # Find which bin each x falls into
-    # For inverse, use cumheights since input is y-space
+    # Use broadcasted comparison instead of searchsorted (faster for small K)
     x_clamped = torch.clamp(x, -bound + 1e-6, bound - 1e-6)
     if inverse:
-        bin_idx = torch.searchsorted(cumheights[..., 1:].contiguous(), x_clamped.unsqueeze(-1))
+        # Count how many bin boundaries x exceeds
+        bin_idx = (x_clamped.unsqueeze(-1) >= cumheights[..., 1:]).sum(dim=-1)
     else:
-        bin_idx = torch.searchsorted(cumwidths[..., 1:].contiguous(), x_clamped.unsqueeze(-1))
-    bin_idx = bin_idx.squeeze(-1).clamp(0, K - 1)
+        bin_idx = (x_clamped.unsqueeze(-1) >= cumwidths[..., 1:]).sum(dim=-1)
+    bin_idx = bin_idx.clamp(0, K - 1)
 
     # Gather bin parameters
     # Input is always 2D (batch, dim) from coupling layers

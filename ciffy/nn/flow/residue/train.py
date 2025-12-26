@@ -49,6 +49,7 @@ def train_pca_flow(
     lr: float = 1e-3,
     device: str = "cpu",
     verbose: bool = True,
+    progress_tracker: "TrainingProgress | None" = None,
 ) -> tuple[PCAFlow, dict]:
     """
     Train a PCA + Flow model on data with proper train/test evaluation.
@@ -127,7 +128,20 @@ def train_pca_flow(
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
     losses = []
 
+    # Setup progress tracking
+    if progress_tracker is None and verbose:
+        from ...progress import TrainingProgress
+        progress_tracker = TrainingProgress(
+            n_epochs=n_epochs,
+            model_name="flow",
+            show_header=False,
+            update_every=max(1, n_epochs // 10),  # ~10 updates
+        )
+
     for epoch in range(n_epochs):
+        if progress_tracker:
+            progress_tracker.start_epoch()
+
         flow.train()
         perm = torch.randperm(n_train)
         epoch_loss = 0.0
@@ -151,8 +165,8 @@ def train_pca_flow(
         avg_loss = epoch_loss / n_batches
         losses.append(avg_loss)
 
-        if verbose and (epoch + 1) % 50 == 0:
-            print(f"  Epoch {epoch+1:3d}: loss={avg_loss:.4f}")
+        if progress_tracker:
+            progress_tracker.update(epoch, {"loss": avg_loss})
 
     # Import metrics functions
     from ..metrics import compute_nll, compute_latent_moments
@@ -180,7 +194,16 @@ def train_pca_flow(
         test_nll = train_nll
         test_moments = train_moments
 
-    if verbose:
+    # Print final results
+    if progress_tracker:
+        final_metrics = {
+            "test_rmsd": test_rmsd,
+            "pca_rmsd": pca_rmsd,
+        }
+        if test_data is not None and len(test_data) > 0:
+            final_metrics["train_rmsd"] = train_rmsd
+        progress_tracker.finish(final_metrics)
+    elif verbose:
         if test_data is not None and len(test_data) > 0:
             print(f"Final: train_RMSD={train_rmsd:.4f}Å, test_RMSD={test_rmsd:.4f}Å (PCA={pca_rmsd:.4f}Å)")
             print(f"       train_NLL={train_nll:.4f}, test_NLL={test_nll:.4f}")

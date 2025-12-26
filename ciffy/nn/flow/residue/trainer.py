@@ -8,8 +8,9 @@ with proper train/test splitting by structure to avoid data leakage.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from glob import glob
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import torch
@@ -18,6 +19,7 @@ from .model import ResidueFlowModel
 from .data import extract_residues_with_links
 from .train import train_pca_flow
 from ...split import split_by_structure
+from ...trainer_registry import register_trainer
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -56,6 +58,67 @@ class ResidueFlowTrainingConfig:
     train_split: float = 0.8
     test_split: float = 0.2
     split_seed: int | None = 42
+
+    # Data source fields (for unified training CLI)
+    data_dir: str | None = None
+    cif_patterns: list[str] | None = None
+    residue_names: list[str] | None = None
+    output_dir: str = "./checkpoints/flow"
+
+    # Report generation
+    generate_report: bool = True
+    report_path: str | None = None  # If None, saves to output_dir/training_report.html
+
+    @classmethod
+    def from_dict(
+        cls,
+        config: dict[str, Any],
+        **overrides: Any,
+    ) -> "ResidueFlowTrainingConfig":
+        """Create config from a YAML config dictionary.
+
+        Args:
+            config: Dictionary from YAML config file.
+            **overrides: Override specific fields (e.g., device='cuda').
+
+        Returns:
+            ResidueFlowTrainingConfig instance.
+        """
+        model = config.get("model", {})
+        training = config.get("training", {})
+        output = config.get("output", {})
+
+        kwargs = {
+            # Model settings
+            "latent_dim": model.get("latent_dim", 12),
+            "n_layers": model.get("n_layers", 4),
+            "hidden_dim": model.get("hidden_dim", 56),
+            "bound": model.get("bound"),
+            # Training settings
+            "n_epochs": training.get("n_epochs", 200),
+            "batch_size": training.get("batch_size", 256),
+            "lr": training.get("lr", 1e-3),
+            "min_coverage": training.get("min_coverage", 0.9),
+            "max_bond_length": training.get("max_bond_length", 2.0),
+            "device": training.get("device", "cpu"),
+            "train_split": training.get("train_split", 0.8),
+            "test_split": training.get("test_split", 0.2),
+            "split_seed": training.get("split_seed", 42),
+            # Data settings
+            "data_dir": config.get("data_dir"),
+            "cif_patterns": config.get("cif_patterns"),
+            "residue_names": config.get("residues"),
+            # Output settings
+            "output_dir": output.get("checkpoint_dir", "./checkpoints/flow"),
+            # Report settings
+            "generate_report": output.get("generate_report", True),
+            "report_path": output.get("report_path"),
+        }
+
+        # Apply overrides
+        kwargs.update(overrides)
+
+        return cls(**kwargs)
 
 
 @dataclass
@@ -106,6 +169,7 @@ class TrainingResult:
         return self.n_train + self.n_test
 
 
+@register_trainer("flow", ResidueFlowTrainingConfig)
 class ResidueFlowTrainer:
     """
     Trainer for ResidueFlowModels across multiple residue types.
@@ -129,14 +193,219 @@ class ResidueFlowTrainer:
         >>> trainer.save(results, "models/rna_v1")
     """
 
-    def __init__(self, config: ResidueFlowTrainingConfig | None = None):
+    def __init__(self, config: ResidueFlowTrainingConfig | None = None, quiet: bool = False):
         """
         Initialize trainer with configuration.
 
         Args:
             config: Training configuration. If None, uses defaults.
+            quiet: If True, suppress progress output.
         """
         self.config = config or ResidueFlowTrainingConfig()
+        self.quiet = quiet
+
+    def train(
+        self,
+        resume_path: str | None = None,
+        progress_callback: Callable[[int, int, dict], None] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Unified training interface for CLI integration.
+
+        Loads CIF files and residues from config, trains all residue types,
+        and saves models to the output directory.
+
+        Args:
+            resume_path: Not used (flow models don't support resume).
+            progress_callback: Optional callback for progress updates.
+                Signature: callback(epoch, total_epochs, metrics)
+
+        Returns:
+            Dict with training results:
+                - status: 'success' or 'failed'
+                - epochs_trained: Number of epochs completed
+                - total_epochs: Total configured epochs
+                - checkpoint_path: Path to saved models
+                - residue_results: Per-residue metrics
+
+        Raises:
+            ValueError: If no CIF paths or residues are configured.
+        """
+        from ciffy.biochemistry import Residue
+        from ...validation import validate_training_config, print_validation_result
+
+        verbose = not self.quiet
+
+        # Validate configuration before training
+        if verbose:
+            print("\nValidating training configuration...")
+
+        validation = validate_training_config(
+            data_dir=self.config.data_dir,
+            cif_patterns=self.config.cif_patterns,
+            residues=self.config.residue_names,
+            output_dir=self.config.output_dir,
+            device=self.config.device,
+        )
+
+        if verbose:
+            print_validation_result(validation, show_info=True, show_summary=True)
+
+        if validation.has_errors:
+            error_msgs = [i.message for i in validation.issues if i.level == "error"]
+            raise ValueError(
+                "Training configuration invalid:\n  " + "\n  ".join(error_msgs)
+            )
+
+        # Get CIF paths from config (already validated)
+        cif_paths = self._get_cif_paths()
+
+        # Get residues from config (already validated)
+        residues = self._get_residues()
+
+        # Train all residues
+        results = self.train_all(cif_paths, residues, verbose=verbose)
+
+        if not results:
+            return {
+                "status": "failed",
+                "epochs_trained": 0,
+                "total_epochs": self.config.n_epochs,
+                "error": "No residues were successfully trained",
+            }
+
+        # Save models
+        self.save(results, self.config.output_dir)
+
+        # Build per-residue results
+        residue_results = {}
+        for residue, result in results.items():
+            residue_results[residue.name] = {
+                "n_train": result.n_train,
+                "n_test": result.n_test,
+                "n_atoms": result.n_atoms,
+                "pca_rmsd": result.pca_rmsd,
+                "train_rmsd": result.train_rmsd,
+                "test_rmsd": result.test_rmsd,
+                "var_explained": result.var_explained,
+                "n_params": result.n_params,
+            }
+
+        train_result = {
+            "status": "success",
+            "epochs_trained": self.config.n_epochs,
+            "total_epochs": self.config.n_epochs,
+            "n_samples": sum(r.n_train for r in results.values()),
+            "checkpoint_path": str(self.config.output_dir),
+            "extra_metrics": {
+                "n_residue_types": len(results),
+                "residue_results": residue_results,
+            },
+        }
+
+        # Generate training report
+        if self.config.generate_report:
+            self._generate_report(train_result, verbose)
+
+        return train_result
+
+    def _get_cif_paths(self) -> list[Path]:
+        """Get CIF file paths from config."""
+        paths = []
+
+        # From data_dir
+        if self.config.data_dir:
+            data_path = Path(self.config.data_dir)
+            if data_path.is_dir():
+                paths.extend(data_path.glob("*.cif"))
+                paths.extend(data_path.glob("**/*.cif"))
+
+        # From cif_patterns
+        if self.config.cif_patterns:
+            for pattern in self.config.cif_patterns:
+                paths.extend(Path(p) for p in glob(pattern))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_paths = []
+        for p in paths:
+            p_resolved = p.resolve()
+            if p_resolved not in seen:
+                seen.add(p_resolved)
+                unique_paths.append(p)
+
+        return unique_paths
+
+    def _get_residues(self) -> list["Residue"]:
+        """Get residue types from config."""
+        from ciffy.biochemistry import Residue
+
+        if not self.config.residue_names:
+            return []
+
+        residues = []
+        for name in self.config.residue_names:
+            try:
+                residue = getattr(Residue, name)
+                residues.append(residue)
+            except AttributeError:
+                if not self.quiet:
+                    print(f"Warning: Unknown residue '{name}', skipping")
+
+        return residues
+
+    def _generate_report(
+        self,
+        train_result: dict[str, Any],
+        verbose: bool = True,
+    ) -> None:
+        """Generate training report.
+
+        Args:
+            train_result: Training result dictionary.
+            verbose: Print report path.
+        """
+        from ...report import TrainingReport
+
+        # Determine report path
+        if self.config.report_path:
+            report_path = Path(self.config.report_path)
+        else:
+            report_path = Path(self.config.output_dir) / "training_report.html"
+
+        # Build config dict for report
+        config_dict = {
+            "model": {
+                "latent_dim": self.config.latent_dim,
+                "n_layers": self.config.n_layers,
+                "hidden_dim": self.config.hidden_dim,
+                "bound": self.config.bound,
+            },
+            "training": {
+                "n_epochs": self.config.n_epochs,
+                "batch_size": self.config.batch_size,
+                "lr": self.config.lr,
+                "device": self.config.device,
+            },
+            "data": {
+                "data_dir": self.config.data_dir,
+                "residues": self.config.residue_names,
+                "min_coverage": self.config.min_coverage,
+                "train_split": self.config.train_split,
+            },
+        }
+
+        # Create and save report
+        report = TrainingReport(
+            model_type="flow",
+            config=config_dict,
+            results=train_result,
+        )
+
+        saved_path = report.save(report_path)
+
+        if verbose:
+            print(f"\n📄 Training report saved to: {saved_path}")
 
     def train_single(
         self,

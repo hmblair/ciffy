@@ -4,6 +4,7 @@ PCA + Flow model for residue conformations.
 
 from __future__ import annotations
 
+import math
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,9 @@ from ciffy.utils import atoms_to_col_map
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
+
+# Pre-computed constant for Gaussian log-prob
+_LOG_2PI = math.log(2 * math.pi)
 
 
 # =============================================================================
@@ -37,6 +41,8 @@ class ActNorm(nn.Module):
         self.log_scale = nn.Parameter(torch.zeros(dim))
         self.bias = nn.Parameter(torch.zeros(dim))
         self.register_buffer("initialized", torch.tensor(False))
+        # Cache exp(log_scale) to avoid recomputing
+        self._cached_scale: torch.Tensor | None = None
 
     def initialize(self, x: torch.Tensor) -> None:
         with torch.no_grad():
@@ -46,11 +52,13 @@ class ActNorm(nn.Module):
             std = x.std(dim=0, correction=0).clamp(min=1e-6)
             self.log_scale.copy_(-torch.log(std))
             self.initialized.fill_(True)
+            self._cached_scale = None  # Invalidate cache
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if not self.initialized:
             self.initialize(x)
-        y = (x + self.bias) * torch.exp(self.log_scale)
+        scale = torch.exp(self.log_scale)
+        y = (x + self.bias) * scale
         log_det = self.log_scale.sum().expand(x.shape[0])
         return y, log_det
 
@@ -226,21 +234,27 @@ class SplineCoupling(nn.Module):
         self.dim = dim
         self.n_bins = n_bins
         self.bound = bound
-        self.register_buffer("mask", torch.arange(dim) % 2 == (0 if even_mask else 1))
 
-        n_masked = int(self.mask.sum())
-        n_unmasked = dim - n_masked
+        # Pre-compute integer indices instead of boolean mask (faster indexing)
+        mask = torch.arange(dim) % 2 == (0 if even_mask else 1)
+        self.register_buffer("masked_idx", torch.where(mask)[0])
+        self.register_buffer("unmasked_idx", torch.where(~mask)[0])
+
+        n_masked = len(self.masked_idx)
+        n_unmasked = len(self.unmasked_idx)
+        self.n_unmasked = n_unmasked
+
         # Output: widths (K), heights (K), derivatives (K+1) per unmasked dim
         n_params = n_unmasked * (3 * n_bins + 1)
         self.net = CouplingNetwork(n_masked, n_params, hidden_dim)
 
-    def _get_spline_params(self, context: torch.Tensor, n_unmasked: int):
+    def _get_spline_params(self, context: torch.Tensor):
         """Extract spline parameters from network output."""
         params = self.net(context)
         K = self.n_bins
 
         # Reshape to (batch, n_unmasked, 3K+1)
-        params = params.reshape(-1, n_unmasked, 3 * K + 1)
+        params = params.reshape(-1, self.n_unmasked, 3 * K + 1)
 
         widths = params[..., :K]
         heights = params[..., K:2*K]
@@ -249,37 +263,35 @@ class SplineCoupling(nn.Module):
         return widths, heights, derivatives
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x_a = x[:, self.mask]
-        x_b = x[:, ~self.mask]
-        n_unmasked = x_b.shape[-1]
+        # Use index_select for faster indexing than boolean masks
+        x_a = x.index_select(1, self.masked_idx)
+        x_b = x.index_select(1, self.unmasked_idx)
 
-        widths, heights, derivatives = self._get_spline_params(x_a, n_unmasked)
+        widths, heights, derivatives = self._get_spline_params(x_a)
 
         y_b, log_det = _rational_quadratic_spline(
             x_b, widths, heights, derivatives,
             inverse=False, bound=self.bound
         )
 
-        y = torch.empty_like(x)
-        y[:, self.mask] = x_a
-        y[:, ~self.mask] = y_b
+        # Scatter results back - use index_copy_ for efficiency
+        y = x.clone()  # Start with x (preserves x_a in place)
+        y.scatter_(1, self.unmasked_idx.expand(x.shape[0], -1), y_b)
         return y, log_det
 
     def inverse(self, y: torch.Tensor) -> torch.Tensor:
-        y_a = y[:, self.mask]
-        y_b = y[:, ~self.mask]
-        n_unmasked = y_b.shape[-1]
+        y_a = y.index_select(1, self.masked_idx)
+        y_b = y.index_select(1, self.unmasked_idx)
 
-        widths, heights, derivatives = self._get_spline_params(y_a, n_unmasked)
+        widths, heights, derivatives = self._get_spline_params(y_a)
 
         x_b, _ = _rational_quadratic_spline(
             y_b, widths, heights, derivatives,
             inverse=True, bound=self.bound
         )
 
-        x = torch.empty_like(y)
-        x[:, self.mask] = y_a
-        x[:, ~self.mask] = x_b
+        x = y.clone()
+        x.scatter_(1, self.unmasked_idx.expand(y.shape[0], -1), x_b)
         return x
 
 
@@ -396,7 +408,7 @@ class PCAFlow(nn.Module):
     def log_prob(self, x: torch.Tensor) -> torch.Tensor:
         """Compute log probability of coordinates under the model."""
         z, log_det = self.forward(x)
-        log_pz = -0.5 * (z ** 2 + np.log(2 * np.pi)).sum(dim=-1)
+        log_pz = -0.5 * (z ** 2 + _LOG_2PI).sum(dim=-1)
         return log_pz + log_det
 
     def sample(self, n_samples: int) -> torch.Tensor:

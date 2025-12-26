@@ -11,6 +11,9 @@ import torch.optim as optim
 from .model import PCAFlow
 from .data import compute_pca
 
+# Pre-computed constant for Gaussian log-prob (avoids np call in training loop)
+_LOG_2PI = float(np.log(2 * np.pi))
+
 
 def _compute_aligned_rmsd(coords1: np.ndarray, coords2: np.ndarray, n_atoms: int) -> float:
     """
@@ -127,6 +130,16 @@ def train_pca_flow(
         bound=bound,
     ).to(device)
 
+    # Compile model for faster training (PyTorch 2.0+)
+    # Use reduce-overhead mode for small models with many iterations
+    if hasattr(torch, 'compile') and device != "cpu":
+        try:
+            flow = torch.compile(flow, mode="reduce-overhead")
+            if verbose:
+                print("Using torch.compile for accelerated training")
+        except Exception:
+            pass  # Fall back to eager mode if compilation fails
+
     # Prepare training data
     X_train = torch.from_numpy(train_data).float().to(device)
 
@@ -153,8 +166,8 @@ def train_pca_flow(
             progress_tracker.start_epoch()
 
         flow.train()
-        perm = torch.randperm(n_train)
-        epoch_loss = 0.0
+        perm = torch.randperm(n_train, device=device)
+        epoch_loss = torch.tensor(0.0, device=device)
         n_batches = 0
 
         for i in range(0, n_train, batch_size):
@@ -162,17 +175,17 @@ def train_pca_flow(
 
             optimizer.zero_grad()
             z, log_det = flow(batch)
-            log_pz = -0.5 * (z ** 2 + np.log(2 * np.pi)).sum(dim=-1)
+            log_pz = -0.5 * (z ** 2 + _LOG_2PI).sum(dim=-1)
             loss = -(log_pz + log_det).mean()
 
             loss.backward()
             optimizer.step()
 
-            epoch_loss += loss.item()
+            epoch_loss += loss.detach()  # No GPU sync per batch
             n_batches += 1
 
         scheduler.step()
-        avg_loss = epoch_loss / n_batches
+        avg_loss = (epoch_loss / n_batches).item()  # Single sync at epoch end
         losses.append(avg_loss)
 
         if progress_tracker:

@@ -44,6 +44,21 @@ from .metrics import (
     evaluate_samples,
     compute_diffusion_metrics,
 )
+from .latent_denoiser import (
+    LatentDenoiserConfig,
+    LatentDenoiser,
+)
+from .latent_diffusion import (
+    LatentDiffusionConfig,
+    LatentDiffusionModel,
+)
+from .latent_trainer import (
+    LatentDiffusionDataConfig,
+    LatentDiffusionTrainingConfig,
+    LatentCacheDataset,
+    latent_collate_fn,
+    LatentDiffusionTrainer,
+)
 
 __all__ = [
     # Noise schedules
@@ -74,4 +89,14 @@ __all__ = [
     "compute_sample_rmsd",
     "evaluate_samples",
     "compute_diffusion_metrics",
+    # Latent diffusion
+    "LatentDenoiserConfig",
+    "LatentDenoiser",
+    "LatentDiffusionConfig",
+    "LatentDiffusionModel",
+    "LatentDiffusionDataConfig",
+    "LatentDiffusionTrainingConfig",
+    "LatentCacheDataset",
+    "latent_collate_fn",
+    "LatentDiffusionTrainer",
 ]

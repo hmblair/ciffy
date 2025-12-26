@@ -87,6 +87,13 @@ from .diffusion import (
     update_ema_model,
     DiffusionConfig,
     DiffusionTrainer,
+    # Latent diffusion
+    LatentDenoiserConfig,
+    LatentDenoiser,
+    LatentDiffusionConfig,
+    LatentDiffusionModel,
+    LatentDiffusionTrainingConfig,
+    LatentDiffusionTrainer,
 )
 
 __all__ = [
@@ -165,6 +172,13 @@ __all__ = [
     # Diffusion trainer (from diffusion/)
     "DiffusionConfig",
     "DiffusionTrainer",
+    # Latent diffusion (from diffusion/)
+    "LatentDenoiserConfig",
+    "LatentDenoiser",
+    "LatentDiffusionConfig",
+    "LatentDiffusionModel",
+    "LatentDiffusionTrainingConfig",
+    "LatentDiffusionTrainer",
 ]
 
 # Optional geometric deep learning module

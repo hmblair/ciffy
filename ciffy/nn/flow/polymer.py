@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Union
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 # Import geometry functions directly (data.py wrappers still available for backward compat)
 from ciffy.geometry import position_residue_fast
@@ -84,7 +85,7 @@ def _normalize_key(key) -> int:
     return key.value
 
 
-class PolymerFlowModel:
+class PolymerFlowModel(nn.Module):
     """
     Orchestrates per-residue flow models for full polymer encoding/decoding.
 
@@ -138,13 +139,23 @@ class PolymerFlowModel:
             >>> PolymerFlowModel({Residue.A: model_a, Residue.G: model_g})
             >>> PolymerFlowModel({0: model_a, 4: model_g})
         """
+        super().__init__()
+
         if not residue_models:
             raise ValueError("residue_models cannot be empty")
 
-        # Normalize keys to int (accept both Residue and int)
-        self.residue_models: dict[int, "ResidueFlowModel"] = {
-            _normalize_key(k): v for k, v in residue_models.items()
-        }
+        # Normalize keys to int and store mapping
+        # nn.ModuleDict requires string keys, so we store int->str mapping
+        self._key_to_str: dict[int, str] = {}
+        normalized = {}
+        for k, v in residue_models.items():
+            int_key = _normalize_key(k)
+            str_key = str(int_key)
+            self._key_to_str[int_key] = str_key
+            normalized[str_key] = v
+
+        # Use nn.ModuleDict for proper parameter tracking
+        self.residue_models = nn.ModuleDict(normalized)
 
         # Validate all models have same latent dim
         latent_dims = [m.latent_dim for m in self.residue_models.values()]
@@ -156,16 +167,20 @@ class PolymerFlowModel:
 
         # Cache atom counts and supported types for fast validation
         self._atom_counts: dict[int, int] = {
-            res_type: model.n_atoms for res_type, model in self.residue_models.items()
+            int(k): model.n_atoms for k, model in self.residue_models.items()
         }
-        self._supported_types_set: set[int] = set(self.residue_models.keys())
+        self._supported_types_set: set[int] = set(self._atom_counts.keys())
 
-        # Stateful lazy computation attributes
+        # Stateful lazy computation attributes (not parameters, just cache)
         self._sequence: np.ndarray | None = None
         self._cached_latents: torch.Tensor | None = None
         self._cached_coordinates: torch.Tensor | None = None
         self._latents_dirty: bool = True
         self._coords_dirty: bool = True
+
+    def _get_model(self, res_type: int) -> "ResidueFlowModel":
+        """Get residue model by int key."""
+        return self.residue_models[str(res_type)]
 
     @classmethod
     def from_residue_models(
@@ -405,7 +420,7 @@ class PolymerFlowModel:
         offset = 0
 
         for res_type in sequence:
-            model = self.residue_models[int(res_type)]
+            model = self._get_model(int(res_type))
             n_atoms = model.n_atoms
 
             # Extract this residue's coordinates
@@ -455,7 +470,7 @@ class PolymerFlowModel:
         prev_model = None
 
         for i, res_type in enumerate(sequence):
-            model = self.residue_models[int(res_type)]
+            model = self._get_model(int(res_type))
 
             # Decode this residue
             with torch.no_grad():
@@ -531,13 +546,13 @@ class PolymerFlowModel:
     @property
     def supported_residue_types(self) -> np.ndarray:
         """Array of supported residue type indices (int)."""
-        return np.array(sorted(self.residue_models.keys()), dtype=np.int64)
+        return np.array(sorted(int(k) for k in self.residue_models.keys()), dtype=np.int64)
 
     @property
     def supported_residues(self) -> list["AtomGroup"]:
         """List of residue types this model can handle (as AtomGroup)."""
         from ciffy.biochemistry import Residue
-        return [Residue.from_index(v) for v in sorted(self.residue_models.keys())]
+        return [Residue.from_index(int(k)) for k in sorted(self.residue_models.keys(), key=int)]
 
     @property
     def atom_filter(self) -> dict[int, list[int]]:
@@ -553,40 +568,18 @@ class PolymerFlowModel:
             >>> # template now has only the atoms used by the flow models
         """
         return {
-            res_type: list(model._atom_indices)
+            int(res_type): list(model._atom_indices)
             for res_type, model in self.residue_models.items()
         }
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Device Management
+    # Device Management (inherited from nn.Module, but add convenience property)
     # ─────────────────────────────────────────────────────────────────────────
 
     @property
     def device(self) -> "torch.device":
         """Device where model parameters reside."""
         return next(iter(self.residue_models.values())).device
-
-    def to(self, device: str | "torch.device") -> "PolymerFlowModel":
-        """
-        Move all residue models to specified device.
-
-        Args:
-            device: Target device (e.g., "cpu", "cuda", "cuda:0").
-
-        Returns:
-            Self for method chaining.
-        """
-        for model in self.residue_models.values():
-            model.to(device)
-        return self
-
-    def cuda(self, device_id: int = 0) -> "PolymerFlowModel":
-        """Move all residue models to CUDA device."""
-        return self.to(f"cuda:{device_id}")
-
-    def cpu(self) -> "PolymerFlowModel":
-        """Move all residue models to CPU."""
-        return self.to("cpu")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Persistence
@@ -609,8 +602,8 @@ class PolymerFlowModel:
 
         # Save each residue model (use residue name as subdirectory)
         residue_names = []
-        for res_type, model in self.residue_models.items():
-            res_name = Residue.from_index(res_type).name
+        for res_type_str, model in self.residue_models.items():
+            res_name = Residue.from_index(int(res_type_str)).name
             model.save(path / res_name)
             residue_names.append(res_name)
 
@@ -794,5 +787,5 @@ class PolymerFlowModel:
 
     def __repr__(self) -> str:
         from ciffy.biochemistry import Residue
-        residues = [Residue.from_index(r).name for r in self.residue_models.keys()]
+        residues = [Residue.from_index(int(k)).name for k in self.residue_models.keys()]
         return f"PolymerFlowModel(residues={residues}, latent_dim={self.latent_dim})"

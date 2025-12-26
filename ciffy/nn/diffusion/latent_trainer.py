@@ -1,0 +1,489 @@
+"""Trainer for latent diffusion models on polymer structures.
+
+This module provides the LatentDiffusionTrainer, which handles:
+- Pre-encoding of polymer coordinates to latent space for efficient training
+- Variable-length sequence batching with padding
+- EMA weight tracking for the denoiser
+- RMSD-based validation via sample generation
+
+Example:
+    >>> from ciffy.nn.diffusion import LatentDiffusionTrainer, LatentDiffusionTrainingConfig
+    >>>
+    >>> config = LatentDiffusionTrainingConfig.from_yaml("config.yaml")
+    >>> trainer = LatentDiffusionTrainer(config)
+    >>> trainer.train()
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+
+import numpy as np
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, Dataset
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+    nn = None
+    optim = None
+    DataLoader = None
+    Dataset = None
+
+if TYPE_CHECKING:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, Dataset
+
+from ciffy import Scale
+
+from ..base_trainer import (
+    BaseConfig,
+    BaseTrainer,
+    MetricsLogger,
+    OutputConfig,
+    TrainingConfig,
+    WandbConfig,
+)
+from ..dataset import PolymerDataset
+from ..trainer_registry import register_trainer
+from .ema import EMA
+from .latent_diffusion import LatentDiffusionConfig, LatentDiffusionModel
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LatentDiffusionDataConfig:
+    """Dataset configuration for latent diffusion training.
+
+    Attributes:
+        data_dir: Directory containing CIF files.
+        batch_size: Training batch size.
+        num_workers: DataLoader workers.
+        molecule_types: Filter to specific molecule types (e.g., ["RNA"]).
+        min_residues: Minimum residues per chain.
+        max_residues: Maximum residues per chain.
+        cache_latents: Pre-encode all latents (faster training, more memory).
+    """
+
+    data_dir: str = ""
+    batch_size: int = 32
+    num_workers: int = 4
+    molecule_types: tuple[str, ...] = ("RNA",)
+    min_residues: int = 10
+    max_residues: int = 500
+    cache_latents: bool = True
+
+
+@dataclass
+class LatentDiffusionTrainingConfig(BaseConfig):
+    """Full configuration for latent diffusion training.
+
+    Combines model, data, training, output, and logging configurations.
+
+    Example:
+        >>> config = LatentDiffusionTrainingConfig(
+        ...     model=LatentDiffusionConfig(),
+        ...     data=LatentDiffusionDataConfig(data_dir="./data"),
+        ...     training=TrainingConfig(epochs=100),
+        ... )
+    """
+
+    model: LatentDiffusionConfig = field(default_factory=LatentDiffusionConfig)
+    data: LatentDiffusionDataConfig = field(default_factory=LatentDiffusionDataConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
+
+    # EMA settings
+    ema_decay: float = 0.9999
+    ema_warmup_steps: int = 2000
+
+    # Validation settings
+    val_every: int = 10
+    val_samples: int = 5
+    val_steps: int = 50  # DDIM steps for validation sampling
+
+
+class LatentCacheDataset(Dataset):
+    """Dataset wrapping pre-cached latents for efficient training."""
+
+    def __init__(
+        self,
+        cache: dict[int, tuple["torch.Tensor", "torch.Tensor"]],
+    ) -> None:
+        """Initialize with a cache dictionary.
+
+        Args:
+            cache: Dict mapping index to (latents, sequence) tuples.
+        """
+        self.cache = cache
+        self.indices = list(cache.keys())
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int) -> tuple["torch.Tensor", "torch.Tensor"]:
+        return self.cache[self.indices[idx]]
+
+
+def latent_collate_fn(
+    batch: list[tuple["torch.Tensor", "torch.Tensor"]],
+) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+    """Collate variable-length latent sequences with padding.
+
+    Args:
+        batch: List of (latents, sequence) tuples.
+
+    Returns:
+        Tuple of (latents, sequences, mask) where:
+            - latents: (batch, max_len, latent_dim)
+            - sequences: (batch, max_len)
+            - mask: (batch, max_len) bool mask, True = padding
+    """
+    latents_list = [item[0] for item in batch]
+    seq_list = [item[1] for item in batch]
+
+    # Find max length
+    max_len = max(z.shape[0] for z in latents_list)
+    latent_dim = latents_list[0].shape[1]
+
+    batch_size = len(batch)
+
+    # Initialize padded tensors
+    latents = torch.zeros(batch_size, max_len, latent_dim)
+    sequences = torch.zeros(batch_size, max_len, dtype=torch.long)
+    mask = torch.ones(batch_size, max_len, dtype=torch.bool)  # True = padding
+
+    for i, (z, s) in enumerate(zip(latents_list, seq_list)):
+        length = z.shape[0]
+        latents[i, :length] = z
+        sequences[i, :length] = s
+        mask[i, :length] = False
+
+    return latents, sequences, mask
+
+
+@register_trainer("latent_diffusion", LatentDiffusionTrainingConfig)
+class LatentDiffusionTrainer(BaseTrainer):
+    """Trainer for latent diffusion models on polymer structures.
+
+    Extends BaseTrainer with:
+        - Pre-encoding of latents for efficient training
+        - Custom loss function for diffusion
+        - EMA weight tracking for denoiser
+        - RMSD-based validation via sample generation
+
+    Example:
+        >>> config = LatentDiffusionTrainingConfig.from_yaml("config.yaml")
+        >>> trainer = LatentDiffusionTrainer(config)
+        >>> trainer.train()
+    """
+
+    config: LatentDiffusionTrainingConfig
+
+    def __init__(
+        self,
+        config: LatentDiffusionTrainingConfig,
+        model: LatentDiffusionModel | None = None,
+        dataset: PolymerDataset | None = None,
+        device: Optional["torch.device"] = None,
+        logger: MetricsLogger | None = None,
+        quiet: bool = False,
+    ) -> None:
+        """Initialize the latent diffusion trainer.
+
+        Args:
+            config: Training configuration.
+            model: Optional pre-initialized model.
+            dataset: Optional pre-created dataset.
+            device: Device to train on. If None, uses config.training.device.
+            logger: Optional metrics logger (e.g., WandbLogger).
+            quiet: If True, suppress progress bars and reduce logging.
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required for LatentDiffusionTrainer")
+
+        # Create model if not provided
+        if model is None:
+            model = LatentDiffusionModel(config.model)
+
+        # Create dataset if not provided
+        if dataset is None:
+            dataset = self._create_polymer_dataset(config)
+
+        # Cache for pre-encoded latents
+        self._latent_cache: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._cache_dataset: LatentCacheDataset | None = None
+
+        # Initialize base trainer
+        super().__init__(
+            config=config,
+            model=model,
+            dataset=dataset,
+            device=device,
+            logger=logger,
+            quiet=quiet,
+        )
+
+        # Setup EMA for denoiser only (flow model is frozen)
+        self.ema = EMA(
+            self.model.denoiser,
+            decay=config.ema_decay,
+            warmup_steps=config.ema_warmup_steps,
+        )
+
+        # Pre-encode latents if configured
+        if config.data.cache_latents:
+            self._pre_encode_latents()
+
+    def _create_polymer_dataset(
+        self,
+        config: LatentDiffusionTrainingConfig,
+    ) -> PolymerDataset:
+        """Create the polymer dataset from config."""
+        from ciffy import Molecule
+
+        mol_types = tuple(
+            getattr(Molecule, m) for m in config.data.molecule_types
+        )
+
+        return PolymerDataset(
+            directory=config.data.data_dir,
+            scale=Scale.CHAIN,
+            molecule_types=mol_types,
+            backend="torch",
+        )
+
+    def _pre_encode_latents(self) -> None:
+        """Pre-encode all polymers to latent space for faster training."""
+        if not self.quiet:
+            logger.info("Pre-encoding latents...")
+
+        self.model.eval()
+        valid_count = 0
+
+        with torch.no_grad():
+            for idx in range(len(self.dataset)):
+                try:
+                    polymer = self.dataset[idx]
+                except Exception:
+                    continue
+
+                if polymer is None:
+                    continue
+
+                # Filter by residue count
+                try:
+                    n_res = polymer.size(Scale.RESIDUE)
+                except Exception:
+                    continue
+
+                if n_res < self.config.data.min_residues:
+                    continue
+                if n_res > self.config.data.max_residues:
+                    continue
+
+                # Get coordinates and sequence
+                try:
+                    coords = polymer.coordinates
+                    sequence = polymer.sequence
+                except Exception:
+                    continue
+
+                # Convert to tensors
+                if not isinstance(coords, torch.Tensor):
+                    coords = torch.from_numpy(coords).float()
+                if not isinstance(sequence, torch.Tensor):
+                    sequence = torch.tensor(sequence, dtype=torch.long)
+
+                # Encode to latent space
+                try:
+                    coords = coords.to(self.device)
+                    latents = self.model.encode(coords, sequence.numpy())
+                    self._latent_cache[idx] = (latents.cpu(), sequence)
+                    valid_count += 1
+                except Exception as e:
+                    if not self.quiet:
+                        logger.debug(f"Failed to encode sample {idx}: {e}")
+                    continue
+
+        if not self.quiet:
+            logger.info(f"Cached {valid_count} latent samples")
+
+        # Create cache dataset
+        if valid_count > 0:
+            self._cache_dataset = LatentCacheDataset(self._latent_cache)
+
+        self.model.train()
+
+    def create_optimizer(self) -> "optim.Optimizer":
+        """Create optimizer for denoiser only (flow model is frozen)."""
+        return optim.AdamW(
+            self.model.denoiser.parameters(),
+            lr=self.config.training.lr,
+            weight_decay=self.config.training.weight_decay,
+        )
+
+    def create_dataloader(self) -> "DataLoader":
+        """Create DataLoader for training."""
+        if self._cache_dataset is not None:
+            dataset = self._cache_dataset
+        else:
+            # Would need to implement on-the-fly encoding
+            raise ValueError(
+                "Non-cached training not yet implemented. "
+                "Set config.data.cache_latents=True"
+            )
+
+        return DataLoader(
+            dataset,
+            batch_size=self.config.data.batch_size,
+            shuffle=True,
+            num_workers=self.config.training.num_workers,
+            collate_fn=latent_collate_fn,
+            drop_last=True,
+        )
+
+    def create_loss_fn(
+        self,
+    ) -> Callable[["nn.Module", Any], dict[str, "torch.Tensor"]]:
+        """Create the diffusion loss function."""
+        device = self.device
+
+        def diffusion_loss_fn(
+            model: LatentDiffusionModel,
+            batch: tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"],
+        ) -> dict[str, "torch.Tensor"]:
+            latents, sequences, mask = batch
+            latents = latents.to(device)
+            sequences = sequences.to(device)
+            mask = mask.to(device)
+
+            loss, metrics = model.training_step_batch(latents, sequences, mask)
+
+            return {"loss": loss, **{k: torch.tensor(v) for k, v in metrics.items()}}
+
+        return diffusion_loss_fn
+
+    def on_epoch_end(self, epoch: int, metrics: dict[str, float]) -> None:
+        """Hook for EMA update and periodic validation."""
+        # Update EMA after each epoch
+        self.ema.update(self.model.denoiser)
+
+        # Periodic validation
+        if (epoch + 1) % self.config.val_every == 0:
+            val_metrics = self._validate()
+            metrics.update(val_metrics)
+
+            # Generate and save samples
+            self._generate_samples(epoch)
+
+    def _validate(self) -> dict[str, float]:
+        """Compute validation metrics via sample generation."""
+        if len(self._latent_cache) == 0:
+            return {}
+
+        self.model.eval()
+        rmsds = []
+
+        try:
+            with self.ema.apply(self.model.denoiser):
+                # Sample a few structures and compute RMSD
+                sample_indices = list(self._latent_cache.keys())[
+                    : self.config.val_samples
+                ]
+
+                for idx in sample_indices:
+                    latents, sequence = self._latent_cache[idx]
+                    latents = latents.to(self.device)
+                    sequence_np = sequence.numpy()
+
+                    # Decode original latents for reference
+                    original_coords = self.model.decode(latents, sequence_np)
+
+                    # Generate sample via reverse diffusion
+                    try:
+                        sampled_coords = self.model.sample(
+                            sequence,
+                            n_samples=1,
+                            num_steps=self.config.val_steps,
+                        )
+
+                        # Compute RMSD
+                        from ciffy import rmsd
+
+                        rmsd_val = rmsd(
+                            sampled_coords.cpu().numpy(),
+                            original_coords.cpu().numpy(),
+                        )
+                        rmsds.append(float(rmsd_val))
+                    except Exception as e:
+                        if not self.quiet:
+                            logger.debug(f"Validation sample failed: {e}")
+                        continue
+        finally:
+            self.model.train()
+
+        if len(rmsds) == 0:
+            return {}
+
+        return {
+            "val_rmsd_mean": float(np.mean(rmsds)),
+            "val_rmsd_std": float(np.std(rmsds)),
+            "val_n_samples": len(rmsds),
+        }
+
+    def _generate_samples(self, epoch: int) -> None:
+        """Generate and save sample structures."""
+        if len(self._latent_cache) == 0:
+            return
+
+        sample_dir = self.sample_dir / f"epoch_{epoch + 1:04d}"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pick a template sequence
+        idx = list(self._latent_cache.keys())[0]
+        _, sequence = self._latent_cache[idx]
+
+        self.model.eval()
+        try:
+            with torch.no_grad(), self.ema.apply(self.model.denoiser):
+                samples = self.model.sample(
+                    sequence,
+                    n_samples=5,
+                    num_steps=self.config.val_steps,
+                )
+
+            if not isinstance(samples, list):
+                samples = [samples]
+
+            # Save samples
+            for i, coords in enumerate(samples):
+                torch.save(coords.cpu(), sample_dir / f"sample_{i}.pt")
+                # Also save as numpy for convenience
+                np.save(sample_dir / f"sample_{i}.npy", coords.cpu().numpy())
+        except Exception as e:
+            if not self.quiet:
+                logger.warning(f"Sample generation failed: {e}")
+        finally:
+            self.model.train()
+
+
+__all__ = [
+    "LatentDiffusionDataConfig",
+    "LatentDiffusionTrainingConfig",
+    "LatentCacheDataset",
+    "latent_collate_fn",
+    "LatentDiffusionTrainer",
+]

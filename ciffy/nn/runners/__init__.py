@@ -30,6 +30,12 @@ from .inference_runner import (
     run_inference_jobs,
     format_inference_results_table,
 )
+from .training_runner import (
+    TrainingResult,
+    TrainingRunner,
+    run_training_jobs,
+    format_training_results_table,
+)
 from .flow_runner import (
     FlowExperimentConfig,
     FlowExperimentResult,
@@ -67,6 +73,11 @@ __all__ = [
     "InferenceRunner",
     "run_inference_jobs",
     "format_inference_results_table",
+    # Training running
+    "TrainingResult",
+    "TrainingRunner",
+    "run_training_jobs",
+    "format_training_results_table",
     # Flow experiments
     "FlowExperimentConfig",
     "FlowExperimentResult",

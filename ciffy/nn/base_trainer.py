@@ -187,18 +187,62 @@ class BaseConfig:
     @classmethod
     def _from_dict(cls, data: dict) -> "BaseConfig":
         """Create config from dictionary, handling nested dataclasses."""
+        from typing import get_type_hints
+
         kwargs = {}
+
+        # Resolve type hints (handles forward references from __future__ annotations)
+        try:
+            type_hints = get_type_hints(cls)
+        except Exception:
+            type_hints = {}
 
         for f in fields(cls):
             if f.name in data:
                 value = data[f.name]
+                # Get resolved type from type_hints, fallback to f.type
+                field_type = type_hints.get(f.name, f.type)
                 # If the field type is a dataclass, recursively construct it
-                if hasattr(f.type, "__dataclass_fields__"):
-                    kwargs[f.name] = cls._dict_to_dataclass(f.type, value)
+                if hasattr(field_type, "__dataclass_fields__"):
+                    kwargs[f.name] = cls._dict_to_dataclass(field_type, value)
                 else:
                     kwargs[f.name] = value
 
         return cls(**kwargs)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        **overrides: Any,
+    ) -> "BaseConfig":
+        """Create config from dictionary with optional overrides.
+
+        This is the standard interface for the trainer registry.
+
+        Args:
+            data: Dictionary from YAML config file.
+            **overrides: Override specific fields (e.g., device='cuda').
+                Overrides are applied to the 'training' sub-config for
+                common fields like 'device'.
+
+        Returns:
+            Configuration instance.
+        """
+        # Apply device override to training config
+        if "device" in overrides:
+            training = data.get("training", {})
+            training = {**training, "device": overrides.pop("device")}
+            data = {**data, "training": training}
+
+        config = cls._from_dict(data)
+
+        # Apply remaining overrides directly if they're top-level fields
+        for key, value in overrides.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+
+        return config
 
     @staticmethod
     def _dict_to_dataclass(dc_class: type, data: dict) -> Any:

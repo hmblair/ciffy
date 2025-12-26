@@ -26,3 +26,6 @@ inference_output/
 
 # Personal config files (use examples/configs as templates)
 configs/
+
+# Scratch directory for local experiments
+scratch/

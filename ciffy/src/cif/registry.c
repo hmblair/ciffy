@@ -743,6 +743,10 @@ static CifError _op_lookup(mmCIF *cif, mmBlock *block, const FieldDef *def,
 
 /**
  * OP_COMPUTE: Custom computation for atoms field.
+ *
+ * For multi-model structures, we load only model 1. Instead of assuming
+ * equal atoms per model (total/models), we scan to find where model 1 ends.
+ * This correctly handles cases where models have different atom counts.
  */
 static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
                                    const FieldDef *def, CifErrorContext *ctx) {
@@ -753,22 +757,37 @@ static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
         return CIF_ERR_BLOCK;
     }
 
-    /* Adjust for multi-model structures (use first model only) */
+    /* For single-model structures, use all atoms */
     int atom_count = block->size;
+    int total_atoms = block->size;
+
+    /* For multi-model structures, find where model 1 ends */
     if (cif->models > 1) {
-        if (block->size % cif->models != 0) {
-            LOG_WARNING("[%s] Atom count %d not evenly divisible by model count %d",
-                        cif->id ? cif->id : "unknown", block->size, cif->models);
+        int model_idx = _get_attr_index(block, "pdbx_PDB_model_num", ctx);
+
+        if (model_idx >= 0) {
+            /* Scan to find first row where model != 1 */
+            for (int row = 0; row < block->size; row++) {
+                int model_num = _parse_int_inline(block, row, model_idx);
+                if (model_num != 1) {
+                    atom_count = row;
+                    break;
+                }
+            }
+            LOG_DEBUG("[%s] Model 1 has %d atoms (total %d across %d models)",
+                      cif->id ? cif->id : "unknown", atom_count, total_atoms, cif->models);
+        } else {
+            /* No model column - fall back to division (legacy behavior) */
+            atom_count = block->size / cif->models;
+            LOG_DEBUG("[%s] No model column, assuming %d atoms per model",
+                      cif->id ? cif->id : "unknown", atom_count);
         }
-        atom_count = block->size / cif->models;
-        /* Note: We modify block->size here for subsequent operations */
+
+        /* Truncate block to model 1 atoms for subsequent operations */
         block->size = atom_count;
     }
 
     _store_int(cif, def, atom_count);
-
-    LOG_DEBUG("OP_COMPUTE: atoms = %d (from %d total / %d models)",
-              atom_count, block->size * cif->models, cif->models);
 
     return CIF_OK;
 }

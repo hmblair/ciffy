@@ -18,6 +18,7 @@ def load(
     load_descriptions: bool = False,
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
+    model: int = 1,
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -37,6 +38,8 @@ def load(
         chains: Filter to load only specific chains by name.
             Can be a single chain name (e.g., "A") or a list of chain names.
             If None, all chains are loaded. Can be combined with molecule_types.
+        model: Model number to load for multi-model structures (e.g., NMR
+            ensembles). Currently only model 1 is supported. Default is 1.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -45,6 +48,7 @@ def load(
         OSError: If the file does not exist.
         RuntimeError: If parsing fails.
         ValueError: If backend is not "numpy" or "torch".
+        NotImplementedError: If model is not 1.
 
     Example:
         >>> polymer = load("1abc.cif", backend="numpy")
@@ -80,6 +84,12 @@ def load(
 
     if backend not in ("numpy", "torch"):
         raise ValueError(f"backend must be 'numpy' or 'torch', got {backend!r}")
+
+    if model != 1:
+        raise NotImplementedError(
+            f"Only model 1 is currently supported, got model={model}. "
+            "Multi-model support may be added in a future version."
+        )
 
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')

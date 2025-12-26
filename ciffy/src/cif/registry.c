@@ -978,7 +978,7 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
         if (_r) { \
             (dest) = _r->value; \
         } else { \
-            LOG_WARNING("Unknown element '%s' at line %d", buf, block->data.line + row); \
+            LOG_INFO("Unknown element '%s' at line %d", buf, block->data.line + row); \
             (dest) = PARSE_FAIL; \
         } \
     } else { \
@@ -1021,7 +1021,7 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
         if (_r) { \
             (dest) = _r->value; \
         } else { \
-            LOG_WARNING("Unknown atom '%s' at line %d", buf, block->data.line + row); \
+            LOG_INFO("Unknown atom '%s' at line %d", buf, block->data.line + row); \
             (dest) = PARSE_FAIL; \
         } \
     } else { \

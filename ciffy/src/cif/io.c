@@ -535,7 +535,7 @@ int _lookup_element_fast(mmBlock *block, int line, int index, HashTable func) {
 
         struct _LOOKUP *lookup = func(buffer, len);
         if (lookup == NULL) {
-            LOG_WARNING("Unknown element '%s' at line %d", buffer, block->data.line + line);
+            LOG_INFO("Unknown element '%s' at line %d", buffer, block->data.line + line);
             return PARSE_FAIL;
         }
         return lookup->value;
@@ -583,7 +583,7 @@ int _lookup_atom_type_fast(mmBlock *block, int line, int idx1, int idx2,
 
         struct _LOOKUP *lookup = func(buffer, total_len);
         if (lookup == NULL) {
-            LOG_WARNING("Unknown atom '%s' at line %d", buffer, block->data.line + line);
+            LOG_INFO("Unknown atom '%s' at line %d", buffer, block->data.line + line);
             return PARSE_FAIL;
         }
         return lookup->value;
@@ -683,7 +683,7 @@ int _lookup_inline(mmBlock *block, int line, int index, HashTable func) {
 
     struct _LOOKUP *lookup = func(buffer, out_len);
     if (lookup == NULL) {
-        LOG_WARNING("Unknown residue '%s' at line %d", buffer, block->data.line + line);
+        LOG_INFO("Unknown residue '%s' at line %d", buffer, block->data.line + line);
         return PARSE_FAIL;
     }
     return lookup->value;
@@ -739,7 +739,7 @@ int _lookup_double_inline(mmBlock *block, int line, int index1, int index2,
 
     struct _LOOKUP *lookup = func(buffer, out_len);
     if (lookup == NULL) {
-        LOG_WARNING("Unknown atom '%s' at line %d", buffer, block->data.line + line);
+        LOG_INFO("Unknown atom '%s' at line %d", buffer, block->data.line + line);
         return PARSE_FAIL;
     }
     return lookup->value;

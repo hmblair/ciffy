@@ -343,6 +343,97 @@ def load_checkpoint(
     return checkpoint
 
 
+def _log_bad_loss(
+    loss_type: str,
+    sample: Any,
+    losses: dict[str, "torch.Tensor"],
+    model: "nn.Module",
+    n_samples: int,
+    n_skipped: int,
+) -> None:
+    """Log debug information when a bad loss (NaN/Inf) is encountered.
+
+    This helps diagnose training instabilities by providing:
+    - Sample characteristics (shape, dtype, value ranges)
+    - Loss breakdown (which component is bad)
+    - Model parameter statistics
+    """
+    import torch
+
+    parts = [f"\n{'='*60}", f"BAD LOSS DETECTED: {loss_type}", f"{'='*60}"]
+
+    # Sample info
+    parts.append(f"\nSample info (after {n_samples} good, {n_skipped} skipped):")
+    if hasattr(sample, "shape"):
+        parts.append(f"  Shape: {sample.shape}")
+        parts.append(f"  Dtype: {sample.dtype}")
+        if hasattr(sample, "min") and hasattr(sample, "max"):
+            try:
+                parts.append(f"  Value range: [{sample.min().item():.4g}, {sample.max().item():.4g}]")
+                if torch.isnan(sample).any():
+                    parts.append(f"  WARNING: Sample contains NaN values!")
+                if torch.isinf(sample).any():
+                    parts.append(f"  WARNING: Sample contains Inf values!")
+            except Exception:
+                pass
+    elif isinstance(sample, (tuple, list)) and len(sample) > 0:
+        parts.append(f"  Sample is tuple/list with {len(sample)} elements")
+        for i, elem in enumerate(sample[:3]):  # First 3 elements
+            if hasattr(elem, "shape"):
+                parts.append(f"    [{i}] shape={elem.shape}, dtype={elem.dtype}")
+                try:
+                    if torch.isnan(elem).any():
+                        parts.append(f"        WARNING: Element [{i}] contains NaN!")
+                    if torch.isinf(elem).any():
+                        parts.append(f"        WARNING: Element [{i}] contains Inf!")
+                except Exception:
+                    pass
+
+    # Loss breakdown
+    parts.append(f"\nLoss breakdown:")
+    for key, value in losses.items():
+        if isinstance(value, torch.Tensor):
+            val = value.item() if value.numel() == 1 else str(value)
+            status = ""
+            if torch.isnan(value).any():
+                status = " <- NaN!"
+            elif torch.isinf(value).any():
+                status = " <- Inf!"
+            parts.append(f"  {key}: {val}{status}")
+
+    # Model parameter stats
+    parts.append(f"\nModel parameter statistics:")
+    n_nan_params = 0
+    n_inf_params = 0
+    param_stats = []
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.numel() > 0:
+            try:
+                has_nan = torch.isnan(param).any().item()
+                has_inf = torch.isinf(param).any().item()
+                if has_nan:
+                    n_nan_params += 1
+                    param_stats.append(f"  {name}: contains NaN!")
+                elif has_inf:
+                    n_inf_params += 1
+                    param_stats.append(f"  {name}: contains Inf!")
+            except Exception:
+                pass
+
+    if n_nan_params > 0 or n_inf_params > 0:
+        parts.append(f"  Parameters with NaN: {n_nan_params}")
+        parts.append(f"  Parameters with Inf: {n_inf_params}")
+        parts.extend(param_stats[:5])  # Show first 5 problematic params
+        if len(param_stats) > 5:
+            parts.append(f"  ... and {len(param_stats) - 5} more")
+    else:
+        parts.append("  All parameters are finite (problem is in forward pass)")
+
+    parts.append(f"{'='*60}\n")
+
+    logger.warning("\n".join(parts))
+
+
 def train_epoch(
     model: "nn.Module",
     dataloader: "DataLoader",
@@ -433,9 +524,12 @@ def train_epoch(
             losses = loss_fn(model, sample)
             loss = losses["loss"]
 
-            # Skip NaN losses
-            if torch.isnan(loss):
+            # Skip bad losses (NaN or Inf)
+            if torch.isnan(loss) or torch.isinf(loss):
                 n_skipped += 1
+                # Log debug info about the bad loss
+                loss_type = "NaN" if torch.isnan(loss) else "Inf"
+                _log_bad_loss(loss_type, sample, losses, model, n_samples, n_skipped)
                 continue
 
             # Backward pass
@@ -487,6 +581,21 @@ def train_epoch(
     if n_samples > 0:
         for key, value in metrics_accum.items():
             result[key] = value / n_samples
+    else:
+        # All samples were skipped - this is a training failure
+        total_samples = n_samples + n_skipped
+        logger.warning(
+            f"\n{'='*60}\n"
+            f"TRAINING FAILURE: All {total_samples} samples were skipped!\n"
+            f"This typically indicates:\n"
+            f"  1. Empty dataset (no valid samples)\n"
+            f"  2. Model producing NaN/Inf from the start\n"
+            f"  3. Data preprocessing issue (NaN/Inf in inputs)\n"
+            f"  4. Learning rate too high causing immediate instability\n"
+            f"{'='*60}"
+        )
+        result["loss"] = float("inf")
+
     result["n_samples"] = float(n_samples)
     result["n_skipped"] = float(n_skipped)
 

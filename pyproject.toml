@@ -29,7 +29,7 @@ torch = ["torch"]
 geometric = ["sphericart[torch]"]
 vis = ["matplotlib"]
 ml = ["torch", "safetensors"]
-dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "sphericart[torch]", "safetensors"]
+dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "sphericart[torch]", "safetensors", "biopython"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"

@@ -108,6 +108,13 @@ def train_pca_flow(
     n_train = len(train_data)
     batch_size = min(batch_size, n_train)
 
+    # Clamp latent_dim to available samples (PCA can't have more components than samples)
+    max_components = min(n_train, train_data.shape[1])
+    if latent_dim > max_components:
+        if verbose:
+            print(f"Warning: reducing latent_dim from {latent_dim} to {max_components} (only {n_train} samples)")
+        latent_dim = max_components
+
     # Compute PCA on training data only
     V, mean, singular_values, var_explained = compute_pca(train_data, n_components=latent_dim)
     pca_var = var_explained[latent_dim - 1]

@@ -20,105 +20,87 @@ from .data import extract_residues_with_links
 from .train import train_pca_flow
 from ...split import split_by_structure
 from ...trainer_registry import register_trainer
+from ...base_trainer import BaseConfig, DataConfig, OutputConfig, TrainingConfig
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
 
 
 @dataclass
-class ResidueFlowTrainingConfig:
-    """Configuration for ResidueFlowModel training.
+class ResidueFlowModelConfig:
+    """Model configuration for ResidueFlowModel.
 
     Attributes:
         latent_dim: Number of latent dimensions (PCA components).
-        n_layers: Number of normalizing flow layers (default 4 for spline).
-        hidden_dim: Hidden dimension in coupling networks (default 56).
+        n_layers: Number of normalizing flow layers.
+        hidden_dim: Hidden dimension in coupling networks.
         bound: Tanh bound for decode (in std devs). None for unbounded.
-        n_epochs: Number of training epochs.
-        batch_size: Batch size for training.
-        lr: Learning rate.
-        min_coverage: Minimum fraction of instances an atom must appear in.
-        max_bond_length: Maximum O3'-P distance to accept as connected.
-        device: Device to train on ('cpu' or 'cuda').
-        train_split: Fraction of structures for training (default: 0.8).
-        test_split: Fraction of structures for testing (default: 0.2).
-        split_seed: Random seed for reproducible splits (default: 42).
     """
 
     latent_dim: int = 12
     n_layers: int = 4
     hidden_dim: int = 56
     bound: float | None = None
-    n_epochs: int = 200
-    batch_size: int = 256
-    lr: float = 1e-3
+
+
+@dataclass
+class ResidueFlowDataConfig(DataConfig):
+    """Data configuration for ResidueFlowModel training.
+
+    Extends base DataConfig with flow-specific settings.
+
+    Attributes:
+        cif_patterns: Glob patterns for CIF files.
+        residue_names: Residue types to train (e.g., ["A", "C", "G", "U"]).
+        min_coverage: Minimum fraction of instances an atom must appear in.
+        max_bond_length: Maximum O3'-P distance to accept as connected.
+        train_split: Fraction of structures for training.
+        test_split: Fraction of structures for testing.
+        split_seed: Random seed for reproducible splits.
+    """
+
+    cif_patterns: list[str] | None = None
+    residue_names: list[str] | None = None
     min_coverage: float = 0.9
     max_bond_length: float = 2.0
-    device: str = "cpu"
     train_split: float = 0.8
     test_split: float = 0.2
     split_seed: int | None = 42
 
-    # Data source fields (for unified training CLI)
-    data_dir: str | None = None
-    cif_patterns: list[str] | None = None
-    residue_names: list[str] | None = None
-    output_dir: str = "./checkpoints/flow"
 
-    # Report generation
+@dataclass
+class ResidueFlowOutputConfig(OutputConfig):
+    """Output configuration for ResidueFlowModel training.
+
+    Extends base OutputConfig with report settings.
+
+    Attributes:
+        generate_report: Whether to generate training report.
+        report_path: Path to save report. None for output_dir/training_report.html.
+    """
+
     generate_report: bool = True
-    report_path: str | None = None  # If None, saves to output_dir/training_report.html
+    report_path: str | None = None
 
-    @classmethod
-    def from_dict(
-        cls,
-        config: dict[str, Any],
-        **overrides: Any,
-    ) -> "ResidueFlowTrainingConfig":
-        """Create config from a YAML config dictionary.
 
-        Args:
-            config: Dictionary from YAML config file.
-            **overrides: Override specific fields (e.g., device='cuda').
+@dataclass
+class ResidueFlowTrainingConfig(BaseConfig):
+    """Full configuration for ResidueFlowModel training.
 
-        Returns:
-            ResidueFlowTrainingConfig instance.
-        """
-        model = config.get("model", {})
-        training = config.get("training", {})
-        output = config.get("output", {})
+    Uses nested dataclasses for consistency with other trainers.
+    Inherits from BaseConfig to use shared from_dict() machinery.
 
-        kwargs = {
-            # Model settings
-            "latent_dim": model.get("latent_dim", 12),
-            "n_layers": model.get("n_layers", 4),
-            "hidden_dim": model.get("hidden_dim", 56),
-            "bound": model.get("bound"),
-            # Training settings
-            "n_epochs": training.get("n_epochs", 200),
-            "batch_size": training.get("batch_size", 256),
-            "lr": training.get("lr", 1e-3),
-            "min_coverage": training.get("min_coverage", 0.9),
-            "max_bond_length": training.get("max_bond_length", 2.0),
-            "device": training.get("device", "cpu"),
-            "train_split": training.get("train_split", 0.8),
-            "test_split": training.get("test_split", 0.2),
-            "split_seed": training.get("split_seed", 42),
-            # Data settings
-            "data_dir": config.get("data_dir"),
-            "cif_patterns": config.get("cif_patterns"),
-            "residue_names": config.get("residues"),
-            # Output settings
-            "output_dir": output.get("checkpoint_dir", "./checkpoints/flow"),
-            # Report settings
-            "generate_report": output.get("generate_report", True),
-            "report_path": output.get("report_path"),
-        }
+    Example:
+        >>> config = ResidueFlowTrainingConfig(
+        ...     model=ResidueFlowModelConfig(latent_dim=16),
+        ...     data=ResidueFlowDataConfig(data_dir="./cif"),
+        ... )
+    """
 
-        # Apply overrides
-        kwargs.update(overrides)
-
-        return cls(**kwargs)
+    model: ResidueFlowModelConfig = field(default_factory=ResidueFlowModelConfig)
+    data: ResidueFlowDataConfig = field(default_factory=ResidueFlowDataConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    output: ResidueFlowOutputConfig = field(default_factory=ResidueFlowOutputConfig)
 
 
 @dataclass
@@ -204,6 +186,18 @@ class ResidueFlowTrainer:
         self.config = config or ResidueFlowTrainingConfig()
         self.quiet = quiet
 
+    def _get_device(self) -> str:
+        """Resolve device string, handling 'auto'."""
+        device = self.config.training.device
+        if device == "auto":
+            if torch.cuda.is_available():
+                return "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+            else:
+                return "cpu"
+        return device
+
     def train(
         self,
         resume_path: str | None = None,
@@ -241,11 +235,11 @@ class ResidueFlowTrainer:
             print("\nValidating training configuration...")
 
         validation = validate_training_config(
-            data_dir=self.config.data_dir,
-            cif_patterns=self.config.cif_patterns,
-            residues=self.config.residue_names,
-            output_dir=self.config.output_dir,
-            device=self.config.device,
+            data_dir=self.config.data.data_dir,
+            cif_patterns=self.config.data.cif_patterns,
+            residues=self.config.data.residue_names,
+            output_dir=self.config.output.checkpoint_dir,
+            device=self.config.training.device,
         )
 
         if verbose:
@@ -270,12 +264,12 @@ class ResidueFlowTrainer:
             return {
                 "status": "failed",
                 "epochs_trained": 0,
-                "total_epochs": self.config.n_epochs,
+                "total_epochs": self.config.training.epochs,
                 "error": "No residues were successfully trained",
             }
 
         # Save models
-        self.save(results, self.config.output_dir)
+        self.save(results, self.config.output.checkpoint_dir)
 
         # Build per-residue results
         residue_results = {}
@@ -293,10 +287,10 @@ class ResidueFlowTrainer:
 
         train_result = {
             "status": "success",
-            "epochs_trained": self.config.n_epochs,
-            "total_epochs": self.config.n_epochs,
+            "epochs_trained": self.config.training.epochs,
+            "total_epochs": self.config.training.epochs,
             "n_samples": sum(r.n_train for r in results.values()),
-            "checkpoint_path": str(self.config.output_dir),
+            "checkpoint_path": str(self.config.output.checkpoint_dir),
             "extra_metrics": {
                 "n_residue_types": len(results),
                 "residue_results": residue_results,
@@ -304,7 +298,7 @@ class ResidueFlowTrainer:
         }
 
         # Generate training report
-        if self.config.generate_report:
+        if self.config.output.generate_report:
             self._generate_report(train_result, verbose)
 
         return train_result
@@ -314,15 +308,15 @@ class ResidueFlowTrainer:
         paths = []
 
         # From data_dir
-        if self.config.data_dir:
-            data_path = Path(self.config.data_dir)
+        if self.config.data.data_dir:
+            data_path = Path(self.config.data.data_dir)
             if data_path.is_dir():
                 paths.extend(data_path.glob("*.cif"))
                 paths.extend(data_path.glob("**/*.cif"))
 
         # From cif_patterns
-        if self.config.cif_patterns:
-            for pattern in self.config.cif_patterns:
+        if self.config.data.cif_patterns:
+            for pattern in self.config.data.cif_patterns:
                 paths.extend(Path(p) for p in glob(pattern))
 
         # Remove duplicates while preserving order
@@ -340,11 +334,11 @@ class ResidueFlowTrainer:
         """Get residue types from config."""
         from ciffy.biochemistry import Residue
 
-        if not self.config.residue_names:
+        if not self.config.data.residue_names:
             return []
 
         residues = []
-        for name in self.config.residue_names:
+        for name in self.config.data.residue_names:
             try:
                 residue = getattr(Residue, name)
                 residues.append(residue)
@@ -368,30 +362,30 @@ class ResidueFlowTrainer:
         from ...report import TrainingReport
 
         # Determine report path
-        if self.config.report_path:
-            report_path = Path(self.config.report_path)
+        if self.config.output.report_path:
+            report_path = Path(self.config.output.report_path)
         else:
-            report_path = Path(self.config.output_dir) / "training_report.html"
+            report_path = Path(self.config.output.checkpoint_dir) / "training_report.html"
 
         # Build config dict for report
         config_dict = {
             "model": {
-                "latent_dim": self.config.latent_dim,
-                "n_layers": self.config.n_layers,
-                "hidden_dim": self.config.hidden_dim,
-                "bound": self.config.bound,
+                "latent_dim": self.config.model.latent_dim,
+                "n_layers": self.config.model.n_layers,
+                "hidden_dim": self.config.model.hidden_dim,
+                "bound": self.config.model.bound,
             },
             "training": {
-                "n_epochs": self.config.n_epochs,
-                "batch_size": self.config.batch_size,
-                "lr": self.config.lr,
-                "device": self.config.device,
+                "n_epochs": self.config.training.epochs,
+                "batch_size": self.config.data.batch_size,
+                "lr": self.config.training.lr,
+                "device": self.config.training.device,
             },
             "data": {
-                "data_dir": self.config.data_dir,
-                "residues": self.config.residue_names,
-                "min_coverage": self.config.min_coverage,
-                "train_split": self.config.train_split,
+                "data_dir": self.config.data.data_dir,
+                "residues": self.config.data.residue_names,
+                "min_coverage": self.config.data.min_coverage,
+                "train_split": self.config.data.train_split,
             },
         }
 
@@ -439,10 +433,10 @@ class ResidueFlowTrainer:
         # Split structures into train/test sets
         split = split_by_structure(
             cif_paths,
-            train=self.config.train_split,
+            train=self.config.data.train_split,
             val=0.0,  # No validation set for now
-            test=self.config.test_split,
-            seed=self.config.split_seed,
+            test=self.config.data.test_split,
+            seed=self.config.data.split_seed,
         )
 
         if verbose:
@@ -452,8 +446,8 @@ class ResidueFlowTrainer:
         train_coords, train_transforms, atoms = extract_residues_with_links(
             split.train,
             residue,
-            min_coverage=self.config.min_coverage,
-            max_bond_length=self.config.max_bond_length,
+            min_coverage=self.config.data.min_coverage,
+            max_bond_length=self.config.data.max_bond_length,
             verbose=verbose,
         )
 
@@ -475,8 +469,8 @@ class ResidueFlowTrainer:
                 test_coords, test_transforms, _ = extract_residues_with_links(
                     split.test,
                     residue,
-                    min_coverage=self.config.min_coverage,
-                    max_bond_length=self.config.max_bond_length,
+                    min_coverage=self.config.data.min_coverage,
+                    max_bond_length=self.config.data.max_bond_length,
                     verbose=False,  # Quiet for test extraction
                 )
                 n_test = len(test_coords)
@@ -496,14 +490,14 @@ class ResidueFlowTrainer:
             train_data=train_extended,
             test_data=test_extended,
             n_atoms=n_atoms,
-            latent_dim=self.config.latent_dim,
-            n_layers=self.config.n_layers,
-            hidden_dim=self.config.hidden_dim,
-            bound=self.config.bound,
-            n_epochs=self.config.n_epochs,
-            batch_size=self.config.batch_size,
-            lr=self.config.lr,
-            device=self.config.device,
+            latent_dim=self.config.model.latent_dim,
+            n_layers=self.config.model.n_layers,
+            hidden_dim=self.config.model.hidden_dim,
+            bound=self.config.model.bound,
+            n_epochs=self.config.training.epochs,
+            batch_size=self.config.data.batch_size,
+            lr=self.config.training.lr,
+            device=self._get_device(),
             verbose=verbose,
         )
 
@@ -564,8 +558,8 @@ class ResidueFlowTrainer:
         train_coords, train_transforms, atoms = extract_residues_with_links(
             train_paths,
             residue,
-            min_coverage=self.config.min_coverage,
-            max_bond_length=self.config.max_bond_length,
+            min_coverage=self.config.data.min_coverage,
+            max_bond_length=self.config.data.max_bond_length,
             verbose=verbose,
         )
 
@@ -587,8 +581,8 @@ class ResidueFlowTrainer:
                 test_coords, test_transforms, _ = extract_residues_with_links(
                     test_paths,
                     residue,
-                    min_coverage=self.config.min_coverage,
-                    max_bond_length=self.config.max_bond_length,
+                    min_coverage=self.config.data.min_coverage,
+                    max_bond_length=self.config.data.max_bond_length,
                     verbose=False,
                 )
                 n_test = len(test_coords)
@@ -607,14 +601,14 @@ class ResidueFlowTrainer:
             train_data=train_extended,
             test_data=test_extended,
             n_atoms=n_atoms,
-            latent_dim=self.config.latent_dim,
-            n_layers=self.config.n_layers,
-            hidden_dim=self.config.hidden_dim,
-            bound=self.config.bound,
-            n_epochs=self.config.n_epochs,
-            batch_size=self.config.batch_size,
-            lr=self.config.lr,
-            device=self.config.device,
+            latent_dim=self.config.model.latent_dim,
+            n_layers=self.config.model.n_layers,
+            hidden_dim=self.config.model.hidden_dim,
+            bound=self.config.model.bound,
+            n_epochs=self.config.training.epochs,
+            batch_size=self.config.data.batch_size,
+            lr=self.config.training.lr,
+            device=self._get_device(),
             verbose=verbose,
         )
 
@@ -737,14 +731,14 @@ class ResidueFlowTrainer:
         # Save metadata
         config = {
             "residue_types": [r.name for r in results.keys()],
-            "latent_dim": self.config.latent_dim,
+            "latent_dim": self.config.model.latent_dim,
             "training_config": {
-                "latent_dim": self.config.latent_dim,
-                "n_layers": self.config.n_layers,
-                "hidden_dim": self.config.hidden_dim,
-                "bound": self.config.bound,
-                "n_epochs": self.config.n_epochs,
-                "min_coverage": self.config.min_coverage,
+                "latent_dim": self.config.model.latent_dim,
+                "n_layers": self.config.model.n_layers,
+                "hidden_dim": self.config.model.hidden_dim,
+                "bound": self.config.model.bound,
+                "n_epochs": self.config.training.epochs,
+                "min_coverage": self.config.data.min_coverage,
             },
         }
         with open(path / "config.json", "w") as f:

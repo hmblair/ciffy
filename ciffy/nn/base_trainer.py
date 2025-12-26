@@ -109,6 +109,21 @@ class OutputConfig:
 
 
 @dataclass
+class DataConfig:
+    """Base data configuration shared across trainers.
+
+    Attributes:
+        data_dir: Directory containing training data (CIF files, etc.).
+        batch_size: Training batch size.
+        num_workers: Number of DataLoader workers.
+    """
+
+    data_dir: str = ""
+    batch_size: int = 32
+    num_workers: int = 4
+
+
+@dataclass
 class WandbConfig:
     """Weights & Biases logging configuration.
 
@@ -596,6 +611,7 @@ class BaseTrainer(ABC):
 __all__ = [
     "TrainingConfig",
     "OutputConfig",
+    "DataConfig",
     "WandbConfig",
     "BaseConfig",
     "MetricsLogger",

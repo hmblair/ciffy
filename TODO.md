@@ -51,6 +51,42 @@ def encode(self, coords, sequence):
 **Effort**: ~50-100 lines, 2-4 hours
 **Impact**: Fewer samples filtered during training, better data utilization
 
+**Alternative approach (masked training)**:
+
+Train the flow model to handle missing atoms natively by using masked inputs during training:
+
+1. During training, randomly mask some atoms (set to zero or learnable mask token)
+2. Model learns to produce valid latents even with partial input
+3. At inference, naturally handles incomplete structures
+
+```python
+class MaskedPCAFlow(PCAFlow):
+    def __init__(self, V, mean, mask_token=None):
+        super().__init__(V, mean)
+        # Learnable embedding for masked positions
+        self.mask_embedding = nn.Parameter(torch.zeros(3))
+
+    def encode(self, coords, mask=None):
+        if mask is not None:
+            # Replace masked positions with learned embedding
+            coords = coords.clone()
+            coords[mask] = self.mask_embedding
+        return super().encode(coords)
+```
+
+**Pros**:
+- Model learns robust representations
+- No information loss from imputation
+- Works even with many missing atoms
+
+**Cons**:
+- Requires retraining flow models
+- More complex training procedure
+- May need larger models for robustness
+
+**Effort**: 1-2 days (includes retraining)
+**Impact**: Most robust solution for incomplete structures
+
 ---
 
 ## MEDIUM Priority

@@ -83,6 +83,38 @@ The following C functions in `ciffy/src/internal/` are no longer used by the Pyt
 
 ---
 
+## CIF Parsing Performance Optimizations
+
+Current: ~11ms for 100K atoms (9M atoms/sec). Bottleneck is memory-bound, not compute-bound.
+
+### Binary Cache Format (3-5x faster on repeated loads)
+
+Cache parsed structures in binary format to skip ASCII parsing on subsequent loads.
+
+```python
+polymer = ciffy.load('file.cif')  # First: 11ms (parses + writes cache)
+polymer = ciffy.load('file.cif')  # Second: ~2ms (reads binary cache)
+```
+
+**Effort**: 1-2 days
+**Impact**: 3-5x faster for ML training loops
+
+### Columnar Pre-scan (1.5-2x faster)
+
+Parse one column at a time across all rows instead of row-by-row with scattered column access. Improves CPU prefetcher efficiency.
+
+**Effort**: 4-6 hours
+**Impact**: 1.5-2x faster parsing
+
+### Integer Hash Keys (1.3-1.5x faster)
+
+Replace string-based gperf hash lookups with integer-encoded keys for direct array lookup.
+
+**Effort**: 1 day
+**Impact**: 1.3-1.5x faster element/atom type lookups
+
+---
+
 ## Test Coverage Gaps
 
 The following modules lack test coverage. Adding tests would improve reliability.

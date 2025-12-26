@@ -161,6 +161,11 @@ def train_pca_flow(
             update_every=max(1, n_epochs // 10),  # ~10 updates
         )
 
+    # Throttle progress callback to avoid overhead (update at most every 0.5s)
+    import time as time_module
+    last_callback_time = 0.0
+    callback_interval = 0.5
+
     for epoch in range(n_epochs):
         if progress_tracker:
             progress_tracker.start_epoch()
@@ -191,13 +196,17 @@ def train_pca_flow(
         if progress_tracker:
             progress_tracker.update(epoch, {"loss": avg_loss})
 
-        # Call external progress callback
+        # Call external progress callback (throttled to reduce overhead)
         if progress_callback is not None:
-            progress_callback(epoch + 1, n_epochs, {
-                "loss": avg_loss,
-                "n_params": n_params,
-                "n_samples": n_train,
-            })
+            current_time = time_module.perf_counter()
+            is_last_epoch = (epoch == n_epochs - 1)
+            if is_last_epoch or (current_time - last_callback_time) >= callback_interval:
+                progress_callback(epoch + 1, n_epochs, {
+                    "loss": avg_loss,
+                    "n_params": n_params,
+                    "n_samples": n_train,
+                })
+                last_callback_time = current_time
 
     # Import metrics functions
     from ..metrics import compute_nll, compute_latent_moments

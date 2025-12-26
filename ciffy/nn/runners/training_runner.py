@@ -188,9 +188,10 @@ def _run_training_job(
                 }
                 if extra_metrics:
                     msg.update(extra_metrics)
-                progress_queue.put(msg)
+                # Use put_nowait to avoid blocking training
+                progress_queue.put_nowait(msg)
             except Exception:
-                pass
+                pass  # Queue full - skip this update
 
     # Capture stdout/stderr to log file
     log_buffer = io.StringIO()

@@ -397,7 +397,6 @@ class LatentDiffusionTrainer(BaseTrainer):
             shuffle=True,
             num_workers=0,  # Encoding uses GPU, can't use multiple workers
             collate_fn=latent_collate_fn,
-            drop_last=True,
         )
 
     def create_loss_fn(

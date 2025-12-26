@@ -201,6 +201,9 @@ class LatentEncodingDataset(Dataset):
         polymer_idx = self.valid_indices[idx]
         polymer = self.polymer_dataset[polymer_idx]
 
+        # Get only polymer atoms (exclude HETATM like water/ions)
+        polymer = polymer.poly()
+
         coords = polymer.coordinates
         sequence = polymer.sequence
 

@@ -10,17 +10,27 @@ Install ciffy from PyPI:
 pip install ciffy
 ```
 
-For deep learning workflows, install with PyTorch:
+### Optional Dependencies
+
+For machine learning (PyTorch + safetensors):
 
 ```bash
-pip install ciffy torch
+pip install ciffy[ml]
 ```
 
-For visualization features:
+For visualization:
 
 ```bash
-pip install ciffy matplotlib
+pip install ciffy[vis]
 ```
+
+For development (all dependencies):
+
+```bash
+pip install ciffy[dev]
+```
+
+Available extras: `ml`, `torch`, `vis`, `geometric`, `dev`
 
 ## Quick Reference
 

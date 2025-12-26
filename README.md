@@ -27,8 +27,15 @@ pip install ciffy
 ```bash
 git clone https://github.com/hmblair/ciffy.git
 cd ciffy
-pip install -r requirements.txt
 pip install -e .
+```
+
+### Optional Dependencies
+
+```bash
+pip install ciffy[ml]   # PyTorch + safetensors for neural networks
+pip install ciffy[vis]  # matplotlib for visualization
+pip install ciffy[dev]  # all dependencies for development
 ```
 
 ## Backends

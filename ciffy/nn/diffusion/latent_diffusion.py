@@ -388,6 +388,45 @@ class LatentDiffusionModel(nn.Module):
             return polymers[0]
         return polymers
 
+    def sample_from_sequence(
+        self,
+        sequence: str,
+        n_samples: int = 1,
+        id: str = "sampled",
+        **kwargs,
+    ) -> Union["Polymer", list["Polymer"]]:
+        """
+        Sample polymer conformations directly from a sequence string.
+
+        Generates a template Polymer from the sequence string and samples
+        new conformations via the diffusion process.
+
+        Args:
+            sequence: Sequence string (e.g., "acgu" for RNA, "MGKLF" for protein).
+            n_samples: Number of conformations to generate.
+            id: PDB ID for the generated polymers.
+            **kwargs: Passed to sample() (e.g., num_steps, temperature).
+
+        Returns:
+            If n_samples=1: Single Polymer with generated coordinates.
+            If n_samples>1: List of Polymers.
+
+        Example:
+            >>> model = LatentDiffusionModel(config)
+            >>> polymer = model.sample_from_sequence("acgu", num_steps=50)
+            >>> polymer.write("sampled.cif")
+        """
+        from ciffy.template import from_sequence
+
+        # Create template with correct atoms for the flow model
+        template = from_sequence(
+            sequence,
+            atoms=self.flow_model.atom_filter,
+            id=id,
+        )
+
+        return self.sample_to_polymer(template, n_samples, **kwargs)
+
     def reconstruct(
         self,
         coords: "torch.Tensor",

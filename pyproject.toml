@@ -67,6 +67,8 @@ ciffy = ["data/*.npz"]
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 tag_regex = "^v(?P<version>.*)$"
+write_to = "ciffy/_version.py"
+fallback_version = "0.0.0.dev0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

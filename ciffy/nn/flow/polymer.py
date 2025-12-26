@@ -543,6 +543,57 @@ class PolymerFlowModel(nn.Module):
             return samples[0]
         return samples
 
+    def sample_from_sequence(
+        self,
+        sequence: str,
+        n_samples: int = 1,
+        id: str = "sampled",
+    ) -> "Polymer" | list["Polymer"]:
+        """
+        Sample polymer conformations directly from a sequence string.
+
+        Generates a template Polymer from the sequence string and samples
+        new conformations. This is the simplest way to generate structures
+        from scratch.
+
+        Args:
+            sequence: Sequence string (e.g., "acgu" for RNA, "MGKLF" for protein).
+            n_samples: Number of conformations to generate.
+            id: PDB ID for the generated polymers.
+
+        Returns:
+            If n_samples=1: Single Polymer with generated coordinates.
+            If n_samples>1: List of Polymers.
+
+        Example:
+            >>> model = PolymerFlowModel.load("path/to/model")
+            >>> polymer = model.sample_from_sequence("acgu")
+            >>> polymer.write("sampled.cif")
+            >>>
+            >>> # Generate multiple samples
+            >>> samples = model.sample_from_sequence("acgu", n_samples=10)
+            >>> for i, p in enumerate(samples):
+            ...     p.write(f"sample_{i}.cif")
+        """
+        from ciffy.template import from_sequence
+
+        # Create template with correct atoms for this model
+        template = from_sequence(sequence, atoms=self.atom_filter, id=id)
+
+        # Sample coordinates
+        coords_list = self.sample(template.sequence, n_samples=n_samples)
+
+        # Convert to Polymers
+        if n_samples == 1:
+            coords = coords_list if not isinstance(coords_list, list) else coords_list[0]
+            return template.with_coordinates(coords.detach().cpu().numpy())
+
+        polymers = []
+        for i, coords in enumerate(coords_list):
+            p = template.with_coordinates(coords.detach().cpu().numpy())
+            polymers.append(p)
+        return polymers
+
     @property
     def supported_residue_types(self) -> np.ndarray:
         """Array of supported residue type indices (int)."""

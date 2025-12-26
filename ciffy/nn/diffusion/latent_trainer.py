@@ -445,34 +445,63 @@ class LatentDiffusionTrainer(BaseTrainer):
         }
 
     def _generate_samples(self, epoch: int) -> None:
-        """Generate and save sample structures."""
+        """Generate and save sample structures as CIF files.
+
+        For each validation sequence, saves:
+        - ground_truth.cif: The original structure
+        - sample_0.cif, sample_1.cif, ...: Generated samples
+
+        Directory structure:
+            samples/epoch_0010/
+            ├── seq_0/
+            │   ├── ground_truth.cif
+            │   ├── sample_0.cif
+            │   └── sample_1.cif
+            └── seq_1/
+                ├── ground_truth.cif
+                └── ...
+        """
         if len(self._latent_cache) == 0:
             return
 
         sample_dir = self.sample_dir / f"epoch_{epoch + 1:04d}"
-        sample_dir.mkdir(parents=True, exist_ok=True)
 
-        # Pick a template sequence
-        idx = list(self._latent_cache.keys())[0]
-        _, sequence = self._latent_cache[idx]
+        # Use multiple validation sequences (up to val_samples)
+        sample_indices = list(self._latent_cache.keys())[: self.config.val_samples]
 
         self.model.eval()
         try:
             with torch.no_grad(), self.ema.apply(self.model.denoiser):
-                samples = self.model.sample(
-                    sequence,
-                    n_samples=5,
-                    num_steps=self.config.val_steps,
-                )
+                for seq_idx, cache_idx in enumerate(sample_indices):
+                    seq_dir = sample_dir / f"seq_{seq_idx}"
+                    seq_dir.mkdir(parents=True, exist_ok=True)
 
-            if not isinstance(samples, list):
-                samples = [samples]
+                    try:
+                        # Get original polymer for ground truth
+                        polymer = self.dataset[cache_idx]
 
-            # Save samples
-            for i, coords in enumerate(samples):
-                torch.save(coords.cpu(), sample_dir / f"sample_{i}.pt")
-                # Also save as numpy for convenience
-                np.save(sample_dir / f"sample_{i}.npy", coords.cpu().numpy())
+                        # Save ground truth
+                        polymer.write(str(seq_dir / "ground_truth.cif"))
+
+                        # Generate samples
+                        samples = self.model.sample_to_polymer(
+                            polymer,
+                            n_samples=3,  # 3 samples per sequence
+                            num_steps=self.config.val_steps,
+                        )
+
+                        if not isinstance(samples, list):
+                            samples = [samples]
+
+                        # Save samples as CIF
+                        for i, sample in enumerate(samples):
+                            sample.write(str(seq_dir / f"sample_{i}.cif"))
+
+                    except Exception as e:
+                        if not self.quiet:
+                            logger.debug(f"Sample generation for seq {seq_idx} failed: {e}")
+                        continue
+
         except Exception as e:
             if not self.quiet:
                 logger.warning(f"Sample generation failed: {e}")

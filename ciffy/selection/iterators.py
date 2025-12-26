@@ -63,10 +63,15 @@ def poly(polymer: Polymer) -> Polymer:
     # Filter molecule types if available
     mol_types = polymer._molecule_types[chain_mask] if polymer._molecule_types is not None else None
 
+    # Slice bfactors to polymer atoms only
+    bfactors = polymer._bfactors[:polymer.polymer_count] if polymer._bfactors is not None else None
+
     return Polymer(
         coordinates, atoms, elements, polymer.sequence, sizes,
         polymer.pdb_id, names, strands, lengths, polymer.polymer_count,
         mol_types,
+        bfactors=bfactors,
+        resolution=polymer._resolution,
     )
 
 

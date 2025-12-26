@@ -49,7 +49,8 @@
     X(CONN,           "_struct_conn.",          false) \
     X(ENTITY_POLY,    "_entity_poly.",          false) \
     X(ENTITY,         "_entity.",               false) \
-    X(ENTITY_NONPOLY, "_pdbx_entity_nonpoly.",  false)
+    X(ENTITY_NONPOLY, "_pdbx_entity_nonpoly.",  false) \
+    X(REFINE,         "_refine.",               false)
 
 /**
  * @brief Block identifier enum.

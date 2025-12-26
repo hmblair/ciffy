@@ -167,12 +167,14 @@ typedef enum {
     FIELD_STRANDS,       /**< cif->strands - strand ID strings */
     FIELD_SEQUENCE,      /**< cif->sequence - residue type indices */
     FIELD_COORDS,        /**< cif->coordinates - x,y,z positions */
+    FIELD_BFACTORS,      /**< cif->bfactors - B-factors/temperature factors */
     FIELD_TYPES,         /**< cif->types - atom type indices */
     FIELD_ELEMENTS,      /**< cif->elements - element type indices */
     FIELD_RES_PER_CHAIN, /**< cif->res_per_chain - residue counts per chain */
     FIELD_ATOMS_PER_RES, /**< cif->atoms_per_res - atom counts per residue */
     FIELD_MOL_TYPES,     /**< cif->molecule_types - molecule type per chain */
     FIELD_DESCRIPTIONS,  /**< cif->descriptions - entity description per chain (optional) */
+    FIELD_RESOLUTION,    /**< cif->resolution - structure resolution in Angstroms */
     FIELD_COUNT          /**< Total number of field types */
 } FieldId;
 
@@ -200,6 +202,7 @@ typedef enum {
 typedef enum {
     STORAGE_NONE = 0,    /**< No automatic storage (custom handling) */
     STORAGE_INT,         /**< int field (e.g., cif->chains) */
+    STORAGE_FLOAT,       /**< float field (e.g., cif->resolution) */
     STORAGE_INT_PTR,     /**< int* field (e.g., cif->sequence) */
     STORAGE_FLOAT_PTR,   /**< float* field (e.g., cif->coordinates) */
     STORAGE_STR_ARRAY,   /**< char** field (e.g., cif->names) */
@@ -225,6 +228,7 @@ typedef enum {
 typedef enum {
     PY_NONE = 0,         /**< Not exported to Python */
     PY_INT,              /**< Scalar int -> Python int */
+    PY_FLOAT,            /**< Scalar float -> Python float */
     PY_STRING,           /**< char* -> Python str */
     PY_1D_INT,           /**< int* -> 1D numpy int32 array */
     PY_1D_FLOAT,         /**< float* -> 1D numpy float32 array */
@@ -293,6 +297,9 @@ typedef struct {
     /* Python export - enables automatic dict generation */
     PyExportType py_export;     /**< How to convert to Python object */
     const char  *py_name;       /**< Key name in returned dict (NULL = use 'name') */
+
+    /* Optional field - if true, missing attributes don't cause parse failure */
+    bool         optional;      /**< If true, field is skipped when attrs missing */
 } FieldDef;
 
 

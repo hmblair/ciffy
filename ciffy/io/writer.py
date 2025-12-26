@@ -51,6 +51,11 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
     res_per_chain = np.ascontiguousarray(polymer.lengths.astype(np.int32))
     molecule_types = np.ascontiguousarray(polymer.molecule_type.astype(np.int32))
 
+    # B-factors are optional - pass None if not available
+    bfactors = None
+    if polymer.bfactors is not None:
+        bfactors = np.ascontiguousarray(polymer.bfactors.astype(np.float32))
+
     _save(
         filename,
         polymer.pdb_id,
@@ -65,4 +70,5 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
         polymer.strands,
         polymer.polymer_count,
         molecule_types,
+        bfactors,
     )

@@ -17,6 +17,20 @@
 #include "io.h"
 
 /**
+ * @brief Filter options for partial loading.
+ *
+ * Allows loading only specific chains, molecule types, or models.
+ * All filter fields are optional - NULL/0 means no filtering.
+ */
+typedef struct LoadFilter {
+    int *molecule_types;    /**< Array of molecule type values to include (-1 terminated), NULL = all */
+    char **chain_names;     /**< NULL-terminated array of chain names to include, NULL = all */
+    int mol_type_count;     /**< Number of molecule types in filter */
+    int chain_count;        /**< Number of chain names in filter */
+    int model;              /**< Model number to load (1-indexed), 0 = default (first) */
+} LoadFilter;
+
+/**
  * @brief Parsed mmCIF molecular structure data.
  *
  * Contains all extracted information from an mmCIF file including
@@ -40,16 +54,26 @@ typedef struct mmCIF {
     int nonpoly;            /**< Count of non-polymeric atoms */
 
     float *coordinates;     /**< Atom coordinates [atoms * 3] as x,y,z triplets */
+    float *bfactors;        /**< B-factors/temperature factors [atoms] */
     int   *types;           /**< Atom type indices [atoms] */
     int   *elements;        /**< Element type indices [atoms] */
     int   *is_nonpoly;      /**< Non-polymer mask [atoms], temp during parse */
     int   write_dest;       /**< Current write destination for batch callbacks */
+
+    float resolution;       /**< Resolution in Angstroms (from _refine.ls_d_res_high), -1 if not available */
 
     int *sequence;          /**< Residue type indices [residues] */
     int *res_per_chain;     /**< Residues per chain [chains] */
     int *atoms_per_chain;   /**< Atoms per chain [chains] */
     int *atoms_per_res;     /**< Atoms per residue [residues] */
     int *molecule_types;    /**< Molecule type per chain [chains] (from _entity_poly.type) */
+
+    /* Partial loading support */
+    int *chain_mask;        /**< Per-chain inclusion mask [chains], 1=include, 0=exclude, NULL=all */
+    int *is_excluded;       /**< Per-atom exclusion mask [atoms], 1=exclude, 0=include, NULL=all */
+    int excluded_count;     /**< Count of excluded atoms */
+    int original_chains;    /**< Original chain count before filtering */
+    int original_atoms;     /**< Original atom count before filtering */
 
 } mmCIF;
 
@@ -84,10 +108,33 @@ char *_get_id(ParseCursor *cursor, CifErrorContext *ctx);
  *
  * @param cif Output structure to populate
  * @param blocks Parsed block collection
+ * @param metadata_only If true, skip batch parsing (for fast indexing)
+ * @param filter Optional filter for partial loading (NULL = load all)
  * @param ctx Error context, populated on failure
  * @return CIF_OK on success, error code on failure
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifErrorContext *ctx);
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
+                   const LoadFilter *filter, CifErrorContext *ctx);
+
+/**
+ * @brief Build a chain inclusion mask based on filter criteria.
+ *
+ * Creates a boolean mask indicating which chains to include based on
+ * molecule_types and/or chain_names filters. Returns count of included chains.
+ *
+ * @param cif Structure with chains and molecule_types already parsed
+ * @param filter Filter criteria
+ * @param ctx Error context, populated on failure
+ * @return Number of included chains, or -1 on error
+ */
+int _build_chain_mask(mmCIF *cif, const LoadFilter *filter, CifErrorContext *ctx);
+
+/**
+ * @brief Free filter resources.
+ *
+ * @param filter Filter to free (fields are set to NULL)
+ */
+void _free_filter(LoadFilter *filter);
 
 
 /* ─────────────────────────────────────────────────────────────────────────────

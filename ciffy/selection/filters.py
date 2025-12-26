@@ -67,10 +67,15 @@ def by_index(polymer: Polymer, ix: Array | int) -> Polymer:
     # Preserve molecule types if available
     mol_types = polymer._molecule_types[ix] if polymer._molecule_types is not None else None
 
+    # Slice bfactors by atom mask
+    bfactors = polymer._bfactors[atm_ix] if polymer._bfactors is not None else None
+
     return Polymer(
         coordinates, atoms, elements, sequence, sizes,
         polymer.pdb_id, names, strands, lengths, new_polymer_count,
         mol_types,
+        bfactors=bfactors,
+        resolution=polymer._resolution,
     )
 
 

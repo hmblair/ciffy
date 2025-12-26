@@ -4,17 +4,20 @@ CIF file loading functionality.
 
 from __future__ import annotations
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union, List
 
 import numpy as np
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
+    from ..biochemistry import Molecule
 
 def load(
     file: str,
     backend: str | None = None,
     load_descriptions: bool = False,
+    molecule_types: Union["Molecule", List["Molecule"], None] = None,
+    chains: Union[str, List[str], None] = None,
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -27,6 +30,13 @@ def load(
         backend: Array backend, either "numpy" or "torch". Default is "numpy".
         load_descriptions: If True, parse entity descriptions from CIF file.
             Default is False for performance (descriptions not needed for DL).
+        molecule_types: Filter to load only specific molecule types.
+            Can be a single Molecule enum (e.g., Molecule.RNA) or a list
+            of Molecule enums. If None, all molecules are loaded.
+            This enables partial loading for improved performance.
+        chains: Filter to load only specific chains by name.
+            Can be a single chain name (e.g., "A") or a list of chain names.
+            If None, all chains are loaded. Can be combined with molecule_types.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -44,10 +54,24 @@ def load(
         >>> polymer = load("1abc.cif", load_descriptions=True)
         >>> print(polymer.descriptions)
         ['RNA (66-MER)', 'CESIUM ION', ...]
+
+        >>> # Load only RNA chains (partial loading)
+        >>> from ciffy import Molecule
+        >>> rna = load("1abc.cif", molecule_types=Molecule.RNA)
+
+        >>> # Load RNA and DNA chains
+        >>> rna_dna = load("1abc.cif", molecule_types=[Molecule.RNA, Molecule.DNA])
+
+        >>> # Load specific chains by name
+        >>> chain_a = load("1abc.cif", chains="A")
+        >>> chains_ab = load("1abc.cif", chains=["A", "B"])
+
+        >>> # Combine filters: only RNA chains named A or B
+        >>> rna_ab = load("1abc.cif", molecule_types=Molecule.RNA, chains=["A", "B"])
     """
     # Import here to avoid circular imports
     from ..polymer import Polymer
-    from ..biochemistry import Scale
+    from ..biochemistry import Scale, Molecule
     from .._c import _load
 
     # Handle backend parameter
@@ -60,8 +84,24 @@ def load(
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')
 
+    # Convert molecule_types to list of ints for C extension
+    mol_type_filter = None
+    if molecule_types is not None:
+        if isinstance(molecule_types, Molecule):
+            mol_type_filter = [int(molecule_types)]
+        else:
+            mol_type_filter = [int(mt) for mt in molecule_types]
+
+    # Convert chains to list of strings for C extension
+    chain_filter = None
+    if chains is not None:
+        if isinstance(chains, str):
+            chain_filter = [chains]
+        else:
+            chain_filter = list(chains)
+
     # Load returns a dict with all parsed data
-    data = _load(file, load_descriptions=load_descriptions)
+    data = _load(file, load_descriptions=load_descriptions, molecule_types=mol_type_filter, chains=chain_filter)
 
     # Extract fields from dict
     id = data["id"]
@@ -88,6 +128,10 @@ def load(
     # Get descriptions if loaded
     descriptions = data.get("descriptions", None)
 
+    # Get B-factors and resolution
+    bfactors = data.get("bfactors", None)
+    resolution = data.get("resolution", None)
+
     # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(
         coordinates,
@@ -102,6 +146,8 @@ def load(
         polymer_count,
         molecule_types,
         descriptions,
+        bfactors,
+        resolution,
     )
 
     # Convert to torch if requested

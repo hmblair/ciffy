@@ -368,6 +368,9 @@ static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *c
  * @brief Write the _atom_site block (coordinates and atom types).
  */
 static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
+    /* Check if we have B-factors to write */
+    int has_bfactors = (cif->bfactors != NULL);
+
     /* Write block header */
     CIF_FPRINTF(file, ctx, "loop_\n");
     CIF_FPRINTF(file, ctx, "_atom_site.group_PDB\n");
@@ -381,6 +384,9 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
     CIF_FPRINTF(file, ctx, "_atom_site.Cartn_x\n");
     CIF_FPRINTF(file, ctx, "_atom_site.Cartn_y\n");
     CIF_FPRINTF(file, ctx, "_atom_site.Cartn_z\n");
+    if (has_bfactors) {
+        CIF_FPRINTF(file, ctx, "_atom_site.B_iso_or_equiv\n");
+    }
     CIF_FPRINTF(file, ctx, "_atom_site.pdbx_PDB_model_num\n");
 
     LOG_INFO("Writing %d atoms (%d polymer, %d non-polymer)",
@@ -446,6 +452,9 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 float y = cif->coordinates[coord_idx + 1];
                 float z = cif->coordinates[coord_idx + 2];
 
+                /* Get B-factor if available */
+                float bfactor = has_bfactors ? cif->bfactors[atom_idx] : 0.0f;
+
                 /* Sequence ID: use output_seq_id for polymer, '.' for non-polymer */
                 /* NOTE: Use LEFT-justified fields (%-Nd) to avoid leading spaces that merge
                  * with field delimiters. The parser uses whitespace to find field boundaries,
@@ -453,13 +462,25 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                  * must have consistent width for the fixed-line-width parser to work.
                  * Field widths: serial(7), element(2), atom(6 for quoted), res(4), chain(4), seq(6), coord(10) */
                 if (atom_idx < cif->polymer) {
-                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
-                        group, serial, elem, atom_name,
-                        res_name, chain_name, output_seq_id, x, y, z);
+                    if (has_bfactors) {
+                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
+                            group, serial, elem, atom_name,
+                            res_name, chain_name, output_seq_id, x, y, z, bfactor);
+                    } else {
+                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
+                            group, serial, elem, atom_name,
+                            res_name, chain_name, output_seq_id, x, y, z);
+                    }
                 } else {
-                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
-                        group, serial, elem, atom_name,
-                        res_name, chain_name, ".", x, y, z);
+                    if (has_bfactors) {
+                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
+                            group, serial, elem, atom_name,
+                            res_name, chain_name, ".", x, y, z, bfactor);
+                    } else {
+                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
+                            group, serial, elem, atom_name,
+                            res_name, chain_name, ".", x, y, z);
+                    }
                 }
 
                 atom_idx++;

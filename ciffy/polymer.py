@@ -103,6 +103,8 @@ class Polymer:
         polymer_count: int | None = None,
         molecule_types: Array | None = None,
         descriptions: list[str] | None = None,
+        bfactors: Array | None = None,
+        resolution: float | None = None,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -122,6 +124,10 @@ class Polymer:
             molecule_types: (C,) array of molecule types per chain from CIF.
                 If None, molecule types will be inferred from residue indices.
             descriptions: List of entity descriptions per chain, or None.
+            bfactors: (N,) array of B-factors (temperature factors) per atom.
+                Higher values indicate greater atomic mobility/disorder.
+            resolution: Structure resolution in Angstroms (from _refine.ls_d_res_high).
+                None if not available (e.g., NMR structures).
 
         Raises:
             ValueError: If tensor sizes are inconsistent.
@@ -168,6 +174,8 @@ class Polymer:
         self._lengths = lengths
         self._molecule_types = molecule_types
         self.descriptions = descriptions
+        self._bfactors = bfactors
+        self._resolution = resolution
 
         # Create topology info
         from .backend.graph import TopologyInfo
@@ -304,6 +312,50 @@ class Polymer:
             # Filter to i < j to avoid duplicates
             self._bonds = edges[edges[:, 0] < edges[:, 1]]
         return self._bonds
+
+    @property
+    def bfactors(self) -> Array | None:
+        """
+        B-factors (temperature factors) per atom.
+
+        B-factors quantify the uncertainty in atomic positions due to
+        thermal motion and static disorder. Higher values indicate
+        greater atomic mobility or structural heterogeneity.
+
+        Returns:
+            (N,) array of B-factors in Angstroms squared, or None if not
+            available (e.g., template structures, some NMR structures).
+
+        Example:
+            >>> p = ciffy.load("structure.cif")
+            >>> if p.bfactors is not None:
+            ...     mean_b = p.bfactors.mean()
+            ...     print(f"Mean B-factor: {mean_b:.1f} A^2")
+        """
+        return self._bfactors
+
+    @property
+    def resolution(self) -> float | None:
+        """
+        Structure resolution in Angstroms.
+
+        The resolution indicates the level of detail visible in the
+        electron density map. Lower values indicate higher resolution:
+        - < 1.0 A: Atomic resolution (individual atoms visible)
+        - 1.0-2.0 A: High resolution (most atoms resolvable)
+        - 2.0-3.0 A: Medium resolution (secondary structure clear)
+        - > 3.0 A: Low resolution (overall shape/fold visible)
+
+        Returns:
+            Resolution in Angstroms, or None if not available
+            (e.g., NMR structures, theoretical models).
+
+        Example:
+            >>> p = ciffy.load("structure.cif")
+            >>> if p.resolution is not None:
+            ...     print(f"Resolution: {p.resolution:.2f} A")
+        """
+        return self._resolution
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification
@@ -900,9 +952,14 @@ class Polymer:
         # polymer_count atoms survive the mask (direct slice avoids O(N) allocation)
         new_polymer_count = mask[:self.polymer_count].sum().item()
 
+        # Slice bfactors if present
+        bfactors = self._bfactors[mask] if self._bfactors is not None else None
+
         return Polymer(
             coordinates, atoms, elements, sequence, sizes,
             self.pdb_id, names, strands, lengths, new_polymer_count,
+            bfactors=bfactors,
+            resolution=self._resolution,
         )
 
     def by_index(self: Polymer, ix: Array | int) -> Polymer:
@@ -1286,6 +1343,8 @@ class Polymer:
             polymer_count=self.polymer_count + n_new_atoms,
             molecule_types=ops.clone(self._molecule_types) if self._molecule_types is not None else None,
             descriptions=list(self.descriptions) if self.descriptions else None,
+            # bfactors not preserved - new atoms don't have experimental B-factors
+            resolution=self._resolution,
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1409,6 +1468,8 @@ class Polymer:
             lengths=to_numpy(self.lengths),
             polymer_count=self.polymer_count,
             molecule_types=to_numpy(self._molecule_types) if self._molecule_types is not None else None,
+            bfactors=to_numpy(self._bfactors) if self._bfactors is not None else None,
+            resolution=self._resolution,
         )
 
     def torch(self: Polymer) -> Polymer:
@@ -1438,6 +1499,8 @@ class Polymer:
             lengths=to_torch(self.lengths).long(),
             polymer_count=self.polymer_count,
             molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
+            bfactors=to_torch(self._bfactors).float() if self._bfactors is not None else None,
+            resolution=self._resolution,
         )
 
     def to(self: Polymer, device=None, dtype=None) -> Polymer:
@@ -1481,6 +1544,17 @@ class Polymer:
         def move_int(t):
             return t.to(device) if device is not None else t
 
+        # For float tensors, apply device and dtype
+        def move_float(t):
+            if t is None:
+                return None
+            result = t
+            if device is not None:
+                result = result.to(device)
+            if dtype is not None:
+                result = result.to(dtype)
+            return result
+
         # Create new polymer with moved arrays
         return Polymer(
             coordinates=coords,
@@ -1493,6 +1567,8 @@ class Polymer:
             strands=self.strands.copy(),
             lengths=move_int(self.lengths),
             polymer_count=self.polymer_count,
+            bfactors=move_float(self._bfactors),
+            resolution=self._resolution,
         )
 
     def cuda(self: Polymer) -> Polymer:

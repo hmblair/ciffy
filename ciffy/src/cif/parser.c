@@ -42,6 +42,10 @@ static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 
 
+/* Forward declarations for partial loading support */
+static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErrorContext *ctx);
+static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx);
+static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block, CifErrorContext *ctx);
 
 
 /* ============================================================================
@@ -308,6 +312,80 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
     return sizes;
 }
 
+
+/**
+ * Count atoms per chain with exclusion support.
+ *
+ * Like _count_sizes_by_group but skips excluded atoms.
+ * Used after chain filtering is applied.
+ */
+static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
+                                             CifErrorContext *ctx) {
+    int index = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
+    if (index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_LABEL_ASYM);
+        return NULL;
+    }
+
+    int chain_count = cif->original_chains > 0 ? cif->original_chains : cif->chains;
+    int *sizes = calloc((size_t)chain_count, sizeof(int));
+    if (sizes == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate chain sizes array");
+        return NULL;
+    }
+
+    int current_chain = 0;
+    char *prev_ptr = NULL;
+    size_t prev_len = 0;
+
+    for (int line = 0; line < block->size; line++) {
+        /* Skip excluded atoms */
+        if (cif->is_excluded && cif->is_excluded[line]) {
+            continue;
+        }
+
+        size_t cur_len;
+        char *cur_ptr = _get_field_ptr(block, line, index, &cur_len);
+        if (cur_ptr == NULL) {
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Failed to get chain field");
+            free(sizes);
+            return NULL;
+        }
+
+        /* Track chain changes */
+        if (prev_ptr == NULL) {
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
+            /* Find initial chain index */
+            for (int i = 0; i < chain_count; i++) {
+                if (cif->names[i] && strlen(cif->names[i]) == cur_len &&
+                    memcmp(cif->names[i], cur_ptr, cur_len) == 0) {
+                    current_chain = i;
+                    break;
+                }
+            }
+        } else if (!_field_eq_field(prev_ptr, prev_len, cur_ptr, cur_len)) {
+            prev_ptr = cur_ptr;
+            prev_len = cur_len;
+            /* Find new chain index */
+            for (int i = 0; i < chain_count; i++) {
+                if (cif->names[i] && strlen(cif->names[i]) == cur_len &&
+                    memcmp(cif->names[i], cur_ptr, cur_len) == 0) {
+                    current_chain = i;
+                    break;
+                }
+            }
+        }
+
+        if (current_chain >= 0 && current_chain < chain_count) {
+            sizes[current_chain]++;
+        }
+    }
+
+    return sizes;
+}
+
+
 /**
  * Count atoms per residue with chain-aware indexing.
  *
@@ -345,6 +423,11 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
     int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
+        /* Skip excluded atoms (from chain filter) */
+        if (cif->is_excluded && cif->is_excluded[line]) {
+            continue;
+        }
+
         /* Skip non-polymer atoms (already classified during pre-scan) */
         if (cif->is_nonpoly[line]) {
             continue;
@@ -422,8 +505,10 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
  *
  * @param metadata_only If true, skip batch parsing and only compute counts.
  *                      Used for fast dataset indexing.
+ * @param filter Optional filter for partial loading (NULL = load all).
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifErrorContext *ctx) {
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
+                   const LoadFilter *filter, CifErrorContext *ctx) {
     LOG_DEBUG("Starting CIF structure parsing");
 
     /* ── Block Validation (registry-driven) ────────────────────────────────── */
@@ -486,6 +571,20 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
     LOG_DEBUG("Metadata extracted: %d chains, %d residues in sequence",
               cif->chains, cif->residues);
 
+    /* ── Build Chain Mask for Partial Loading ─────────────────────────────── */
+    /* Build inclusion mask based on filter criteria (molecule_types, chain_names) */
+    if (filter && (filter->molecule_types || filter->chain_names)) {
+        cif->original_chains = cif->chains;
+        int included = _build_chain_mask(cif, filter, ctx);
+        if (included < 0) {
+            _free_lines(&blocks->b[BLOCK_ATOM]);
+            _free_lines(&blocks->b[BLOCK_POLY]);
+            _free_lines(&blocks->b[BLOCK_CHAIN]);
+            return ctx->code;
+        }
+        LOG_INFO("Chain filter: %d/%d chains included", included, cif->original_chains);
+    }
+
     /* ── metadata_only: Skip batch parsing, just compute atoms_per_chain ───── */
     if (metadata_only) {
         LOG_DEBUG("metadata_only mode: skipping batch parsing");
@@ -506,28 +605,20 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
     /* ── Batch Atom Parsing with Two-Pointer Placement ───────────────────── */
     /* Note: lines already precomputed at start of function */
 
+    int original_atoms = cif->atoms;
     LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
 
     PROFILE_START(batch_parse);
 
-    /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
-    err = _allocate_field_arrays(cif, ctx);
-    if (err != CIF_OK) {
-        _free_lines(&blocks->b[BLOCK_ATOM]);
-        _free_lines(&blocks->b[BLOCK_POLY]);
-        _free_lines(&blocks->b[BLOCK_CHAIN]);
-        return err;
-    }
-
-    /* Allocate is_nonpoly for two-pointer placement */
-    cif->is_nonpoly = calloc((size_t)cif->atoms, sizeof(int));
+    /* Allocate is_nonpoly for two-pointer placement (sized for ORIGINAL atom count) */
+    cif->is_nonpoly = calloc((size_t)original_atoms, sizeof(int));
     if (!cif->is_nonpoly) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_nonpoly");
         return CIF_ERR_ALLOC;
     }
 
     /* Pre-scan group_PDB to classify atoms */
-    int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], cif->atoms,
+    int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], original_atoms,
                                            cif->is_nonpoly, ctx);
     if (polymer_count < 0) {
         free(cif->is_nonpoly);
@@ -537,6 +628,44 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
     cif->nonpoly = cif->atoms - polymer_count;
 
     LOG_DEBUG("Pre-scan: %d polymer, %d non-polymer atoms", cif->polymer, cif->nonpoly);
+
+    /* Pre-scan for excluded atoms based on chain filter */
+    if (cif->chain_mask) {
+        int excluded = _prescan_excluded_atoms(cif, &blocks->b[BLOCK_ATOM], original_atoms, ctx);
+        if (excluded < 0) {
+            free(cif->is_nonpoly);
+            _free_lines(&blocks->b[BLOCK_ATOM]);
+            _free_lines(&blocks->b[BLOCK_POLY]);
+            _free_lines(&blocks->b[BLOCK_CHAIN]);
+            return ctx->code;
+        }
+        /* Adjust counts for excluded atoms */
+        cif->original_atoms = original_atoms;
+        cif->atoms -= excluded;
+        /* Recount polymer/nonpoly excluding excluded atoms */
+        int adjusted_polymer = 0;
+        for (int i = 0; i < original_atoms; i++) {
+            if (!cif->is_excluded[i] && !cif->is_nonpoly[i]) {
+                adjusted_polymer++;
+            }
+        }
+        cif->polymer = adjusted_polymer;
+        cif->nonpoly = cif->atoms - adjusted_polymer;
+        LOG_DEBUG("After exclusion: %d atoms (%d polymer, %d non-polymer), %d excluded",
+                  cif->atoms, cif->polymer, cif->nonpoly, excluded);
+    }
+
+    /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
+    /* NOTE: cif->atoms is now the FILTERED count */
+    err = _allocate_field_arrays(cif, ctx);
+    if (err != CIF_OK) {
+        free(cif->is_nonpoly);
+        if (cif->is_excluded) free(cif->is_excluded);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
+        return err;
+    }
 
     /* Compute and execute batch groups - data written directly to final positions */
     BatchGroup batch_groups[BLOCK_COUNT];
@@ -588,9 +717,31 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
     free(cif->is_nonpoly);
     cif->is_nonpoly = NULL;
 
-    cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
-                                                 &cif->chains, ctx);
+    /* Count atoms per chain - use filtered version if chain filtering is active */
+    if (cif->is_excluded) {
+        cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+    } else {
+        cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
+                                                     &cif->chains, ctx);
+    }
     if (cif->atoms_per_chain == NULL) return ctx->code;
+
+    /* Free is_excluded - no longer needed */
+    if (cif->is_excluded) {
+        free(cif->is_excluded);
+        cif->is_excluded = NULL;
+    }
+
+    /* Compact chain arrays to remove excluded chains */
+    if (cif->chain_mask) {
+        err = _compact_chain_arrays(cif, ctx);
+        if (err != CIF_OK) {
+            free(cif->chain_mask);
+            return err;
+        }
+        free(cif->chain_mask);
+        cif->chain_mask = NULL;
+    }
 
     PROFILE_END(residue_count);
 
@@ -598,6 +749,279 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only, CifError
     LOG_DEBUG("CIF structure parsing complete");
 
     return CIF_OK;
+}
+
+
+/* ============================================================================
+ * PARTIAL LOADING SUPPORT
+ * Functions for filtering chains during loading.
+ * ============================================================================ */
+
+/**
+ * Build a chain inclusion mask based on filter criteria.
+ *
+ * Creates a boolean mask indicating which chains to include based on
+ * molecule_types and/or chain_names filters.
+ *
+ * @param cif Structure with chains and molecule_types already parsed
+ * @param filter Filter criteria
+ * @param ctx Error context, populated on failure
+ * @return Number of included chains, or -1 on error
+ */
+int _build_chain_mask(mmCIF *cif, const LoadFilter *filter, CifErrorContext *ctx) {
+    if (!cif || !filter) return -1;
+
+    /* Allocate chain mask */
+    cif->chain_mask = calloc((size_t)cif->chains, sizeof(int));
+    if (!cif->chain_mask) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate chain_mask");
+        return -1;
+    }
+
+    int included = 0;
+    for (int i = 0; i < cif->chains; i++) {
+        bool include = true;
+
+        /* Check molecule type filter */
+        if (include && filter->molecule_types != NULL) {
+            include = false;
+            for (int j = 0; filter->molecule_types[j] != -1; j++) {
+                if (cif->molecule_types && cif->molecule_types[i] == filter->molecule_types[j]) {
+                    include = true;
+                    break;
+                }
+            }
+        }
+
+        /* Check chain name filter */
+        if (include && filter->chain_names != NULL) {
+            include = false;
+            for (int j = 0; filter->chain_names[j] != NULL; j++) {
+                if (cif->names && cif->names[i] &&
+                    strcmp(cif->names[i], filter->chain_names[j]) == 0) {
+                    include = true;
+                    break;
+                }
+            }
+        }
+
+        cif->chain_mask[i] = include ? 1 : 0;
+        if (include) included++;
+    }
+
+    LOG_DEBUG("Chain mask built: %d/%d chains included", included, cif->chains);
+    return included;
+}
+
+
+/**
+ * Prescan atoms to mark excluded atoms based on chain mask.
+ *
+ * Iterates through all atoms and marks those belonging to excluded chains.
+ * Also counts how many atoms are excluded.
+ *
+ * @param cif Structure with chain_mask and names already populated
+ * @param block Atom block
+ * @param atoms Total atom count
+ * @param ctx Error context
+ * @return Number of excluded atoms, or -1 on error
+ */
+static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErrorContext *ctx) {
+    if (!cif->chain_mask) return 0;  /* No filtering */
+
+    /* Get label_asym_id attribute index */
+    int chain_idx = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
+    if (chain_idx == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'label_asym_id' for chain filtering");
+        return -1;
+    }
+
+    /* Allocate is_excluded array */
+    cif->is_excluded = calloc((size_t)atoms, sizeof(int));
+    if (!cif->is_excluded) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded");
+        return -1;
+    }
+
+    /* Track chain transitions to efficiently map atoms to chains */
+    int current_chain = 0;
+    char *prev_chain_ptr = NULL;
+    size_t prev_chain_len = 0;
+    int excluded = 0;
+
+    for (int row = 0; row < atoms; row++) {
+        size_t chain_len;
+        char *chain_ptr = _get_field_ptr(block, row, chain_idx, &chain_len);
+        if (!chain_ptr) {
+            free(cif->is_excluded);
+            cif->is_excluded = NULL;
+            CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Failed to get chain field at row %d", row);
+            return -1;
+        }
+
+        /* Check if chain changed */
+        if (prev_chain_ptr == NULL ||
+            !_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
+            prev_chain_ptr = chain_ptr;
+            prev_chain_len = chain_len;
+
+            /* Find the chain index by matching name */
+            current_chain = -1;
+            for (int i = 0; i < cif->original_chains; i++) {
+                if (cif->names[i] &&
+                    strlen(cif->names[i]) == chain_len &&
+                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
+                    current_chain = i;
+                    break;
+                }
+            }
+        }
+
+        /* Mark as excluded if chain not in mask */
+        if (current_chain < 0 || !cif->chain_mask[current_chain]) {
+            cif->is_excluded[row] = 1;
+            excluded++;
+        }
+    }
+
+    cif->excluded_count = excluded;
+    LOG_DEBUG("Excluded atoms: %d/%d", excluded, atoms);
+    return excluded;
+}
+
+
+/**
+ * Compact chain arrays to remove excluded chains.
+ *
+ * After filtering, removes chains with 0 atoms from all chain-indexed arrays:
+ * names, strands, molecule_types, res_per_chain, atoms_per_chain.
+ * Updates cif->chains to reflect the new count.
+ *
+ * @param cif Structure with chain_mask and atoms_per_chain populated
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx) {
+    if (!cif->chain_mask) return CIF_OK;  /* No filtering, nothing to compact */
+
+    /* Count included chains */
+    int included = 0;
+    for (int i = 0; i < cif->original_chains; i++) {
+        if (cif->chain_mask[i]) included++;
+    }
+
+    /* If all chains included, nothing to do */
+    if (included == cif->original_chains) return CIF_OK;
+
+    /* If no chains included, create empty arrays (not NULL, since Python expects arrays) */
+    if (included == 0) {
+        /* Free old string arrays */
+        if (cif->names) {
+            for (int i = 0; i < cif->original_chains; i++) {
+                if (cif->names[i]) free(cif->names[i]);
+            }
+            free(cif->names);
+        }
+        if (cif->strands) {
+            for (int i = 0; i < cif->original_chains; i++) {
+                if (cif->strands[i]) free(cif->strands[i]);
+            }
+            free(cif->strands);
+        }
+        /* Allocate empty arrays (size 1 to avoid malloc(0) issues) */
+        cif->names = calloc(1, sizeof(char *));
+        cif->strands = calloc(1, sizeof(char *));
+        if (cif->molecule_types) free(cif->molecule_types);
+        cif->molecule_types = calloc(1, sizeof(int));
+        if (cif->res_per_chain) free(cif->res_per_chain);
+        cif->res_per_chain = calloc(1, sizeof(int));
+        if (cif->atoms_per_chain) free(cif->atoms_per_chain);
+        cif->atoms_per_chain = calloc(1, sizeof(int));
+        cif->chains = 0;
+        cif->residues = 0;
+        return CIF_OK;
+    }
+
+    /* Allocate new compacted arrays */
+    char **new_names = calloc(included, sizeof(char *));
+    char **new_strands = calloc(included, sizeof(char *));
+    int *new_mol_types = calloc(included, sizeof(int));
+    int *new_res_per_chain = calloc(included, sizeof(int));
+    int *new_atoms_per_chain = calloc(included, sizeof(int));
+
+    if (!new_names || !new_strands || !new_mol_types ||
+        !new_res_per_chain || !new_atoms_per_chain) {
+        free(new_names); free(new_strands); free(new_mol_types);
+        free(new_res_per_chain); free(new_atoms_per_chain);
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate compacted chain arrays");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Copy included chains, free excluded ones */
+    int j = 0;
+    int new_residues = 0;
+    for (int i = 0; i < cif->original_chains; i++) {
+        if (cif->chain_mask[i]) {
+            /* Copy to new arrays */
+            new_names[j] = cif->names ? cif->names[i] : NULL;
+            new_strands[j] = cif->strands ? cif->strands[i] : NULL;
+            new_mol_types[j] = cif->molecule_types ? cif->molecule_types[i] : 0;
+            new_res_per_chain[j] = cif->res_per_chain ? cif->res_per_chain[i] : 0;
+            new_atoms_per_chain[j] = cif->atoms_per_chain ? cif->atoms_per_chain[i] : 0;
+            new_residues += new_res_per_chain[j];
+            j++;
+        } else {
+            /* Free excluded chain's strings */
+            if (cif->names && cif->names[i]) free(cif->names[i]);
+            if (cif->strands && cif->strands[i]) free(cif->strands[i]);
+        }
+    }
+
+    /* Free old arrays (but not the strings we copied) */
+    free(cif->names);
+    free(cif->strands);
+    free(cif->molecule_types);
+    free(cif->res_per_chain);
+    free(cif->atoms_per_chain);
+
+    /* Assign new arrays */
+    cif->names = new_names;
+    cif->strands = new_strands;
+    cif->molecule_types = new_mol_types;
+    cif->res_per_chain = new_res_per_chain;
+    cif->atoms_per_chain = new_atoms_per_chain;
+    cif->chains = included;
+    cif->residues = new_residues;
+
+    LOG_DEBUG("Compacted chains: %d -> %d", cif->original_chains, included);
+    return CIF_OK;
+}
+
+
+/**
+ * Free LoadFilter resources.
+ *
+ * @param filter Filter to free (fields are set to NULL)
+ */
+void _free_filter(LoadFilter *filter) {
+    if (!filter) return;
+
+    if (filter->molecule_types) {
+        free(filter->molecule_types);
+        filter->molecule_types = NULL;
+    }
+
+    if (filter->chain_names) {
+        for (int i = 0; filter->chain_names[i] != NULL; i++) {
+            free(filter->chain_names[i]);
+        }
+        free(filter->chain_names);
+        filter->chain_names = NULL;
+    }
+
+    filter->mol_type_count = 0;
+    filter->chain_count = 0;
+    filter->model = 0;
 }
 
 

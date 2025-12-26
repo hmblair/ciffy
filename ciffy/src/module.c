@@ -77,6 +77,13 @@ static PyObject *_set_py_error(CifErrorContext *ctx, const char *filename) {
  * is garbage collected.
  */
 static PyObject *_init_1d_arr_int(int size, int *data) {
+    /* Handle empty array case */
+    if (size == 0) {
+        if (data) free(data);
+        npy_intp dims[1] = {0};
+        return PyArray_SimpleNew(1, dims, NPY_INT64);  /* Empty array, no data needed */
+    }
+
     /* Allocate int64 array */
     int64_t *data64 = malloc(size * sizeof(int64_t));
     if (data64 == NULL) {
@@ -172,6 +179,11 @@ static PyObject *_export_field(const mmCIF *cif, const FieldDef *def) {
         case PY_INT: {
             int value = *(const int *)(base + def->storage_offset);
             return _c_int_to_py_int(value);
+        }
+
+        case PY_FLOAT: {
+            float value = *(const float *)(base + def->storage_offset);
+            return PyFloat_FromDouble((double)value);
         }
 
         case PY_STRING: {
@@ -402,14 +414,88 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifErrorContext ctx = CIF_ERROR_INIT;
 
     /* Parse arguments: filename (required) + optional keywords */
-    static char *kwlist[] = {"filename", "load_descriptions", "metadata_only", NULL};
+    static char *kwlist[] = {"filename", "load_descriptions", "metadata_only",
+                             "molecule_types", "chains", NULL};
     const char *file = NULL;
     int load_descriptions = 0;  /* Default: false */
     int metadata_only = 0;      /* Default: false - load full data */
+    PyObject *py_mol_types = NULL;  /* Optional list of molecule type ints */
+    PyObject *py_chains = NULL;     /* Optional list of chain name strings */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|pp", kwlist,
-                                      &file, &load_descriptions, &metadata_only)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|ppOO", kwlist,
+                                      &file, &load_descriptions, &metadata_only,
+                                      &py_mol_types, &py_chains)) {
         return NULL;
+    }
+
+    /* Build LoadFilter from Python arguments */
+    LoadFilter filter = {0};
+
+    /* Parse molecule_types filter */
+    if (py_mol_types != NULL && py_mol_types != Py_None) {
+        if (!PyList_Check(py_mol_types)) {
+            PyErr_SetString(PyExc_TypeError, "molecule_types must be a list of integers");
+            return NULL;
+        }
+        filter.mol_type_count = (int)PyList_Size(py_mol_types);
+        if (filter.mol_type_count > 0) {
+            filter.molecule_types = calloc(filter.mol_type_count + 1, sizeof(int));
+            if (filter.molecule_types == NULL) {
+                return PyErr_NoMemory();
+            }
+            for (int i = 0; i < filter.mol_type_count; i++) {
+                PyObject *item = PyList_GetItem(py_mol_types, i);
+                if (!PyLong_Check(item)) {
+                    _free_filter(&filter);
+                    PyErr_SetString(PyExc_TypeError, "molecule_types must contain integers");
+                    return NULL;
+                }
+                filter.molecule_types[i] = (int)PyLong_AsLong(item);
+            }
+            filter.molecule_types[filter.mol_type_count] = -1;  /* Sentinel */
+        }
+    }
+
+    /* Parse chains filter (list of chain name strings) */
+    if (py_chains != NULL && py_chains != Py_None) {
+        if (!PyList_Check(py_chains)) {
+            _free_filter(&filter);
+            PyErr_SetString(PyExc_TypeError, "chains must be a list of strings");
+            return NULL;
+        }
+        filter.chain_count = (int)PyList_Size(py_chains);
+        if (filter.chain_count > 0) {
+            /* Allocate NULL-terminated array (calloc ensures NULL termination) */
+            filter.chain_names = calloc(filter.chain_count + 1, sizeof(char *));
+            if (filter.chain_names == NULL) {
+                _free_filter(&filter);
+                return PyErr_NoMemory();
+            }
+            for (int i = 0; i < filter.chain_count; i++) {
+                PyObject *item = PyList_GetItem(py_chains, i);
+                if (!PyUnicode_Check(item)) {
+                    _free_filter(&filter);
+                    PyErr_SetString(PyExc_TypeError, "chains must contain strings");
+                    return NULL;
+                }
+                const char *name = PyUnicode_AsUTF8(item);
+                if (name == NULL) {
+                    _free_filter(&filter);
+                    return NULL;
+                }
+                /* Validate non-empty chain name */
+                if (name[0] == '\0') {
+                    _free_filter(&filter);
+                    PyErr_SetString(PyExc_ValueError, "chain names must be non-empty strings");
+                    return NULL;
+                }
+                filter.chain_names[i] = strdup(name);
+                if (filter.chain_names[i] == NULL) {
+                    _free_filter(&filter);
+                    return PyErr_NoMemory();
+                }
+            }
+        }
     }
 
     /* Load the entire file into memory */
@@ -418,6 +504,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifError err = _load_file(file, &buffer, &ctx);
     PROFILE_END(file_load);
     if (err != CIF_OK) {
+        _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
     char *cpy = buffer;  /* Keep original pointer for free */
@@ -432,6 +519,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     cif.id = _get_id(&cursor, &ctx);
     if (cif.id == NULL) {
         free(cpy);
+        _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
     _next_block(&cursor);
@@ -445,6 +533,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(cif.id);
             _free_block_list(&blocks);
             free(cpy);
+            _free_filter(&filter);
             return _set_py_error(&ctx, file);
         }
         _store_or_free_block(&block, &blocks);
@@ -452,11 +541,12 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     PROFILE_END(block_parse);
 
     /* Extract molecular data from parsed blocks (includes line_precomp, metadata, batch_parse, residue_count) */
-    err = _fill_cif(&cif, &blocks, metadata_only, &ctx);
+    err = _fill_cif(&cif, &blocks, metadata_only, &filter, &ctx);
     if (err != CIF_OK) {
         free(cif.id);
         _free_block_list(&blocks);
         free(cpy);
+        _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
 
@@ -468,9 +558,13 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(cif.id);
             _free_block_list(&blocks);
             free(cpy);
+            _free_filter(&filter);
             return _set_py_error(&ctx, file);
         }
     }
+
+    /* Free filter resources */
+    _free_filter(&filter);
 
     /* Free the file buffer and block metadata */
     free(cpy);
@@ -596,13 +690,15 @@ static PyObject *_save(PyObject *self, PyObject *args) {
     PyObject *py_coords, *py_atoms, *py_elements, *py_residues;
     PyObject *py_atoms_per_res, *py_atoms_per_chain, *py_res_per_chain;
     PyObject *py_chain_names, *py_strand_names, *py_molecule_types;
+    PyObject *py_bfactors;
     int polymer_count;
 
-    if (!PyArg_ParseTuple(args, "ssOOOOOOOOOiO",
+    if (!PyArg_ParseTuple(args, "ssOOOOOOOOOiOO",
             &filename, &id,
             &py_coords, &py_atoms, &py_elements, &py_residues,
             &py_atoms_per_res, &py_atoms_per_chain, &py_res_per_chain,
-            &py_chain_names, &py_strand_names, &polymer_count, &py_molecule_types)) {
+            &py_chain_names, &py_strand_names, &polymer_count, &py_molecule_types,
+            &py_bfactors)) {
         return NULL;  /* PyArg_ParseTuple sets exception */
     }
 
@@ -649,6 +745,12 @@ static PyObject *_save(PyObject *self, PyObject *args) {
 
     cif.molecule_types = _numpy_to_int_arr(py_molecule_types, NULL);
     if (cif.molecule_types == NULL) goto cleanup;
+
+    /* Extract optional bfactors (None means not available) */
+    if (py_bfactors != Py_None) {
+        cif.bfactors = _numpy_to_float_arr(py_bfactors, NULL);
+        if (cif.bfactors == NULL) goto cleanup;
+    }
 
     /* Extract string arrays (we own these copies) */
     cif.names = _py_list_to_c_arr(py_chain_names, &num_chains);

@@ -44,8 +44,12 @@ static const char *ATTR_RESIDUE_NAME[]  = { "mon_id", NULL };
 
 /* Batch-parsed field attributes */
 static const char *ATTR_COORDS[]   = { "Cartn_x", "Cartn_y", "Cartn_z", NULL };
+static const char *ATTR_BFACTOR[]  = { "B_iso_or_equiv", NULL };
 static const char *ATTR_ELEMENT[]  = { "type_symbol", NULL };
 static const char *ATTR_ATOM_TYPE[] = { "label_comp_id", "label_atom_id", NULL };
+
+/* Refinement attributes */
+static const char *ATTR_RESOLUTION[] = { "ls_d_res_high", NULL };
 
 
 /* ============================================================================
@@ -119,6 +123,16 @@ static void _batch_types(mmCIF *cif, mmBlock *block, int row,
                          const int *idx, char *scratch) {
     cif->types[cif->write_dest] = _lookup_atom_type_fast(block, row, idx[0], idx[1],
                                                           _lookup_atom, scratch);
+}
+
+/**
+ * @brief Parse B-factor for a single row with two-pointer placement.
+ * attr_indices: [0]=B_iso_or_equiv
+ */
+static void _batch_bfactors(mmCIF *cif, mmBlock *block, int row,
+                            const int *idx, char *scratch) {
+    (void)scratch;
+    cif->bfactors[cif->write_dest] = _parse_float_inline(block, row, idx[0]);
 }
 
 
@@ -321,6 +335,49 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
 }
 
 
+/**
+ * Parse resolution from _refine.ls_d_res_high.
+ *
+ * Sets cif->resolution to the resolution value, or -1.0 if not available.
+ * For now, only handles looped blocks (which is the common case).
+ */
+static CifError _parse_resolution(mmCIF *cif, mmBlockList *blocks,
+                                   const void *def, CifErrorContext *ctx) {
+    (void)def;
+
+    /* Default to -1 (not available) */
+    cif->resolution = -1.0f;
+
+    mmBlock *block = &blocks->b[BLOCK_REFINE];
+    if (block->category == NULL) {
+        LOG_DEBUG("No _refine block found, resolution unavailable");
+        return CIF_OK;  /* Not an error, just no data */
+    }
+
+    /* Get attribute index for ls_d_res_high */
+    int res_idx = _get_attr_index(block, "ls_d_res_high", ctx);
+    if (res_idx == BAD_IX) {
+        LOG_DEBUG("No ls_d_res_high attribute found");
+        return CIF_OK;  /* Not an error */
+    }
+
+    /* Precompute lines and parse first row */
+    CifError err = _precompute_lines(block, ctx);
+    if (err != CIF_OK) return err;
+
+    if (block->size > 0) {
+        cif->resolution = _parse_float_inline(block, 0, res_idx);
+    }
+
+    _free_lines(block);
+
+    if (cif->resolution > 0) {
+        LOG_DEBUG("Resolution: %.2f Å", cif->resolution);
+    }
+    return CIF_OK;
+}
+
+
 /* ============================================================================
  * FIELD DEFINITIONS
  * Declarative specification of fields and their dependencies.
@@ -403,7 +460,14 @@ static const FieldDef FIELDS[] = {
       SIZE_ATOMS, sizeof(float), 3,
       PY_2D_FLOAT, NULL },
 
-    /* FIELD_TYPES = 8 - batch parsed, auto-allocated, exported as "atoms" */
+    /* FIELD_BFACTORS = 8 - batch parsed, auto-allocated */
+    { FIELD_BFACTORS, "bfactors", BLOCK_ATOM, OP_COMPUTE,
+      ATTR_BFACTOR, DEP_MODELS, NULL, true, _batch_bfactors,
+      offsetof(mmCIF, bfactors), STORAGE_FLOAT_PTR,
+      SIZE_ATOMS, sizeof(float), 1,
+      PY_1D_FLOAT, NULL, true /* optional */ },
+
+    /* FIELD_TYPES = 9 - batch parsed, auto-allocated, exported as "atoms" */
     { FIELD_TYPES, "types", BLOCK_ATOM, OP_COMPUTE,
       ATTR_ATOM_TYPE, DEP_MODELS, NULL, true, _batch_types,
       offsetof(mmCIF, types), STORAGE_INT_PTR,
@@ -444,6 +508,13 @@ static const FieldDef FIELDS[] = {
       offsetof(mmCIF, descriptions), STORAGE_STR_ARRAY,
       SIZE_NONE, 0, 0,
       PY_NONE, NULL },  /* PY_NONE: not auto-exported, handled in module.c */
+
+    /* FIELD_RESOLUTION = 14 - parsed from _refine block */
+    { FIELD_RESOLUTION, "resolution", BLOCK_REFINE, OP_COMPUTE,
+      ATTR_RESOLUTION, NULL, _parse_resolution, false, NULL,
+      offsetof(mmCIF, resolution), STORAGE_FLOAT,
+      SIZE_NONE, 0, 0,
+      PY_FLOAT, NULL },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -952,17 +1023,12 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
 /**
  * @brief Fused batch processing for ATOM block fields.
  *
- * Processes coords, elements, and types in a single tight loop,
+ * Processes coords, bfactors, elements, and types in a single tight loop,
  * eliminating per-field function call overhead. Uses two-pointer
  * placement for polymer/non-polymer separation.
- *
- * To add new fields (e.g., B-factor, occupancy):
- *   1. Add attribute name to ATTR_xxx array at top of file
- *   2. Add field index lookup in _execute_batch_group
- *   3. Add one BATCH_xxx macro call in the loop below
  */
 static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
-                                          const int *coord_idx,
+                                          const int *coord_idx, int bfactor_idx,
                                           int elem_idx, int comp_idx, int atom_idx,
                                           CifErrorContext *ctx) {
     (void)ctx;
@@ -970,9 +1036,11 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
     char scratch[MAX_INLINE_BUFFER];
     char elem_buf[MAX_INLINE_BUFFER];
     float *coords = cif->coordinates;
+    float *bfactors = cif->bfactors;
     int *elements = cif->elements;
     int *types = cif->types;
     int *is_nonpoly = cif->is_nonpoly;
+    int *is_excluded = cif->is_excluded;  /* May be NULL if no filtering */
     const int *offsets = block->offsets;
     char **lines = block->lines;
 
@@ -980,6 +1048,11 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
     int nonpoly_idx = cif->polymer;
 
     for (int row = 0; row < block->size; row++) {
+        /* Skip excluded atoms (from chain filter) */
+        if (is_excluded && is_excluded[row]) {
+            continue;
+        }
+
         int dest = is_nonpoly[row] ? nonpoly_idx++ : poly_idx++;
         char *line_start = lines[row];
 
@@ -987,6 +1060,11 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
         BATCH_FLOAT(coords[3 * dest + 0], coord_idx[0]);
         BATCH_FLOAT(coords[3 * dest + 1], coord_idx[1]);
         BATCH_FLOAT(coords[3 * dest + 2], coord_idx[2]);
+
+        /* B-factor (may not be present in all files) */
+        if (bfactor_idx >= 0 && bfactors) {
+            BATCH_FLOAT(bfactors[dest], bfactor_idx);
+        }
 
         /* Element symbol -> element index */
         BATCH_LOOKUP(elements[dest], elem_idx, _lookup_element, elem_buf);
@@ -996,6 +1074,27 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
     }
 
     return CIF_OK;
+}
+
+
+/**
+ * @brief Check if an attribute index in a batch group belongs to an optional field.
+ *
+ * @param group The batch group
+ * @param attr_idx Index into group->attrs
+ * @return true if the attribute belongs to an optional field
+ */
+static bool _is_optional_attr(const BatchGroup *group, int attr_idx) {
+    for (int f = 0; f < group->field_count; f++) {
+        const FieldDef *def = &FIELDS[group->fields[f]];
+        int field_attr_count = _count_attrs(def->attrs);
+        for (int a = 0; a < field_attr_count; a++) {
+            if (group->attr_map[f][a] == attr_idx) {
+                return def->optional;
+            }
+        }
+    }
+    return false;
 }
 
 
@@ -1010,22 +1109,27 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
     LOG_DEBUG("Executing batch group for block %d: %d fields, %d rows",
               group->block_id, group->field_count, block->size);
 
-    /* Pre-compute all attribute indices */
+    /* Pre-compute all attribute indices.
+     * Optional fields' attributes may be missing - set to BAD_IX and continue. */
     int attr_indices[MAX_BATCH_ATTRS];
     for (int a = 0; a < group->attr_count; a++) {
         attr_indices[a] = _get_attr_index(block, group->attrs[a], ctx);
         if (attr_indices[a] == BAD_IX) {
-            CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
-                "Missing batch attribute '%s'", group->attrs[a]);
-            return CIF_ERR_ATTR;
+            if (!_is_optional_attr(group, a)) {
+                CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
+                    "Missing batch attribute '%s'", group->attrs[a]);
+                return CIF_ERR_ATTR;
+            }
+            /* Optional attribute missing - leave as BAD_IX and continue */
+            LOG_DEBUG("Optional attribute '%s' not found, skipping", group->attrs[a]);
         }
     }
 
     /* Use fused loop for ATOM block when is_nonpoly is available */
     if (group->block_id == BLOCK_ATOM && cif->is_nonpoly != NULL) {
-        /* Find attribute indices for coords, elements, types */
+        /* Find attribute indices for coords, bfactors, elements, types */
         int coord_idx[3] = {-1, -1, -1};
-        int elem_idx = -1, comp_idx = -1, atom_idx = -1;
+        int bfactor_idx = -1, elem_idx = -1, comp_idx = -1, atom_idx = -1;
 
         for (int f = 0; f < group->field_count; f++) {
             FieldId fid = group->fields[f];
@@ -1033,6 +1137,8 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
                 coord_idx[0] = attr_indices[group->attr_map[f][0]];
                 coord_idx[1] = attr_indices[group->attr_map[f][1]];
                 coord_idx[2] = attr_indices[group->attr_map[f][2]];
+            } else if (fid == FIELD_BFACTORS) {
+                bfactor_idx = attr_indices[group->attr_map[f][0]];
             } else if (fid == FIELD_ELEMENTS) {
                 elem_idx = attr_indices[group->attr_map[f][0]];
             } else if (fid == FIELD_TYPES) {
@@ -1042,8 +1148,16 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
         }
 
         LOG_DEBUG("Using fused batch loop for ATOM block");
-        return _batch_atom_fields_fused(cif, block, coord_idx,
-                                        elem_idx, comp_idx, atom_idx, ctx);
+        CifError err = _batch_atom_fields_fused(cif, block, coord_idx, bfactor_idx,
+                                                elem_idx, comp_idx, atom_idx, ctx);
+
+        /* If bfactors attribute was missing, free the pre-allocated array */
+        if (bfactor_idx < 0 && cif->bfactors != NULL) {
+            free(cif->bfactors);
+            cif->bfactors = NULL;
+        }
+
+        return err;
     }
 
     /* Scratch buffer for combined lookups */
@@ -1155,9 +1269,13 @@ CifError _allocate_field_arrays(mmCIF *cif, CifErrorContext *ctx) {
         }
 
         int count = _get_alloc_size(cif, def);
-        if (count <= 0) {
+        if (count < 0) {
             LOG_WARNING("Invalid allocation size for field '%s'", def->name);
             continue;
+        }
+        /* Handle zero-size case (e.g., filter matched no atoms) - allocate empty array */
+        if (count == 0) {
+            count = 1;  /* Allocate minimum to avoid NULL - actual size tracked in cif->atoms */
         }
 
         void *ptr = calloc((size_t)count, def->element_size);

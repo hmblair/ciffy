@@ -431,6 +431,9 @@ def _log_bad_loss(
 
     parts.append(f"{'='*60}\n")
 
+    # Print to stderr to ensure visibility (logger may not be captured in subprocesses)
+    import sys
+    print("\n".join(parts), file=sys.stderr)
     logger.warning("\n".join(parts))
 
 
@@ -584,7 +587,7 @@ def train_epoch(
     else:
         # All samples were skipped - this is a training failure
         total_samples = n_samples + n_skipped
-        logger.warning(
+        msg = (
             f"\n{'='*60}\n"
             f"TRAINING FAILURE: All {total_samples} samples were skipped!\n"
             f"This typically indicates:\n"
@@ -594,6 +597,10 @@ def train_epoch(
             f"  4. Learning rate too high causing immediate instability\n"
             f"{'='*60}"
         )
+        # Print to stderr to ensure visibility in subprocesses
+        import sys
+        print(msg, file=sys.stderr)
+        logger.warning(msg)
         result["loss"] = float("inf")
 
     result["n_samples"] = float(n_samples)

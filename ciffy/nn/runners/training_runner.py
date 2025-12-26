@@ -509,6 +509,34 @@ def format_training_results_table(
                 if r.log_file:
                     lines.append(f"    Log: {r.log_file}")
 
+    # Show warnings for inf/nan losses (training issues even if "success")
+    problematic = [
+        r for r in results
+        if r.status == "success" and (
+            r.best_loss is None or
+            r.best_loss == float("inf") or
+            (isinstance(r.best_loss, float) and (r.best_loss != r.best_loss))  # NaN check
+        )
+    ]
+    if problematic:
+        lines.append("")
+        lines.append("Warnings (training issues detected):")
+        for r in problematic:
+            lines.append(f"  {r.name}: best_loss={r.best_loss}")
+            if r.log_file:
+                lines.append(f"    Log: {r.log_file}")
+                # Show last 30 lines of log file for diagnosis
+                try:
+                    with open(r.log_file, "r") as f:
+                        log_lines = f.readlines()
+                        if log_lines:
+                            lines.append("    --- Log tail ---")
+                            for log_line in log_lines[-30:]:
+                                lines.append(f"    {log_line.rstrip()}")
+                            lines.append("    --- End log ---")
+                except Exception:
+                    pass
+
     return "\n".join(lines)
 
 

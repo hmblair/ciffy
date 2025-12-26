@@ -8,6 +8,9 @@ This module provides simplified functions for common flow model operations:
 - decode(): Decode latents to polymers
 - load(): Load pre-trained models
 
+Note: This module requires the neural network components which are not
+included in the PyPI distribution. Install from source for full functionality.
+
 Example usage:
     >>> from ciffy import flow
     >>>
@@ -29,6 +32,23 @@ Example usage:
 """
 
 from __future__ import annotations
+
+
+def _check_nn_available():
+    """Check if neural network modules are available."""
+    try:
+        from . import nn  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+if not _check_nn_available():
+    raise ImportError(
+        "ciffy.flow requires the neural network modules which are not included "
+        "in the PyPI distribution. Install from source: "
+        "pip install git+https://github.com/hmblair/ciffy.git"
+    )
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Union

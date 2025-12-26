@@ -222,7 +222,15 @@ def _experiment_command(args):
 
     from glob import glob
 
-    from ciffy.nn.runners import format_results_table, run_experiments
+    try:
+        from ciffy.nn.runners import format_results_table, run_experiments
+    except ImportError:
+        print(
+            "Error: Neural network modules not available.\n"
+            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Expand glob patterns in config paths
     config_paths = []
@@ -317,7 +325,15 @@ def _inference_command(args):
 
     from glob import glob
 
-    from ciffy.nn.runners import format_inference_results_table, run_inference_jobs
+    try:
+        from ciffy.nn.runners import format_inference_results_table, run_inference_jobs
+    except ImportError:
+        print(
+            "Error: Neural network modules not available.\n"
+            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Expand glob patterns in config paths
     config_paths = []
@@ -390,7 +406,15 @@ def _train_command(args):
 
     from glob import glob
 
-    from ciffy.nn.runners import format_training_results_table, run_training_jobs
+    try:
+        from ciffy.nn.runners import format_training_results_table, run_training_jobs
+    except ImportError:
+        print(
+            "Error: Neural network modules not available.\n"
+            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Expand glob patterns in config paths
     config_paths = []

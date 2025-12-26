@@ -20,8 +20,6 @@ Operations:
 
 Submodules:
     ciffy.biochemistry      Full biochemistry constants and types
-    ciffy.nn                Neural network utilities (requires PyTorch)
-    ciffy.flow              High-level flow model API
     ciffy.visualize         Visualization utilities
     ciffy.operations        All operations (alignment, metrics, reduction)
 """
@@ -77,9 +75,16 @@ from .operations.reduction import Reduction
 # Submodules (lazy-ish - imported but not used directly)
 from . import biochemistry
 from . import operations
-from . import nn
-from . import flow
 from . import visualize
+
+# Optional submodules (require additional dependencies)
+# nn and flow require PyTorch and are not included in the PyPI distribution
+try:
+    from . import nn
+    from . import flow
+except ImportError:
+    nn = None
+    flow = None
 
 # Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map
@@ -132,8 +137,6 @@ __all__ = [
     # Submodules
     "biochemistry",
     "operations",
-    "nn",
-    "flow",
     "visualize",
     # Visualization
     "to_defattr",

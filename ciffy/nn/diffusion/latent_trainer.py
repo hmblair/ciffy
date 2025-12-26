@@ -148,6 +148,7 @@ class LatentEncodingDataset(Dataset):
         n_too_small = 0
         n_too_large = 0
         n_unknown_residues = 0
+        n_atom_mismatch = 0
         n_errors = 0
 
         for idx in range(len(polymer_dataset)):
@@ -176,6 +177,19 @@ class LatentEncodingDataset(Dataset):
                     n_unknown_residues += 1
                     continue
 
+                # Check atom count matches flow model expectations
+                expected_atoms = sum(
+                    flow_model._atom_counts[int(t)] for t in seq
+                )
+                actual_atoms = polymer.size()
+                if actual_atoms != expected_atoms:
+                    n_atom_mismatch += 1
+                    logger.debug(
+                        f"Sample {idx}: atom mismatch "
+                        f"({actual_atoms} vs {expected_atoms} expected)"
+                    )
+                    continue
+
                 self.valid_indices.append(idx)
             except Exception as e:
                 n_errors += 1
@@ -187,8 +201,8 @@ class LatentEncodingDataset(Dataset):
         valid = len(self.valid_indices)
         logger.info(
             f"LatentEncodingDataset: {valid}/{total} samples valid "
-            f"(filtered: {n_too_small} too small, {n_too_large} too large, "
-            f"{n_unknown_residues} unknown residues, {n_none} None, {n_errors} errors)"
+            f"(filtered: {n_too_small} small, {n_too_large} large, "
+            f"{n_unknown_residues} unknown, {n_atom_mismatch} incomplete, {n_errors} errors)"
         )
 
         if valid == 0:
@@ -198,6 +212,7 @@ class LatentEncodingDataset(Dataset):
                 f"  Too small (<{min_residues} residues): {n_too_small}\n"
                 f"  Too large (>{max_residues} residues): {n_too_large}\n"
                 f"  Unknown residues: {n_unknown_residues}\n"
+                f"  Incomplete (missing atoms): {n_atom_mismatch}\n"
                 f"  None/empty: {n_none}\n"
                 f"  Load errors: {n_errors}\n"
                 f"Consider adjusting min_residues/max_residues in config."

@@ -8,9 +8,9 @@ that depend solely on size bookkeeping without requiring actual atomic data.
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from .backend import Array, ops, size as arr_size
-from .biochemistry import Scale
-from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
+from ..backend import Array, ops, size as arr_size
+from ..biochemistry import Scale
+from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 
 if TYPE_CHECKING:
     pass
@@ -235,27 +235,6 @@ class _Hierarchy:
 
         return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
 
-    def rreduce(
-        self,
-        features: Array,
-        scale: Scale,
-        rtype: Reduction = Reduction.MEAN,
-    ) -> ReductionResult:
-        """
-        Reduce per-residue features to per-scale values.
-
-        Deprecated: Use reduce(features, scale, rtype, in_scale=Scale.RESIDUE) instead.
-
-        Args:
-            features: Per-residue feature tensor.
-            scale: Scale at which to aggregate.
-            rtype: Reduction type.
-
-        Returns:
-            Reduced features.
-        """
-        return self.reduce(features, scale, rtype, in_scale=Scale.RESIDUE)
-
     def expand(
         self,
         features: Array,
@@ -353,7 +332,7 @@ class _Hierarchy:
                 res_mask = res_sizes > 0
             else:
                 res_mask = ops.ones(self.size(Scale.RESIDUE), like=self._ref, dtype='bool')
-            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             chn_mask = new_lengths > 0
 
         elif input_scale == Scale.RESIDUE:
@@ -365,7 +344,7 @@ class _Hierarchy:
                 atom_mask[:self._polymer_count] = polymer_atom_mask
             else:
                 atom_mask = polymer_atom_mask
-            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             chn_mask = new_lengths > 0
 
         elif input_scale == Scale.CHAIN:
@@ -414,7 +393,7 @@ class _Hierarchy:
 
             # Compute new lengths (residues per chain)
             # Count how many residues remain in each chain
-            res_per_chain = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            res_per_chain = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             new_lengths = res_per_chain[chn_mask]
 
         else:
@@ -423,7 +402,7 @@ class _Hierarchy:
 
             if input_scale == Scale.RESIDUE:
                 masked_res_sizes = orig_res_sizes * ops.to_int64(res_mask)
-                chn_sizes = self.rreduce(masked_res_sizes, Scale.CHAIN, Reduction.SUM)
+                chn_sizes = self.reduce(masked_res_sizes, Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             else:  # CHAIN
                 chn_sizes = self._per[(Scale.ATOM, Scale.CHAIN)]
 
@@ -433,7 +412,7 @@ class _Hierarchy:
             # Compute new lengths
             orig_lengths = self._per[(Scale.RESIDUE, Scale.CHAIN)]
             if input_scale == Scale.RESIDUE:
-                res_per_chain = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+                res_per_chain = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
                 new_lengths = res_per_chain[chn_mask]
             else:  # CHAIN
                 new_lengths = orig_lengths[chn_mask]

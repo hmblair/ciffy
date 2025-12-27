@@ -79,7 +79,7 @@ def _info_command(args):
         # Optional: show atom details
         if args.atoms:
             from ciffy import Scale
-            atoms_per_res = polymer.per(Scale.ATOM, Scale.RESIDUE).tolist()
+            atoms_per_res = polymer.counts(Scale.RESIDUE).tolist()
             print(f"\nAtoms per residue: {atoms_per_res}")
 
         # Optional: show entity descriptions

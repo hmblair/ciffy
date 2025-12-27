@@ -2,81 +2,37 @@
 Template polymer generation from sequences.
 
 Generates Polymer objects with correct atom types, elements, and residue
-sequences but zero coordinates - useful for generative modeling.
+sequences using ideal CCD coordinates.
 """
 
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
-from functools import lru_cache
 from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
 from .polymer import Polymer
-from ..biochemistry import Scale, Molecule, atom_to_element
-from ..biochemistry import Residue
+from .builder import ChainBuilder, expand_residue
+from ..biochemistry import Scale, Molecule, Residue, atom_to_element
+from ..utils import atoms_to_col_map
 
 if TYPE_CHECKING:
     from ..biochemistry.atom import AtomGroup
-from ..biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
-from ..utils import atoms_to_col_map
 
 
 # =============================================================================
-# DATA CLASSES
-# =============================================================================
-
-
-@dataclass
-class ResidueExpansion:
-    """Expanded atom data for a single residue type."""
-    atom_indices: tuple[int, ...]
-    element_indices: tuple[int, ...]
-    atom_names: tuple[str, ...]
-    ideal_coords: np.ndarray  # (N, 3)
-
-
-@dataclass
-class ChainData:
-    """Processed data for a single chain."""
-    atom_indices: list[int]
-    element_indices: list[int]
-    atoms_per_residue: list[int]
-    residue_indices: list[int]
-    coords: list[np.ndarray]
-
-
-@dataclass(frozen=True)
-class MoleculeTypeConfig:
-    """
-    Configuration for a molecule type in sequence generation.
-
-    Bundles all molecule-specific parameters needed for template generation:
-    linking info, terminal atoms, and sequence character mapping.
-    """
-    linking: LinkingDefinition | None
-    start_terminal_atoms: frozenset[str]  # 5'/N-terminal only
-    end_terminal_atoms: frozenset[str]    # 3'/C-terminal only
-    sequence_map: dict[str, int]          # char -> residue index
-
-
-# =============================================================================
-# SEQUENCE CHARACTER MAPPINGS (built from generated data)
+# SEQUENCE CHARACTER MAPPINGS
 # =============================================================================
 
 def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
     """
     Build sequence character -> residue index mappings from generated data.
 
-    Only includes canonical residues for sequence generation.
-
     Returns:
         Tuple of (RNA_MAP, DNA_MAP, AMINO_ACID_MAP).
     """
-    # Canonical residue names for sequence generation
-    canonical_rna = {'A', 'C', 'G', 'U', 'I', 'N'}  # I=inosine, N=unknown
+    canonical_rna = {'A', 'C', 'G', 'U', 'I', 'N'}
     canonical_dna = {'DA', 'DC', 'DG', 'DT'}
     canonical_protein = {
         'ALA', 'ARG', 'ASN', 'ASP', 'CYS',
@@ -90,8 +46,6 @@ def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, in
     amino_acid_map: dict[str, int] = {}
 
     for residue in Residue.all():
-        # Only include canonical residues with atom definitions
-        # In v2, residue IS the AtomGroup, so check if it has any atoms
         if len(residue) == 0:
             continue
 
@@ -111,187 +65,21 @@ def _build_sequence_maps() -> tuple[dict[str, int], dict[str, int], dict[str, in
 
 RNA_MAP, DNA_MAP, AMINO_ACID_MAP = _build_sequence_maps()
 
-# Characters that look like nucleotides (for ambiguity warning)
 _NUCLEOTIDE_CHARS = frozenset('ACGUT')
 
 
 # =============================================================================
-# MOLECULE TYPE CONFIGURATIONS
+# SEQUENCE PARSING
 # =============================================================================
 
-_MOLECULE_CONFIGS: dict[Molecule, MoleculeTypeConfig] = {
-    Molecule.RNA: MoleculeTypeConfig(
-        linking=NUCLEIC_ACID_LINK,
-        start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
-        end_terminal_atoms=frozenset({'HO3p'}),
-        sequence_map=RNA_MAP,
-    ),
-    Molecule.DNA: MoleculeTypeConfig(
-        linking=NUCLEIC_ACID_LINK,
-        start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
-        end_terminal_atoms=frozenset({'HO3p'}),
-        sequence_map=DNA_MAP,
-    ),
-    Molecule.PROTEIN: MoleculeTypeConfig(
-        linking=PEPTIDE_LINK,
-        start_terminal_atoms=frozenset({'H2', 'H3'}),
-        end_terminal_atoms=frozenset({'OXT', 'HXT'}),
-        sequence_map=AMINO_ACID_MAP,
-    ),
-}
-
-
-def _get_molecule_config(residue_idx: int) -> MoleculeTypeConfig:
-    """Get config for a residue's molecule type."""
-    mol_type_int = Residue.from_index(residue_idx).molecule_type
-    mol_type = Molecule(mol_type_int)
-    if mol_type not in _MOLECULE_CONFIGS:
-        raise ValueError(f"Unsupported molecule type: {mol_type.name}")
-    return _MOLECULE_CONFIGS[mol_type]
-
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
-def _generate_chain_name(index: int) -> str:
+def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], Molecule, str]:
     """
-    Generate chain name for a given index.
-
-    Args:
-        index: 0-based chain index.
+    Detect molecule type from sequence.
 
     Returns:
-        Chain name: A-Z for 0-25, AA-AZ for 26-51, BA-BZ for 52-77, etc.
-    """
-    if index < 26:
-        return chr(ord('A') + index)
-    prefix = chr(ord('A') + (index // 26) - 1)
-    suffix = chr(ord('A') + (index % 26))
-    return f"{prefix}{suffix}"
-
-
-@lru_cache(maxsize=32)
-def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...], np.ndarray]:
-    """
-    Internal cached expansion - returns tuple for hashability.
-
-    The numpy array is cached; callers MUST copy if mutating.
-    The _expand_residue() wrapper handles copying for safe mutation.
-    """
-    try:
-        residue = Residue.from_index(residue_idx)
-    except (ValueError, KeyError):
-        raise ValueError(f"Invalid residue index: {residue_idx}")
-
-    if residue.atoms is None:
-        raise ValueError(f"No atom definitions for residue {residue.name}")
-
-    atom_indices = []
-    element_indices = []
-    atom_names = []
-
-    for member in residue.atoms:
-        atom_indices.append(member.value)
-        atom_names.append(member.name)
-        element_indices.append(atom_to_element(member))
-
-    # Get ideal coordinates from the residue (delegates to atom enum)
-    # No copy here - _expand_residue() copies when needed
-    ideal_coords = residue.ideal
-
-    return tuple(atom_indices), tuple(element_indices), tuple(atom_names), ideal_coords
-
-
-def _expand_residue(residue_idx: int) -> ResidueExpansion:
-    """
-    Get atom data for a residue type.
-
-    Results are cached since the same residue type always expands identically.
-    Coordinates are copied to allow safe mutation by callers.
-
-    Args:
-        residue_idx: Residue index (from Residue enum value).
-
-    Returns:
-        ResidueExpansion with atom indices, elements, names, and ideal coordinates.
-
-    Raises:
-        ValueError: If residue_idx has no atom definitions.
-    """
-    atoms, elements, names, coords = _expand_residue_cached(residue_idx)
-    return ResidueExpansion(atoms, elements, names, coords.copy())
-
-
-def _filter_atoms_by_position(
-    expansion: ResidueExpansion,
-    coords: np.ndarray,
-    config: MoleculeTypeConfig,
-    is_first: bool,
-    is_last: bool,
-) -> tuple[list[int], list[int], list[np.ndarray]]:
-    """
-    Filter atoms based on residue position in chain.
-
-    Terminal atoms are only included for terminal residues:
-    - 5'/N-terminal atoms: only for first residue
-    - 3'/C-terminal atoms: only for last residue
-    - Internal residues: exclude all terminal atoms
-
-    Args:
-        expansion: Residue expansion with atom data.
-        coords: Positioned coordinates (may differ from expansion.ideal_coords).
-        config: Molecule type configuration with terminal atom definitions.
-        is_first: True if this is the first residue in the chain.
-        is_last: True if this is the last residue in the chain.
-
-    Returns:
-        Tuple of (filtered_atom_indices, filtered_element_indices, filtered_coords) as lists.
-    """
-    filtered_atoms = []
-    filtered_elements = []
-    filtered_coords = []
-
-    for i, (atom_idx, elem_idx, name) in enumerate(zip(
-        expansion.atom_indices, expansion.element_indices, expansion.atom_names
-    )):
-        # Check if this is a terminal-only atom
-        is_start_terminal = name in config.start_terminal_atoms
-        is_end_terminal = name in config.end_terminal_atoms
-
-        # Include atom if:
-        # - It's not a terminal atom, OR
-        # - It's a start-terminal atom AND we're at the start, OR
-        # - It's an end-terminal atom AND we're at the end
-        include = True
-        if is_start_terminal and not is_first:
-            include = False
-        if is_end_terminal and not is_last:
-            include = False
-
-        if include:
-            filtered_atoms.append(atom_idx)
-            filtered_elements.append(elem_idx)
-            filtered_coords.append(coords[i])
-
-    return filtered_atoms, filtered_elements, filtered_coords
-
-
-def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], str]:
-    """
-    Detect molecule type from sequence and return appropriate mapping.
-
-    Args:
-        sequence: Single-letter sequence (already validated as single-case).
-
-    Returns:
-        Tuple of (character_to_index_map, molecule_type_name).
-
-    Raises:
-        ValueError: If sequence contains both 'u' and 't'.
+        Tuple of (char_to_index_map, Molecule enum, type_name_for_errors).
     """
     if sequence[0].islower():
-        # Nucleic acid
         has_u = 'u' in sequence
         has_t = 't' in sequence
 
@@ -301,10 +89,9 @@ def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], str]:
                 "Use 'u' for RNA or 't' for DNA, not both."
             )
         if has_t:
-            return DNA_MAP, "DNA"
-        return RNA_MAP, "RNA"
+            return DNA_MAP, Molecule.DNA, "DNA"
+        return RNA_MAP, Molecule.RNA, "RNA"
 
-    # Protein - warn if looks like nucleotides
     if set(sequence).issubset(_NUCLEOTIDE_CHARS):
         warnings.warn(
             f"Sequence '{sequence}' contains only nucleotide characters "
@@ -313,28 +100,18 @@ def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], str]:
             UserWarning,
             stacklevel=4,
         )
-    return AMINO_ACID_MAP, "protein"
+    return AMINO_ACID_MAP, Molecule.PROTEIN, "protein"
 
 
-def _parse_sequence(sequence: str) -> list[int]:
+def _parse_sequence(sequence: str) -> tuple[list[int], Molecule]:
     """
-    Parse sequence string to residue indices.
-
-    Args:
-        sequence: Single-letter sequence.
-            - Lowercase with 'u': RNA (acgu)
-            - Lowercase with 't': DNA (acgt)
-            - Lowercase with only a/c/g: RNA (default)
-            - Uppercase: Protein (ACDEFGHIKLMNPQRSTVWY)
+    Parse sequence string to residue indices and molecule type.
 
     Returns:
-        List of residue indices (empty list for empty sequence).
-
-    Raises:
-        ValueError: If sequence is mixed case or contains invalid chars.
+        Tuple of (residue_indices, molecule_type).
     """
     if not sequence:
-        return []
+        return [], Molecule.RNA  # Default, won't be used for empty
 
     has_lower = any(c.islower() for c in sequence)
     has_upper = any(c.isupper() for c in sequence)
@@ -345,192 +122,144 @@ def _parse_sequence(sequence: str) -> list[int]:
             "(acgu for RNA, acgt for DNA) or uppercase for protein."
         )
 
-    mapping, mol_type = _detect_molecule_type(sequence)
+    mapping, mol_type, type_name = _detect_molecule_type(sequence)
 
     residue_indices = []
     for i, char in enumerate(sequence):
         if char not in mapping:
             valid = ', '.join(sorted(mapping.keys()))
             raise ValueError(
-                f"Unknown {mol_type} residue '{char}' at position {i}. "
+                f"Unknown {type_name} residue '{char}' at position {i}. "
                 f"Valid characters: {valid}"
             )
         residue_indices.append(mapping[char])
 
-    return residue_indices
+    return residue_indices, mol_type
 
 
-@dataclass
-class _PrevResidueState:
-    """State from previous residue needed for positioning next residue."""
-    coords: np.ndarray          # (n_atoms, 3) positioned coordinates
-    atom_to_col: dict[int, int] # {atom_type_value: col_index}
-    residue: Residue            # Residue enum
+def _generate_chain_name(index: int) -> str:
+    """Generate chain name for a given index (A-Z, AA-AZ, etc.)."""
+    if index < 26:
+        return chr(ord('A') + index)
+    prefix = chr(ord('A') + (index // 26) - 1)
+    suffix = chr(ord('A') + (index % 26))
+    return f"{prefix}{suffix}"
 
 
-def _build_atom_to_col(expansion: ResidueExpansion) -> dict[int, int]:
-    """Build atom type value -> column index mapping from expansion."""
-    return atoms_to_col_map(expansion.atom_indices)
+# =============================================================================
+# CHAIN BUILDING
+# =============================================================================
 
-
-def _position_residue(
-    expansion: ResidueExpansion,
-    residue_idx: int,
-    prev_state: _PrevResidueState | None,
-    config: MoleculeTypeConfig,
-) -> tuple[np.ndarray, _PrevResidueState | None]:
-    """
-    Position residue coordinates relative to previous residue.
-
-    Uses the geometry module's position_residue() function which properly
-    aligns residue frames (not just translating atoms).
-
-    Args:
-        expansion: Residue expansion with ideal coordinates.
-        residue_idx: Residue index (for error messages).
-        prev_state: Previous residue state, or None for first residue.
-        config: Molecule type configuration with linking definition.
-
-    Returns:
-        Tuple of (positioned_coords, new_state for next residue).
-        new_state is None if no linking definition.
-
-    Raises:
-        ValueError: If linking atoms are not found in the residue.
-    """
-    from ..geometry import position_residue
-
-    # expansion.ideal_coords is already a copy from _expand_residue()
-    coords = expansion.ideal_coords
-    link_def = config.linking
-    residue = Residue.from_index(residue_idx)
-    atom_to_col = _build_atom_to_col(expansion)
-
-    # Position relative to previous residue
-    if link_def is not None and prev_state is not None:
-        # Validate that required atoms are present
-        _validate_linking_atoms(expansion, residue, link_def, "next")
-
-        # Use geometry module for proper frame-based positioning
-        coords = position_residue(
-            prev_coords=prev_state.coords,
-            next_coords=coords,
-            prev_atom_to_col=prev_state.atom_to_col,
-            next_atom_to_col=atom_to_col,
-            prev_residue=prev_state.residue,
-            next_residue=residue,
-            transform=None,  # Linear extension (default orientation)
-        )
-
-    # Build state for next residue
-    new_state = None
-    if link_def is not None:
-        _validate_linking_atoms(expansion, residue, link_def, "prev")
-        new_state = _PrevResidueState(
-            coords=coords,
-            atom_to_col=atom_to_col,
-            residue=residue,
-        )
-
-    return coords, new_state
-
-
-def _validate_linking_atoms(
-    expansion: ResidueExpansion,
-    residue: "AtomGroup",
-    link_def: "LinkingDefinition",
-    which: str,
-) -> None:
-    """
-    Validate that required linking atoms are present.
-
-    Uses LinkingDefinition.validate_atoms() for centralized validation.
-    """
-    available = set(expansion.atom_indices)
-    missing = link_def.validate_atoms(residue, available, which=which)
-
-    if missing:
-        frame_name = "incoming" if which == "next" else "outgoing"
-        raise ValueError(
-            f"Cannot compute {frame_name} frame for {residue.name}: "
-            f"missing atoms {missing}. "
-            f"Available: {list(expansion.atom_names)[:10]}..."
-        )
-
-
-def _process_chain(
+def _build_chain(
     sequence: str,
     atom_filter: dict[int, Sequence[int]] | None = None,
-) -> ChainData:
+) -> dict:
     """
-    Process a single chain sequence into atom/element/residue/coordinate data.
-
-    Handles terminal atoms correctly:
-    - 5'/N-terminal atoms only on first residue
-    - 3'/C-terminal atoms only on last residue
-
-    Positions residues with correct bond lengths between them.
+    Build arrays for a single chain from sequence.
 
     Args:
-        sequence: Single-letter sequence for one chain.
-        atom_filter: Optional dict mapping residue type (int) to atom values
-            to include. If provided, only these atoms are included.
+        sequence: Single-letter sequence string.
+        atom_filter: Optional dict mapping residue type to allowed atom values.
 
     Returns:
-        ChainData with all atom and coordinate information.
+        Dict with coordinates, atoms, elements, sequence, sizes.
     """
-    residue_indices = _parse_sequence(sequence)
-    n_residues = len(residue_indices)
-    config = _get_molecule_config(residue_indices[0])
+    residue_indices, mol_type = _parse_sequence(sequence)
 
-    all_atoms: list[int] = []
-    all_elements: list[int] = []
-    all_coords: list[np.ndarray] = []
-    atoms_per_res: list[int] = []
-    prev_state: _PrevResidueState | None = None
+    if not residue_indices:
+        return {
+            'coordinates': np.empty((0, 3), dtype=np.float32),
+            'atoms': np.empty(0, dtype=np.int64),
+            'elements': np.empty(0, dtype=np.int64),
+            'sequence': np.empty(0, dtype=np.int64),
+            'atoms_per_residue': [],
+            'residue_indices': [],
+        }
 
-    for i, res_idx in enumerate(residue_indices):
-        is_first = (i == 0)
-        is_last = (i == n_residues - 1)
+    # Use ChainBuilder for positioning and terminal filtering
+    builder = ChainBuilder(mol_type, filter_terminal=True)
 
-        # Get residue data and position it
-        expansion = _expand_residue(res_idx)
-        positioned_coords, prev_state = _position_residue(
-            expansion, res_idx, prev_state, config
-        )
+    for res_idx in residue_indices:
+        residue = Residue.from_index(res_idx)
+        builder.append(residue)
 
-        # Filter terminal atoms based on position
-        filtered_atoms, filtered_elements, filtered_coords = _filter_atoms_by_position(
-            expansion, positioned_coords, config, is_first, is_last
-        )
+    # Build arrays
+    result = builder.build()
 
-        # Apply custom atom filter if provided
-        if atom_filter is not None and res_idx in atom_filter:
-            allowed_atoms = set(atom_filter[res_idx])
-            final_atoms = []
-            final_elements = []
-            final_coords = []
-            for atom, elem, coord in zip(filtered_atoms, filtered_elements, filtered_coords):
-                if atom in allowed_atoms:
-                    final_atoms.append(atom)
-                    final_elements.append(elem)
-                    final_coords.append(coord)
-            filtered_atoms = final_atoms
-            filtered_elements = final_elements
-            filtered_coords = final_coords
+    # Apply custom atom filter if provided
+    if atom_filter is not None:
+        result = _apply_atom_filter(result, builder, atom_filter)
 
-        all_atoms.extend(filtered_atoms)
-        all_elements.extend(filtered_elements)
-        all_coords.extend(filtered_coords)
-        atoms_per_res.append(len(filtered_atoms))
+    # Add residue_indices for multi-chain aggregation
+    result['residue_indices'] = residue_indices
+    result['atoms_per_residue'] = result['sizes'][Scale.RESIDUE].tolist()
 
-    return ChainData(
-        atom_indices=all_atoms,
-        element_indices=all_elements,
-        atoms_per_residue=atoms_per_res,
-        residue_indices=residue_indices,
-        coords=all_coords,
-    )
+    return result
+
+
+def _apply_atom_filter(
+    arrays: dict,
+    builder: ChainBuilder,
+    atom_filter: dict[int, Sequence[int]],
+) -> dict:
+    """Apply custom atom filter to built arrays."""
+    # Rebuild from residue data with filtering
+    all_coords = []
+    all_atoms = []
+    all_elements = []
+    atoms_per_residue = []
+
+    coord_offset = 0
+    for res_data in builder._residues:
+        res_idx = res_data.residue.value
+        n_atoms = res_data.n_atoms
+
+        if res_idx in atom_filter:
+            allowed = set(atom_filter[res_idx])
+            # Filter this residue's atoms
+            filtered_atoms = []
+            filtered_elements = []
+            filtered_indices = []
+
+            for i, (atom, elem) in enumerate(zip(res_data.atoms, res_data.elements)):
+                if atom in allowed:
+                    filtered_atoms.append(atom)
+                    filtered_elements.append(elem)
+                    filtered_indices.append(i)
+
+            if filtered_indices:
+                coords_slice = arrays['coordinates'][coord_offset:coord_offset + n_atoms]
+                all_coords.append(coords_slice[filtered_indices])
+                all_atoms.extend(filtered_atoms)
+                all_elements.extend(filtered_elements)
+                atoms_per_residue.append(len(filtered_atoms))
+        else:
+            # Keep all atoms for this residue
+            all_coords.append(arrays['coordinates'][coord_offset:coord_offset + n_atoms])
+            all_atoms.extend(res_data.atoms)
+            all_elements.extend(res_data.elements)
+            atoms_per_residue.append(n_atoms)
+
+        coord_offset += n_atoms
+
+    if all_coords:
+        coords = np.concatenate(all_coords, axis=0)
+    else:
+        coords = np.empty((0, 3), dtype=np.float32)
+
+    n_atoms = len(all_atoms)
+
+    return {
+        'coordinates': coords,
+        'atoms': np.array(all_atoms, dtype=np.int64),
+        'elements': np.array(all_elements, dtype=np.int64),
+        'sequence': arrays['sequence'],
+        'sizes': {
+            Scale.RESIDUE: np.array(atoms_per_residue, dtype=np.int64),
+            Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
+            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+        },
+    }
 
 
 # =============================================================================
@@ -550,13 +279,6 @@ def from_sequence(
     using ideal CCD coordinates. Useful for generative modeling where coordinates
     are generated separately.
 
-    For realistic conformations, use PolymerFlowModel after creating the template:
-
-        >>> from ciffy.nn.flow import PolymerFlowModel
-        >>> template = from_sequence("acgu")
-        >>> model = PolymerFlowModel.load("path/to/model")
-        >>> samples = model.sample(template.sequence, n_samples=10)
-
     Args:
         sequence: Single-letter sequence string, or list of strings for multi-chain.
             - Lowercase with 'u': RNA (acgu)
@@ -564,83 +286,66 @@ def from_sequence(
             - Lowercase with only a/c/g: RNA (default)
             - Uppercase: Protein (ACDEFGHIKLMNPQRSTVWY)
             - List creates multiple chains: ['acgu', 'acgt']
-            - Empty strings are filtered out; "" returns empty polymer with 0 chains
+            - Empty strings are filtered out; "" returns empty polymer
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
         atoms: Optional dict mapping residue type (int) to atom values to include.
-            If provided, only atoms in the specified set are included for each
-            residue type. Useful for flow models that use a subset of atoms.
-            Example: {Residue.A.value: model_A._atom_indices, ...}
 
     Returns:
-        Polymer with:
-        - atoms: Global atom type indices
-        - elements: Atomic numbers (H=1, C=6, N=7, O=8, P=15, S=16)
-        - sequence: Residue type indices (matching Residue enum)
-        - sizes: Atoms per residue/chain/molecule
-        - coordinates: Ideal CCD coordinates
-        Empty sequence returns an empty Polymer with 0 atoms and 0 chains.
-
-    Raises:
-        ValueError: If sequence is mixed case, contains both 'u' and 't',
-            or contains invalid characters.
+        Polymer with ideal CCD coordinates.
 
     Examples:
         >>> rna = from_sequence("acgu")
-        >>> rna.size()  # Total atoms
-        148
-        >>> rna.size(Scale.RESIDUE)  # Number of residues
-        4
-
-        >>> dna = from_sequence("acgt")
-        >>> dna.size(Scale.RESIDUE)
+        >>> rna.size(Scale.RESIDUE)
         4
 
         >>> protein = from_sequence("MGKLF")
         >>> protein.size(Scale.RESIDUE)
         5
 
-        >>> multi = from_sequence(["acgu", "acgu"])  # Two RNA chains
+        >>> multi = from_sequence(["acgu", "acgu"])
         >>> multi.size(Scale.CHAIN)
         2
     """
-    # Normalize input and filter out empty sequences
     sequences = [sequence] if isinstance(sequence, str) else list(sequence)
-    sequences = [s for s in sequences if s]  # Remove empty strings
+    sequences = [s for s in sequences if s]
 
-    # Handle empty polymer (0 chains)
     if not sequences:
         return Polymer.create_empty(pdb_id=id, backend=backend)
 
-    # Accumulate data across all chains
-    all_atoms: list[int] = []
-    all_elements: list[int] = []
-    all_coords: list[np.ndarray] = []
-    all_atoms_per_res: list[int] = []
-    all_residue_indices: list[int] = []
-    atoms_per_chain: list[int] = []
-    residues_per_chain: list[int] = []
-    chain_names: list[str] = []
+    # Build each chain
+    all_coords = []
+    all_atoms = []
+    all_elements = []
+    all_atoms_per_res = []
+    all_residue_indices = []
+    atoms_per_chain = []
+    residues_per_chain = []
+    chain_names = []
 
     for chain_idx, seq in enumerate(sequences):
-        chain_data = _process_chain(seq, atom_filter=atoms)
+        chain_data = _build_chain(seq, atom_filter=atoms)
 
-        all_atoms.extend(chain_data.atom_indices)
-        all_elements.extend(chain_data.element_indices)
-        all_coords.extend(chain_data.coords)
-        all_atoms_per_res.extend(chain_data.atoms_per_residue)
-        all_residue_indices.extend(chain_data.residue_indices)
-        atoms_per_chain.append(len(chain_data.atom_indices))
-        residues_per_chain.append(len(chain_data.residue_indices))
+        all_coords.append(chain_data['coordinates'])
+        all_atoms.append(chain_data['atoms'])
+        all_elements.append(chain_data['elements'])
+        all_atoms_per_res.extend(chain_data['atoms_per_residue'])
+        all_residue_indices.extend(chain_data['residue_indices'])
+        atoms_per_chain.append(len(chain_data['atoms']))
+        residues_per_chain.append(len(chain_data['residue_indices']))
         chain_names.append(_generate_chain_name(chain_idx))
 
-    # Build arrays
-    n_atoms = len(all_atoms)
+    # Concatenate arrays
+    coords = np.concatenate(all_coords, axis=0) if all_coords else np.empty((0, 3), dtype=np.float32)
+    atoms_arr = np.concatenate(all_atoms) if all_atoms else np.empty(0, dtype=np.int64)
+    elements_arr = np.concatenate(all_elements) if all_elements else np.empty(0, dtype=np.int64)
+
+    n_atoms = len(atoms_arr)
 
     polymer = Polymer(
-        coordinates=np.array(all_coords, dtype=np.float32),
-        atoms=np.array(all_atoms, dtype=np.int64),
-        elements=np.array(all_elements, dtype=np.int64),
+        coordinates=coords,
+        atoms=atoms_arr,
+        elements=elements_arr,
         sequence=np.array(all_residue_indices, dtype=np.int64),
         sizes={
             Scale.RESIDUE: np.array(all_atoms_per_res, dtype=np.int64),
@@ -668,18 +373,17 @@ def from_extract(
     Convert extracted coordinates back to a Polymer.
 
     Takes the output of `extract()` and creates a Polymer that can be
-    saved as a CIF file. Each row in coords becomes a separate residue
-    (in a single chain).
+    saved as a CIF file. Each row in coords becomes a separate residue.
 
     Args:
-        coords: Coordinate array of shape (n_residues, n_atoms, 3) from extract().
-        atoms: List of atom type indices from extract().
-        residue: The residue AtomGroup that was extracted (e.g., Residue.A).
+        coords: Coordinate array of shape (n_residues, n_atoms, 3).
+        atoms: List of atom type indices.
+        residue: The residue AtomGroup that was extracted.
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
 
     Returns:
-        Polymer with the extracted coordinates and correct atom metadata.
+        Polymer with the extracted coordinates.
 
     Example:
         >>> from ciffy import load
@@ -689,19 +393,12 @@ def from_extract(
         >>>
         >>> poly = load("structure.cif")
         >>> coords, atoms = extract(poly, Residue.A, align=True, scale=True)
-        >>>
-        >>> # Process coords (e.g., run through a model)
-        >>> new_coords = model(coords)
-        >>>
-        >>> # Convert back to Polymer for saving
-        >>> result = from_extract(new_coords, atoms, Residue.A)
+        >>> result = from_extract(coords, atoms, Residue.A)
         >>> result.write("output.cif")
     """
     from ..backend import to_numpy as _to_numpy
 
-    # Handle torch input
     coords_np = np.asarray(_to_numpy(coords))
-
     n_residues, n_atoms, _ = coords_np.shape
 
     if len(atoms) != n_atoms:
@@ -710,11 +407,10 @@ def from_extract(
             f"but atoms list has {len(atoms)} entries"
         )
 
-    # Build atom name -> member lookup for this residue type
+    # Build atom -> element mapping
     atom_enum = residue.atoms
     idx_to_member = {m.value: m for m in atom_enum}
 
-    # Get element indices for each atom
     element_indices = []
     for atom_idx in atoms:
         if atom_idx not in idx_to_member:
@@ -723,10 +419,10 @@ def from_extract(
             )
         element_indices.append(atom_to_element(idx_to_member[atom_idx]))
 
-    # Flatten coordinates: (n_residues, n_atoms, 3) -> (n_residues * n_atoms, 3)
+    # Flatten coordinates
     flat_coords = coords_np.reshape(-1, 3).astype(np.float32)
 
-    # Build arrays for all residues
+    # Build arrays
     all_atoms = np.tile(atoms, n_residues).astype(np.int64)
     all_elements = np.tile(element_indices, n_residues).astype(np.int64)
     sequence = np.full(n_residues, residue.value, dtype=np.int64)

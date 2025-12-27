@@ -250,6 +250,33 @@ class AtomGroup:
             return int(item) in set(self.index())
         return False
 
+    def __getitem__(self, value: int) -> Atom:
+        """
+        Get atom by its integer value.
+
+        Args:
+            value: The atom's integer value.
+
+        Returns:
+            The Atom with that value.
+
+        Raises:
+            KeyError: If no atom with that value exists.
+
+        Example:
+            >>> Residue.A[2]  # Get atom with value 2
+            Atom(P, 2)
+        """
+        for member in self._members.values():
+            if isinstance(member, Atom) and int(member) == value:
+                return member
+            if isinstance(member, AtomGroup):
+                try:
+                    return member[value]
+                except KeyError:
+                    pass
+        raise KeyError(f"No atom with value {value} in {self.name}")
+
     def __repr__(self) -> str:
         if self.value is not None:
             return f"Residue.{self.name}"

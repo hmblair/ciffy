@@ -483,85 +483,85 @@ class TestDeviceProperty:
         assert p_torch.device == "cpu"
 
 
-class TestIndexMethod:
-    """Test the index(scale) method."""
+class TestMembershipMethod:
+    """Test the membership(scale) method."""
 
-    def test_index_residue_shape(self, backend):
-        """index(RESIDUE) returns array with shape (num_atoms,)."""
+    def test_membership_residue_shape(self, backend):
+        """membership(RESIDUE) returns array with shape (num_atoms,)."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.RESIDUE)
+        idx = p.membership(Scale.RESIDUE)
 
         assert idx.shape == (p.size(),)
 
-    def test_index_residue_values(self, backend):
-        """index(RESIDUE) returns values in [0, num_residues)."""
+    def test_membership_residue_values(self, backend):
+        """membership(RESIDUE) returns values in [0, num_residues)."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.RESIDUE)
+        idx = p.membership(Scale.RESIDUE)
 
         # Convert to numpy for checking
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert idx_np.min() == 0
         assert idx_np.max() == p.size(Scale.RESIDUE) - 1
 
-    def test_index_residue_unique_count(self, backend):
-        """index(RESIDUE) has num_residues unique values."""
+    def test_membership_residue_unique_count(self, backend):
+        """membership(RESIDUE) has num_residues unique values."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.RESIDUE)
+        idx = p.membership(Scale.RESIDUE)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert len(set(idx_np)) == p.size(Scale.RESIDUE)
 
-    def test_index_chain_single_chain(self, backend):
-        """index(CHAIN) returns all zeros for single chain."""
+    def test_membership_chain_single_chain(self, backend):
+        """membership(CHAIN) returns all zeros for single chain."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.CHAIN)
+        idx = p.membership(Scale.CHAIN)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert (idx_np == 0).all()
 
-    def test_index_chain_multi_chain(self, backend):
-        """index(CHAIN) returns correct indices for multi-chain."""
+    def test_membership_chain_multi_chain(self, backend):
+        """membership(CHAIN) returns correct indices for multi-chain."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence(["acgu", "MGKLF"], backend=backend)
-        idx = p.index(Scale.CHAIN)
+        idx = p.membership(Scale.CHAIN)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert len(set(idx_np)) == 2
         assert idx_np.min() == 0
         assert idx_np.max() == 1
 
-    def test_index_molecule_all_zeros(self, backend):
-        """index(MOLECULE) returns all zeros."""
+    def test_membership_molecule_all_zeros(self, backend):
+        """membership(MOLECULE) returns all zeros."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.MOLECULE)
+        idx = p.membership(Scale.MOLECULE)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
         assert (idx_np == 0).all()
 
-    def test_index_dtype(self, backend):
-        """index() returns integer dtype."""
+    def test_membership_dtype(self, backend):
+        """membership() returns integer dtype."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.RESIDUE)
+        idx = p.membership(Scale.RESIDUE)
 
         if backend == "torch":
             import torch
@@ -569,14 +569,14 @@ class TestIndexMethod:
         else:
             assert idx.dtype == np.int64
 
-    def test_index_consistency_with_sizes(self, backend):
-        """index() is consistent with sizes()."""
+    def test_membership_consistency_with_counts(self, backend):
+        """membership() is consistent with counts()."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        idx = p.index(Scale.RESIDUE)
-        sizes = p.sizes(Scale.RESIDUE)
+        idx = p.membership(Scale.RESIDUE)
+        sizes = p.counts(Scale.RESIDUE)
 
         # Count atoms per residue from index
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx

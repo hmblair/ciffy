@@ -53,7 +53,7 @@ def build_bond_graph(polymer) -> tuple[np.ndarray, int]:
     from ..biochemistry import Scale
 
     n_atoms = polymer.size()
-    res_sizes = polymer.sizes(Scale.RESIDUE)
+    res_sizes = polymer.counts(Scale.RESIDUE)
     edges = _build_bond_graph_c(
         np.ascontiguousarray(to_numpy(polymer.atoms), dtype=np.int32),
         np.ascontiguousarray(to_numpy(polymer.sequence), dtype=np.int32),

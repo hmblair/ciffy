@@ -220,11 +220,11 @@ class TestMask:
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        mask = p.mask(0, Scale.RESIDUE, Scale.ATOM)
+        mask = p._mask(0, Scale.RESIDUE, Scale.ATOM)
 
         # Mask should be True for atoms of first residue only
         true_count = mask.sum().item() if hasattr(mask.sum(), 'item') else mask.sum()
-        atoms_in_first_residue = p.sizes(Scale.RESIDUE)[0].item()
+        atoms_in_first_residue = p.counts(Scale.RESIDUE)[0].item()
 
         assert true_count == atoms_in_first_residue
 
@@ -236,7 +236,7 @@ class TestMask:
         p = ciffy.from_sequence("acgu", backend=backend)
         last_idx = p.size(Scale.RESIDUE) - 1
 
-        mask = p.mask(last_idx, Scale.RESIDUE, Scale.ATOM)
+        mask = p._mask(last_idx, Scale.RESIDUE, Scale.ATOM)
         true_count = mask.sum().item() if hasattr(mask.sum(), 'item') else mask.sum()
 
         assert true_count > 0
@@ -247,14 +247,14 @@ class TestMask:
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
-        mask = p.mask(0, Scale.CHAIN, Scale.ATOM)
+        mask = p._mask(0, Scale.CHAIN, Scale.ATOM)
 
         # Mask should have size equal to total atoms
         assert len(mask) == p.size()
 
         # Sum should equal atoms in first chain
         true_count = mask.sum().item() if hasattr(mask.sum(), 'item') else mask.sum()
-        atoms_in_first_chain = p.sizes(Scale.CHAIN)[0].item()
+        atoms_in_first_chain = p.counts(Scale.CHAIN)[0].item()
 
         assert true_count == atoms_in_first_chain
 

@@ -77,7 +77,7 @@ def _write_residue_defattr(
         )
 
     # Get residue-to-chain mapping
-    chain_sizes = polymer.sizes(Scale.CHAIN)
+    chain_sizes = polymer.counts(Scale.CHAIN)
 
     # Build chain name lookup
     chain_names = polymer.names
@@ -95,7 +95,7 @@ def _write_residue_defattr(
         for chain_idx, chain_name in enumerate(polymer.names):
             # Get residues in this chain
             chain_atoms = chain_sizes[chain_idx].item()
-            res_sizes = polymer.sizes(Scale.RESIDUE)
+            res_sizes = polymer.counts(Scale.RESIDUE)
 
             # Count residues in this chain
             atom_count = 0
@@ -137,8 +137,8 @@ def _write_atom_defattr(
         )
 
     atom_names = polymer.atom_names()
-    res_sizes = polymer.sizes(Scale.RESIDUE)
-    chain_sizes = polymer.sizes(Scale.CHAIN)
+    res_sizes = polymer.counts(Scale.RESIDUE)
+    chain_sizes = polymer.counts(Scale.CHAIN)
 
     with open(path, 'w') as f:
         f.write(f"attribute: {attr_name}\n")

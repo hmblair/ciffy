@@ -99,11 +99,11 @@ class TestReduce:
             assert result.shape[0] == p.size(Scale.RESIDUE)
 
 
-class TestRReduce:
-    """Test rreduce() (residue-level reduction) edge cases."""
+class TestResidueReduce:
+    """Test reduce() with in_scale=RESIDUE edge cases."""
 
-    def test_rreduce_single_residue(self, backend):
-        """rreduce on single-residue polymer."""
+    def test_reduce_residue_single(self, backend):
+        """reduce from residue scale on single-residue polymer."""
         import ciffy
         from ciffy import Scale, Reduction
 
@@ -111,11 +111,11 @@ class TestRReduce:
         # Create per-residue feature
         residue_feature = p.sequence.float() if backend == "torch" else p.sequence.astype(np.float32)
 
-        result = p.rreduce(residue_feature, Scale.CHAIN, Reduction.MEAN)
+        result = p.reduce(residue_feature, Scale.CHAIN, Reduction.MEAN, in_scale=Scale.RESIDUE)
         assert result.shape[0] == 1
 
-    def test_rreduce_to_chain(self, backend):
-        """rreduce per-residue features to chain scale."""
+    def test_reduce_residue_to_chain(self, backend):
+        """reduce per-residue features to chain scale."""
         import ciffy
         from ciffy import Scale, Reduction
 
@@ -128,7 +128,7 @@ class TestRReduce:
         else:
             residue_feat = np.ones(p.size(Scale.RESIDUE), dtype=np.float32)
 
-        result = p.rreduce(residue_feat, Scale.CHAIN, Reduction.SUM)
+        result = p.reduce(residue_feat, Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
 
         # Single chain, so result should be sum of all residues
         assert result.shape[0] == 1
@@ -136,8 +136,8 @@ class TestRReduce:
         actual_sum = result[0].item() if hasattr(result[0], 'item') else result[0]
         assert actual_sum == expected_sum
 
-    def test_rreduce_min_max(self, backend):
-        """rreduce with MIN and MAX reductions."""
+    def test_reduce_residue_min_max(self, backend):
+        """reduce from residue scale with MIN and MAX reductions."""
         import ciffy
         from ciffy import Scale, Reduction
 
@@ -149,8 +149,8 @@ class TestRReduce:
         else:
             seq_float = p.sequence.astype(np.float32)
 
-        min_val, min_idx = p.rreduce(seq_float, Scale.CHAIN, Reduction.MIN)
-        max_val, max_idx = p.rreduce(seq_float, Scale.CHAIN, Reduction.MAX)
+        min_val, min_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MIN, in_scale=Scale.RESIDUE)
+        max_val, max_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MAX, in_scale=Scale.RESIDUE)
 
         assert min_val.shape[0] == p.size(Scale.CHAIN)
         assert max_val.shape[0] == p.size(Scale.CHAIN)
@@ -276,7 +276,7 @@ class TestCount:
         counts = p.count(mask, Scale.RESIDUE)
 
         # Counts should match atoms per residue
-        expected = p.sizes(Scale.RESIDUE)
+        expected = p.counts(Scale.RESIDUE)
         counts_np = np.asarray(counts)
         expected_np = np.asarray(expected)
 
@@ -331,26 +331,26 @@ class TestCount:
 class TestPer:
     """Test per() method edge cases."""
 
-    def test_per_same_scale(self, backend):
-        """per(scale, scale) returns ones."""
+    def test_counts_same_scale(self, backend):
+        """counts(scale, per=scale) returns ones."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        result = p.per(Scale.RESIDUE, Scale.RESIDUE)
+        result = p.counts(Scale.RESIDUE, per=Scale.RESIDUE)
 
         # Should be all ones
         all_ones = (result == 1).all() if hasattr(result, 'all') else np.all(result == 1)
         assert all_ones
         assert len(result) == p.size(Scale.RESIDUE)
 
-    def test_per_atom_chain(self, backend):
-        """per(ATOM, CHAIN) returns atoms per chain."""
+    def test_counts_atoms_per_chain(self, backend):
+        """counts(CHAIN) returns atoms per chain."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        result = p.per(Scale.ATOM, Scale.CHAIN)
+        result = p.counts(Scale.CHAIN)
 
         # Single chain, should have one element
         assert len(result) == 1
@@ -358,13 +358,13 @@ class TestPer:
         total = result[0].item() if hasattr(result[0], 'item') else result[0]
         assert total == p.size()
 
-    def test_per_residue_chain(self, backend):
-        """per(RESIDUE, CHAIN) returns lengths."""
+    def test_counts_residues_per_chain(self, backend):
+        """counts(RESIDUE, per=CHAIN) returns lengths."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        result = p.per(Scale.RESIDUE, Scale.CHAIN)
+        result = p.counts(Scale.RESIDUE, per=Scale.CHAIN)
 
         # Should match lengths attribute
         lengths_np = np.asarray(p.lengths)
@@ -372,8 +372,8 @@ class TestPer:
 
         assert np.array_equal(result_np, lengths_np)
 
-    def test_per_invalid_combination(self, backend):
-        """per with invalid scale combination raises ValueError."""
+    def test_counts_invalid_combination(self, backend):
+        """counts with invalid scale combination raises ValueError."""
         import ciffy
         from ciffy import Scale
 
@@ -381,4 +381,4 @@ class TestPer:
 
         # CHAIN per RESIDUE doesn't make sense
         with pytest.raises(ValueError):
-            p.per(Scale.CHAIN, Scale.RESIDUE)
+            p.counts(Scale.CHAIN, per=Scale.RESIDUE)

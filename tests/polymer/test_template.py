@@ -133,7 +133,7 @@ class TestFromSequence:
         # Different residues have different numbers of atoms
         polymer = from_sequence("acgu")
 
-        atoms_per_res = polymer.per(Scale.ATOM, Scale.RESIDUE)
+        atoms_per_res = polymer.counts(Scale.RESIDUE)
         # Each nucleotide should have atoms (varies by type)
         assert len(atoms_per_res) == 4
         assert all(count > 0 for count in atoms_per_res)
@@ -408,7 +408,7 @@ class TestFromSequenceMultiChain:
         polymer = from_sequence(["acgu", "MGKLF"])
 
         # Get atoms per chain
-        atoms_per_chain = polymer.per(Scale.ATOM, Scale.CHAIN)
+        atoms_per_chain = polymer.counts(Scale.CHAIN)
         assert len(atoms_per_chain) == 2
 
         # First chain (RNA) should have 148 atoms
@@ -473,7 +473,7 @@ class TestTerminalAtoms:
 
         # Use same residue type to control for inherent size differences
         polymer = from_sequence("aaaa")
-        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        apr = list(polymer.counts(Scale.RESIDUE))
         full_count = len(Residue.A)
 
         # First residue: all atoms except HO3' (3'-terminal) -> full - 1
@@ -492,7 +492,7 @@ class TestTerminalAtoms:
         from ciffy.biochemistry import ATOM_NAMES
 
         polymer = from_sequence("AAA")  # 3 alanines
-        apr = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        apr = list(polymer.counts(Scale.RESIDUE))
 
         # First residue has H2, H3 (N-terminal), no OXT
         # Middle residue has neither terminal atoms
@@ -565,8 +565,8 @@ class TestTemplateMatchesCIF:
             "Residue sequences differ"
 
         # 2. Loaded atoms are subset of template atoms per residue
-        loaded_sizes = loaded.per(Scale.ATOM, Scale.RESIDUE)
-        template_sizes = template.per(Scale.ATOM, Scale.RESIDUE)
+        loaded_sizes = loaded.counts(Scale.RESIDUE)
+        template_sizes = template.counts(Scale.RESIDUE)
 
         loaded_offset = 0
         template_offset = 0
@@ -658,7 +658,7 @@ class TestBondsAndLinking:
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("aa")
-        res_sizes = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        res_sizes = list(polymer.counts(Scale.RESIDUE))
 
         # Get centroids
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
@@ -674,7 +674,7 @@ class TestBondsAndLinking:
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("AA")
-        res_sizes = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        res_sizes = list(polymer.counts(Scale.RESIDUE))
 
         # Get centroids
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
@@ -689,7 +689,7 @@ class TestBondsAndLinking:
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("at")  # DNA (has 't')
-        res_sizes = list(polymer.per(Scale.ATOM, Scale.RESIDUE))
+        res_sizes = list(polymer.counts(Scale.RESIDUE))
 
         # Get centroids
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)

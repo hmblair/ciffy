@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import torch
     from ..hetero import HeteroAtoms
 from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
-from ..hierarchy import _Hierarchy
+from .hierarchy import _Hierarchy
 from ..biochemistry import (
     Residue,
     ATOM_NAMES,
@@ -654,34 +654,26 @@ class Polymer:
             return arr_size(self.coordinates, 0)
         return self._hierarchy.size(scale)
 
-    def sizes(self: Polymer, scale: Scale) -> Array:
+    def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:
         """
-        Get the sizes tensor for a scale.
+        Get counts at a scale, optionally per outer unit.
 
         Args:
-            scale: Scale level.
+            scale: Scale to count.
+            per: Optional outer scale. If provided, returns count of `scale`
+                 units per `per` unit.
 
         Returns:
-            Tensor of atom counts per unit at this scale.
+            Array of counts.
+
+        Examples:
+            >>> polymer.counts(Scale.CHAIN)              # atoms per chain
+            >>> polymer.counts(Scale.RESIDUE)            # atoms per residue
+            >>> polymer.counts(Scale.RESIDUE, per=Scale.CHAIN)  # residues per chain
         """
-        return self._hierarchy.sizes(scale)
-
-    def per(self: Polymer, inner: Scale, outer: Scale) -> Array:
-        """
-        Get the count of inner units per outer unit.
-
-        Args:
-            inner: Inner scale (e.g., RESIDUE).
-            outer: Outer scale (e.g., CHAIN).
-
-        Returns:
-            Array with count of inner units per outer unit.
-
-        Example:
-            >>> polymer.per(Scale.RESIDUE, Scale.CHAIN)
-            array([150, 200, 175])  # residues per chain
-        """
-        return self._hierarchy.per(inner, outer)
+        if per is None:
+            return self._hierarchy.sizes(scale)
+        return self._hierarchy.per(scale, per)
 
     def istype(self: Polymer, mol: Molecule) -> bool:
         """
@@ -743,27 +735,6 @@ class Polymer:
         """
         return self._hierarchy.reduce(features, out_scale, rtype, in_scale)
 
-    def rreduce(
-        self: Polymer,
-        features: Array,
-        scale: Scale,
-        rtype: Reduction = Reduction.MEAN,
-    ) -> ReductionResult:
-        """
-        Reduce per-residue features to per-scale values.
-
-        Deprecated: Use reduce(features, scale, rtype, in_scale=Scale.RESIDUE) instead.
-
-        Args:
-            features: Per-residue feature tensor.
-            scale: Scale at which to aggregate.
-            rtype: Reduction type.
-
-        Returns:
-            Reduced features.
-        """
-        return self._hierarchy.reduce(features, scale, rtype, in_scale=Scale.RESIDUE)
-
     def expand(
         self: Polymer,
         features: Array,
@@ -803,27 +774,27 @@ class Polymer:
         """
         return self._hierarchy.count(mask, scale)
 
-    def index(self: Polymer, scale: Scale) -> Array:
+    def membership(self: Polymer, scale: Scale) -> Array:
         """
-        Get the index of each atom within units at the specified scale.
+        Get which unit each atom belongs to at the specified scale.
 
         Creates an integer array where each atom is labeled with its
         containing unit's index at the given scale. Useful for positional
         encodings, attention masking, and grouping operations.
 
         Args:
-            scale: Scale at which to compute indices.
+            scale: Scale at which to compute membership.
                 - RESIDUE: atom -> residue index (0 to num_residues-1)
                 - CHAIN: atom -> chain index (0 to num_chains-1)
                 - MOLECULE: all atoms get index 0
 
         Returns:
-            Integer array of shape (num_atoms,) with indices.
+            Integer array of shape (num_atoms,) with unit indices.
 
         Examples:
             >>> polymer = ciffy.load("structure.cif")
-            >>> res_idx = polymer.index(Scale.RESIDUE)  # atom -> residue
-            >>> chain_idx = polymer.index(Scale.CHAIN)  # atom -> chain
+            >>> res_idx = polymer.membership(Scale.RESIDUE)  # atom -> residue
+            >>> chain_idx = polymer.membership(Scale.CHAIN)  # atom -> chain
 
             # Use for attention masking (same-residue attention)
             >>> mask = res_idx[:, None] == res_idx[None, :]
@@ -1035,7 +1006,7 @@ class Polymer:
     # Selection Operations
     # ─────────────────────────────────────────────────────────────────────────
 
-    def mask(
+    def _mask(
         self: Polymer,
         indices: Array | int,
         source: Scale,
@@ -1043,6 +1014,8 @@ class Polymer:
     ) -> Array:
         """
         Create a boolean mask selecting specific units.
+
+        Internal method used by selection operations.
 
         Args:
             indices: Indices of units to select.
@@ -1328,26 +1301,6 @@ class Polymer:
         from ..selection import hetero
         return hetero(self)
 
-    @property
-    def polymer(self: Polymer) -> Polymer:
-        """
-        Return polymer atoms only (excludes HETATM/non-polymer atoms).
-
-        This property provides a clean way to access only the polymer portion
-        of a structure for residue-level operations.
-
-        Returns:
-            Polymer with only polymer atoms. If already polymer-only, returns self.
-
-        Example:
-            >>> structure = load("file.cif")
-            >>> structure.polymer.by_residue(Residue.A)  # Residue operations
-            >>> structure.polymer.backbone()  # Structural selections
-        """
-        if self.nonpoly == 0:
-            return self
-        return self.poly()
-
     def chains(
         self: Polymer,
         mol: Molecule | None = None,
@@ -1462,20 +1415,10 @@ class Polymer:
             >>> custom_coords = model.predict_residue()
             >>> p = p.extend(Residue.A, coords=custom_coords)
         """
-        # Use ideal coordinates if none provided
-        if coords is None:
-            coords = residue.ideal
-            # Convert to backend if needed
-            if self.backend == "torch":
-                import torch
-                coords = torch.from_numpy(coords).to(
-                    dtype=self.coordinates.dtype,
-                    device=self.coordinates.device
-                )
         from ..geometry import position_residue
-        from ..biochemistry import atom_to_element
         from ..biochemistry.linking import LINKING_BY_TYPE
         from ..utils import atoms_to_col_map
+        from .builder import expand_residue
 
         # Validate single chain and poly-only
         if self.size(Scale.CHAIN) != 1:
@@ -1489,6 +1432,27 @@ class Polymer:
                 "Use polymer.poly() first."
             )
 
+        # Get atom data for the new residue (uses cached expansion)
+        new_res_atoms, new_elements, _, ideal_coords = expand_residue(residue)
+
+        # Use ideal coordinates if none provided
+        if coords is None:
+            coords = ideal_coords
+            # Convert to backend if needed
+            if self.backend == "torch":
+                import torch
+                coords = torch.from_numpy(coords).to(
+                    dtype=self.coordinates.dtype,
+                    device=self.coordinates.device
+                )
+
+        # Validate coordinate shape
+        if len(new_res_atoms) != coords.shape[0]:
+            raise ValueError(
+                f"Coordinate shape {coords.shape} doesn't match residue {residue.name} "
+                f"which has {len(new_res_atoms)} atoms."
+            )
+
         # Validate backend compatibility
         check_compatible(self.coordinates, coords, "coords")
 
@@ -1496,13 +1460,6 @@ class Polymer:
         last_res_coords, _, last_res_atom_to_col, last_res_type = self._residue_slice(-1)
 
         # Build atom_to_col for new residue
-        # The new residue's atoms must correspond to the coords columns
-        new_res_atoms = [a.value for a in residue.atoms] if residue.atoms else []
-        if len(new_res_atoms) != coords.shape[0]:
-            raise ValueError(
-                f"Coordinate shape {coords.shape} doesn't match residue {residue.name} "
-                f"which has {len(new_res_atoms)} atoms."
-            )
         new_res_atom_to_col = atoms_to_col_map(new_res_atoms)
 
         # Get linking definition
@@ -1523,9 +1480,6 @@ class Polymer:
             next_residue=residue,
             transform=transform,
         )
-
-        # Build element indices for new residue
-        new_elements = [atom_to_element(a) for a in residue.atoms]
 
         # Concatenate arrays
         new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)

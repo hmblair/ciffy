@@ -182,7 +182,7 @@ class TestLoad:
         for ix in range(polymer.size(Scale.CHAIN)):
             chain_name = polymer.names[ix]
             residue_count = polymer.lengths[ix].item()
-            atom_count = polymer.sizes(Scale.CHAIN)[ix].item()
+            atom_count = polymer.counts(Scale.CHAIN)[ix].item()
 
             # Chain name should appear in output
             assert chain_name in repr_str
@@ -544,7 +544,7 @@ class TestPolymerCountInvariant:
         polymer = load(cif_file, backend=backend)
 
         # Sum of atoms per residue should equal polymer_count
-        atoms_per_res_sum = polymer.sizes(Scale.RESIDUE).sum().item()
+        atoms_per_res_sum = polymer.counts(Scale.RESIDUE).sum().item()
         assert atoms_per_res_sum == polymer.polymer_count, \
             f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum} != polymer_count={polymer.polymer_count}"
 

@@ -7,36 +7,51 @@ Functions to parse the PDB Chemical Component Dictionary and load residue defini
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterator
 
-from .config import IONS, RESIDUE_WHITELIST, Molecule
+from .config import (
+    IONS,
+    RESIDUE_WHITELIST,
+    Molecule,
+    MOLECULE_CLASSIFICATION_RULES,
+    MOLECULE_CLASSIFICATION_DEFAULT,
+)
 from .names import clean_atom_name, to_class_name
 from .residue import ResidueDefinition
 
 
+class CCDParseError(Exception):
+    """Error parsing the Chemical Component Dictionary."""
+    pass
+
+
 def _determine_molecule_type(comp_type: str, name: str, comp_id: str) -> int:
-    """Determine Molecule type index from CCD type string."""
+    """
+    Determine Molecule type index from CCD type string.
+
+    Uses classification rules loaded from residues.yaml. Rules are evaluated
+    in order; first pattern match wins. Special handling for water and ions
+    within the LIGAND category.
+    """
     t = comp_type.upper()
 
-    # Polymer types
-    if 'RNA' in t:
-        return Molecule.RNA
-    if 'DNA' in t:
-        return Molecule.DNA
-    if 'D-PEPTIDE' in t:
-        return Molecule.PROTEIN_D
-    if 'PEPTIDE' in t:
-        return Molecule.PROTEIN
+    # Apply classification rules from YAML (order matters)
+    for rule in MOLECULE_CLASSIFICATION_RULES:
+        if rule.pattern.upper() in t:
+            molecule_type = getattr(Molecule, rule.molecule_type)
 
-    # Non-polymer types
-    if 'NON-POLYMER' in t:
-        if comp_id == "HOH" or name.upper() == "WATER":
-            return Molecule.WATER
-        if comp_id in IONS:
-            return Molecule.ION
-        return Molecule.LIGAND
+            # Special handling for non-polymers: distinguish water, ions, ligands
+            if molecule_type == Molecule.LIGAND:
+                if comp_id == "HOH" or name.upper() == "WATER":
+                    return Molecule.WATER
+                if comp_id in IONS:
+                    return Molecule.ION
 
-    return Molecule.OTHER
+            return molecule_type
+
+    # Default if no pattern matches
+    return getattr(Molecule, MOLECULE_CLASSIFICATION_DEFAULT)
 
 
 def _get_abbreviation(one_letter: str, comp_type: str) -> str:
@@ -55,18 +70,104 @@ def _get_abbreviation(one_letter: str, comp_type: str) -> str:
 
 
 @dataclass
-class LoopColumns:
-    """Column indices for a CIF loop."""
-    names: list[str] = field(default_factory=list)
+class AtomLoopState:
+    """
+    State for parsing _chem_comp_atom loops.
 
-    def add(self, field_name: str) -> int:
-        """Add a column and return its index."""
-        self.names.append(field_name)
-        return len(self.names) - 1
+    Tracks which columns contain which fields, allowing data rows
+    to be parsed correctly regardless of column order.
+    """
+    active: bool = False
+    column_count: int = 0
+    # Column indices (-1 = not present)
+    atom_id_col: int = -1
+    x_ideal_col: int = -1
+    y_ideal_col: int = -1
+    z_ideal_col: int = -1
+
+    def add_column(self, field_name: str) -> None:
+        """Record column index for a field."""
+        if field_name == 'atom_id':
+            self.atom_id_col = self.column_count
+        elif field_name == 'pdbx_model_Cartn_x_ideal':
+            self.x_ideal_col = self.column_count
+        elif field_name == 'pdbx_model_Cartn_y_ideal':
+            self.y_ideal_col = self.column_count
+        elif field_name == 'pdbx_model_Cartn_z_ideal':
+            self.z_ideal_col = self.column_count
+        self.column_count += 1
+        self.active = True
 
     def reset(self) -> None:
-        """Reset column tracking."""
-        self.names.clear()
+        """Reset to initial state."""
+        self.active = False
+        self.column_count = 0
+        self.atom_id_col = -1
+        self.x_ideal_col = -1
+        self.y_ideal_col = -1
+        self.z_ideal_col = -1
+
+
+@dataclass
+class BondLoopState:
+    """State for parsing _chem_comp_bond loops."""
+    active: bool = False
+    column_count: int = 0
+    atom1_col: int = -1
+    atom2_col: int = -1
+
+    def add_column(self, field_name: str) -> None:
+        """Record column index for a field."""
+        if field_name == 'atom_id_1':
+            self.atom1_col = self.column_count
+        elif field_name == 'atom_id_2':
+            self.atom2_col = self.column_count
+        self.column_count += 1
+        self.active = True
+
+    def reset(self) -> None:
+        """Reset to initial state."""
+        self.active = False
+        self.column_count = 0
+        self.atom1_col = -1
+        self.atom2_col = -1
+
+
+@dataclass
+class TorsionLoopState:
+    """State for parsing _chem_comp_tor loops."""
+    active: bool = False
+    column_count: int = 0
+    id_col: int = -1
+    atom1_col: int = -1
+    atom2_col: int = -1
+    atom3_col: int = -1
+    atom4_col: int = -1
+
+    def add_column(self, field_name: str) -> None:
+        """Record column index for a field."""
+        if field_name == 'id':
+            self.id_col = self.column_count
+        elif field_name == 'atom_id_1':
+            self.atom1_col = self.column_count
+        elif field_name == 'atom_id_2':
+            self.atom2_col = self.column_count
+        elif field_name == 'atom_id_3':
+            self.atom3_col = self.column_count
+        elif field_name == 'atom_id_4':
+            self.atom4_col = self.column_count
+        self.column_count += 1
+        self.active = True
+
+    def reset(self) -> None:
+        """Reset to initial state."""
+        self.active = False
+        self.column_count = 0
+        self.id_col = -1
+        self.atom1_col = -1
+        self.atom2_col = -1
+        self.atom3_col = -1
+        self.atom4_col = -1
 
 
 @dataclass
@@ -128,52 +229,16 @@ class CCDParser:
         self.whitelist = whitelist
         self._state = ComponentState()
 
-        # Loop state
-        self._in_atom_loop = False
-        self._in_bond_loop = False
-        self._in_torsion_loop = False
-
-        # Column tracking for each loop type
-        self._atom_cols = LoopColumns()
-        self._bond_cols = LoopColumns()
-        self._torsion_cols = LoopColumns()
-
-        # Column indices (cached for performance)
-        self._atom_id_col = -1
-        self._x_ideal_col = -1
-        self._y_ideal_col = -1
-        self._z_ideal_col = -1
-        self._bond_atom1_col = -1
-        self._bond_atom2_col = -1
-        self._tor_id_col = -1
-        self._tor_atom1_col = -1
-        self._tor_atom2_col = -1
-        self._tor_atom3_col = -1
-        self._tor_atom4_col = -1
+        # Loop state for each CIF category
+        self._atom_loop = AtomLoopState()
+        self._bond_loop = BondLoopState()
+        self._torsion_loop = TorsionLoopState()
 
     def _reset_loops(self) -> None:
         """Reset all loop states."""
-        self._in_atom_loop = False
-        self._in_bond_loop = False
-        self._in_torsion_loop = False
-        self._atom_cols.reset()
-        self._bond_cols.reset()
-        self._torsion_cols.reset()
-        self._reset_column_indices()
-
-    def _reset_column_indices(self) -> None:
-        """Reset cached column indices."""
-        self._atom_id_col = -1
-        self._x_ideal_col = -1
-        self._y_ideal_col = -1
-        self._z_ideal_col = -1
-        self._bond_atom1_col = -1
-        self._bond_atom2_col = -1
-        self._tor_id_col = -1
-        self._tor_atom1_col = -1
-        self._tor_atom2_col = -1
-        self._tor_atom3_col = -1
-        self._tor_atom4_col = -1
+        self._atom_loop.reset()
+        self._bond_loop.reset()
+        self._torsion_loop.reset()
 
     def _try_yield(self) -> ResidueDefinition | None:
         """Try to create a residue from current state, respecting whitelist."""
@@ -210,134 +275,138 @@ class CCDParser:
             if val != '?':
                 self._state.one_letter = val
 
-    def _handle_atom_header(self, line: str) -> None:
-        """Handle _chem_comp_atom.* header lines."""
-        col_name = line.strip().split()[0]
-        field_name = col_name.split('.')[-1]
-        parts = line.split()
+    def _update_atom_coordinate(self, atom_name: str, coord_index: int, value: str) -> None:
+        """
+        Update a single coordinate component for an atom.
 
-        # Check for single-value format (e.g., "_chem_comp_atom.atom_id MG")
-        if len(parts) >= 2:
-            value = parts[-1]
-            if field_name == 'atom_id':
-                atom_id = clean_atom_name(value)
-                if atom_id not in self._state.atoms:
-                    self._state.atoms.append(atom_id)
-            elif field_name == 'pdbx_model_Cartn_x_ideal' and self._state.atoms:
-                try:
-                    coord = list(self._state.ideal_coords.get(self._state.atoms[-1], [None, None, None]))
-                    coord[0] = float(value)
-                    self._state.ideal_coords[self._state.atoms[-1]] = coord
-                except ValueError:
-                    pass
-            elif field_name == 'pdbx_model_Cartn_y_ideal' and self._state.atoms:
-                try:
-                    coord = list(self._state.ideal_coords.get(self._state.atoms[-1], [None, None, None]))
-                    coord[1] = float(value)
-                    self._state.ideal_coords[self._state.atoms[-1]] = coord
-                except ValueError:
-                    pass
-            elif field_name == 'pdbx_model_Cartn_z_ideal' and self._state.atoms:
-                try:
-                    coord = list(self._state.ideal_coords.get(self._state.atoms[-1], [None, None, None]))
-                    coord[2] = float(value)
-                    if all(c is not None for c in coord):
-                        self._state.ideal_coords[self._state.atoms[-1]] = tuple(coord)
-                except ValueError:
-                    pass
-        else:
-            # Loop header format - track column position
-            col_idx = self._atom_cols.add(field_name)
-            if field_name == 'atom_id':
-                self._atom_id_col = col_idx
-            elif field_name == 'pdbx_model_Cartn_x_ideal':
-                self._x_ideal_col = col_idx
+        Args:
+            atom_name: Name of the atom to update.
+            coord_index: Which coordinate (0=x, 1=y, 2=z).
+            value: String value to parse as float.
+        """
+        try:
+            coord = list(self._state.ideal_coords.get(atom_name, [None, None, None]))
+            coord[coord_index] = float(value)
+            # Store as tuple only when all coordinates are present
+            if all(c is not None for c in coord):
+                self._state.ideal_coords[atom_name] = tuple(coord)
+            else:
+                self._state.ideal_coords[atom_name] = coord
+        except ValueError:
+            pass  # Ignore unparseable coordinate values
+
+    def _handle_atom_single_value(self, field_name: str, value: str) -> None:
+        """
+        Handle single-value atom field (non-loop format).
+
+        Some simple components use "_chem_comp_atom.field value" format
+        instead of loop format.
+        """
+        if field_name == 'atom_id':
+            atom_id = clean_atom_name(value)
+            if atom_id not in self._state.atoms:
+                self._state.atoms.append(atom_id)
+        elif self._state.atoms:
+            # Coordinate fields - apply to most recently added atom
+            atom_name = self._state.atoms[-1]
+            if field_name == 'pdbx_model_Cartn_x_ideal':
+                self._update_atom_coordinate(atom_name, 0, value)
             elif field_name == 'pdbx_model_Cartn_y_ideal':
-                self._y_ideal_col = col_idx
+                self._update_atom_coordinate(atom_name, 1, value)
             elif field_name == 'pdbx_model_Cartn_z_ideal':
-                self._z_ideal_col = col_idx
-            self._in_atom_loop = True
+                self._update_atom_coordinate(atom_name, 2, value)
+
+    def _handle_atom_loop_header(self, field_name: str) -> None:
+        """
+        Track column position for atom loop format.
+
+        Records which column index corresponds to each field name.
+        """
+        self._atom_loop.add_column(field_name)
+
+    def _handle_atom_header(self, line: str) -> None:
+        """
+        Handle _chem_comp_atom.* header lines.
+
+        CIF files can have atoms in two formats:
+        1. Single-value: "_chem_comp_atom.atom_id MG" (simple components)
+        2. Loop format: column headers followed by data rows (most components)
+
+        This method detects which format is used and delegates accordingly.
+        """
+        parts = line.split()
+        field_name = parts[0].split('.')[-1]
+
+        if len(parts) >= 2:
+            # Single-value format: "_chem_comp_atom.field value"
+            self._handle_atom_single_value(field_name, parts[-1])
+        else:
+            # Loop header format: just the field name
+            self._handle_atom_loop_header(field_name)
 
     def _handle_atom_data(self, parts: list[str]) -> None:
         """Handle atom loop data line."""
         if len(parts) < 2 or parts[0] != self._state.comp_id:
             return
 
-        if self._atom_id_col >= 0 and self._atom_id_col < len(parts):
-            atom_id = clean_atom_name(parts[self._atom_id_col])
+        loop = self._atom_loop
+        if loop.atom_id_col >= 0 and loop.atom_id_col < len(parts):
+            atom_id = clean_atom_name(parts[loop.atom_id_col])
             if atom_id not in self._state.atoms:
                 self._state.atoms.append(atom_id)
 
             # Parse ideal coordinates if available
-            if (self._x_ideal_col >= 0 and self._y_ideal_col >= 0 and self._z_ideal_col >= 0 and
-                self._x_ideal_col < len(parts) and self._y_ideal_col < len(parts) and
-                self._z_ideal_col < len(parts)):
-                x = self._parse_float(parts[self._x_ideal_col])
-                y = self._parse_float(parts[self._y_ideal_col])
-                z = self._parse_float(parts[self._z_ideal_col])
+            if (loop.x_ideal_col >= 0 and loop.y_ideal_col >= 0 and loop.z_ideal_col >= 0 and
+                loop.x_ideal_col < len(parts) and loop.y_ideal_col < len(parts) and
+                loop.z_ideal_col < len(parts)):
+                x = self._parse_float(parts[loop.x_ideal_col])
+                y = self._parse_float(parts[loop.y_ideal_col])
+                z = self._parse_float(parts[loop.z_ideal_col])
                 if x is not None and y is not None and z is not None:
                     self._state.ideal_coords[atom_id] = (x, y, z)
 
     def _handle_bond_header(self, line: str) -> None:
         """Handle _chem_comp_bond.* header lines."""
-        col_name = line.strip().split()[0]
-        field_name = col_name.split('.')[-1]
         parts = line.split()
-
         if len(parts) == 1:
             # Loop header format
-            col_idx = self._bond_cols.add(field_name)
-            if field_name == 'atom_id_1':
-                self._bond_atom1_col = col_idx
-            elif field_name == 'atom_id_2':
-                self._bond_atom2_col = col_idx
-            self._in_bond_loop = True
+            field_name = parts[0].split('.')[-1]
+            self._bond_loop.add_column(field_name)
 
     def _handle_bond_data(self, parts: list[str]) -> None:
         """Handle bond loop data line."""
         if len(parts) < 3 or parts[0] != self._state.comp_id:
             return
 
-        if (self._bond_atom1_col >= 0 and self._bond_atom2_col >= 0 and
-            self._bond_atom1_col < len(parts) and self._bond_atom2_col < len(parts)):
-            atom1 = clean_atom_name(parts[self._bond_atom1_col])
-            atom2 = clean_atom_name(parts[self._bond_atom2_col])
+        loop = self._bond_loop
+        if (loop.atom1_col >= 0 and loop.atom2_col >= 0 and
+            loop.atom1_col < len(parts) and loop.atom2_col < len(parts)):
+            atom1 = clean_atom_name(parts[loop.atom1_col])
+            atom2 = clean_atom_name(parts[loop.atom2_col])
             self._state.bonds.append((atom1, atom2))
 
     def _handle_torsion_header(self, line: str) -> None:
         """Handle _chem_comp_tor.* header lines."""
-        col_name = line.strip().split()[0]
-        field_name = col_name.split('.')[-1]
         parts = line.split()
-
         if len(parts) == 1:
             # Loop header format
-            col_idx = self._torsion_cols.add(field_name)
-            if field_name == 'id':
-                self._tor_id_col = col_idx
-            elif field_name == 'atom_id_1':
-                self._tor_atom1_col = col_idx
-            elif field_name == 'atom_id_2':
-                self._tor_atom2_col = col_idx
-            elif field_name == 'atom_id_3':
-                self._tor_atom3_col = col_idx
-            elif field_name == 'atom_id_4':
-                self._tor_atom4_col = col_idx
-            self._in_torsion_loop = True
+            field_name = parts[0].split('.')[-1]
+            self._torsion_loop.add_column(field_name)
 
     def _handle_torsion_data(self, parts: list[str]) -> None:
         """Handle torsion loop data line."""
         if len(parts) < 5 or parts[0] != self._state.comp_id:
             return
 
-        if (self._tor_id_col >= 0 and self._tor_atom1_col >= 0 and self._tor_atom2_col >= 0 and
-            self._tor_atom3_col >= 0 and self._tor_atom4_col >= 0 and
-            self._tor_id_col < len(parts) and self._tor_atom4_col < len(parts)):
-            tor_id = parts[self._tor_id_col].lower()
-            a1 = clean_atom_name(parts[self._tor_atom1_col])
-            a2 = clean_atom_name(parts[self._tor_atom2_col])
-            a3 = clean_atom_name(parts[self._tor_atom3_col])
-            a4 = clean_atom_name(parts[self._tor_atom4_col])
+        loop = self._torsion_loop
+        if (loop.id_col >= 0 and loop.atom1_col >= 0 and loop.atom2_col >= 0 and
+            loop.atom3_col >= 0 and loop.atom4_col >= 0 and
+            loop.id_col < len(parts) and loop.atom4_col < len(parts)):
+            tor_id = parts[loop.id_col].lower()
+            a1 = clean_atom_name(parts[loop.atom1_col])
+            a2 = clean_atom_name(parts[loop.atom2_col])
+            a3 = clean_atom_name(parts[loop.atom3_col])
+            a4 = clean_atom_name(parts[loop.atom4_col])
             self._state.torsions[tor_id] = (a1, a2, a3, a4)
 
     def parse(self, filepath: str) -> Iterator[ResidueDefinition]:
@@ -349,8 +418,24 @@ class CCDParser:
 
         Yields:
             ResidueDefinition for each valid component.
+
+        Raises:
+            CCDParseError: If the file cannot be opened or parsed.
         """
-        with open(filepath, 'r') as f:
+        try:
+            f = open(filepath, 'r')
+        except FileNotFoundError:
+            raise CCDParseError(
+                f"CCD file not found: {filepath}\n"
+                f"Run 'python -m codegen.cli --download' to download it, or download manually from:\n"
+                f"https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
+            ) from None
+        except PermissionError:
+            raise CCDParseError(f"Permission denied reading CCD file: {filepath}") from None
+        except OSError as e:
+            raise CCDParseError(f"Error opening CCD file {filepath}: {e}") from None
+
+        with f:
             for line in f:
                 line = line.rstrip('\n')
 
@@ -376,32 +461,32 @@ class CCDParser:
                 # Atom loop
                 elif line.startswith('_chem_comp_atom.'):
                     self._handle_atom_header(line)
-                elif self._in_atom_loop and line.startswith('_'):
+                elif self._atom_loop.active and line.startswith('_'):
                     pass  # Other header in atom context
-                elif self._in_atom_loop and line.strip() and not line.startswith('#'):
+                elif self._atom_loop.active and line.strip() and not line.startswith('#'):
                     self._handle_atom_data(line.split())
 
                 # Bond loop
                 elif line.startswith('_chem_comp_bond.'):
                     self._handle_bond_header(line)
-                elif self._in_bond_loop and line.startswith('_'):
+                elif self._bond_loop.active and line.startswith('_'):
                     pass
-                elif self._in_bond_loop and line.strip() and not line.startswith('#'):
+                elif self._bond_loop.active and line.strip() and not line.startswith('#'):
                     self._handle_bond_data(line.split())
 
                 # Torsion loop
                 elif line.startswith('_chem_comp_tor.'):
                     self._handle_torsion_header(line)
-                elif self._in_torsion_loop and line.startswith('_'):
+                elif self._torsion_loop.active and line.startswith('_'):
                     pass
-                elif self._in_torsion_loop and line.strip() and not line.startswith('#'):
+                elif self._torsion_loop.active and line.strip() and not line.startswith('#'):
                     self._handle_torsion_data(line.split())
 
                 # Comment ends loops
                 elif line.startswith('#'):
-                    self._in_atom_loop = False
-                    self._in_bond_loop = False
-                    self._in_torsion_loop = False
+                    self._atom_loop.active = False
+                    self._bond_loop.active = False
+                    self._torsion_loop.active = False
 
         # Yield last component
         if res := self._try_yield():

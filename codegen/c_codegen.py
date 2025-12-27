@@ -16,10 +16,19 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import ELEMENTS, IONS, MOLECULE_TYPES, Molecule, BACKBONE_NAMES, NUM_BACKBONE_NAMES
+from .config import (
+    IONS,
+    MOLECULE_TYPES,
+    Molecule,
+    BACKBONE_NAMES,
+    NUM_BACKBONE_NAMES,
+    NUCLEIC_MOLECULE_TYPES,
+    PROTEIN_MOLECULE_TYPES,
+)
 from .residue import ResidueDefinition
 
-# Minimum gperf version required for %define constants-prefix
+# Minimum gperf version required for %define constants-prefix feature
+# (introduced in gperf 3.1, released 2017)
 GPERF_MIN_VERSION = (3, 1)
 
 
@@ -134,6 +143,7 @@ def generate_gperf_files(
     cif_to_residue: dict[str, int],
     residue_index: dict[str, int],
     all_residues: list[ResidueDefinition],
+    elements: dict[str, int],
 ) -> None:
     """Generate all .gperf files."""
 
@@ -158,7 +168,7 @@ def generate_gperf_files(
 
     # element.gperf
     content = _gperf_header("_lookup_element", "_hash_element", "ELEMENT")
-    for symbol, atomic_num in sorted(ELEMENTS.items(), key=lambda x: x[1]):
+    for symbol, atomic_num in sorted(elements.items(), key=lambda x: x[1]):
         content += f"{symbol}, {atomic_num}\n"
     (hash_dir / "element.gperf").write_text(content)
 
@@ -196,18 +206,19 @@ def generate_reverse_header(
     hash_dir: Path,
     atom_index: dict[tuple[str, str], int],
     residue_to_cif: dict[int, str],
+    elements: dict[str, int],
 ) -> None:
     """Generate reverse.h for CIF writing."""
 
     # Build reverse mappings
     atoms = {idx: (res, atom) for (res, atom), idx in atom_index.items()}
-    elements_reverse = {v: k for k, v in ELEMENTS.items()}
+    elements_reverse = {v: k for k, v in elements.items()}
     molecule_types = {i: mt.entity_poly_type for i, mt in enumerate(MOLECULE_TYPES)
                       if mt.entity_poly_type}
 
     atom_max = max(atoms.keys()) + 1
     residue_max = max(residue_to_cif.keys()) + 1
-    element_max = max(ELEMENTS.values()) + 1
+    element_max = max(elements.values()) + 1
     molecule_max = len(MOLECULE_TYPES)
 
     lines = [
@@ -378,21 +389,17 @@ def generate_bond_patterns_header(
     linking_prev = []  # Atom value for prev residue's linking atom (O3' or C)
     linking_next = []  # Atom value for next residue's linking atom (P or N)
 
-    # Molecule type groups for linking
-    nucleic_types = (mol_idx["RNA"], mol_idx["DNA"], mol_idx["HYBRID"])
-    protein_types = (mol_idx["PROTEIN"], mol_idx["PROTEIN_D"], mol_idx["CYCLIC_PEPTIDE"])
-
     for res_idx, res in enumerate(all_residues):
         primary_cif = res.cif_names[0]
         array_name = f'BONDS_{res.class_name}'
         mol_types.append(res.molecule_type)
 
         # Determine linking atoms based on molecule type
-        if res.molecule_type in nucleic_types:
+        if res.molecule_type in NUCLEIC_MOLECULE_TYPES:
             # Nucleic acids: O3' -> P linkage
             prev_atom = atom_index.get((primary_cif, "O3'"), 0)
             next_atom = atom_index.get((primary_cif, "P"), 0)
-        elif res.molecule_type in protein_types:
+        elif res.molecule_type in PROTEIN_MOLECULE_TYPES:
             # Proteins: C -> N linkage
             prev_atom = atom_index.get((primary_cif, "C"), 0)
             next_atom = atom_index.get((primary_cif, "N"), 0)
@@ -482,8 +489,6 @@ def generate_canonical_refs_header(
     internal_dir: Path,
     all_residues: list[ResidueDefinition],
     atom_index: dict[tuple[str, str], int],
-    atom_canonical_refs: np.ndarray,
-    atom_has_canonical_refs: np.ndarray,
     atom_dihedral_type: np.ndarray,
     atom_dihedral_refs: np.ndarray,
     residue_backbone_atoms: np.ndarray,
@@ -493,8 +498,6 @@ def generate_canonical_refs_header(
 
     This header enables single-pass Z-matrix construction in C without Python
     post-processing. It contains:
-    - ATOM_CANONICAL_REFS: Pre-defined reference atoms for each atom type
-    - ATOM_HAS_CANONICAL_REFS: Whether each atom type has canonical refs
     - ATOM_DIHEDRAL_TYPE: Which dihedral (if any) each atom owns
     - ATOM_DIHEDRAL_REFS: Reference atoms for dihedral owners (offset, local_idx)
     - RESIDUE_BACKBONE_ATOMS: Backbone atom types for each residue type
@@ -505,13 +508,11 @@ def generate_canonical_refs_header(
         internal_dir: Output directory for header file.
         all_residues: List of all residue definitions.
         atom_index: Dict mapping (cif_name, atom_name) -> global atom index.
-        atom_canonical_refs: (num_atoms, 6) array from compute_canonical_zmatrix_refs.
-        atom_has_canonical_refs: (num_atoms,) bool array.
         atom_dihedral_type: (num_atoms,) int8 array from compute_atom_dihedral_ownership.
         atom_dihedral_refs: (num_atoms, 3, 2) int8 array from compute_atom_dihedral_ownership.
         residue_backbone_atoms: (num_residues, num_backbone_names) int16 array.
     """
-    num_atoms = len(atom_canonical_refs)
+    num_atoms = len(atom_dihedral_type)
     num_residues = len(all_residues)
 
     lines = [
@@ -545,38 +546,6 @@ def generate_canonical_refs_header(
         lines.append(f'#define BACKBONE_{c_name} {idx}')
 
     lines.extend([
-        '',
-        '/**',
-        ' * Canonical refs for each atom type.',
-        ' * Columns: [dist_ref, ang_ref, dih_ref, dist_off, ang_off, dih_off]',
-        ' * If offset == 0: ref value is atom TYPE (global index)',
-        ' * If offset != 0: ref value is backbone NAME ID',
-        ' * Value of -1 means no reference.',
-        ' */',
-        f'static const int16_t ATOM_CANONICAL_REFS[NUM_ATOM_TYPES][6] = {{',
-    ])
-
-    # Output ATOM_CANONICAL_REFS
-    for i in range(num_atoms):
-        vals = atom_canonical_refs[i]
-        line = f'    [{i}] = {{{vals[0]}, {vals[1]}, {vals[2]}, {vals[3]}, {vals[4]}, {vals[5]}}},'
-        lines.append(line)
-
-    lines.extend([
-        '};',
-        '',
-        '/* Which atoms have canonical refs defined (1 = yes, 0 = no) */',
-        f'static const int8_t ATOM_HAS_CANONICAL_REFS[NUM_ATOM_TYPES] = {{',
-    ])
-
-    # Output ATOM_HAS_CANONICAL_REFS (8 values per line for compactness)
-    for i in range(0, num_atoms, 16):
-        chunk = atom_has_canonical_refs[i:i+16]
-        vals = ', '.join(str(int(v)) for v in chunk)
-        lines.append(f'    {vals},')
-
-    lines.extend([
-        '};',
         '',
         '/**',
         ' * Dihedral type ownership: -1 if not a named dihedral owner.',

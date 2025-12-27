@@ -9,14 +9,25 @@ This package generates:
 
 Main entry point: generate_all(ccd_path)
 CLI entry point: cli.main()
+
+The generation process has four phases:
+1. Load: Read elements from PubChem and residues from CCD
+2. Validate: Check for duplicates and compare against authoritative sources
+3. Index: Build atom/residue indices and compute derived arrays
+4. Generate: Write C headers and Python modules
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .config import MOLECULE_TYPES, ELEMENTS, IONS, RESIDUE_WHITELIST
+import numpy as np
+
+from .config import MOLECULE_TYPES, IONS, RESIDUE_WHITELIST
 from .ccd import load_residues_from_ccd
+from .elements import load_elements
 from .c_codegen import (
     generate_gperf_files,
     generate_reverse_header,
@@ -24,7 +35,7 @@ from .c_codegen import (
     generate_canonical_refs_header,
 )
 from .residue import (
-    compute_canonical_zmatrix_refs,
+    ResidueDefinition,
     compute_atom_dihedral_ownership,
     compute_residue_backbone_atoms,
 )
@@ -36,16 +47,88 @@ from .python_codegen import (
     generate_python_atoms,
     generate_python_residues,
 )
+from .validation import run_all_validations
 
 
-def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
-    """Generate all lookup tables and Python enums from CCD."""
+# =============================================================================
+# DATA STRUCTURES FOR GENERATION PIPELINE
+# =============================================================================
 
-    all_residues = load_residues_from_ccd(ccd_path)
 
-    # Validate - check for duplicate CIF names
+@dataclass
+class LoadedData:
+    """Data loaded from external sources (Phase 1)."""
+    elements: dict[str, int]
+    residues: list[ResidueDefinition]
+
+
+@dataclass
+class IndexedData:
+    """Indices and mappings built from loaded data (Phase 3)."""
+    residue_index: dict[str, int]  # residue name -> index
+    cif_to_residue: dict[str, int]  # CIF name -> residue index
+    residue_to_cif: dict[int, str]  # residue index -> primary CIF name
+    atom_index: dict[tuple[str, str], int]  # (cif_name, atom_name) -> atom index
+    atom_dihedral_type: np.ndarray  # atom index -> dihedral type
+    atom_dihedral_refs: np.ndarray  # atom index -> reference atoms
+    residue_backbone_atoms: np.ndarray  # residue index -> backbone atom indices
+
+
+@dataclass
+class OutputPaths:
+    """Output directory paths for generated files."""
+    hash_dir: Path
+    internal_dir: Path
+    biochem_dir: Path
+
+    @classmethod
+    def from_project_root(cls, project_root: Path) -> 'OutputPaths':
+        """Create output paths relative to project root."""
+        ciffy_dir = project_root / "ciffy"
+        paths = cls(
+            hash_dir=ciffy_dir / "src" / "hash",
+            internal_dir=ciffy_dir / "src" / "internal",
+            biochem_dir=ciffy_dir / "biochemistry",
+        )
+        paths.hash_dir.mkdir(exist_ok=True)
+        paths.internal_dir.mkdir(exist_ok=True)
+        return paths
+
+
+# =============================================================================
+# PHASE 1: LOAD DATA
+# =============================================================================
+
+
+def _load_data(ccd_path: str) -> LoadedData:
+    """
+    Phase 1: Load data from external sources.
+
+    Loads elements from PubChem (cached locally) and residue definitions
+    from the Chemical Component Dictionary.
+    """
+    elements = load_elements()
+    print(f"Loaded {len(elements)} elements from PubChem")
+
+    residues = load_residues_from_ccd(ccd_path)
+    return LoadedData(elements=elements, residues=residues)
+
+
+# =============================================================================
+# PHASE 2: VALIDATE DATA
+# =============================================================================
+
+
+def _validate_data(data: LoadedData) -> None:
+    """
+    Phase 2: Validate loaded data.
+
+    Checks for duplicate CIF names and compares backbone dihedrals
+    against authoritative MonomerLibrary source.
+    """
+    # Check for duplicate CIF names
     seen_cif: dict[str, str] = {}
-    for res in all_residues:
+    for res in data.residues:
         for cif_name in res.cif_names:
             if cif_name in seen_cif:
                 raise ValueError(
@@ -53,25 +136,37 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
                 )
             seen_cif[cif_name] = res.name
 
-    # Output directories (codegen is at project root, outputs go into ciffy package)
-    project_root = Path(__file__).parent.parent
-    ciffy_dir = project_root / "ciffy"
-    hash_dir = ciffy_dir / "src" / "hash"
-    internal_dir = ciffy_dir / "src" / "internal"
-    biochem_dir = ciffy_dir / "biochemistry"
-    types_dir = ciffy_dir / "types"
-    hash_dir.mkdir(exist_ok=True)
-    internal_dir.mkdir(exist_ok=True)
+    # Run validation checks (compares against authoritative sources)
+    run_all_validations(data.residues)
 
-    # Build derived mappings
-    residue_index = {res.name: idx for idx, res in enumerate(all_residues)}
-    cif_to_residue = {cif: idx for idx, res in enumerate(all_residues) for cif in res.cif_names}
-    residue_to_cif = {idx: res.cif_names[0] for idx, res in enumerate(all_residues)}
 
-    # Assign atom indices (1-indexed, 0 reserved for unknown)
+# =============================================================================
+# PHASE 3: BUILD INDICES
+# =============================================================================
+
+
+def _build_indices(data: LoadedData) -> IndexedData:
+    """
+    Phase 3: Build indices and derived arrays.
+
+    Creates lookup tables for residues and atoms, and computes
+    dihedral ownership and backbone atom arrays.
+    """
+    residues = data.residues
+
+    # Build residue mappings
+    residue_index = {res.name: idx for idx, res in enumerate(residues)}
+    cif_to_residue = {
+        cif: idx for idx, res in enumerate(residues) for cif in res.cif_names
+    }
+    residue_to_cif = {idx: res.cif_names[0] for idx, res in enumerate(residues)}
+
+    # Build atom index (1-indexed, 0 reserved for unknown)
     atom_index: dict[tuple[str, str], int] = {}
     current_idx = 1
-    for res in all_residues:
+
+    # Assign indices to primary CIF names first
+    for res in residues:
         primary_cif = res.cif_names[0]
         for atom in res.atoms:
             key = (primary_cif, atom)
@@ -79,8 +174,8 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
                 atom_index[key] = current_idx
                 current_idx += 1
 
-    # Add aliases
-    for res in all_residues:
+    # Add aliases pointing to same indices
+    for res in residues:
         primary_cif = res.cif_names[0]
         for alias in res.cif_names[1:]:
             for atom in res.atoms:
@@ -91,43 +186,115 @@ def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
 
     print(f"Assigned {current_idx - 1} unique atoms, {len(atom_index)} total entries")
 
-    # Compute arrays needed for multiple generators
-    atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(all_residues, atom_index)
-    atom_canonical_refs, atom_has_canonical_refs = compute_canonical_zmatrix_refs(
-        all_residues, atom_index
+    # Compute derived arrays
+    atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(
+        residues, atom_index
     )
-    residue_backbone_atoms = compute_residue_backbone_atoms(all_residues, atom_index)
+    residue_backbone_atoms = compute_residue_backbone_atoms(residues, atom_index)
 
-    # Generate all files
-    generate_gperf_files(hash_dir, atom_index, cif_to_residue, residue_index, all_residues)
-    generate_reverse_header(hash_dir, atom_index, residue_to_cif)
-    generate_bond_patterns_header(internal_dir, all_residues, atom_index)
+    return IndexedData(
+        residue_index=residue_index,
+        cif_to_residue=cif_to_residue,
+        residue_to_cif=residue_to_cif,
+        atom_index=atom_index,
+        atom_dihedral_type=atom_dihedral_type,
+        atom_dihedral_refs=atom_dihedral_refs,
+        residue_backbone_atoms=residue_backbone_atoms,
+    )
+
+
+# =============================================================================
+# PHASE 4: GENERATE FILES
+# =============================================================================
+
+
+def _generate_files(
+    data: LoadedData,
+    indices: IndexedData,
+    paths: OutputPaths,
+) -> None:
+    """
+    Phase 4: Generate all output files.
+
+    Writes C headers (gperf hash tables, reverse lookups, bond patterns)
+    and Python modules (enums, atoms, residues).
+    """
+    # C code generation
+    generate_gperf_files(
+        paths.hash_dir,
+        indices.atom_index,
+        indices.cif_to_residue,
+        indices.residue_index,
+        data.residues,
+        data.elements,
+    )
+    generate_reverse_header(
+        paths.hash_dir,
+        indices.atom_index,
+        indices.residue_to_cif,
+        data.elements,
+    )
+    generate_bond_patterns_header(paths.internal_dir, data.residues, indices.atom_index)
     generate_canonical_refs_header(
-        internal_dir,
-        all_residues,
-        atom_index,
-        atom_canonical_refs,
-        atom_has_canonical_refs,
-        atom_dihedral_type,
-        atom_dihedral_refs,
-        residue_backbone_atoms,
+        paths.internal_dir,
+        data.residues,
+        indices.atom_index,
+        indices.atom_dihedral_type,
+        indices.atom_dihedral_refs,
+        indices.residue_backbone_atoms,
     )
-    generate_python_molecule(biochem_dir)
-    generate_python_elements(biochem_dir)
-    generate_dihedral_arrays(biochem_dir, all_residues, atom_index)
-    generate_python_dihedraltypes(biochem_dir)
 
-    # Generate AtomGroup-based files
-    generate_python_atoms(biochem_dir, atom_index, all_residues)
-    generate_python_residues(biochem_dir, all_residues)
+    # Python code generation
+    generate_python_molecule(paths.biochem_dir)
+    generate_python_elements(paths.biochem_dir, data.elements)
+    generate_dihedral_arrays(paths.biochem_dir, data.residues, indices.atom_index)
+    generate_python_dihedraltypes(paths.biochem_dir)
+    generate_python_atoms(paths.biochem_dir, indices.atom_index, data.residues)
+    generate_python_residues(paths.biochem_dir, data.residues)
 
-    return hash_dir, atom_index
+
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
+
+
+def generate_all(ccd_path: str) -> tuple[Path, dict[tuple[str, str], int]]:
+    """
+    Generate all lookup tables and Python enums from CCD.
+
+    This is the main entry point for code generation. It runs four phases:
+    1. Load: Read elements from PubChem and residues from CCD
+    2. Validate: Check for duplicates and compare against authoritative sources
+    3. Index: Build atom/residue indices and compute derived arrays
+    4. Generate: Write C headers and Python modules
+
+    Args:
+        ccd_path: Path to the Chemical Component Dictionary file.
+
+    Returns:
+        Tuple of (hash_dir, atom_index) for compatibility with existing code.
+    """
+    # Phase 1: Load data
+    data = _load_data(ccd_path)
+
+    # Phase 2: Validate
+    _validate_data(data)
+
+    # Phase 3: Build indices
+    indices = _build_indices(data)
+
+    # Phase 4: Generate files
+    project_root = Path(__file__).parent.parent
+    paths = OutputPaths.from_project_root(project_root)
+    _generate_files(data, indices, paths)
+
+    return paths.hash_dir, indices.atom_index
 
 
 __all__ = [
     "generate_all",
     "MOLECULE_TYPES",
-    "ELEMENTS",
     "IONS",
     "RESIDUE_WHITELIST",
+    "load_elements",
 ]

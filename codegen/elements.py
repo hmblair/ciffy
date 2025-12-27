@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from typing import Iterator
 
 
+class ElementsParseError(Exception):
+    """Error parsing the PubChem elements CSV."""
+    pass
+
+
 def parse_elements_csv(csv_path: Path) -> dict[str, int]:
     """
     Parse PubChem periodic table CSV.
@@ -30,15 +35,54 @@ def parse_elements_csv(csv_path: Path) -> dict[str, int]:
     Returns:
         Dictionary mapping element symbol to atomic number.
         Example: {"H": 1, "HE": 2, "LI": 3, ...}
+
+    Raises:
+        ElementsParseError: If the file cannot be opened or has unexpected format.
     """
     elements: dict[str, int] = {}
 
-    with open(csv_path, 'r', encoding='utf-8') as f:
+    try:
+        f = open(csv_path, 'r', encoding='utf-8')
+    except FileNotFoundError:
+        raise ElementsParseError(
+            f"Elements CSV not found: {csv_path}\n"
+            f"Run 'python -m codegen.cli --download' to download it, or download manually from:\n"
+            f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/periodictable/CSV"
+        ) from None
+    except OSError as e:
+        raise ElementsParseError(f"Error opening elements file {csv_path}: {e}") from None
+
+    with f:
         reader = csv.DictReader(f)
-        for row in reader:
-            symbol = row['Symbol'].upper()
-            atomic_number = int(row['AtomicNumber'])
-            elements[symbol] = atomic_number
+
+        # Verify expected columns exist
+        if reader.fieldnames is None:
+            raise ElementsParseError(
+                f"Elements CSV appears empty or malformed: {csv_path}"
+            )
+
+        required_cols = {'Symbol', 'AtomicNumber'}
+        missing = required_cols - set(reader.fieldnames)
+        if missing:
+            raise ElementsParseError(
+                f"Elements CSV missing required columns: {missing}\n"
+                f"Found columns: {reader.fieldnames}\n"
+                f"The PubChem CSV format may have changed. File: {csv_path}"
+            )
+
+        for line_num, row in enumerate(reader, start=2):  # start=2 for 1-indexed + header
+            try:
+                symbol = row['Symbol'].upper()
+                atomic_number = int(row['AtomicNumber'])
+                elements[symbol] = atomic_number
+            except (KeyError, ValueError, TypeError) as e:
+                raise ElementsParseError(
+                    f"Error parsing line {line_num} of elements CSV: {e}\n"
+                    f"Row data: {row}"
+                ) from None
+
+    if not elements:
+        raise ElementsParseError(f"No elements found in CSV file: {csv_path}")
 
     return elements
 

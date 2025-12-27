@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Iterator
 
 
+class MonLibParseError(Exception):
+    """Error parsing the MonomerLibrary file."""
+    pass
+
+
 @dataclass
 class LinkTorsion:
     """A torsion angle definition from a chemical link."""
@@ -47,6 +52,9 @@ def parse_link_torsions(filepath: Path) -> Iterator[LinkTorsion]:
     Parse _chem_link_tor from links_and_mods.cif.
 
     Yields LinkTorsion objects for each torsion definition found.
+
+    Raises:
+        MonLibParseError: If the file cannot be opened.
     """
     current_link = ""
     in_link_tor_loop = False
@@ -64,7 +72,18 @@ def parse_link_torsions(filepath: Path) -> Iterator[LinkTorsion]:
     atom4_comp_col = -1
     atom4_id_col = -1
 
-    with open(filepath, 'r', encoding='utf-8') as f:
+    try:
+        f = open(filepath, 'r', encoding='utf-8')
+    except FileNotFoundError:
+        raise MonLibParseError(
+            f"MonomerLibrary file not found: {filepath}\n"
+            f"Run 'python -m codegen.cli --download' to download it, or download manually from:\n"
+            f"https://github.com/MonomerLibrary/monomers"
+        ) from None
+    except OSError as e:
+        raise MonLibParseError(f"Error opening MonomerLibrary file {filepath}: {e}") from None
+
+    with f:
         for line in f:
             line = line.rstrip('\n')
 

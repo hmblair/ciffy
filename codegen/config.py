@@ -2,107 +2,42 @@
 Code generation configuration and constants.
 
 This module contains all constants and data definitions used during code generation:
-- Element symbols and atomic numbers
-- Ion identifiers
-- Residue whitelist
+- Ion identifiers (loaded from residues.yaml)
+- Residue whitelist (loaded from residues.yaml)
+- Nucleotide classification (loaded from residues.yaml)
 - Molecule type definitions
 - Dihedral type definitions (single source of truth)
+
+Curated biochemistry data is loaded from residues.yaml. Edit that file to
+add or remove residues from code generation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
+
+import yaml
+
+
+class ConfigError(Exception):
+    """Error loading or validating codegen configuration."""
+    pass
 
 # URL for the PDB Chemical Component Dictionary
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 
+# Path to the YAML config file
+RESIDUES_YAML_PATH = Path(__file__).parent / "residues.yaml"
 
-# =============================================================================
-# CONSTANTS - Single source of truth for elements and ions
-# =============================================================================
-
-# Element symbol -> atomic number
-# NOTE: Full periodic table available from PubChem via codegen.elements.load_elements()
-# The hard-coded values here are for backward compatibility and offline use.
-ELEMENTS: dict[str, int] = {
-    "H": 1, "LI": 3, "C": 6, "N": 7, "O": 8, "F": 9, "NA": 11, "MG": 12,
-    "AL": 13, "P": 15, "S": 16, "CL": 17, "K": 19, "CA": 20, "MN": 25,
-    "FE": 26, "CO": 27, "NI": 28, "CU": 29, "ZN": 30, "SE": 34, "BR": 35,
-    "RB": 37, "SR": 38, "MO": 42, "AG": 47, "CD": 48, "I": 53, "CS": 55,
-    "BA": 56, "W": 74, "PT": 78, "AU": 79, "HG": 80, "PB": 82,
-}
-
-# Single-atom ions (used for classification and gperf generation)
-IONS: set[str] = {
-    "AG", "AL", "AU", "BA", "BR", "CA", "CD", "CL", "CO", "CS", "CU",
-    "F", "FE", "HG", "I", "K", "LI", "MG", "MN", "NA", "NI", "PB",
-    "PT", "RB", "SE", "SR", "W", "ZN",
-}
-
-
-# =============================================================================
-# RESIDUE WHITELIST
-# =============================================================================
-# Only these residues will be included. Set to None to include all from CCD.
-
-RESIDUE_WHITELIST: set[str] | None = {
-    # Standard RNA nucleotides
-    "A", "C", "G", "U",
-    "N",    # Unknown nucleotide (ribose-phosphate backbone only)
-    # Standard DNA nucleotides
-    "DA", "DC", "DG", "DT",
-    # Standard amino acids (20)
-    "ALA", "ARG", "ASN", "ASP", "CYS",
-    "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO",
-    "SER", "THR", "TRP", "TYR", "VAL",
-    "UNK",  # Unknown amino acid
-    # Common modified nucleotides
-    "PSU",  # Pseudouridine
-    "5MU",  # 5-methyluridine
-    "1MG",  # 1-methylguanosine
-    "2MG",  # 2-methylguanosine
-    "7MG",  # 7-methylguanosine
-    "M2G",  # N2-methylguanosine
-    "OMG",  # 2'-O-methylguanosine
-    "OMC",  # 2'-O-methylcytidine
-    "OMU",  # 2'-O-methyluridine
-    "5MC",  # 5-methylcytidine
-    "H2U",  # Dihydrouridine
-    "4SU",  # 4-thiouridine
-    "FHU",  # 5-fluorohydroxyuridine (modified uracil)
-    "PPU",  # Puromycin (modified adenosine)
-    "I",    # Inosine
-    "2MA",  # 2-methyladenosine-5'-monophosphate (RNA)
-    "6MZ",  # N6-methyladenosine-5'-monophosphate (RNA)
-    # Additional modified amino acids
-    "MEQ",  # N5-methylglutamine
-    "MS6",  # 2-amino-4-(methylsulfanyl)butane-1-thiol
-    "4D4",  # Modified arginine
-    # Common modified amino acids
-    "MSE",  # Selenomethionine
-    "SEP",  # Phosphoserine
-    "TPO",  # Phosphothreonine
-    "PTR",  # Phosphotyrosine
-    "CSO",  # S-hydroxycysteine
-    "OCS",  # Cysteinesulfonic acid
-    "HYP",  # Hydroxyproline
-    "MLY",  # N-dimethyl-lysine
-    # Water, ions, and common ligands
-    "HOH", "MG", "K", "NA", "ZN", "ACT",
-    "G7M",  # 2'-O-7-methylguanosine (modified RNA)
-    "6O1",  # Evernimicin (antibiotic ligand)
-    "GTP",  # Guanosine triphosphate
-    "CCC",  # Cytidine-5'-monophosphate
-    "GNG",  # Guanine
-    "CS",   # Cesium ion
-}
 
 # =============================================================================
 # MOLECULE TYPE DEFINITIONS
 # =============================================================================
 # Order determines integer values. This is the single source of truth.
+# Defined early so YAML loader can validate against these names.
+
 
 @dataclass
 class MoleculeType:
@@ -132,6 +67,9 @@ MOLECULE_TYPES: list[MoleculeType] = [
     MoleculeType("UNKNOWN", None, "Residue type not recognized"),
 ]
 
+# Valid molecule type names for validation
+VALID_MOLECULE_NAMES: set[str] = {mt.name for mt in MOLECULE_TYPES}
+
 
 # Build name -> index mapping for easy access
 class Molecule:
@@ -142,6 +80,133 @@ class Molecule:
 for _idx, _mt in enumerate(MOLECULE_TYPES):
     setattr(Molecule, _mt.name, _idx)
 
+
+# Molecule type groups for convenience
+# Used in linking and backbone detection across related types
+NUCLEIC_MOLECULE_TYPES: tuple[int, ...] = (Molecule.RNA, Molecule.DNA, Molecule.HYBRID)
+PROTEIN_MOLECULE_TYPES: tuple[int, ...] = (Molecule.PROTEIN, Molecule.PROTEIN_D, Molecule.CYCLIC_PEPTIDE)
+
+
+# =============================================================================
+# YAML CONFIG LOADER
+# =============================================================================
+
+
+@dataclass
+class ClassificationRule:
+    """A molecule classification rule from YAML config."""
+    pattern: str  # Substring to match in CCD type (case-insensitive)
+    molecule_type: str  # Name of Molecule enum member
+
+
+class ResidueConfig(TypedDict):
+    """Type definition for residues.yaml structure."""
+    residue_whitelist: list[str] | None
+    ions: list[str]
+    purine_residues: list[str]
+    pyrimidine_residues: list[str]
+    molecule_classification: list[ClassificationRule]
+    molecule_classification_default: str
+
+
+def load_residue_config(path: Path | None = None) -> ResidueConfig:
+    """
+    Load curated biochemistry data from residues.yaml.
+
+    Args:
+        path: Path to YAML file. Defaults to codegen/residues.yaml.
+
+    Returns:
+        Dictionary with all configuration including classification rules.
+
+    Raises:
+        ConfigError: If the file is missing, malformed, or contains invalid values.
+    """
+    if path is None:
+        path = RESIDUES_YAML_PATH
+
+    # Load YAML with informative errors
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise ConfigError(
+            f"Configuration file not found: {path}\n"
+            f"This file is required for code generation. If you're developing ciffy,\n"
+            f"ensure the codegen/residues.yaml file exists."
+        ) from None
+    except yaml.YAMLError as e:
+        raise ConfigError(
+            f"Invalid YAML in configuration file: {path}\n"
+            f"Error: {e}"
+        ) from None
+
+    if data is None:
+        raise ConfigError(f"Configuration file is empty: {path}")
+
+    # Parse and validate classification rules
+    raw_rules = data.get('molecule_classification', [])
+    classification_rules = []
+
+    for i, rule in enumerate(raw_rules):
+        # Validate rule structure
+        if not isinstance(rule, dict):
+            raise ConfigError(
+                f"Invalid classification rule at index {i} in {path}:\n"
+                f"Expected a mapping with 'pattern' and 'molecule_type' keys, got {type(rule).__name__}"
+            )
+
+        if 'pattern' not in rule:
+            raise ConfigError(
+                f"Classification rule at index {i} missing 'pattern' key in {path}"
+            )
+
+        if 'molecule_type' not in rule:
+            raise ConfigError(
+                f"Classification rule at index {i} missing 'molecule_type' key in {path}"
+            )
+
+        # Validate molecule_type is a known value
+        mol_type = rule['molecule_type']
+        if mol_type not in VALID_MOLECULE_NAMES:
+            raise ConfigError(
+                f"Invalid molecule_type '{mol_type}' in classification rule at index {i} in {path}\n"
+                f"Valid values are: {', '.join(sorted(VALID_MOLECULE_NAMES))}"
+            )
+
+        classification_rules.append(
+            ClassificationRule(pattern=rule['pattern'], molecule_type=mol_type)
+        )
+
+    # Validate default molecule type
+    default_mol = data.get('molecule_classification_default', 'OTHER')
+    if default_mol not in VALID_MOLECULE_NAMES:
+        raise ConfigError(
+            f"Invalid molecule_classification_default '{default_mol}' in {path}\n"
+            f"Valid values are: {', '.join(sorted(VALID_MOLECULE_NAMES))}"
+        )
+
+    return ResidueConfig(
+        residue_whitelist=data.get('residue_whitelist'),
+        ions=data.get('ions', []),
+        purine_residues=data.get('purine_residues', []),
+        pyrimidine_residues=data.get('pyrimidine_residues', []),
+        molecule_classification=classification_rules,
+        molecule_classification_default=default_mol,
+    )
+
+
+# Load configuration from YAML
+_config = load_residue_config()
+
+# Single-atom ions (used for classification and gperf generation)
+IONS: set[str] = set(_config['ions'])
+
+# Residue whitelist - only these residues will be included from CCD.
+# Set to None to include all residues (not recommended).
+RESIDUE_WHITELIST: set[str] | None = (
+    set(_config['residue_whitelist']) if _config['residue_whitelist'] else None
+)
 
 # =============================================================================
 # DIHEDRAL TYPE DEFINITIONS
@@ -214,6 +279,55 @@ DIHEDRAL_ATOMS: dict[str, tuple[str, str, str, str]] = {
 
 
 # =============================================================================
+# SIDECHAIN CHI ANGLE DEFINITIONS
+# =============================================================================
+# Residue-specific chi angle definitions for amino acid sidechains.
+# Maps residue name -> chi_name -> (atom1, atom2, atom3, atom4)
+# All atoms are in the same residue (offset 0).
+#
+# These are the actual atom names from the CCD, unlike DIHEDRAL_TYPES
+# which uses placeholder names (XG, XD, etc.) for the generic definitions.
+
+SIDECHAIN_CHI_DEFS: dict[str, dict[str, tuple[str, str, str, str]]] = {
+    # Standard amino acids (17 with chi angles, GLY and ALA have none)
+    "ARG": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "NE"), "chi4": ("CG", "CD", "NE", "CZ")},
+    "ASN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
+    "ASP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
+    "CYS": {"chi1": ("N", "CA", "CB", "SG")},
+    "GLN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "OE1")},
+    "GLU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "OE1")},
+    "HIS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "ND1")},
+    "ILE": {"chi1": ("N", "CA", "CB", "CG1"), "chi2": ("CA", "CB", "CG1", "CD1")},
+    "LEU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "LYS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},
+    "MET": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SD"),
+            "chi3": ("CB", "CG", "SD", "CE")},
+    "PHE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "PRO": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},
+    "SER": {"chi1": ("N", "CA", "CB", "OG")},
+    "THR": {"chi1": ("N", "CA", "CB", "OG1")},
+    "TRP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "TYR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
+    "VAL": {"chi1": ("N", "CA", "CB", "CG1")},
+    # Modified amino acids (inherit from parent residue)
+    "MSE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SE"),
+            "chi3": ("CB", "CG", "SE", "CE")},  # Selenomethionine (like MET)
+    "SEP": {"chi1": ("N", "CA", "CB", "OG")},  # Phosphoserine (like SER)
+    "TPO": {"chi1": ("N", "CA", "CB", "OG1")},  # Phosphothreonine (like THR)
+    "PTR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},  # Phosphotyrosine (like TYR)
+    "CSO": {"chi1": ("N", "CA", "CB", "SG")},  # S-hydroxycysteine (like CYS)
+    "OCS": {"chi1": ("N", "CA", "CB", "SG")},  # Cysteinesulfonic acid (like CYS)
+    "HYP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},  # Hydroxyproline (like PRO)
+    "MLY": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
+            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},  # N-dimethyl-lysine (like LYS)
+}
+
+
+# =============================================================================
 # BACKBONE NAME IDS - For inter-residue reference resolution in C
 # =============================================================================
 # These are canonical identifiers for backbone atoms that can be referenced
@@ -269,37 +383,12 @@ NUM_BACKBONE_NAMES: int = len(BACKBONE_NAMES)
 # =============================================================================
 # Used to determine which chi angle (CHI_PURINE vs CHI_PYRIMIDINE) applies.
 # Purines have N9 as glycosidic nitrogen, pyrimidines have N1.
+# Loaded from residues.yaml.
 
-PURINE_RESIDUES: set[str] = {
-    # Standard RNA/DNA
-    "A", "G", "DA", "DG",
-    # Modified purines
-    "I",     # Inosine
-    "1MG",   # 1-methylguanosine
-    "2MG",   # 2-methylguanosine
-    "7MG",   # 7-methylguanosine
-    "M2G",   # N2-methylguanosine
-    "OMG",   # 2'-O-methylguanosine
-    "2MA",   # 2-methyladenosine
-    "6MZ",   # N6-methyladenosine
-    "G7M",   # 2'-O-7-methylguanosine
-    "PPU",   # Puromycin (modified adenosine)
-    "GTP",   # Guanosine triphosphate
-    "GNG",   # Guanine
-}
+PURINE_RESIDUES: set[str] = set(_config['purine_residues'])
 
-PYRIMIDINE_RESIDUES: set[str] = {
-    # Standard RNA/DNA
-    "C", "U", "DC", "DT",
-    "N",     # Unknown nucleotide (treated as pyrimidine for backbone)
-    # Modified pyrimidines
-    "PSU",   # Pseudouridine
-    "5MU",   # 5-methyluridine
-    "5MC",   # 5-methylcytidine
-    "OMC",   # 2'-O-methylcytidine
-    "OMU",   # 2'-O-methyluridine
-    "H2U",   # Dihydrouridine
-    "4SU",   # 4-thiouridine
-    "FHU",   # 5-fluorohydroxyuridine
-    "CCC",   # Cytidine-5'-monophosphate
-}
+PYRIMIDINE_RESIDUES: set[str] = set(_config['pyrimidine_residues'])
+
+# Molecule classification rules (loaded from YAML)
+MOLECULE_CLASSIFICATION_RULES: list[ClassificationRule] = _config['molecule_classification']
+MOLECULE_CLASSIFICATION_DEFAULT: str = _config['molecule_classification_default']

@@ -1,5 +1,24 @@
 """
-Residue definition dataclass for code generation.
+Residue definition and dihedral computation for code generation.
+
+This module provides:
+1. ResidueDefinition dataclass - parsed residue data from CCD
+2. Dihedral pattern computation - determines which atoms define each dihedral angle
+3. Dihedral ownership arrays - maps atoms to the dihedrals they "own"
+
+Dihedral Ownership Model:
+    Each dihedral angle is defined by 4 atoms [A, B, C, D]. The 4th atom (D)
+    "owns" the dihedral for purposes of Z-matrix construction. This means:
+    - When building internal coordinates, atom D's position is defined by
+      the dihedral angle A-B-C-D plus bond length and angle.
+    - Only atoms in the current residue (offset=0) can own dihedrals.
+    - Inter-residue dihedrals (like phi, psi) reference atoms from neighboring
+      residues but are owned by the current residue's atom.
+
+Sidechain Chi Angles:
+    Defined in SIDECHAIN_CHI_DEFS, these are residue-specific dihedral angles
+    for amino acid sidechains. Each residue may have 0-4 chi angles depending
+    on sidechain length.
 """
 
 from __future__ import annotations
@@ -10,8 +29,12 @@ import numpy as np
 
 from .names import to_class_name, to_python_name
 from .config import (
-    DIHEDRAL_TYPE_INDEX, Molecule,
-    PURINE_RESIDUES, PYRIMIDINE_RESIDUES,
+    DIHEDRAL_TYPE_INDEX,
+    Molecule,
+    PURINE_RESIDUES,
+    PYRIMIDINE_RESIDUES,
+    NUCLEIC_MOLECULE_TYPES,
+    SIDECHAIN_CHI_DEFS,
 )
 
 
@@ -33,50 +56,7 @@ class ResidueDefinition:
             self.class_name = to_class_name(self.name)
 
 
-# =============================================================================
-# SIDECHAIN DIHEDRAL DEFINITIONS
-# =============================================================================
-# Chi definitions for each amino acid residue.
-# Format: chi_name -> (atom1, atom2, atom3, atom4)
-# All atoms are in the same residue (offset 0).
-
-SIDECHAIN_CHI_DEFS: dict[str, dict[str, tuple[str, str, str, str]]] = {
-    # CHI1: N-CA-CB-XG
-    "ARG": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
-            "chi3": ("CB", "CG", "CD", "NE"), "chi4": ("CG", "CD", "NE", "CZ")},
-    "ASN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
-    "ASP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "OD1")},
-    "CYS": {"chi1": ("N", "CA", "CB", "SG")},
-    "GLN": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
-            "chi3": ("CB", "CG", "CD", "OE1")},
-    "GLU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
-            "chi3": ("CB", "CG", "CD", "OE1")},
-    "HIS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "ND1")},
-    "ILE": {"chi1": ("N", "CA", "CB", "CG1"), "chi2": ("CA", "CB", "CG1", "CD1")},
-    "LEU": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
-    "LYS": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
-            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},
-    "MET": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SD"),
-            "chi3": ("CB", "CG", "SD", "CE")},
-    "PHE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
-    "PRO": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},
-    "SER": {"chi1": ("N", "CA", "CB", "OG")},
-    "THR": {"chi1": ("N", "CA", "CB", "OG1")},
-    "TRP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
-    "TYR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},
-    "VAL": {"chi1": ("N", "CA", "CB", "CG1")},
-    # Modified amino acids
-    "MSE": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "SE"),
-            "chi3": ("CB", "CG", "SE", "CE")},  # Selenomethionine (like MET)
-    "SEP": {"chi1": ("N", "CA", "CB", "OG")},  # Phosphoserine (like SER)
-    "TPO": {"chi1": ("N", "CA", "CB", "OG1")},  # Phosphothreonine (like THR)
-    "PTR": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD1")},  # Phosphotyrosine (like TYR)
-    "CSO": {"chi1": ("N", "CA", "CB", "SG")},  # S-hydroxycysteine (like CYS)
-    "OCS": {"chi1": ("N", "CA", "CB", "SG")},  # Cysteinesulfonic acid (like CYS)
-    "HYP": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD")},  # Hydroxyproline (like PRO)
-    "MLY": {"chi1": ("N", "CA", "CB", "CG"), "chi2": ("CA", "CB", "CG", "CD"),
-            "chi3": ("CB", "CG", "CD", "CE"), "chi4": ("CG", "CD", "CE", "NZ")},  # N-dimethyl-lysine (like LYS)
-}
+# Note: SIDECHAIN_CHI_DEFS is now imported from config.py (single source of truth)
 
 
 def compute_dihedral_patterns(res: ResidueDefinition) -> dict[int, list[tuple[int, int]]]:
@@ -255,41 +235,32 @@ def compute_atom_dihedral_ownership(
     return atom_dihedral_type, atom_dihedral_refs
 
 
-def compute_canonical_zmatrix_refs(
-    all_residues: list[ResidueDefinition],
-    atom_index: dict[tuple[str, str], int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Compute canonical Z-matrix reference atoms for each atom type.
-
-    Returns:
-        atom_canonical_refs: (num_atoms, 6) array with reference info
-        atom_has_canonical_refs: (num_atoms,) bool array
-    """
-    # Find max atom index
-    num_atoms = max(atom_index.values()) + 1
-
-    # Initialize empty arrays (stub - not yet implemented)
-    atom_canonical_refs = np.zeros((num_atoms, 6), dtype=np.int16)
-    atom_has_canonical_refs = np.zeros(num_atoms, dtype=bool)
-
-    return atom_canonical_refs, atom_has_canonical_refs
-
-
 def compute_residue_backbone_atoms(
     all_residues: list[ResidueDefinition],
     atom_index: dict[tuple[str, str], int],
 ) -> np.ndarray:
     """
-    Compute backbone atom types for each residue type.
+    Compute backbone atom indices for each residue type.
+
+    For each residue, stores the global atom indices of its backbone atoms:
+    - Protein: N, CA, C, O (4 atoms)
+    - Nucleic acid: P, O5', C5', C4', C3', O3' (6 atoms)
+
+    Args:
+        all_residues: List of all residue definitions.
+        atom_index: Dict mapping (cif_name, atom_name) -> global atom index.
 
     Returns:
-        (num_residues, max_backbone_atoms) array with backbone atom indices
+        (num_residues, MAX_BACKBONE_ATOMS) int16 array where value is global
+        atom index or -1 if backbone atom not present.
     """
     from .config import Molecule
 
     num_residues = len(all_residues)
-    max_backbone = 6  # Conservative max (N, CA, C, O for protein; P, O5', C5', C4', C3', O3' for nucleic)
+    # Max backbone atoms across all molecule types:
+    # - Protein has 4 (N, CA, C, O)
+    # - Nucleic acid has 6 (P, O5', C5', C4', C3', O3')
+    max_backbone = 6
 
     backbone_atoms = np.full((num_residues, max_backbone), -1, dtype=np.int16)
 
@@ -302,7 +273,7 @@ def compute_residue_backbone_atoms(
         # Define backbone atoms by molecule type
         if res.molecule_type == Molecule.PROTEIN:
             backbone_names = ['N', 'CA', 'C', 'O']
-        elif res.molecule_type in (Molecule.RNA, Molecule.DNA, Molecule.HYBRID):
+        elif res.molecule_type in NUCLEIC_MOLECULE_TYPES:
             backbone_names = ["P", "O5'", "C5'", "C4'", "C3'", "O3'"]
         else:
             continue

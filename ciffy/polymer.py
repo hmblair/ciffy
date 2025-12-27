@@ -153,7 +153,7 @@ class Polymer:
         strands: List of strand identifiers.
         lengths: (C,) tensor of residues per chain.
         polymer_count: Number of polymer atoms (first polymer_count atoms).
-        nonpoly: Count of non-polymer atoms (last nonpoly atoms).
+        nonpoly: Count of non-polymer atoms (computed property).
     """
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -234,22 +234,16 @@ class Polymer:
         self.names = names
         self.strands = strands
 
-        # Store polymer/nonpoly counts
+        # Store polymer_count (nonpoly is computed as a property)
         # If polymer_count is None, assume all atoms are polymer (backward compat)
         total_atoms = arr_size(coordinates, 0)
-        if polymer_count is not None:
-            self.polymer_count = polymer_count
-            self.nonpoly = total_atoms - polymer_count
-        else:
-            self.polymer_count = total_atoms
-            self.nonpoly = 0
+        self.polymer_count = polymer_count if polymer_count is not None else total_atoms
 
         # Store all fields first
         self._coordinates = coordinates
         self._atoms = atoms
         self._elements = elements
         self._sequence = sequence
-        self._sizes = sizes
         self._lengths = lengths
         self._molecule_types = molecule_types
         self._descriptions = descriptions
@@ -383,6 +377,20 @@ class Polymer:
 
         return result
 
+    @property
+    def _sizes(self) -> dict[Scale, Array]:
+        """
+        Get sizes dict from hierarchy.
+
+        Returns dict mapping Scale to atoms-per-unit arrays, for compatibility
+        with code expecting the old _sizes storage.
+        """
+        return {
+            Scale.RESIDUE: self._hierarchy.sizes(Scale.RESIDUE),
+            Scale.CHAIN: self._hierarchy.sizes(Scale.CHAIN),
+            Scale.MOLECULE: self._hierarchy.sizes(Scale.MOLECULE),
+        }
+
     def _validate_consistency(self, sizes: dict[Scale, Array]) -> None:
         """
         Validate that field sizes are consistent at each scale and across scales.
@@ -417,10 +425,12 @@ class Polymer:
         res_count = sizes[Scale.RESIDUE].sum().item()
         chn_count = sizes[Scale.CHAIN].sum().item()
         mol_count = sizes[Scale.MOLECULE].sum().item()
+        # Compute nonpoly locally (can't use property - hierarchy not yet created)
+        nonpoly = mol_count - self.polymer_count
 
-        if not all_equal(res_count + self.nonpoly, chn_count, mol_count):
+        if not all_equal(res_count + nonpoly, chn_count, mol_count):
             raise ValueError(
-                f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
+                f"Atom counts do not match: residues ({res_count} + {nonpoly}), "
                 f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
             )
 
@@ -514,6 +524,11 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
     # Computed Properties
     # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def nonpoly(self) -> int:
+        """Number of non-polymer atoms (waters, ions, ligands)."""
+        return self._hierarchy.nonpoly
 
     @property
     def bonds(self) -> np.ndarray:

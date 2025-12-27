@@ -266,10 +266,6 @@ class Polymer:
             ref=coordinates,
         )
 
-        # Create topology info
-        from .backend.graph import TopologyInfo
-        self._topology = TopologyInfo.from_polymer(self)
-
         self._bonds: np.ndarray | None = None
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -529,12 +525,12 @@ class Polymer:
             between atoms i and j (with i < j).
 
         Note:
-            Computed lazily from topology and cached. Includes both
-            intra-residue bonds and inter-residue linkages.
+            Computed lazily and cached. Includes both intra-residue bonds
+            and inter-residue linkages.
         """
         if self._bonds is None:
-            from .backend.graph import build_bond_graph_from_topology
-            edges, _ = build_bond_graph_from_topology(self._topology)
+            from .backend.graph import build_bond_graph
+            edges, _ = build_bond_graph(self)
             # Filter to i < j to avoid duplicates
             self._bonds = edges[edges[:, 0] < edges[:, 1]]
         return self._bonds

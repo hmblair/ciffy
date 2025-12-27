@@ -10,21 +10,16 @@ from __future__ import annotations
 __all__ = [
     # Graph building
     "build_bond_graph",
-    "build_bond_graph_csr",
-    "build_bond_graph_from_topology",
+    "edges_to_csr",
     "find_connected_components",
-    # Data structures
-    "TopologyInfo",
     # Alignment
     "kabsch_rotation",
 ]
 
-# Graph building and data structures (from backend.graph)
+# Graph building (from backend.graph)
 from .graph import (
-    TopologyInfo,
     build_bond_graph,
-    build_bond_graph_csr,
-    build_bond_graph_from_topology,
+    edges_to_csr,
     find_connected_components,
 )
 

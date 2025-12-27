@@ -18,9 +18,6 @@ from .atom import Atom, AtomGroup, build_atom_group
 # Scale enum for hierarchical levels
 from .scale import Scale
 
-# TopologyInfo for structural metadata (defined in backend to avoid circular imports)
-from ..backend.graph import TopologyInfo
-
 from ._generated_elements import Element, ELEMENT_NAMES
 from ._generated_molecule import Molecule, molecule_type
 
@@ -90,8 +87,6 @@ __all__ = [
     "build_atom_group",
     # Scale enum
     "Scale",
-    # TopologyInfo
-    "TopologyInfo",
     # Vocabulary sizes
     "NUM_ELEMENTS",
     "NUM_RESIDUES",

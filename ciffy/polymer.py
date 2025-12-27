@@ -76,13 +76,14 @@ class Field(_BaseDescriptor):
 
     Args:
         scale: Scale at which the field is defined (Scale.ATOM, RESIDUE, CHAIN).
-        dtype: Target dtype for backend conversion (Dtype.FLOAT32, INT64, etc.).
+        dtype: Data type category (Dtype.FLOAT or Dtype.INT). Precision is
+            preserved from the source array during backend conversion.
         required: Whether the field must have a value (raises AttributeError if None).
         validate: Whether to validate backend/device compatibility on set.
 
     Example:
-        >>> coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT32)
-        >>> bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT32, required=False)
+        >>> coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
+        >>> bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
     """
 
     __slots__ = ('dtype', 'validate')
@@ -161,17 +162,17 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     # Per-atom arrays
-    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT32)
-    atoms = Field(Scale.ATOM, dtype=Dtype.INT64)
-    elements = Field(Scale.ATOM, dtype=Dtype.INT64)
-    bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT32, required=False)
+    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
+    atoms = Field(Scale.ATOM, dtype=Dtype.INT)
+    elements = Field(Scale.ATOM, dtype=Dtype.INT)
+    bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
 
     # Per-residue arrays
-    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT64)
+    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT)
 
     # Per-chain arrays
-    lengths = Field(Scale.CHAIN, dtype=Dtype.INT64)
-    molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT64, required=False, validate=False)
+    lengths = Field(Scale.CHAIN, dtype=Dtype.INT)
+    molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT, required=False, validate=False)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Metadata Descriptors - values passed through without conversion
@@ -357,13 +358,11 @@ class Polymer:
         """
         result = {}
 
-        # Convert Field arrays with dtype
+        # Convert Field arrays (precision preserved from source)
         for name, field in self._get_fields().items():
             value = getattr(self, field.private_name, None)
             if value is None:
                 result[name] = None
-            elif field.dtype is not None:
-                result[name] = to_func(value, dtype=field.dtype)
             else:
                 result[name] = to_func(value)
 
@@ -1705,7 +1704,7 @@ class Polymer:
             value = getattr(self, field.private_name, None)
             if value is None:
                 converted[name] = None
-            elif field.dtype == Dtype.FLOAT32:
+            elif field.dtype == Dtype.FLOAT:
                 # Float tensors: apply device and dtype
                 result = value
                 if device is not None:
@@ -1779,9 +1778,8 @@ class Polymer:
             >>> loss.backward()
             >>> polymer.detach()
         """
-        float_dtypes = (Dtype.FLOAT16, Dtype.FLOAT32, Dtype.FLOAT64)
         for name, field in self._get_fields().items():
-            if field.dtype in float_dtypes:
+            if field.dtype == Dtype.FLOAT:
                 value = getattr(self, field.private_name, None)
                 if value is not None and is_torch(value):
                     setattr(self, field.private_name, value.detach())

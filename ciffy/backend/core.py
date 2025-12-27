@@ -33,7 +33,11 @@ class Backend(Enum):
 
 
 class Dtype(Enum):
-    """Backend-agnostic data types for array conversion."""
+    """Data type categories for Field definitions and conversions."""
+    # Abstract types (for Field definitions - precision preserved from source)
+    FLOAT = "float"
+    INT = "int"
+    # Specific types (for explicit dtype conversion)
     FLOAT16 = "float16"
     FLOAT32 = "float32"
     FLOAT64 = "float64"

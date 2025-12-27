@@ -28,7 +28,17 @@ from typing import Literal, Callable  # Literal used for experimental_method
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
+from ciffy.utils.formatting import Colors
+
 logger = logging.getLogger(__name__)
+
+
+def _colored_count(count: int) -> str:
+    """Format a count with color (green if > 0, red if 0)."""
+    if count > 0:
+        return f"{Colors.GREEN}{count}{Colors.RESET}"
+    else:
+        return f"{Colors.RED}{count}{Colors.RESET}"
 
 # RCSB API endpoints
 RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
@@ -534,7 +544,7 @@ def download_rna_dataset(
     )
 
     if progress:
-        print(f"Found {len(pdb_ids)} structures")
+        print(f"Found {_colored_count(len(pdb_ids))} structures")
 
     # Limit count
     if max_count is not None and len(pdb_ids) > max_count:
@@ -661,7 +671,7 @@ def download_cli(
             experimental_method=experimental_method,
         )
 
-        print(f"\nFound {len(pdb_ids)} structures")
+        print(f"\nFound {_colored_count(len(pdb_ids))} structures")
 
     # Search only mode
     if search_only:

@@ -97,7 +97,7 @@ def join(*polymers: "Polymer") -> "Polymer":
     if not non_empty:
         # All empty - return first polymer's empty copy
         return Polymer.create_empty(
-            id=polymers[0].pdb_id,
+            pdb_id=polymers[0].pdb_id,
             backend=polymers[0].backend,
         )
 
@@ -119,7 +119,7 @@ def join(*polymers: "Polymer") -> "Polymer":
                 Scale.CHAIN: ops.clone(p._sizes[Scale.CHAIN]),
                 Scale.MOLECULE: ops.clone(p._sizes[Scale.MOLECULE]),
             },
-            id=p.pdb_id,
+            pdb_id=p.pdb_id,
             names=list(p.names),
             strands=list(p.strands),
             lengths=ops.clone(p.lengths),
@@ -183,7 +183,7 @@ def join(*polymers: "Polymer") -> "Polymer":
         elements=elements,
         sequence=sequence,
         sizes=sizes,
-        id=pdb_id,
+        pdb_id=pdb_id,
         names=names,
         strands=strands,
         lengths=lengths,

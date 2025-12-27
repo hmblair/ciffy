@@ -636,7 +636,7 @@ def from_sequence(
 
     # Handle empty polymer (0 chains)
     if not sequences:
-        return Polymer.create_empty(id=id, backend=backend)
+        return Polymer.create_empty(pdb_id=id, backend=backend)
 
     # Accumulate data across all chains
     all_atoms: list[int] = []
@@ -673,7 +673,7 @@ def from_sequence(
             Scale.CHAIN: np.array(atoms_per_chain, dtype=np.int64),
             Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
         },
-        id=id,
+        pdb_id=id,
         names=chain_names,
         strands=chain_names,
         lengths=np.array(residues_per_chain, dtype=np.int64),
@@ -771,7 +771,7 @@ def from_extract(
             Scale.CHAIN: np.array([total_atoms], dtype=np.int64),
             Scale.MOLECULE: np.array([total_atoms], dtype=np.int64),
         },
-        id=id,
+        pdb_id=id,
         names=["A"],
         strands=["A"],
         lengths=np.array([n_residues], dtype=np.int64),

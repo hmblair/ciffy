@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
 from ..backend import ops
 from ..biochemistry import Scale, Molecule
-from ..operations.reduction import Reduction
 
 
 def poly(polymer: Polymer) -> Polymer:
@@ -34,46 +33,13 @@ def poly(polymer: Polymer) -> Polymer:
         >>> rna = poly(p)  # Get polymer only
         >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
     """
-    from ..polymer import Polymer
-    from ..utils import filter_by_mask
-
     if polymer.nonpoly == 0:
         return polymer
 
-    # Slice to polymer atoms only
-    coordinates = polymer.coordinates[:polymer.polymer_count]
-    atoms = polymer.atoms[:polymer.polymer_count]
-    elements = polymer.elements[:polymer.polymer_count]
-
-    # Keep only chains that have residues (polymer chains)
-    chain_mask = polymer.lengths > 0
-    lengths = polymer.lengths[chain_mask]
-    names = filter_by_mask(polymer.names, chain_mask)
-    strands = filter_by_mask(polymer.strands, chain_mask)
-
-    # Calculate chain sizes from residue sizes
-    chn_sizes = polymer.rreduce(polymer._sizes[Scale.RESIDUE], Scale.CHAIN, Reduction.SUM)
-    chn_sizes = chn_sizes[chain_mask]
-
-    sizes = {
-        Scale.RESIDUE: polymer._sizes[Scale.RESIDUE],  # Unchanged
-        Scale.CHAIN: chn_sizes,
-        Scale.MOLECULE: ops.array([polymer.polymer_count], like=polymer.coordinates),
-    }
-
-    # Filter molecule types if available
-    mol_types = polymer._molecule_types[chain_mask] if polymer._molecule_types is not None else None
-
-    # Slice bfactors to polymer atoms only
-    bfactors = polymer._bfactors[:polymer.polymer_count] if polymer._bfactors is not None else None
-
-    return Polymer(
-        coordinates, atoms, elements, polymer.sequence, sizes,
-        polymer.pdb_id, names, strands, lengths, polymer.polymer_count,
-        mol_types,
-        bfactors=bfactors,
-        resolution=polymer._resolution,
-    )
+    # Create atom mask for polymer atoms only (first polymer_count atoms)
+    atom_mask = ops.zeros(polymer.size(), like=polymer.coordinates, dtype='bool')
+    atom_mask[:polymer.polymer_count] = True
+    return polymer.select(atom_mask, Scale.ATOM)
 
 
 def hetero(polymer: Polymer) -> "HeteroAtoms":

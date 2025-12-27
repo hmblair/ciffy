@@ -358,14 +358,26 @@ class _Hierarchy:
 
         elif input_scale == Scale.RESIDUE:
             res_mask = input_mask
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            polymer_atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            # Pad with False for non-polymer atoms
+            if self.nonpoly > 0:
+                atom_mask = ops.zeros(self.size(Scale.ATOM), like=self._ref, dtype='bool')
+                atom_mask[:self._polymer_count] = polymer_atom_mask
+            else:
+                atom_mask = polymer_atom_mask
             new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
             chn_mask = new_lengths > 0
 
         elif input_scale == Scale.CHAIN:
             chn_mask = input_mask
             res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            polymer_atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            # Pad with False for non-polymer atoms
+            if self.nonpoly > 0:
+                atom_mask = ops.zeros(self.size(Scale.ATOM), like=self._ref, dtype='bool')
+                atom_mask[:self._polymer_count] = polymer_atom_mask
+            else:
+                atom_mask = polymer_atom_mask
 
         else:
             raise ValueError(f"Selection not supported at {input_scale.name} scale")

@@ -194,7 +194,7 @@ class Polymer:
         elements: Array,
         sequence: Array,
         sizes: dict[Scale, Array],
-        id: str,
+        pdb_id: str,
         names: list[str],
         strands: list[str],
         lengths: Array,
@@ -213,7 +213,7 @@ class Polymer:
             elements: (N,) tensor of element indices.
             sequence: (R,) tensor of residue type indices.
             sizes: Dict mapping Scale to atom counts per unit.
-            id: PDB identifier.
+            pdb_id: PDB identifier.
             names: List of chain names.
             strands: List of strand identifiers.
             lengths: (C,) tensor of residues per chain.
@@ -230,7 +230,7 @@ class Polymer:
         Raises:
             ValueError: If tensor sizes are inconsistent.
         """
-        self.pdb_id = id or UNKNOWN
+        self.pdb_id = pdb_id or UNKNOWN
         self.names = names
         self.strands = strands
 
@@ -244,16 +244,35 @@ class Polymer:
             self.polymer_count = total_atoms
             self.nonpoly = 0
 
-        if not all_equal(
-            arr_size(coordinates, 0),
-            arr_size(atoms, 0),
-            arr_size(elements, 0),
-        ):
-            raise ValueError(
-                f"Coordinate, atom, and element tensors must have equal size "
-                f"for PDB {self.pdb_id}."
-            )
+        # Store all fields first
+        self._coordinates = coordinates
+        self._atoms = atoms
+        self._elements = elements
+        self._sequence = sequence
+        self._sizes = sizes
+        self._lengths = lengths
+        self._molecule_types = molecule_types
+        self._descriptions = descriptions
+        self._bfactors = bfactors
+        self._resolution = resolution
 
+        # Validate that all Fields at each scale have consistent sizes
+        for scale in [Scale.ATOM, Scale.RESIDUE, Scale.CHAIN]:
+            field_sizes = []
+            field_names = []
+            for name, field in self._get_fields().items():
+                if field.scale == scale:
+                    value = getattr(self, field.private_name, None)
+                    if value is not None:
+                        field_sizes.append(arr_size(value, 0))
+                        field_names.append(name)
+            if field_sizes and not all_equal(*field_sizes):
+                raise ValueError(
+                    f"Fields at {scale.name} scale have inconsistent sizes: "
+                    f"{dict(zip(field_names, field_sizes))} for PDB {self.pdb_id}."
+                )
+
+        # Validate hierarchy consistency (atom counts must match across scales)
         res_count = sizes[Scale.RESIDUE].sum().item()
         chn_count = sizes[Scale.CHAIN].sum().item()
         mol_count = sizes[Scale.MOLECULE].sum().item()
@@ -263,17 +282,6 @@ class Polymer:
                 f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
                 f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
             )
-
-        # Store atomic properties
-        self._atoms = atoms
-        self._elements = elements
-        self._sequence = sequence
-        self._sizes = sizes
-        self._lengths = lengths
-        self.molecule_types = molecule_types
-        self.descriptions = descriptions
-        self._bfactors = bfactors
-        self._resolution = resolution
 
         # Create hierarchy for scale operations
         self._hierarchy = _Hierarchy.from_sizes_and_lengths(
@@ -287,8 +295,6 @@ class Polymer:
         from .backend.graph import TopologyInfo
         self._topology = TopologyInfo.from_polymer(self)
 
-        # Store coordinates directly (no internal coordinate system)
-        self._coordinates = coordinates
         self._bonds: np.ndarray | None = None
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -406,12 +412,55 @@ class Polymer:
 
         return result
 
+    def _clone(self, **overrides) -> Polymer:
+        """
+        Create a copy of this Polymer with optional field overrides.
+
+        Collects all descriptor values and sizes, applies overrides, and
+        constructs a new Polymer. This is the single place that maps
+        descriptor names to constructor parameters.
+
+        Args:
+            **overrides: Field values to override. Can include any descriptor
+                name (coordinates, atoms, pdb_id, etc.) or 'sizes' for the
+                hierarchy sizes dict.
+
+        Returns:
+            New Polymer with the specified overrides applied.
+
+        Example:
+            >>> # Create copy with new coordinates
+            >>> moved = polymer._clone(coordinates=new_coords)
+            >>> # Create copy with converted arrays
+            >>> converted = polymer._clone(**self._convert_backend(to_numpy))
+        """
+        # Collect all descriptor values
+        data = {}
+        for name, desc in self._get_descriptors().items():
+            value = getattr(self, desc.private_name, None)
+            # Copy lists to avoid mutation
+            if desc.is_list and value is not None:
+                value = list(value)
+            data[name] = value
+
+        # Add sizes from hierarchy (not a descriptor)
+        data['sizes'] = {
+            Scale.RESIDUE: self._hierarchy.sizes(Scale.RESIDUE),
+            Scale.CHAIN: self._hierarchy.sizes(Scale.CHAIN),
+            Scale.MOLECULE: self._hierarchy.sizes(Scale.MOLECULE),
+        }
+
+        # Apply overrides
+        data.update(overrides)
+
+        return Polymer(**data)
+
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
     # ─────────────────────────────────────────────────────────────────────────
 
     @classmethod
-    def create_empty(cls, id: str = "empty", backend: str = "numpy") -> "Polymer":
+    def create_empty(cls, pdb_id: str = "empty", backend: str = "numpy") -> "Polymer":
         """
         Create an empty Polymer with 0 atoms and 0 chains.
 
@@ -419,7 +468,7 @@ class Polymer:
         or for testing edge cases.
 
         Args:
-            id: PDB identifier for the empty polymer.
+            pdb_id: PDB identifier for the empty polymer.
             backend: Array backend, either "numpy" or "torch".
 
         Returns:
@@ -442,7 +491,7 @@ class Polymer:
                 Scale.CHAIN: np.array([], dtype=np.int64),
                 Scale.MOLECULE: np.array([0], dtype=np.int64),
             },
-            id=id,
+            pdb_id=pdb_id,
             names=[],
             strands=[],
             lengths=np.array([], dtype=np.int64),
@@ -966,7 +1015,7 @@ class Polymer:
             elements=sliced['elements'],
             sequence=sliced['sequence'],
             sizes=sizes,
-            id=sliced['pdb_id'],
+            pdb_id=sliced['pdb_id'],
             names=sliced['names'],
             strands=sliced['strands'],
             lengths=lengths,
@@ -1447,7 +1496,7 @@ class Polymer:
             elements=new_elements_arr,
             sequence=new_sequence,
             sizes=sizes,
-            id=self.pdb_id,
+            pdb_id=self.pdb_id,
             names=list(self.names),
             strands=list(self.strands),
             lengths=new_lengths,
@@ -1573,7 +1622,7 @@ class Polymer:
             elements=to_numpy(self.elements),
             sequence=to_numpy(self.sequence),
             sizes={k: to_numpy(v) for k, v in self._sizes.items()},
-            id=self.pdb_id,
+            pdb_id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=to_numpy(self.lengths),
@@ -1604,7 +1653,7 @@ class Polymer:
             elements=to_torch(self.elements).long(),
             sequence=to_torch(self.sequence).long(),
             sizes={k: to_torch(v).long() for k, v in self._sizes.items()},
-            id=self.pdb_id,
+            pdb_id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=to_torch(self.lengths).long(),
@@ -1673,7 +1722,7 @@ class Polymer:
             elements=move_int(self.elements),
             sequence=move_int(self.sequence),
             sizes={k: move_int(v) for k, v in self._sizes.items()},
-            id=self.pdb_id,
+            pdb_id=self.pdb_id,
             names=self.names.copy(),
             strands=self.strands.copy(),
             lengths=move_int(self.lengths),

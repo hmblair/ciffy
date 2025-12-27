@@ -657,7 +657,7 @@ class TestRMSDEdgeCases:
             elements=elements,
             sequence=sequence,
             sizes=sizes,
-            id="test",
+            pdb_id="test",
             names=["A"],
             strands=["A"],
             lengths=np.array([1], dtype=np.int64),

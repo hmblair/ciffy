@@ -28,55 +28,23 @@ def by_index(polymer: Polymer, ix: Array | int) -> Polymer:
     Raises:
         IndexError: If any index is out of range.
     """
-    from ..polymer import Polymer
-    from ..utils import filter_by_mask
-
     if isinstance(ix, int):
-        ix = ops.array([ix], like=polymer.coordinates)
+        ix = [ix]
+    elif hasattr(ix, 'tolist'):
+        ix = ix.tolist()
 
     # Validate indices
     max_chain = polymer.size(Scale.CHAIN)
-    ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
-    for j in ix_list:
+    for j in ix:
         if j < 0 or j >= max_chain:
             raise IndexError(
                 f"Chain index {j} out of range for Polymer with {max_chain} chains"
             )
 
-    atm_ix = polymer.mask(ix, Scale.CHAIN, Scale.ATOM)
-    res_ix = polymer.mask(ix, Scale.CHAIN, Scale.RESIDUE)
-
-    coordinates = polymer.coordinates[atm_ix]
-    atoms = polymer.atoms[atm_ix]
-    elements = polymer.elements[atm_ix]
-    lengths = polymer.lengths[ix]
-
-    sizes = {
-        Scale.RESIDUE: polymer._sizes[Scale.RESIDUE][res_ix],
-        Scale.CHAIN: polymer._sizes[Scale.CHAIN][ix],
-        Scale.MOLECULE: ops.array([len(coordinates)], like=polymer.coordinates),
-    }
-
-    sequence = polymer.sequence[res_ix]
-    names = [polymer.names[j] for j in ix]
-    strands = [polymer.strands[j] for j in ix]
-
-    # Calculate new polymer_count from residue sizes
-    new_polymer_count = sizes[Scale.RESIDUE].sum().item()
-
-    # Preserve molecule types if available
-    mol_types = polymer._molecule_types[ix] if polymer._molecule_types is not None else None
-
-    # Slice bfactors by atom mask
-    bfactors = polymer._bfactors[atm_ix] if polymer._bfactors is not None else None
-
-    return Polymer(
-        coordinates, atoms, elements, sequence, sizes,
-        polymer.pdb_id, names, strands, lengths, new_polymer_count,
-        mol_types,
-        bfactors=bfactors,
-        resolution=polymer._resolution,
-    )
+    # Create chain mask and use unified selection
+    chain_mask = ops.zeros(max_chain, like=polymer.coordinates, dtype='bool')
+    chain_mask[ix] = True
+    return polymer.select(chain_mask, Scale.CHAIN)
 
 
 def by_atom(polymer: Polymer, name: Array | int) -> Polymer:

@@ -1615,22 +1615,9 @@ class Polymer:
         if is_numpy(self.coordinates):
             return self
 
-        # Create new polymer with converted arrays
-        return Polymer(
-            coordinates=to_numpy(self.coordinates),
-            atoms=to_numpy(self.atoms),
-            elements=to_numpy(self.elements),
-            sequence=to_numpy(self.sequence),
-            sizes={k: to_numpy(v) for k, v in self._sizes.items()},
-            pdb_id=self.pdb_id,
-            names=self.names.copy(),
-            strands=self.strands.copy(),
-            lengths=to_numpy(self.lengths),
-            polymer_count=self.polymer_count,
-            molecule_types=to_numpy(self._molecule_types) if self._molecule_types is not None else None,
-            bfactors=to_numpy(self._bfactors) if self._bfactors is not None else None,
-            resolution=self._resolution,
-        )
+        converted = self._convert_backend(to_numpy)
+        converted['sizes'] = {k: to_numpy(v) for k, v in self._sizes.items()}
+        return self._clone(**converted)
 
     def torch(self: Polymer) -> Polymer:
         """
@@ -1646,22 +1633,9 @@ class Polymer:
         if is_torch(self.coordinates):
             return self
 
-        # Create new polymer with converted arrays
-        return Polymer(
-            coordinates=to_torch(self.coordinates).float(),
-            atoms=to_torch(self.atoms).long(),
-            elements=to_torch(self.elements).long(),
-            sequence=to_torch(self.sequence).long(),
-            sizes={k: to_torch(v).long() for k, v in self._sizes.items()},
-            pdb_id=self.pdb_id,
-            names=self.names.copy(),
-            strands=self.strands.copy(),
-            lengths=to_torch(self.lengths).long(),
-            polymer_count=self.polymer_count,
-            molecule_types=to_torch(self._molecule_types).long() if self._molecule_types is not None else None,
-            bfactors=to_torch(self._bfactors).float() if self._bfactors is not None else None,
-            resolution=self._resolution,
-        )
+        converted = self._convert_backend(to_torch)
+        converted['sizes'] = {k: to_torch(v, dtype=Dtype.INT64) for k, v in self._sizes.items()}
+        return self._clone(**converted)
 
     def to(self: Polymer, device=None, dtype=None) -> Polymer:
         """
@@ -1693,43 +1667,30 @@ class Polymer:
         if device is None and dtype is None:
             return self
 
-        # For coordinates (float), apply both device and dtype
-        coords = self.coordinates
-        if device is not None:
-            coords = coords.to(device)
-        if dtype is not None:
-            coords = coords.to(dtype)
+        # Convert Fields based on their dtype (float vs int)
+        converted = {}
+        for name, field in self._get_fields().items():
+            value = getattr(self, field.private_name, None)
+            if value is None:
+                converted[name] = None
+            elif field.dtype == Dtype.FLOAT32:
+                # Float tensors: apply device and dtype
+                result = value
+                if device is not None:
+                    result = result.to(device)
+                if dtype is not None:
+                    result = result.to(dtype)
+                converted[name] = result
+            else:
+                # Int tensors: apply device only
+                converted[name] = value.to(device) if device is not None else value
 
-        # For integer tensors, only apply device (keep as long)
+        # Handle sizes dict (all int)
         def move_int(t):
             return t.to(device) if device is not None else t
+        converted['sizes'] = {k: move_int(v) for k, v in self._sizes.items()}
 
-        # For float tensors, apply device and dtype
-        def move_float(t):
-            if t is None:
-                return None
-            result = t
-            if device is not None:
-                result = result.to(device)
-            if dtype is not None:
-                result = result.to(dtype)
-            return result
-
-        # Create new polymer with moved arrays
-        return Polymer(
-            coordinates=coords,
-            atoms=move_int(self.atoms),
-            elements=move_int(self.elements),
-            sequence=move_int(self.sequence),
-            sizes={k: move_int(v) for k, v in self._sizes.items()},
-            pdb_id=self.pdb_id,
-            names=self.names.copy(),
-            strands=self.strands.copy(),
-            lengths=move_int(self.lengths),
-            polymer_count=self.polymer_count,
-            bfactors=move_float(self._bfactors),
-            resolution=self._resolution,
-        )
+        return self._clone(**converted)
 
     def cuda(self: Polymer) -> Polymer:
         """

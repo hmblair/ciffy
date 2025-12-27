@@ -143,7 +143,11 @@ class TestAtomGroup:
         assert atom in simple_group
 
     def test_repr(self, simple_group: AtomGroup, hierarchical_group: AtomGroup):
-        assert "4 atoms" in repr(simple_group)
+        # Simple group shows atoms with values
+        r = repr(simple_group)
+        assert "AtomGroup(" in r
+        assert "=" in r  # Shows atom=value pairs
+        # Hierarchical group shows subgroups
         assert "subgroups" in repr(hierarchical_group)
 
     def test_items(self, simple_group: AtomGroup):
@@ -267,7 +271,9 @@ class TestAtomGroupWithGeometry:
         np.testing.assert_array_equal(residue.index(), [2, 3, 4, 5])
 
     def test_repr(self, residue: AtomGroup):
-        assert repr(residue) == "Residue.A"
+        r = repr(residue)
+        assert r.startswith("Residue.")
+        assert "=" in r  # Shows atom=value pairs
 
     def test_ideal_access(self, residue: AtomGroup):
         assert residue.ideal.shape == (4, 3)

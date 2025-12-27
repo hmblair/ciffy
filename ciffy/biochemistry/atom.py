@@ -278,13 +278,32 @@ class AtomGroup:
         raise KeyError(f"No atom with value {value} in {self.name}")
 
     def __repr__(self) -> str:
+        # Collect atoms for display
+        atoms = [(name, int(atom)) for name, atom in self.items()]
+        n_atoms = len(atoms)
+
         if self.value is not None:
-            return f"Residue.{self.name}"
-        n_atoms = sum(1 for v in self._members.values() if isinstance(v, Atom))
+            # Residue - show truncated atom list
+            if n_atoms <= 6:
+                atom_str = ", ".join(f"{name}={val}" for name, val in atoms)
+            else:
+                shown = atoms[:3] + atoms[-3:]
+                atom_str = ", ".join(f"{name}={val}" for name, val in shown[:3])
+                atom_str += f", ..., "
+                atom_str += ", ".join(f"{name}={val}" for name, val in shown[3:])
+            return f"Residue.{self.name}({atom_str})"
+
+        # Plain AtomGroup
         n_groups = sum(1 for v in self._members.values() if isinstance(v, AtomGroup))
+        if n_atoms <= 8:
+            atom_str = ", ".join(f"{name}={val}" for name, val in atoms)
+        else:
+            atom_str = ", ".join(f"{name}={val}" for name, val in atoms[:4])
+            atom_str += ", ..."
+
         if n_groups > 0:
-            return f"AtomGroup({self.name}, {n_atoms} atoms, {n_groups} subgroups)"
-        return f"AtomGroup({self.name}, {n_atoms} atoms)"
+            return f"AtomGroup({self.name}, {n_groups} subgroups, {{{atom_str}}})"
+        return f"AtomGroup({self.name}, {{{atom_str}}})"
 
     def items(self) -> Iterator[tuple[str, Atom]]:
         """Iterate over (name, Atom) pairs (skips nested AtomGroups)."""

@@ -1002,12 +1002,12 @@ class Polymer:
         from .selection import mask
         return mask(self, indices, source, dest)
 
-    def _to_mask(self: Polymer, selector: Array | int | list, scale: Scale) -> Array:
+    def _to_mask(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Array:
         """
         Convert a selector to a boolean mask.
 
         Args:
-            selector: Boolean mask, int index, or list of indices.
+            selector: Boolean mask, int index, list of indices, or slice.
             scale: Scale at which the selector operates.
 
         Returns:
@@ -1016,9 +1016,16 @@ class Polymer:
         Raises:
             IndexError: If any index is out of range.
         """
+        max_size = self.size(scale)
+
+        # Handle slice
+        if isinstance(selector, slice):
+            mask = ops.zeros(max_size, like=self.coordinates, dtype='bool')
+            mask[selector] = True
+            return mask
+
         # Already a boolean mask - return as-is
         if hasattr(selector, 'dtype'):
-            # Check if it's a boolean array
             dtype_str = str(selector.dtype)
             if 'bool' in dtype_str:
                 return selector
@@ -1036,7 +1043,6 @@ class Polymer:
             return selector
 
         # Validate indices and create mask
-        max_size = self.size(scale)
         for ix in indices:
             if ix < 0 or ix >= max_size:
                 raise IndexError(
@@ -1084,7 +1090,7 @@ class Polymer:
 
         return self._clone(**sliced)
 
-    def select(self: Polymer, selector: Array | int | list, scale: Scale) -> Polymer:
+    def select(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Polymer:
         """
         Select units at the specified scale.
 
@@ -1096,6 +1102,7 @@ class Polymer:
                 - Boolean mask array (True = keep)
                 - Integer index (single unit)
                 - List/array of integer indices
+                - Slice for contiguous range
             scale: Scale of selection (ATOM, RESIDUE, or CHAIN).
 
         Returns:
@@ -1118,9 +1125,9 @@ class Polymer:
             >>> first_residue = polymer.select(0, Scale.RESIDUE)
             >>> first_chain = polymer.select(0, Scale.CHAIN)
             >>>
-            >>> # Select by index list
+            >>> # Select by index list or slice
             >>> residues = polymer.select([0, 2, 4], Scale.RESIDUE)
-            >>> chains = polymer.select([0, 1], Scale.CHAIN)
+            >>> first_100_atoms = polymer.select(slice(100), Scale.ATOM)
         """
         if scale not in (Scale.ATOM, Scale.RESIDUE, Scale.CHAIN):
             raise ValueError(f"Selection not supported at {scale.name} scale")
@@ -1143,12 +1150,6 @@ class Polymer:
         Returns:
             New Polymer with selected atoms.
         """
-        # Handle slice by converting to boolean mask
-        if isinstance(key, slice):
-            mask = ops.zeros(self.size(), like=self.coordinates, dtype='bool')
-            mask[key] = True
-            return self.select(mask, Scale.ATOM)
-
         return self.select(key, Scale.ATOM)
 
     def by_index(self: Polymer, ix: Array | int) -> Polymer:

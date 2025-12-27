@@ -198,8 +198,7 @@ def benchmark_polymer_encode(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
-    residue_types = list(model._atom_counts.keys())
+    residue_types = list(model.supported_residues)
 
     for seq_len in sequence_lengths:
         # Create random sequence using available residue types
@@ -209,7 +208,7 @@ def benchmark_polymer_encode(
         )
 
         # Create random coordinates (sum of atoms for sequence)
-        n_atoms = sum(model._atom_counts[int(r)] for r in sequence)
+        n_atoms = sum(model.atom_counts[int(r)] for r in sequence)
         coords = torch.randn(n_atoms, 3, device=device)
 
         def run():
@@ -232,8 +231,7 @@ def benchmark_polymer_decode(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
-    residue_types = list(model._atom_counts.keys())
+    residue_types = list(model.supported_residues)
     latent_dim = model.latent_dim
 
     for seq_len in sequence_lengths:
@@ -266,8 +264,7 @@ def benchmark_polymer_sample(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
-    residue_types = list(model._atom_counts.keys())
+    residue_types = list(model.supported_residues)
 
     for seq_len in sequence_lengths:
         # Create random sequence using available residue types

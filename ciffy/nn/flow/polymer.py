@@ -107,7 +107,8 @@ class PolymerFlowModel(nn.Module):
 
     Attributes:
         latent_dim: Dimension of per-residue latent space.
-        residue_models: Dict mapping residue type (int) to ResidueFlowModel.
+        supported_residues: Set of supported residue type indices.
+        atom_counts: Dict mapping residue type (int) to atom count.
 
     Example (with Polymer - recommended):
         >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
@@ -181,6 +182,51 @@ class PolymerFlowModel(nn.Module):
     def _get_model(self, res_type: int) -> "ResidueFlowModel":
         """Get residue model by int key."""
         return self.residue_models[str(res_type)]
+
+    @property
+    def supported_residues(self) -> set[int]:
+        """Set of supported residue type indices.
+
+        Example:
+            >>> model.supported_residues
+            {0, 1, 2, 3}  # A, C, G, U
+        """
+        return self._supported_types_set
+
+    @property
+    def atom_counts(self) -> dict[int, int]:
+        """Dict mapping residue type (int) to number of atoms.
+
+        Example:
+            >>> model.atom_counts[0]  # Residue.A
+            22
+        """
+        return self._atom_counts
+
+    def get_residue_model(self, residue_type: int) -> "ResidueFlowModel":
+        """Get the ResidueFlowModel for a specific residue type.
+
+        Args:
+            residue_type: Integer residue type index (e.g., Residue.A.value).
+
+        Returns:
+            The ResidueFlowModel for that residue type.
+
+        Raises:
+            KeyError: If residue type is not supported.
+
+        Example:
+            >>> model_a = polymer_flow.get_residue_model(Residue.A.value)
+            >>> model_a.n_atoms
+            22
+        """
+        try:
+            return self.residue_models[str(residue_type)]
+        except KeyError:
+            raise KeyError(
+                f"Residue type {residue_type} not supported. "
+                f"Supported types: {sorted(self._supported_types_set)}"
+            )
 
     @classmethod
     def from_residue_models(

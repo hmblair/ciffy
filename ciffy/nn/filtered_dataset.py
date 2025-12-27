@@ -125,7 +125,7 @@ class FilteredPolymerDataset(Dataset):
 
         flow_model = self.config.flow_model
         if flow_model is not None:
-            report.flow_model_residues = flow_model._supported_types_set.copy()
+            report.flow_model_residues = flow_model.supported_residues.copy()
 
         report.total_samples = len(self.polymer_dataset)
 
@@ -231,7 +231,7 @@ class FilteredPolymerDataset(Dataset):
                 # Check atom counts match
                 try:
                     expected_atoms = sum(
-                        flow_model._atom_counts[int(t)] for t in seq
+                        flow_model.atom_counts[int(t)] for t in seq
                     )
                     actual_atoms = polymer.size()
 

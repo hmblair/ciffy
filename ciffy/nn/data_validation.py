@@ -146,7 +146,7 @@ def validate_flow_model_compatibility(
         DataCompatibilityReport with estimated compatibility.
     """
     report = DataCompatibilityReport()
-    report.flow_model_residues = flow_model._supported_types_set.copy()
+    report.flow_model_residues = flow_model.supported_residues.copy()
 
     # Sample indices
     n_total = len(polymer_dataset)
@@ -248,7 +248,7 @@ def validate_flow_model_compatibility(
 
         # Check atom count match
         try:
-            expected_atoms = sum(flow_model._atom_counts[int(t)] for t in seq)
+            expected_atoms = sum(flow_model.atom_counts[int(t)] for t in seq)
         except KeyError as e:
             # Residue type not in flow model (shouldn't happen after above check)
             report.add_skip("missing_residue_model")

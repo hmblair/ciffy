@@ -256,32 +256,7 @@ class Polymer:
         self._bfactors = bfactors
         self._resolution = resolution
 
-        # Validate that all Fields at each scale have consistent sizes
-        for scale in [Scale.ATOM, Scale.RESIDUE, Scale.CHAIN]:
-            field_sizes = []
-            field_names = []
-            for name, field in self._get_fields().items():
-                if field.scale == scale:
-                    value = getattr(self, field.private_name, None)
-                    if value is not None:
-                        field_sizes.append(arr_size(value, 0))
-                        field_names.append(name)
-            if field_sizes and not all_equal(*field_sizes):
-                raise ValueError(
-                    f"Fields at {scale.name} scale have inconsistent sizes: "
-                    f"{dict(zip(field_names, field_sizes))} for PDB {self.pdb_id}."
-                )
-
-        # Validate hierarchy consistency (atom counts must match across scales)
-        res_count = sizes[Scale.RESIDUE].sum().item()
-        chn_count = sizes[Scale.CHAIN].sum().item()
-        mol_count = sizes[Scale.MOLECULE].sum().item()
-
-        if not all_equal(res_count + self.nonpoly, chn_count, mol_count):
-            raise ValueError(
-                f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
-                f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
-            )
+        self._validate_consistency(sizes)
 
         # Create hierarchy for scale operations
         self._hierarchy = _Hierarchy.from_sizes_and_lengths(
@@ -411,6 +386,47 @@ class Polymer:
                 result[name] = value
 
         return result
+
+    def _validate_consistency(self, sizes: dict[Scale, Array]) -> None:
+        """
+        Validate that field sizes are consistent at each scale and across scales.
+
+        Checks:
+        1. All Fields at each scale (ATOM, RESIDUE, CHAIN) have the same size.
+        2. Atom counts are consistent across hierarchy (residue + nonpoly = chain = molecule).
+
+        Args:
+            sizes: Dict mapping Scale to atom counts per unit.
+
+        Raises:
+            ValueError: If field sizes are inconsistent or hierarchy doesn't match.
+        """
+        # Validate that all Fields at each scale have consistent sizes
+        for scale in [Scale.ATOM, Scale.RESIDUE, Scale.CHAIN]:
+            field_sizes = []
+            field_names = []
+            for name, field in self._get_fields().items():
+                if field.scale == scale:
+                    value = getattr(self, field.private_name, None)
+                    if value is not None:
+                        field_sizes.append(arr_size(value, 0))
+                        field_names.append(name)
+            if field_sizes and not all_equal(*field_sizes):
+                raise ValueError(
+                    f"Fields at {scale.name} scale have inconsistent sizes: "
+                    f"{dict(zip(field_names, field_sizes))} for PDB {self.pdb_id}."
+                )
+
+        # Validate hierarchy consistency (atom counts must match across scales)
+        res_count = sizes[Scale.RESIDUE].sum().item()
+        chn_count = sizes[Scale.CHAIN].sum().item()
+        mol_count = sizes[Scale.MOLECULE].sum().item()
+
+        if not all_equal(res_count + self.nonpoly, chn_count, mol_count):
+            raise ValueError(
+                f"Atom counts do not match: residues ({res_count} + {self.nonpoly}), "
+                f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
+            )
 
     def _clone(self, **overrides) -> Polymer:
         """
@@ -1000,31 +1016,16 @@ class Polymer:
         new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
         new_polymer_count = self._hierarchy.compute_polymer_count(atom_mask, res_mask, scale)
 
-        # Extract sizes dict and lengths for Polymer constructor (legacy format)
-        sizes = {
+        # Extract sizes dict and lengths for Polymer constructor
+        sliced['sizes'] = {
             Scale.RESIDUE: new_per[(Scale.ATOM, Scale.RESIDUE)],
             Scale.CHAIN: new_per[(Scale.ATOM, Scale.CHAIN)],
             Scale.MOLECULE: new_per[(Scale.ATOM, Scale.MOLECULE)],
         }
-        lengths = new_per[(Scale.RESIDUE, Scale.CHAIN)]
+        sliced['lengths'] = new_per[(Scale.RESIDUE, Scale.CHAIN)]
+        sliced['polymer_count'] = new_polymer_count
 
-        # Step 4: Construct Polymer
-        return Polymer(
-            coordinates=sliced['coordinates'],
-            atoms=sliced['atoms'],
-            elements=sliced['elements'],
-            sequence=sliced['sequence'],
-            sizes=sizes,
-            pdb_id=sliced['pdb_id'],
-            names=sliced['names'],
-            strands=sliced['strands'],
-            lengths=lengths,
-            polymer_count=new_polymer_count,
-            molecule_types=sliced['molecule_types'],
-            descriptions=sliced['descriptions'],
-            bfactors=sliced['bfactors'],
-            resolution=sliced['resolution'],
-        )
+        return self._clone(**sliced)
 
     def select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
         """
@@ -1478,33 +1479,23 @@ class Polymer:
             self._sizes[Scale.MOLECULE]
         )
 
-        sizes = {
-            Scale.RESIDUE: new_res_sizes,
-            Scale.CHAIN: new_chn_sizes,
-            Scale.MOLECULE: new_mol_sizes,
-        }
-
-        # Update lengths
-        new_lengths = ops.to_backend(
-            np.array([self.lengths[0].item() + 1], dtype=np.int64),
-            self.lengths
-        )
-
-        return Polymer(
+        return self._clone(
             coordinates=new_coords,
             atoms=new_atoms_arr,
             elements=new_elements_arr,
             sequence=new_sequence,
-            sizes=sizes,
-            pdb_id=self.pdb_id,
-            names=list(self.names),
-            strands=list(self.strands),
-            lengths=new_lengths,
+            sizes={
+                Scale.RESIDUE: new_res_sizes,
+                Scale.CHAIN: new_chn_sizes,
+                Scale.MOLECULE: new_mol_sizes,
+            },
+            lengths=ops.to_backend(
+                np.array([self.lengths[0].item() + 1], dtype=np.int64),
+                self.lengths
+            ),
             polymer_count=self.polymer_count + n_new_atoms,
-            molecule_types=ops.clone(self._molecule_types) if self._molecule_types is not None else None,
-            descriptions=list(self.descriptions) if self.descriptions else None,
             # bfactors not preserved - new atoms don't have experimental B-factors
-            resolution=self._resolution,
+            bfactors=None,
         )
 
     # ─────────────────────────────────────────────────────────────────────────

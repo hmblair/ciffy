@@ -294,8 +294,17 @@ def search_structures(
 
     try:
         with urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            response_body = response.read().decode("utf-8")
+            # Handle empty response (no results)
+            if not response_body.strip():
+                logger.info("Found 0 structures")
+                return []
+            data = json.loads(response_body)
     except HTTPError as e:
+        # 204 No Content means no results found
+        if e.code == 204:
+            logger.info("Found 0 structures")
+            return []
         raise URLError(f"RCSB search failed with status {e.code}: {e.reason}") from e
 
     # Extract PDB IDs from results

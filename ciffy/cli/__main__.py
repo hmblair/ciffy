@@ -2,14 +2,14 @@
 Command-line interface for ciffy.
 
 Usage:
-    ciffy <file.cif>              # Load and print polymer summary
-    ciffy <file1> <file2> ...     # Load and print multiple files
-    ciffy <file.cif> --atoms      # Also show atom counts per residue
-    ciffy <file.cif> --desc       # Show entity descriptions per chain
-    ciffy map <file.cif>          # Display contact map
-    ciffy split <file.cif>        # Split into per-chain files
-    ciffy template <sequence>     # Create template from sequence with sampled dihedrals
-    ciffy train configs/*.yaml    # Run training from config files
+    ciffy info <file.cif>            # Load and print polymer summary
+    ciffy info <file1> <file2> ...   # Load and print multiple files
+    ciffy info <file.cif> --poly     # Show only polymer atoms
+    ciffy info <file.cif> --desc     # Show entity descriptions per chain
+    ciffy map <file.cif>             # Display contact map
+    ciffy split <file.cif>           # Split into per-chain files
+    ciffy template <sequence>        # Create template from sequence with sampled dihedrals
+    ciffy train configs/*.yaml       # Run training from config files
     ciffy experiment configs/*.yaml  # Run multiple training experiments
     ciffy download --max_count 100   # Download RNA structures from RCSB PDB
 """
@@ -508,8 +508,13 @@ def main():
     subcommands = {"map", "info", "split", "template", "train", "experiment", "inference", "download"}
 
     # If no args or first arg starts with - or is not a subcommand,
-    # treat as the info command
+    # treat as the info command (deprecated)
     if len(sys.argv) > 1 and sys.argv[1] not in subcommands and not sys.argv[1].startswith('-'):
+        # Show deprecation warning
+        print(
+            f"Warning: 'ciffy <file>' is deprecated. Use 'ciffy info <file>' instead.",
+            file=sys.stderr,
+        )
         # Insert 'info' as the subcommand
         sys.argv.insert(1, "info")
 

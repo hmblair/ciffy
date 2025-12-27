@@ -116,7 +116,7 @@ def sample(
         >>> for i, p in enumerate(samples):
         ...     p.write(f"sample_{i}.cif")
     """
-    from .template import from_sequence
+    from .polymer import from_sequence
     from .nn.flow import PolymerFlowModel
 
     # Load or use provided model
@@ -278,7 +278,7 @@ def decode(
         >>> modified_latents = latents + noise
         >>> new_polymer = flow.decode(modified_latents, "acgu")
     """
-    from .template import from_sequence
+    from .polymer import from_sequence
 
     # Load or use provided model
     if isinstance(model, str):

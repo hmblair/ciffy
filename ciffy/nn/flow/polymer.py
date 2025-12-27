@@ -601,7 +601,7 @@ class PolymerFlowModel(nn.Module):
             >>> for i, p in enumerate(samples):
             ...     p.write(f"sample_{i}.cif")
         """
-        from ciffy.template import from_sequence
+        from ciffy import from_sequence
 
         # Create template with correct atoms for this model
         template = from_sequence(sequence, atoms=self.atom_filter, id=id)

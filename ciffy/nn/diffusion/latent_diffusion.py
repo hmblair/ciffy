@@ -416,7 +416,7 @@ class LatentDiffusionModel(nn.Module):
             >>> polymer = model.sample_from_sequence("acgu", num_steps=50)
             >>> polymer.write("sampled.cif")
         """
-        from ciffy.template import from_sequence
+        from ciffy.polymer import from_sequence
 
         # Create template with correct atoms for the flow model
         template = from_sequence(

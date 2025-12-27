@@ -13,7 +13,7 @@ Residue members are AtomGroups with geometry:
 import numpy as np
 
 # Core atom classes
-from .atom import Atom, AtomGroup, build_atom_group
+from .atom import Atom, AtomGroup, build_atom_group, atom_to_element
 
 # Scale enum for hierarchical levels
 from .scale import Scale
@@ -85,6 +85,7 @@ __all__ = [
     "Atom",
     "AtomGroup",
     "build_atom_group",
+    "atom_to_element",
     # Scale enum
     "Scale",
     # Vocabulary sizes

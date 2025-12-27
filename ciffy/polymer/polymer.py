@@ -12,23 +12,23 @@ from copy import copy
 
 import numpy as np
 
-from .backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy, Dtype
-from .backend import ops
-from .biochemistry import Scale, Molecule
-from .biochemistry._generated_molecule import molecule_type
+from ..backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy, Dtype
+from ..backend import ops
+from ..biochemistry import Scale, Molecule
+from ..biochemistry._generated_molecule import molecule_type
 
 if TYPE_CHECKING:
     import torch
-    from .hetero import HeteroAtoms
-from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
-from .hierarchy import _Hierarchy
-from .biochemistry import (
+    from ..hetero import HeteroAtoms
+from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
+from ..hierarchy import _Hierarchy
+from ..biochemistry import (
     Residue,
     ATOM_NAMES,
     ELEMENT_NAMES,
 )
-from .utils import all_equal, filter_by_mask
-from .utils.formatting import format_chain_table
+from ..utils import all_equal, filter_by_mask
+from ..utils.formatting import format_chain_table
 
 
 UNKNOWN = "UNKNOWN"
@@ -376,6 +376,60 @@ class Polymer:
 
         return result
 
+    def _residue_slice(
+        self: Polymer,
+        idx: int,
+    ) -> tuple[Array, Array, dict[int, int], Residue]:
+        """
+        Extract coordinates, atoms, atom_to_col, and residue type for a residue.
+
+        This is a helper for methods that need to work with individual residue
+        data, such as extend() and geometry operations.
+
+        Args:
+            idx: Residue index. Negative indices are supported (e.g., -1 for last).
+
+        Returns:
+            Tuple of:
+            - coords: (n_atoms, 3) coordinates for this residue
+            - atoms: (n_atoms,) atom type indices
+            - atom_to_col: dict mapping atom type value to column index
+            - residue: Residue enum for this residue type
+
+        Raises:
+            IndexError: If idx is out of range.
+
+        Example:
+            >>> coords, atoms, atom_to_col, res_type = polymer._residue_slice(-1)
+            >>> # Get last residue's P atom position
+            >>> p_col = atom_to_col[res_type.P.value]
+            >>> p_pos = coords[p_col]
+        """
+        from ..utils import atoms_to_col_map
+
+        n_residues = self.size(Scale.RESIDUE)
+
+        # Handle negative indices
+        if idx < 0:
+            idx = n_residues + idx
+        if idx < 0 or idx >= n_residues:
+            raise IndexError(
+                f"Residue index {idx} out of range for Polymer with {n_residues} residues"
+            )
+
+        # Compute atom offset and size for this residue
+        res_sizes = self._sizes[Scale.RESIDUE]
+        atom_offset = res_sizes[:idx].sum().item() if idx > 0 else 0
+        n_atoms = res_sizes[idx].item()
+
+        # Extract data
+        coords = self.coordinates[atom_offset:atom_offset + n_atoms]
+        atoms = self.atoms[atom_offset:atom_offset + n_atoms]
+        atom_to_col = atoms_to_col_map(atoms)
+        residue = Residue.from_index(self.sequence[idx].item())
+
+        return coords, atoms, atom_to_col, residue
+
     @property
     def _sizes(self) -> dict[Scale, Array]:
         """
@@ -543,7 +597,7 @@ class Polymer:
             and inter-residue linkages.
         """
         if self._bonds is None:
-            from .backend.graph import build_bond_graph
+            from ..backend.graph import build_bond_graph
             edges, _ = build_bond_graph(self)
             # Filter to i < j to avoid duplicates
             self._bonds = edges[edges[:, 0] < edges[:, 1]]
@@ -998,7 +1052,7 @@ class Polymer:
         Returns:
             Boolean array at dest scale.
         """
-        from .selection import mask
+        from ..selection import mask
         return mask(self, indices, source, dest)
 
     def _to_mask(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Array:
@@ -1176,7 +1230,7 @@ class Polymer:
         Returns:
             New Polymer with matching atoms.
         """
-        from .selection import by_atom
+        from ..selection import by_atom
         return by_atom(self, name)
 
     def by_residue(self: Polymer, res: Array | int) -> Polymer:
@@ -1194,7 +1248,7 @@ class Polymer:
             >>> adenosines = polymer.by_residue(Residue.A)
             >>> purines = polymer.by_residue([Residue.A, Residue.G])
         """
-        from .selection import by_residue
+        from ..selection import by_residue
         return by_residue(self, res)
 
     def canonical(self: Polymer) -> Polymer:
@@ -1217,7 +1271,7 @@ class Polymer:
             >>> # Now safe to use with flow models
             >>> latents = model.encode(polymer)
         """
-        from .biochemistry import CANONICAL_ALL
+        from ..biochemistry import CANONICAL_ALL
         return self.by_residue(CANONICAL_ALL)
 
     def by_type(self: Polymer, mol: Molecule) -> Polymer:
@@ -1230,7 +1284,7 @@ class Polymer:
         Returns:
             New Polymer with chains of that type.
         """
-        from .selection import by_type
+        from ..selection import by_type
         return by_type(self, mol)
 
     def poly(self: Polymer) -> Polymer:
@@ -1251,7 +1305,7 @@ class Polymer:
             >>> rna = p.poly()  # Get polymer only
             >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
         """
-        from .selection import poly
+        from ..selection import poly
         return poly(self)
 
     def hetero(self: Polymer) -> "HeteroAtoms":
@@ -1271,7 +1325,7 @@ class Polymer:
             >>> if not hetero_atoms.empty():
             ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
         """
-        from .selection import hetero
+        from ..selection import hetero
         return hetero(self)
 
     @property
@@ -1307,7 +1361,7 @@ class Polymer:
         Yields:
             Individual chain Polymers.
         """
-        from .selection import chains
+        from ..selection import chains
         return chains(self, mol)
 
     def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
@@ -1320,7 +1374,7 @@ class Polymer:
         Returns:
             Boolean tensor where True indicates resolved units.
         """
-        from .selection import resolved
+        from ..selection import resolved
         return resolved(self, scale)
 
     def strip(self: Polymer, scale: Scale = Scale.RESIDUE) -> Polymer:
@@ -1333,7 +1387,7 @@ class Polymer:
         Returns:
             New Polymer without empty units.
         """
-        from .selection import strip
+        from ..selection import strip
         return strip(self, scale)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1342,22 +1396,22 @@ class Polymer:
 
     def backbone(self: Polymer) -> Polymer:
         """Select backbone atoms (sugar-phosphate for RNA/DNA, N-CA-C-O for protein)."""
-        from .selection import backbone
+        from ..selection import backbone
         return backbone(self)
 
     def nucleobase(self: Polymer) -> Polymer:
         """Select RNA nucleobase atoms."""
-        from .selection import nucleobase
+        from ..selection import nucleobase
         return nucleobase(self)
 
     def phosphate(self: Polymer) -> Polymer:
         """Select RNA/DNA phosphate atoms."""
-        from .selection import phosphate
+        from ..selection import phosphate
         return phosphate(self)
 
     def sidechain(self: Polymer) -> Polymer:
         """Select protein sidechain atoms."""
-        from .selection import sidechain
+        from ..selection import sidechain
         return sidechain(self)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1395,7 +1449,7 @@ class Polymer:
 
         Example:
             >>> from ciffy import Residue
-            >>> from ciffy.template import from_sequence
+            >>> from ciffy import from_sequence
             >>>
             >>> # Create initial polymer and extend
             >>> p = from_sequence("ac")
@@ -1418,9 +1472,10 @@ class Polymer:
                     dtype=self.coordinates.dtype,
                     device=self.coordinates.device
                 )
-        from .geometry import position_residue
-        from .biochemistry.linking import LINKING_BY_TYPE
-        from .utils import atoms_to_col_map
+        from ..geometry import position_residue
+        from ..biochemistry import atom_to_element
+        from ..biochemistry.linking import LINKING_BY_TYPE
+        from ..utils import atoms_to_col_map
 
         # Validate single chain and poly-only
         if self.size(Scale.CHAIN) != 1:
@@ -1438,19 +1493,7 @@ class Polymer:
         check_compatible(self.coordinates, coords, "coords")
 
         # Get last residue's state
-        n_residues = self.size(Scale.RESIDUE)
-        last_res_idx = n_residues - 1
-        last_res_type = Residue.from_index(self.sequence[last_res_idx].item())
-
-        # Compute atom offset for last residue
-        res_sizes = self._sizes[Scale.RESIDUE]
-        atom_offset = res_sizes[:last_res_idx].sum().item()
-        last_res_n_atoms = res_sizes[last_res_idx].item()
-
-        # Extract last residue's coordinates and build atom_to_col
-        last_res_coords = self.coordinates[atom_offset:atom_offset + last_res_n_atoms]
-        last_res_atoms = self.atoms[atom_offset:atom_offset + last_res_n_atoms]
-        last_res_atom_to_col = atoms_to_col_map(last_res_atoms)
+        last_res_coords, _, last_res_atom_to_col, last_res_type = self._residue_slice(-1)
 
         # Build atom_to_col for new residue
         # The new residue's atoms must correspond to the coords columns
@@ -1482,11 +1525,7 @@ class Polymer:
         )
 
         # Build element indices for new residue
-        def atom_name_to_element(name: str) -> int:
-            element_map = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'P': 15, 'S': 16}
-            return element_map.get(name[0].upper(), 0)
-
-        new_elements = [atom_name_to_element(a.name) for a in residue.atoms]
+        new_elements = [atom_to_element(a) for a in residue.atoms]
 
         # Concatenate arrays
         new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)
@@ -1620,7 +1659,7 @@ class Polymer:
         Returns:
             'numpy' if arrays are NumPy, 'torch' if PyTorch tensors.
         """
-        from .backend import get_backend
+        from ..backend import get_backend
         return get_backend(self.coordinates).value
 
     @property
@@ -1632,7 +1671,7 @@ class Polymer:
             Device string (e.g., 'cpu', 'cuda:0', 'mps:0') for PyTorch tensors,
             None for NumPy arrays.
         """
-        from .backend import get_device
+        from ..backend import get_device
         return get_device(self.coordinates)
 
     def numpy(self: Polymer) -> Polymer:
@@ -1642,7 +1681,7 @@ class Polymer:
         Returns:
             New Polymer with NumPy arrays. If already NumPy, returns self.
         """
-        from .backend import is_numpy
+        from ..backend import is_numpy
         if is_numpy(self.coordinates):
             return self
 
@@ -1660,7 +1699,7 @@ class Polymer:
         Raises:
             ImportError: If PyTorch is not installed.
         """
-        from .backend import to_torch, is_torch
+        from ..backend import to_torch, is_torch
         if is_torch(self.coordinates):
             return self
 
@@ -1690,7 +1729,7 @@ class Polymer:
             >>> p_fp16 = p.to(dtype=torch.float16)
             >>> p_gpu_fp16 = p.to("cuda", torch.float16)
         """
-        from .backend import is_torch
+        from ..backend import is_torch
         if not is_torch(self.coordinates):
             raise ValueError("to() is only supported for torch backend. "
                            "Use polymer.torch().to(...) to convert first.")
@@ -1813,7 +1852,7 @@ class Polymer:
             raise ValueError(
                 f"Output file must have .cif extension, got: {filename!r}"
             )
-        from .io.writer import write_cif
+        from ..io.writer import write_cif
         write_cif(self, filename)
 
     # ─────────────────────────────────────────────────────────────────────────

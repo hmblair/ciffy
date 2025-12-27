@@ -30,6 +30,53 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+def atom_to_element(atom: Atom | str) -> int:
+    """
+    Get the element atomic number for an atom from its name.
+
+    Parses the atom name to determine the element. For standard biological
+    macromolecule atoms (proteins, RNA, DNA), the element is typically the
+    first character of the name.
+
+    Args:
+        atom: An Atom object or atom name string (e.g., "CA", "P", "O3'").
+
+    Returns:
+        Atomic number of the element (e.g., 6 for carbon, 7 for nitrogen).
+        Returns 0 if the element cannot be determined.
+
+    Example:
+        >>> atom_to_element("CA")  # Alpha carbon
+        6
+        >>> atom_to_element("P")   # Phosphorus
+        15
+        >>> atom_to_element(Residue.A.N1)  # Nitrogen
+        7
+    """
+    # Import here to avoid circular dependency
+    from ._generated_elements import Element
+
+    name = atom.name if isinstance(atom, Atom) else atom
+    if not name:
+        return 0
+
+    first_char = name[0].upper()
+
+    # Map first character to element
+    # These are the elements found in standard biological macromolecules
+    element_map = {
+        'H': Element.H,
+        'C': Element.C,
+        'N': Element.N,
+        'O': Element.O,
+        'P': Element.P,
+        'S': Element.S,
+    }
+
+    element = element_map.get(first_char)
+    return element.value if element is not None else 0
+
+
 class Atom(int):
     """
     An int that knows its name and local position.

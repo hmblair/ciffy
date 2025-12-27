@@ -52,7 +52,7 @@ except ImportError as e:
     ) from e
 
 # Core types
-from .polymer import Polymer, Field, Metadata
+from .polymer import Polymer, Field, Metadata, from_sequence, from_extract
 from .hetero import HeteroAtoms
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
@@ -61,8 +61,7 @@ from .backend import Dtype
 from .io.loader import load, load_metadata
 from .io.writer import write_cif
 
-# Template generation
-from .template import from_sequence, from_extract
+# Template generation (re-exported from polymer module above)
 
 # Ensemble for conformational analysis
 from .ensemble import Ensemble

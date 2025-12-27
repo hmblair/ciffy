@@ -10,15 +10,18 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
 from .polymer import Polymer
-from .biochemistry import Scale, Molecule
-from .biochemistry import Residue
-from .biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
-from .utils import atoms_to_col_map
+from ..biochemistry import Scale, Molecule, atom_to_element
+from ..biochemistry import Residue
+
+if TYPE_CHECKING:
+    from ..biochemistry.atom import AtomGroup
+from ..biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
+from ..utils import atoms_to_col_map
 
 
 # =============================================================================
@@ -57,21 +60,6 @@ class MoleculeTypeConfig:
     start_terminal_atoms: frozenset[str]  # 5'/N-terminal only
     end_terminal_atoms: frozenset[str]    # 3'/C-terminal only
     sequence_map: dict[str, int]          # char -> residue index
-
-
-# =============================================================================
-# ELEMENT LOOKUP
-# =============================================================================
-
-# First character of atom name -> atomic number
-_ELEMENT_MAP: dict[str, int] = {
-    'H': 1,   # Hydrogen
-    'C': 6,   # Carbon
-    'N': 7,   # Nitrogen
-    'O': 8,   # Oxygen
-    'P': 15,  # Phosphorus
-    'S': 16,  # Sulfur
-}
 
 
 # =============================================================================
@@ -166,11 +154,6 @@ def _get_molecule_config(residue_idx: int) -> MoleculeTypeConfig:
 # HELPER FUNCTIONS
 # =============================================================================
 
-def _atom_name_to_element(name: str) -> int:
-    """Convert atom name to atomic number based on first character."""
-    return _ELEMENT_MAP.get(name[0].upper(), 0)
-
-
 def _generate_chain_name(index: int) -> str:
     """
     Generate chain name for a given index.
@@ -211,8 +194,7 @@ def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int
     for member in residue.atoms:
         atom_indices.append(member.value)
         atom_names.append(member.name)
-        atom_name_display = member.name.replace('p', "'")  # C5p -> C5'
-        element_indices.append(_atom_name_to_element(atom_name_display))
+        element_indices.append(atom_to_element(member))
 
     # Get ideal coordinates from the residue (delegates to atom enum)
     # No copy here - _expand_residue() copies when needed
@@ -416,7 +398,7 @@ def _position_residue(
     Raises:
         ValueError: If linking atoms are not found in the residue.
     """
-    from .geometry import position_residue
+    from ..geometry import position_residue
 
     # expansion.ideal_coords is already a copy from _expand_residue()
     coords = expansion.ideal_coords
@@ -703,7 +685,7 @@ def from_extract(
         >>> from ciffy import load
         >>> from ciffy.biochemistry import Residue
         >>> from ciffy.operations import extract
-        >>> from ciffy.template import from_extract
+        >>> from ciffy import from_extract
         >>>
         >>> poly = load("structure.cif")
         >>> coords, atoms = extract(poly, Residue.A, align=True, scale=True)
@@ -715,7 +697,7 @@ def from_extract(
         >>> result = from_extract(new_coords, atoms, Residue.A)
         >>> result.write("output.cif")
     """
-    from .backend import to_numpy as _to_numpy
+    from ..backend import to_numpy as _to_numpy
 
     # Handle torch input
     coords_np = np.asarray(_to_numpy(coords))
@@ -739,8 +721,7 @@ def from_extract(
             raise ValueError(
                 f"Atom index {atom_idx} not found in {residue.name} atom enum"
             )
-        atom_name = idx_to_member[atom_idx].name
-        element_indices.append(_atom_name_to_element(atom_name))
+        element_indices.append(atom_to_element(idx_to_member[atom_idx]))
 
     # Flatten coordinates: (n_residues, n_atoms, 3) -> (n_residues * n_atoms, 3)
     flat_coords = coords_np.reshape(-1, 3).astype(np.float32)

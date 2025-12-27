@@ -14,7 +14,7 @@ transform from a flow model.
 
 import ciffy
 from ciffy import Residue, Scale
-from ciffy.template import from_sequence
+from ciffy import from_sequence
 
 
 def main():

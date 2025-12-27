@@ -183,7 +183,7 @@ class Ensemble:
         Returns:
             Polymer with the ensemble coordinates.
         """
-        from .template import from_extract
+        from .polymer import from_extract
 
         return from_extract(
             self.coords, self.atoms, self.residue, backend=backend, id=id

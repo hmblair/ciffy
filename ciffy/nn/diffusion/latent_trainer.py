@@ -54,7 +54,9 @@ from ..base_trainer import (
     TrainingConfig,
     WandbConfig,
 )
+from ..data_validation import validate_flow_model_compatibility
 from ..dataset import PolymerDataset
+from ..filtered_dataset import FilterConfig, FilteredPolymerDataset
 from ..trainer_registry import register_trainer
 from .ema import EMA
 from .latent_diffusion import LatentDiffusionConfig, LatentDiffusionModel
@@ -112,114 +114,37 @@ class LatentDiffusionTrainingConfig(BaseConfig):
 
 
 class LatentEncodingDataset(Dataset):
-    """Dataset that encodes polymers to latent space on-the-fly.
+    """Dataset that encodes pre-filtered polymers to latent space on-the-fly.
 
-    Filters polymers by residue count and encodes coordinates using
-    the flow model during __getitem__. This avoids memory overhead
+    This is a thin wrapper that handles encoding only - all filtering
+    is done by FilteredPolymerDataset. This avoids memory overhead
     of caching all latents.
+
+    Attributes:
+        filtered_dataset: The underlying FilteredPolymerDataset.
+        flow_model: Flow model for encoding coordinates to latents.
+        device: Device for encoding.
     """
 
     def __init__(
         self,
-        polymer_dataset: "PolymerDataset",
+        filtered_dataset: "FilteredPolymerDataset",
         flow_model: "nn.Module",
-        min_residues: int = 10,
-        max_residues: int = 500,
         device: str = "cpu",
     ) -> None:
         """Initialize the encoding dataset.
 
         Args:
-            polymer_dataset: Source dataset of Polymer objects.
+            filtered_dataset: Pre-filtered dataset of Polymer objects.
             flow_model: Flow model for encoding coordinates to latents.
-            min_residues: Minimum residues per chain.
-            max_residues: Maximum residues per chain.
             device: Device for encoding.
         """
-        self.polymer_dataset = polymer_dataset
+        self.filtered_dataset = filtered_dataset
         self.flow_model = flow_model
-        self.min_residues = min_residues
-        self.max_residues = max_residues
         self.device = device
 
-        # Build index of valid samples (filter by residue count and unknown residues)
-        self.valid_indices: list[int] = []
-        n_none = 0
-        n_too_small = 0
-        n_too_large = 0
-        n_unknown_residues = 0
-        n_atom_mismatch = 0
-        n_errors = 0
-
-        for idx in range(len(polymer_dataset)):
-            try:
-                polymer = polymer_dataset[idx]
-                if polymer is None:
-                    n_none += 1
-                    continue
-
-                # Filter to polymer atoms only
-                polymer = polymer.poly()
-
-                n_res = polymer.size(Scale.RESIDUE)
-                if n_res < min_residues:
-                    n_too_small += 1
-                    continue
-                if n_res > max_residues:
-                    n_too_large += 1
-                    continue
-
-                # Check for unknown residues (index -1)
-                seq = polymer.sequence
-                if hasattr(seq, 'numpy'):
-                    seq = seq.numpy()
-                if any(r < 0 for r in seq):
-                    n_unknown_residues += 1
-                    continue
-
-                # Check atom count matches flow model expectations
-                expected_atoms = sum(
-                    flow_model._atom_counts[int(t)] for t in seq
-                )
-                actual_atoms = polymer.size()
-                if actual_atoms != expected_atoms:
-                    n_atom_mismatch += 1
-                    logger.debug(
-                        f"Sample {idx}: atom mismatch "
-                        f"({actual_atoms} vs {expected_atoms} expected)"
-                    )
-                    continue
-
-                self.valid_indices.append(idx)
-            except Exception as e:
-                n_errors += 1
-                logger.debug(f"Error loading sample {idx}: {e}")
-                continue
-
-        # Log filtering statistics
-        total = len(polymer_dataset)
-        valid = len(self.valid_indices)
-        logger.info(
-            f"LatentEncodingDataset: {valid}/{total} samples valid "
-            f"(filtered: {n_too_small} small, {n_too_large} large, "
-            f"{n_unknown_residues} unknown, {n_atom_mismatch} incomplete, {n_errors} errors)"
-        )
-
-        if valid == 0:
-            raise ValueError(
-                f"No valid samples in dataset!\n"
-                f"  Total samples: {total}\n"
-                f"  Too small (<{min_residues} residues): {n_too_small}\n"
-                f"  Too large (>{max_residues} residues): {n_too_large}\n"
-                f"  Unknown residues: {n_unknown_residues}\n"
-                f"  Incomplete (missing atoms): {n_atom_mismatch}\n"
-                f"  None/empty: {n_none}\n"
-                f"  Load errors: {n_errors}\n"
-                f"Consider adjusting min_residues/max_residues in config."
-            )
-
     def __len__(self) -> int:
-        return len(self.valid_indices)
+        return len(self.filtered_dataset)
 
     def __getitem__(self, idx: int) -> tuple["torch.Tensor", "torch.Tensor"]:
         """Get encoded latents and sequence for a sample.
@@ -229,11 +154,7 @@ class LatentEncodingDataset(Dataset):
                 - latents: (n_residues, latent_dim) tensor
                 - sequence: (n_residues,) long tensor of residue types
         """
-        polymer_idx = self.valid_indices[idx]
-        polymer = self.polymer_dataset[polymer_idx]
-
-        # Get only polymer atoms (exclude HETATM like water/ions)
-        polymer = polymer.poly()
+        polymer = self.filtered_dataset[idx]
 
         coords = polymer.coordinates
         sequence = polymer.sequence
@@ -340,16 +261,51 @@ class LatentDiffusionTrainer(BaseTrainer):
             model = LatentDiffusionModel(config.model)
         model = model.to(device)
 
-        # Create dataset if not provided
+        # Create base dataset if not provided
         if dataset is None:
             dataset = self._create_polymer_dataset(config)
 
-        # Create encoding dataset BEFORE super().__init__ (which calls create_dataloader)
-        self._encoding_dataset = LatentEncodingDataset(
-            polymer_dataset=dataset,
+        # Upfront validation: Quick compatibility check before building full dataset
+        if not quiet:
+            logger.info("Checking flow model / data compatibility...")
+
+        compat_report = validate_flow_model_compatibility(
             flow_model=model.flow_model,
+            polymer_dataset=dataset,
+            sample_count=min(100, len(dataset)),
             min_residues=config.data.min_residues,
             max_residues=config.data.max_residues,
+        )
+
+        if not compat_report.is_compatible:
+            raise ValueError(
+                f"Flow model incompatible with dataset!\n\n"
+                f"{compat_report.format_summary()}\n\n"
+                f"The flow model expects specific atom counts per residue type "
+                f"that don't match the structures in your dataset."
+            )
+
+        if compat_report.valid_fraction < 0.5:
+            logger.warning(
+                f"Low data compatibility ({compat_report.valid_fraction * 100:.1f}%):\n"
+                f"{compat_report.format_summary()}"
+            )
+
+        # Create filtered dataset with full diagnostics
+        filter_config = FilterConfig(
+            min_residues=config.data.min_residues,
+            max_residues=config.data.max_residues,
+            poly_only=True,
+            reject_unknown_residues=True,
+            flow_model=model.flow_model,
+        )
+
+        self._filtered_dataset = FilteredPolymerDataset(dataset, filter_config)
+
+        # Create encoding dataset BEFORE super().__init__ (which calls create_dataloader)
+        self._encoding_dataset = LatentEncodingDataset(
+            filtered_dataset=self._filtered_dataset,
+            flow_model=model.flow_model,
             device=str(device),
         )
 
@@ -554,8 +510,7 @@ class LatentDiffusionTrainer(BaseTrainer):
 
                     try:
                         # Get original polymer for ground truth
-                        polymer_idx = self._encoding_dataset.valid_indices[seq_idx]
-                        polymer = self._encoding_dataset.polymer_dataset[polymer_idx]
+                        polymer = self._filtered_dataset[seq_idx]
 
                         # Save ground truth
                         polymer.write(str(seq_dir / "ground_truth.cif"))

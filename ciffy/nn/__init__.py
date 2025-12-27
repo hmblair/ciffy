@@ -11,7 +11,13 @@ Modules:
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
+from .data_validation import (
+    DataCompatibilityReport,
+    StructureExample,
+    validate_flow_model_compatibility,
+)
 from .dataset import PolymerDataset
+from .filtered_dataset import FilterConfig, FilteredPolymerDataset
 
 # Layers (moved from root to layers/)
 from .layers import (
@@ -97,6 +103,12 @@ from .diffusion import (
 )
 
 __all__ = [
+    # Data validation and filtering
+    "DataCompatibilityReport",
+    "StructureExample",
+    "validate_flow_model_compatibility",
+    "FilterConfig",
+    "FilteredPolymerDataset",
     # Dataset
     "PolymerDataset",
     # Layers (from layers/)

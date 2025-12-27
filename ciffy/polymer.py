@@ -19,6 +19,7 @@ from .biochemistry._generated_molecule import molecule_type
 
 if TYPE_CHECKING:
     import torch
+    from .hetero import HeteroAtoms
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .biochemistry import (
     Residue,
@@ -1313,27 +1314,45 @@ class Polymer:
         from .selection import poly
         return poly(self)
 
-    def hetero(self: Polymer) -> Polymer:
+    def hetero(self: Polymer) -> "HeteroAtoms":
         """
         Return non-polymer atoms only (HETATM: water, ions, ligands).
 
-        Warning:
-            The returned Polymer has no valid residue information.
-            Residue-scale operations like reduce(scale=Scale.RESIDUE)
-            will return empty results.
+        Returns a lightweight HeteroAtoms container with only atom-level data.
+        Unlike Polymer, HeteroAtoms has no residue or chain hierarchy.
 
         Returns:
-            New Polymer with only HETATM atoms. If there are no HETATM atoms,
-            returns a Polymer with 0 atoms.
+            HeteroAtoms container with HETATM atoms. If there are no HETATM atoms,
+            returns an empty HeteroAtoms.
 
         Example:
             >>> p = load("file.cif")
-            >>> ligands = p.hetero()  # Get waters/ions/ligands
-            >>> if not ligands.empty():
-            ...     ligands.center(Scale.ATOM)  # Works on atom scale
+            >>> hetero_atoms = p.hetero()  # Get waters/ions/ligands
+            >>> if not hetero_atoms.empty():
+            ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
         """
         from .selection import hetero
         return hetero(self)
+
+    @property
+    def polymer(self: Polymer) -> Polymer:
+        """
+        Return polymer atoms only (excludes HETATM/non-polymer atoms).
+
+        This property provides a clean way to access only the polymer portion
+        of a structure for residue-level operations.
+
+        Returns:
+            Polymer with only polymer atoms. If already polymer-only, returns self.
+
+        Example:
+            >>> structure = load("file.cif")
+            >>> structure.polymer.by_residue(Residue.A)  # Residue operations
+            >>> structure.polymer.backbone()  # Structural selections
+        """
+        if self.nonpoly == 0:
+            return self
+        return self.poly()
 
     def chains(
         self: Polymer,

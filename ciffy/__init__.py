@@ -53,6 +53,7 @@ except ImportError as e:
 
 # Core types
 from .polymer import Polymer, Field, Metadata
+from .hetero import HeteroAtoms
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
 
@@ -113,6 +114,7 @@ __all__ = [
     "__version__",
     # Core types
     "Polymer",
+    "HeteroAtoms",
     "Field",
     "Scale",
     "Molecule",

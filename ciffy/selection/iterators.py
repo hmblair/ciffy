@@ -9,6 +9,7 @@ from typing import Generator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
+    from ..hetero import HeteroAtoms
 
 from ..backend import ops
 from ..biochemistry import Scale, Molecule
@@ -75,29 +76,39 @@ def poly(polymer: Polymer) -> Polymer:
     )
 
 
-def hetero(polymer: Polymer) -> Polymer:
+def hetero(polymer: Polymer) -> "HeteroAtoms":
     """
     Return non-polymer atoms only (HETATM: water, ions, ligands).
 
-    Warning:
-        The returned Polymer has no valid residue information.
-        Residue-scale operations like reduce(scale=Scale.RESIDUE)
-        will return empty results.
+    Returns a lightweight HeteroAtoms container with only atom-level data.
+    Unlike Polymer, HeteroAtoms has no residue or chain hierarchy.
 
     Args:
         polymer: Source polymer.
 
     Returns:
-        New Polymer with only HETATM atoms. If there are no HETATM atoms,
-        returns a Polymer with 0 atoms.
+        HeteroAtoms container with HETATM atoms. If there are no HETATM atoms,
+        returns an empty HeteroAtoms.
 
     Example:
         >>> p = load("file.cif")
-        >>> ligands = hetero(p)  # Get waters/ions/ligands
-        >>> if not ligands.empty():
-        ...     ligands.center(Scale.ATOM)  # Works on atom scale
+        >>> hetero_atoms = hetero(p)  # Get waters/ions/ligands
+        >>> if not hetero_atoms.empty():
+        ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
     """
-    return polymer[polymer.polymer_count:]
+    from ..hetero import HeteroAtoms
+
+    if polymer.nonpoly == 0:
+        return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
+
+    pc = polymer.polymer_count
+    return HeteroAtoms(
+        coordinates=polymer.coordinates[pc:],
+        atoms=polymer.atoms[pc:],
+        elements=polymer.elements[pc:],
+        bfactors=polymer._bfactors[pc:] if polymer._bfactors is not None else None,
+        pdb_id=polymer.pdb_id,
+    )
 
 
 def chains(

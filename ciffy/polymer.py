@@ -1574,33 +1574,33 @@ class Polymer:
         Returns:
             List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
         """
-        types_np = to_numpy(self.molecule_types) if self.molecule_types is not None else None
-        lengths_np = to_numpy(self.lengths)
-        atoms_np = to_numpy(self._sizes[Scale.CHAIN])
-        elements_np = to_numpy(self.elements)
+        mol_types = to_numpy(self.molecule_types) if self.molecule_types is not None else None
+        residue_counts = to_numpy(self.lengths)
+        atom_counts = to_numpy(self._hierarchy.sizes(Scale.CHAIN))
+        elements = to_numpy(self.elements)
 
         rows = []
         atom_offset = 0
-        for ix in range(self.size(Scale.CHAIN)):
-            mol = molecule_type(int(types_np[ix])) if types_np is not None else Molecule.UNKNOWN
-            res = int(lengths_np[ix])
-            atoms = int(atoms_np[ix])
 
-            # For ION chains, show element name (e.g., "MG ION")
-            type_str = mol.name
-            if mol == Molecule.ION and atoms > 0:
-                elem_idx = int(elements_np[atom_offset])
-                elem_name = ELEMENT_NAMES.get(elem_idx, "")
-                if elem_name:
-                    type_str = f"{elem_name} {mol.name}"
+        for i, name in enumerate(self.names):
+            mol = molecule_type(int(mol_types[i])) if mol_types is not None else Molecule.UNKNOWN
+            n_residues = int(residue_counts[i])
+            n_atoms = int(atom_counts[i])
+
+            # For ions, prefix with element symbol (e.g., "MG ION")
+            if mol == Molecule.ION and n_atoms > 0:
+                element_name = ELEMENT_NAMES.get(int(elements[atom_offset]), "")
+                type_str = f"{element_name} {mol.name}" if element_name else mol.name
+            else:
+                type_str = mol.name
 
             rows.append({
-                'chain': self.names[ix],
+                'chain': name,
                 'type': type_str,
-                'res': res,
-                'atoms': atoms,
+                'res': n_residues,
+                'atoms': n_atoms,
             })
-            atom_offset += atoms
+            atom_offset += n_atoms
 
         return rows
 

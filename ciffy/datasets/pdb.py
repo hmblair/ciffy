@@ -104,12 +104,16 @@ def _build_search_query(
     min_length: int | None = None,
     max_length: int | None = None,
     experimental_method: str | None = None,
+    released_after: str | None = None,
+    released_before: str | None = None,
 ) -> dict:
     """Build RCSB search query for structures containing specified polymer types.
 
     Args:
         polymer_types: List of polymer types (e.g., ["RNA", "DNA", "Protein"]).
             If None, no polymer type filter is applied.
+        released_after: Only include structures released after this date (YYYY-MM-DD).
+        released_before: Only include structures released before this date (YYYY-MM-DD).
     """
     nodes = []
 
@@ -195,6 +199,29 @@ def _build_search_query(
         }
         nodes.append(method_node)
 
+    # Release date filters
+    if released_after is not None:
+        nodes.append({
+            "type": "terminal",
+            "service": "text",
+            "parameters": {
+                "attribute": "rcsb_accession_info.initial_release_date",
+                "operator": "greater",
+                "value": released_after,
+            },
+        })
+
+    if released_before is not None:
+        nodes.append({
+            "type": "terminal",
+            "service": "text",
+            "parameters": {
+                "attribute": "rcsb_accession_info.initial_release_date",
+                "operator": "less",
+                "value": released_before,
+            },
+        })
+
     # Combine with AND
     if len(nodes) == 1:
         query = nodes[0]
@@ -233,6 +260,8 @@ def search_structures(
         "NEUTRON DIFFRACTION",
     ]
     | None = None,
+    released_after: str | None = None,
+    released_before: str | None = None,
     timeout: float = 60.0,
 ) -> list[str]:
     """
@@ -250,6 +279,8 @@ def search_structures(
         min_length: Minimum polymer length.
         max_length: Maximum polymer length.
         experimental_method: Filter by experimental method.
+        released_after: Only include structures released after this date (YYYY-MM-DD).
+        released_before: Only include structures released before this date (YYYY-MM-DD).
         timeout: Request timeout in seconds.
 
     Returns:
@@ -267,10 +298,10 @@ def search_structures(
         ... )
         >>> print(f"Found {len(pdb_ids)} structures")
 
-        >>> # Find structures with RNA or DNA
+        >>> # Find structures released in 2024
         >>> pdb_ids = search_structures(
-        ...     polymer_types=["RNA", "DNA"],
-        ...     max_resolution=3.0,
+        ...     released_after="2024-01-01",
+        ...     released_before="2025-01-01",
         ... )
     """
     # Normalize polymer_types to list
@@ -288,6 +319,8 @@ def search_structures(
         min_length=min_length,
         max_length=max_length,
         experimental_method=experimental_method,
+        released_after=released_after,
+        released_before=released_before,
     )
 
     query_json = json.dumps(query).encode("utf-8")
@@ -585,6 +618,8 @@ def download_cli(
     min_length: int | None = None,
     max_length: int | None = None,
     method: str | None = None,
+    released_after: str | None = None,
+    released_before: str | None = None,
     overwrite: bool = False,
     max_workers: int = 4,
     search_only: bool = False,
@@ -608,6 +643,8 @@ def download_cli(
         min_length: Minimum polymer length.
         max_length: Maximum polymer length.
         method: Experimental method shorthand (xray, em, nmr, neutron).
+        released_after: Only include structures released after this date (YYYY-MM-DD).
+        released_before: Only include structures released before this date (YYYY-MM-DD).
         overwrite: Overwrite existing files.
         max_workers: Maximum concurrent downloads.
         search_only: Only search, don't download.
@@ -661,6 +698,10 @@ def download_cli(
             print(f"  Max length: {max_length}")
         if experimental_method:
             print(f"  Method: {experimental_method}")
+        if released_after:
+            print(f"  Released after: {released_after}")
+        if released_before:
+            print(f"  Released before: {released_before}")
 
         pdb_ids = search_structures(
             polymer_types=rcsb_types,
@@ -669,6 +710,8 @@ def download_cli(
             min_length=min_length,
             max_length=max_length,
             experimental_method=experimental_method,
+            released_after=released_after,
+            released_before=released_before,
         )
 
         print(f"\nFound {_colored_count(len(pdb_ids))} structures")

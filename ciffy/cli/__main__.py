@@ -332,6 +332,8 @@ def _download_command(args):
         min_length=args.min_length,
         max_length=args.max_length,
         method=args.method,
+        released_after=args.released_after,
+        released_before=args.released_before,
         overwrite=args.overwrite,
         max_workers=args.max_workers,
         search_only=args.search_only,
@@ -790,6 +792,18 @@ def main():
         choices=["xray", "em", "nmr", "neutron"],
         default=None,
         help="Filter by experimental method",
+    )
+    download_parser.add_argument(
+        "--released-after",
+        type=str,
+        default=None,
+        help="Only include structures released after this date (YYYY-MM-DD)",
+    )
+    download_parser.add_argument(
+        "--released-before",
+        type=str,
+        default=None,
+        help="Only include structures released before this date (YYYY-MM-DD)",
     )
     download_parser.add_argument(
         "--overwrite",

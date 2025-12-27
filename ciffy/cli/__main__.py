@@ -22,6 +22,33 @@ def _info_command(args):
     """Handle the info/default command."""
     from ciffy import load
 
+    # For multiple files, collect all info and display as unified table
+    if len(args.files) > 1:
+        from ciffy.utils.formatting import format_multi_polymer_table
+
+        polymers = []
+        backend = "numpy"  # default
+        for filepath in args.files:
+            try:
+                polymer = load(filepath, load_descriptions=args.desc)
+                if args.poly:
+                    polymer = polymer.poly()
+                if not polymers:  # First successful load
+                    backend = polymer.backend
+                rows = polymer.chain_info()
+                polymers.append((polymer.pdb_id, filepath, rows))
+            except FileNotFoundError:
+                print(f"Error: File not found: {filepath}", file=sys.stderr)
+                continue
+            except Exception as e:
+                print(f"Error loading {filepath}: {e}", file=sys.stderr)
+                continue
+
+        if polymers:
+            print(format_multi_polymer_table(polymers, backend))
+        return
+
+    # Single file: use original behavior
     for i, filepath in enumerate(args.files):
         # Add blank line between multiple files
         if i > 0:
@@ -29,6 +56,8 @@ def _info_command(args):
 
         try:
             polymer = load(filepath, load_descriptions=args.desc)
+            if args.poly:
+                polymer = polymer.poly()
         except FileNotFoundError:
             print(f"Error: File not found: {filepath}", file=sys.stderr)
             continue
@@ -516,6 +545,11 @@ def main():
         "--desc", "-d",
         action="store_true",
         help="Show entity descriptions for each chain",
+    )
+    info_parser.add_argument(
+        "--poly", "-p",
+        action="store_true",
+        help="Show only polymer atoms (exclude water, ions, ligands)",
     )
 
     # Map subcommand

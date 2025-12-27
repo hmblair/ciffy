@@ -198,18 +198,18 @@ def benchmark_polymer_encode(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    # Keys are already int after normalization
-    residue_types = list(model.residue_models.keys())
+    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
+    residue_types = list(model._atom_counts.keys())
 
     for seq_len in sequence_lengths:
-        # Create random sequence using available residue types (already ints)
+        # Create random sequence using available residue types
         sequence = np.array(
             [residue_types[i % len(residue_types)] for i in range(seq_len)],
             dtype=np.int64
         )
 
         # Create random coordinates (sum of atoms for sequence)
-        n_atoms = sum(model.residue_models[r].n_atoms for r in sequence)
+        n_atoms = sum(model._atom_counts[int(r)] for r in sequence)
         coords = torch.randn(n_atoms, 3, device=device)
 
         def run():
@@ -232,11 +232,12 @@ def benchmark_polymer_decode(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    residue_types = list(model.residue_models.keys())
+    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
+    residue_types = list(model._atom_counts.keys())
     latent_dim = model.latent_dim
 
     for seq_len in sequence_lengths:
-        # Create random sequence (keys are already ints)
+        # Create random sequence using available residue types
         sequence = np.array(
             [residue_types[i % len(residue_types)] for i in range(seq_len)],
             dtype=np.int64
@@ -265,10 +266,11 @@ def benchmark_polymer_sample(
     _move_polymer_model_to_device(model, device)
 
     results = {}
-    residue_types = list(model.residue_models.keys())
+    # Use _atom_counts which has int keys (residue_models uses string keys for nn.ModuleDict)
+    residue_types = list(model._atom_counts.keys())
 
     for seq_len in sequence_lengths:
-        # Create random sequence (keys are already ints)
+        # Create random sequence using available residue types
         sequence = np.array(
             [residue_types[i % len(residue_types)] for i in range(seq_len)],
             dtype=np.int64

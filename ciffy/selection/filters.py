@@ -28,23 +28,7 @@ def by_index(polymer: Polymer, ix: Array | int) -> Polymer:
     Raises:
         IndexError: If any index is out of range.
     """
-    if isinstance(ix, int):
-        ix = [ix]
-    elif hasattr(ix, 'tolist'):
-        ix = ix.tolist()
-
-    # Validate indices
-    max_chain = polymer.size(Scale.CHAIN)
-    for j in ix:
-        if j < 0 or j >= max_chain:
-            raise IndexError(
-                f"Chain index {j} out of range for Polymer with {max_chain} chains"
-            )
-
-    # Create chain mask and use unified selection
-    chain_mask = ops.zeros(max_chain, like=polymer.coordinates, dtype='bool')
-    chain_mask[ix] = True
-    return polymer.select(chain_mask, Scale.CHAIN)
+    return polymer.select(ix, Scale.CHAIN)
 
 
 def by_atom(polymer: Polymer, name: Array | int) -> Polymer:
@@ -85,43 +69,6 @@ def by_residue(polymer: Polymer, res: Array | int) -> Polymer:
     return polymer[atom_mask]
 
 
-def by_residue_index(polymer: Polymer, ix: Array | int) -> Polymer:
-    """
-    Select residues by positional index.
-
-    Unlike by_residue() which selects by residue TYPE (e.g., all adenines),
-    this method selects by positional INDEX (e.g., residue 0, 1, 2...).
-
-    Args:
-        polymer: Source polymer.
-        ix: Residue index or indices (0-indexed position in polymer).
-
-    Returns:
-        New Polymer with selected residues.
-
-    Raises:
-        IndexError: If any index is out of range.
-
-    Example:
-        >>> first = by_residue_index(polymer, 0)
-        >>> subset = by_residue_index(polymer, [0, 2, 4])
-    """
-    if isinstance(ix, int):
-        ix = ops.array([ix], like=polymer.coordinates)
-
-    # Validate indices
-    max_res = polymer.size(Scale.RESIDUE)
-    ix_list = ix.tolist() if hasattr(ix, 'tolist') else list(ix)
-    for j in ix_list:
-        if j < 0 or j >= max_res:
-            raise IndexError(
-                f"Residue index {j} out of range for Polymer with {max_res} residues"
-            )
-
-    atom_mask = polymer.mask(ix, Scale.RESIDUE, Scale.ATOM)
-    return polymer[atom_mask]
-
-
 def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
     """
     Select chains by molecule type.
@@ -139,4 +86,4 @@ def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
     if polymer.molecule_types is None:
         raise ValueError("Cannot filter by type: molecule_types not available on this polymer")
     ix = ops.nonzero_1d(polymer.molecule_types == mol.value)
-    return by_index(polymer, ix)
+    return polymer.select(ix, Scale.CHAIN)

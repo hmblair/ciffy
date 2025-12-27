@@ -9,7 +9,6 @@ from .filters import (
     by_index,
     by_atom,
     by_residue,
-    by_residue_index,
     by_type,
 )
 
@@ -36,7 +35,6 @@ __all__ = [
     "by_index",
     "by_atom",
     "by_residue",
-    "by_residue_index",
     "by_type",
     # Iterators
     "poly",

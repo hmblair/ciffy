@@ -1002,6 +1002,52 @@ class Polymer:
         from .selection import mask
         return mask(self, indices, source, dest)
 
+    def _to_mask(self: Polymer, selector: Array | int | list, scale: Scale) -> Array:
+        """
+        Convert a selector to a boolean mask.
+
+        Args:
+            selector: Boolean mask, int index, or list of indices.
+            scale: Scale at which the selector operates.
+
+        Returns:
+            Boolean mask array at the specified scale.
+
+        Raises:
+            IndexError: If any index is out of range.
+        """
+        # Already a boolean mask - return as-is
+        if hasattr(selector, 'dtype'):
+            # Check if it's a boolean array
+            dtype_str = str(selector.dtype)
+            if 'bool' in dtype_str:
+                return selector
+
+        # Convert int to list
+        if isinstance(selector, int):
+            indices = [selector]
+        elif isinstance(selector, list):
+            indices = selector
+        elif hasattr(selector, 'tolist'):
+            # Array of indices
+            indices = selector.tolist()
+        else:
+            # Assume it's already a mask
+            return selector
+
+        # Validate indices and create mask
+        max_size = self.size(scale)
+        for ix in indices:
+            if ix < 0 or ix >= max_size:
+                raise IndexError(
+                    f"{scale.name} index {ix} out of range for Polymer with {max_size} {scale.name.lower()}s"
+                )
+
+        mask = ops.zeros(max_size, like=self.coordinates, dtype='bool')
+        for ix in indices:
+            mask[ix] = True
+        return mask
+
     def _select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
         """
         Unified selection implementation for all scales.
@@ -1038,7 +1084,7 @@ class Polymer:
 
         return self._clone(**sliced)
 
-    def select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
+    def select(self: Polymer, selector: Array | int | list, scale: Scale) -> Polymer:
         """
         Select units at the specified scale.
 
@@ -1046,11 +1092,17 @@ class Polymer:
         with appropriate semantics for unresolved (0-atom) residues.
 
         Args:
-            mask: Boolean mask of units to keep at the specified scale.
-            scale: Scale of the mask (ATOM, RESIDUE, or CHAIN).
+            selector: Selection criteria. Can be:
+                - Boolean mask array (True = keep)
+                - Integer index (single unit)
+                - List/array of integer indices
+            scale: Scale of selection (ATOM, RESIDUE, or CHAIN).
 
         Returns:
             New Polymer with selected units.
+
+        Raises:
+            IndexError: If any index is out of range (when using indices).
 
         Semantics by scale:
             - ATOM: Residues with 0 atoms after masking are REMOVED.
@@ -1058,17 +1110,23 @@ class Polymer:
             - CHAIN: All residues in selected chains are KEPT.
 
         Example:
-            >>> # Select atoms (removes empty residues)
+            >>> # Select by boolean mask
             >>> backbone = polymer.select(backbone_mask, Scale.ATOM)
-            >>>
-            >>> # Select residues (keeps unresolved)
             >>> adenines = polymer.select(polymer.sequence == Residue.A, Scale.RESIDUE)
             >>>
-            >>> # Select chains (keeps all residues)
-            >>> chain_a = polymer.select(chain_mask, Scale.CHAIN)
+            >>> # Select by index
+            >>> first_residue = polymer.select(0, Scale.RESIDUE)
+            >>> first_chain = polymer.select(0, Scale.CHAIN)
+            >>>
+            >>> # Select by index list
+            >>> residues = polymer.select([0, 2, 4], Scale.RESIDUE)
+            >>> chains = polymer.select([0, 1], Scale.CHAIN)
         """
         if scale not in (Scale.ATOM, Scale.RESIDUE, Scale.CHAIN):
             raise ValueError(f"Selection not supported at {scale.name} scale")
+
+        # Convert indices to mask if needed
+        mask = self._to_mask(selector, scale)
         return self._select(mask, scale)
 
     def __getitem__(self: Polymer, key: Array | slice) -> Polymer:
@@ -1106,8 +1164,7 @@ class Polymer:
         Raises:
             IndexError: If any index is out of range.
         """
-        from .selection import by_index
-        return by_index(self, ix)
+        return self.select(ix, Scale.CHAIN)
 
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """
@@ -1139,34 +1196,6 @@ class Polymer:
         """
         from .selection import by_residue
         return by_residue(self, res)
-
-    def by_residue_index(self: Polymer, ix: Array | int) -> Polymer:
-        """
-        Select residues by positional index.
-
-        Unlike by_residue() which selects by residue TYPE (e.g., all adenines),
-        this method selects by positional INDEX (e.g., residue 0, 1, 2...).
-
-        Args:
-            ix: Residue index or indices (0-indexed position in polymer).
-
-        Returns:
-            New Polymer with selected residues.
-
-        Raises:
-            IndexError: If any index is out of range.
-
-        Example:
-            >>> # Select first residue
-            >>> first = polymer.by_residue_index(0)
-            >>> # Select residues 0, 2, 4
-            >>> subset = polymer.by_residue_index([0, 2, 4])
-            >>> # Combine with by_atom to get specific atoms
-            >>> from ciffy.biochemistry import Sugar
-            >>> first_c5 = polymer.by_residue_index(0).by_atom(Sugar.C5p.index())
-        """
-        from .selection import by_residue_index
-        return by_residue_index(self, ix)
 
     def canonical(self: Polymer) -> Polymer:
         """

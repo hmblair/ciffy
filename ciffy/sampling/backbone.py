@@ -194,7 +194,7 @@ def _has_clash(
         return False
 
     # Extract current residue atoms
-    current_atoms = polymer.by_residue_index(current_residue_idx)
+    current_atoms = polymer.select(current_residue_idx, Scale.RESIDUE)
 
     # Extract previous residues EXCEPT the immediately adjacent ones (which are bonded)
     # Check residues 0 to current_idx-3 (skip current_idx-2 and current_idx-1)
@@ -202,7 +202,7 @@ def _has_clash(
     if len(previous_indices) == 0:
         return False
 
-    previous_atoms = polymer.by_residue_index(previous_indices)
+    previous_atoms = polymer.select(previous_indices, Scale.RESIDUE)
 
     # Filter to heavy atoms only (exclude hydrogen)
     curr_mask = current_atoms.elements != Element.H
@@ -448,12 +448,14 @@ def _get_pairwise_distances(
     Returns:
         Flattened 1D array of pairwise distances, or empty array if no previous residues.
     """
+    from ..biochemistry import Scale
+
     if current_res_idx <= back_residues:
         return np.array([])
 
-    curr_atoms = polymer.by_residue_index(current_res_idx)
+    curr_atoms = polymer.select(current_res_idx, Scale.RESIDUE)
     prev_indices = list(range(current_res_idx - back_residues))
-    prev_atoms = polymer.by_residue_index(prev_indices)
+    prev_atoms = polymer.select(prev_indices, Scale.RESIDUE)
 
     return _filter_and_compute_distances(curr_atoms, prev_atoms)
 

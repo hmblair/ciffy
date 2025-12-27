@@ -744,7 +744,7 @@ def main():
     )
     download_parser.add_argument(
         "--type", "-t",
-        type=str,
+        type=str.lower,
         nargs="+",
         default=None,
         choices=["rna", "dna", "protein", "hybrid", "other"],

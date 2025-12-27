@@ -5,7 +5,6 @@ Functions for creating masks, checking resolution, and selecting structural regi
 """
 
 from __future__ import annotations
-from copy import copy
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,7 +12,6 @@ if TYPE_CHECKING:
 
 from ..backend import Array, ops
 from ..biochemistry import Scale, Backbone, Nucleobase, Phosphate, Sidechain
-from ..operations.reduction import Reduction
 
 
 def mask(
@@ -51,7 +49,7 @@ def resolved(polymer: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
     Returns:
         Boolean tensor where True indicates resolved units.
     """
-    return polymer._sizes[scale] != 0
+    return polymer._hierarchy.resolved(scale)
 
 
 def strip(polymer: Polymer, scale: Scale = Scale.RESIDUE) -> Polymer:
@@ -65,16 +63,8 @@ def strip(polymer: Polymer, scale: Scale = Scale.RESIDUE) -> Polymer:
     Returns:
         New Polymer without empty units.
     """
-    poly = copy(polymer)
-
-    resolved_mask = polymer._sizes[scale] > 0
-    poly._sizes = copy(polymer._sizes)
-    poly._sizes[scale] = poly._sizes[scale][resolved_mask]
-
-    poly.lengths = polymer.rreduce(ops.to_int64(resolved_mask), Scale.CHAIN, Reduction.SUM)
-    poly.sequence = polymer.sequence[resolved_mask]
-
-    return poly
+    resolved_mask = polymer._hierarchy.resolved(scale)
+    return polymer.select(resolved_mask, scale)
 
 
 # Specialized structural selections

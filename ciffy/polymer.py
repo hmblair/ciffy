@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     import torch
     from .hetero import HeteroAtoms
 from .operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
+from .hierarchy import _Hierarchy
 from .biochemistry import (
     Residue,
     ATOM_NAMES,
@@ -274,6 +275,14 @@ class Polymer:
         self._bfactors = bfactors
         self._resolution = resolution
 
+        # Create hierarchy for scale operations
+        self._hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=lengths,
+            polymer_count=self.polymer_count,
+            ref=coordinates,
+        )
+
         # Create topology info
         from .backend.graph import TopologyInfo
         self._topology = TopologyInfo.from_polymer(self)
@@ -363,139 +372,7 @@ class Polymer:
         Returns:
             Tuple of (atom_mask, res_mask, chn_mask).
         """
-        if input_scale == Scale.ATOM:
-            atom_mask = input_mask
-            # Count atoms per residue after masking
-            res_sizes = self.count(input_mask, Scale.RESIDUE)
-            if remove_empty_residues:
-                res_mask = res_sizes > 0
-            else:
-                res_mask = ops.ones(self.size(Scale.RESIDUE), like=self.coordinates, dtype='bool')
-            # Derive chain mask from residue mask
-            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
-            chn_mask = new_lengths > 0
-
-        elif input_scale == Scale.RESIDUE:
-            res_mask = input_mask
-            # Expand residue mask to atoms
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-            # Derive chain mask
-            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
-            chn_mask = new_lengths > 0
-
-        elif input_scale == Scale.CHAIN:
-            chn_mask = input_mask
-            # Expand to residues and atoms
-            res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-
-        else:
-            raise ValueError(f"Selection not supported at {input_scale.name} scale")
-
-        return atom_mask, res_mask, chn_mask
-
-    def _compute_sizes(
-        self: Polymer,
-        atom_mask: Array,
-        res_mask: Array,
-        chn_mask: Array,
-        input_scale: Scale,
-    ) -> dict[Scale, Array]:
-        """
-        Compute the sizes dict for the new Polymer.
-
-        Semantics differ by input_scale:
-        - ATOM: Count atoms per unit after masking, filter empty residues
-        - RESIDUE/CHAIN: Use original sizes, just filter by masks
-
-        Args:
-            atom_mask: Boolean mask for atoms.
-            res_mask: Boolean mask for residues.
-            chn_mask: Boolean mask for chains.
-            input_scale: Scale of the original input mask.
-
-        Returns:
-            Dict mapping Scale to atom counts per unit.
-        """
-        if input_scale == Scale.ATOM:
-            # Count atoms per unit after masking
-            res_sizes_after = self.count(atom_mask, Scale.RESIDUE)
-            chn_sizes_after = self.count(atom_mask, Scale.CHAIN)
-            mol_sizes = self.count(atom_mask, Scale.MOLECULE)
-
-            return {
-                Scale.RESIDUE: res_sizes_after[res_mask],
-                Scale.CHAIN: chn_sizes_after[chn_mask],
-                Scale.MOLECULE: mol_sizes,
-            }
-        else:
-            # For RESIDUE/CHAIN: use original sizes filtered by masks
-            orig_res_sizes = self._sizes[Scale.RESIDUE]
-
-            if input_scale == Scale.RESIDUE:
-                # Compute chain sizes by summing masked residue sizes
-                masked_res_sizes = orig_res_sizes * ops.to_int64(res_mask)
-                chn_sizes = self.rreduce(masked_res_sizes, Scale.CHAIN, Reduction.SUM)
-            else:  # CHAIN
-                chn_sizes = self._sizes[Scale.CHAIN]
-
-            # Filter residue sizes by mask
-            filtered_res_sizes = orig_res_sizes[res_mask]
-
-            # Total atom count for molecule
-            total_atoms = filtered_res_sizes.sum().item()
-
-            return {
-                Scale.RESIDUE: filtered_res_sizes,
-                Scale.CHAIN: chn_sizes[chn_mask],
-                Scale.MOLECULE: ops.array([total_atoms], like=self.coordinates),
-            }
-
-    def _compute_polymer_count(
-        self: Polymer,
-        atom_mask: Array,
-        res_mask: Array,
-        input_scale: Scale,
-    ) -> int:
-        """
-        Compute new polymer_count based on selection scale.
-
-        Args:
-            atom_mask: Boolean mask for atoms.
-            res_mask: Boolean mask for residues.
-            input_scale: Scale of the original input mask.
-
-        Returns:
-            New polymer_count value.
-        """
-        if input_scale == Scale.ATOM:
-            return atom_mask[:self.polymer_count].sum().item()
-        else:
-            res_sizes = self._sizes[Scale.RESIDUE][res_mask]
-            return res_sizes.sum().item()
-
-    def _compute_lengths(
-        self: Polymer,
-        res_mask: Array,
-        chn_mask: Array,
-        input_scale: Scale,
-    ) -> Array:
-        """
-        Compute new chain lengths.
-
-        Args:
-            res_mask: Boolean mask for residues.
-            chn_mask: Boolean mask for chains.
-            input_scale: Scale of the original input mask.
-
-        Returns:
-            Array of chain lengths.
-        """
-        if input_scale == Scale.CHAIN:
-            return self.lengths[chn_mask]
-        else:
-            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
-            return new_lengths[chn_mask]
+        return self._hierarchy.derive_masks(input_mask, input_scale, remove_empty_residues)
 
     def _convert_backend(self, to_func) -> dict:
         """
@@ -631,7 +508,7 @@ class Polymer:
 
     def empty(self: Polymer) -> bool:
         """Check if the polymer has no atoms."""
-        return arr_size(self.coordinates, 0) == 0
+        return self._hierarchy.empty()
 
     def size(self: Polymer, scale: Scale | None = None) -> int:
         """
@@ -646,7 +523,7 @@ class Polymer:
         """
         if scale is None:
             return arr_size(self.coordinates, 0)
-        return arr_size(self._sizes[scale], 0)
+        return self._hierarchy.size(scale)
 
     def sizes(self: Polymer, scale: Scale) -> Array:
         """
@@ -658,7 +535,7 @@ class Polymer:
         Returns:
             Tensor of atom counts per unit at this scale.
         """
-        return self._sizes[scale]
+        return self._hierarchy.sizes(scale)
 
     def per(self: Polymer, inner: Scale, outer: Scale) -> Array:
         """
@@ -675,22 +552,7 @@ class Polymer:
             >>> polymer.per(Scale.RESIDUE, Scale.CHAIN)
             array([150, 200, 175])  # residues per chain
         """
-        if inner == outer:
-            return ops.ones(self.size(inner), like=self.coordinates)
-
-        # Atoms per {residue, chain, molecule} are stored in _sizes
-        if inner == Scale.ATOM:
-            return self._sizes[outer]
-
-        # Residues per chain are stored in lengths
-        if inner == Scale.RESIDUE and outer == Scale.CHAIN:
-            return self.lengths
-
-        # Single-value cases: total count as 1-element array
-        if outer == Scale.MOLECULE:
-            return ops.array([self.size(inner)], like=self.coordinates)
-
-        raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
+        return self._hierarchy.per(inner, outer)
 
     def istype(self: Polymer, mol: Molecule) -> bool:
         """
@@ -719,40 +581,38 @@ class Polymer:
     def reduce(
         self: Polymer,
         features: Array,
-        scale: Scale,
+        out_scale: Scale,
         rtype: Reduction = Reduction.MEAN,
+        in_scale: Scale = Scale.ATOM,
     ) -> ReductionResult:
         """
-        Reduce per-atom features to per-scale values.
+        Reduce features from one scale to a coarser scale.
 
-        Aggregates atom-level features within each unit at the specified
-        scale using the chosen reduction operation.
+        Aggregates features within each unit at the output scale
+        using the chosen reduction operation.
 
         Args:
-            features: Per-atom feature tensor.
-            scale: Scale at which to aggregate.
+            features: Feature tensor at in_scale.
+            out_scale: Target scale to reduce to.
             rtype: Reduction type (MEAN, SUM, MIN, MAX, COLLATE).
+            in_scale: Scale of input features (default: ATOM).
 
         Returns:
             Reduced features. For MIN/MAX, returns (values, indices).
 
+        Examples:
+            >>> # Atom -> residue (default)
+            >>> res_feats = polymer.reduce(coords, Scale.RESIDUE)
+            >>> # Residue -> chain (with explicit in_scale)
+            >>> chain_feats = polymer.reduce(res_feats, Scale.CHAIN, in_scale=Scale.RESIDUE)
+            >>> # Chain -> molecule
+            >>> mol_feats = polymer.reduce(chain_feats, Scale.MOLECULE, in_scale=Scale.CHAIN)
+
         Note:
-            When reducing to RESIDUE scale, non-polymer atoms are excluded
-            since they don't belong to any residue.
+            When reducing from ATOM to RESIDUE scale, non-polymer atoms are
+            automatically excluded since they don't belong to any residue.
         """
-        # Non-polymer atoms don't belong to residues, so slice them out
-        # when reducing to RESIDUE scale. With reordered atoms, polymer
-        # atoms are always first [0, polymer_count), so we can use simple slicing.
-        if scale == Scale.RESIDUE and self.nonpoly > 0:
-            features = features[:self.polymer_count]
-
-        count = self.size(scale)
-        sizes = self._sizes[scale]
-        # Pass device to ensure index is on same device as features
-        device = getattr(features, 'device', None)
-        ix = create_reduction_index(count, sizes, device=device)
-
-        return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
+        return self._hierarchy.reduce(features, out_scale, rtype, in_scale)
 
     def rreduce(
         self: Polymer,
@@ -763,8 +623,7 @@ class Polymer:
         """
         Reduce per-residue features to per-scale values.
 
-        Like reduce(), but for features with one value per residue
-        instead of per atom.
+        Deprecated: Use reduce(features, scale, rtype, in_scale=Scale.RESIDUE) instead.
 
         Args:
             features: Per-residue feature tensor.
@@ -774,12 +633,7 @@ class Polymer:
         Returns:
             Reduced features.
         """
-        count = self.size(scale)
-        # Pass device to ensure index is on same device as features
-        device = getattr(features, 'device', None)
-        ix = create_reduction_index(count, self.lengths, device=device)
-
-        return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
+        return self._hierarchy.reduce(features, scale, rtype, in_scale=Scale.RESIDUE)
 
     def expand(
         self: Polymer,
@@ -801,12 +655,7 @@ class Polymer:
         Returns:
             Expanded feature tensor.
         """
-        # Device mismatch is handled by ops.repeat_interleave
-        if dest == Scale.ATOM:
-            return ops.repeat_interleave(features, self._sizes[source])
-        if dest == Scale.RESIDUE:
-            return ops.repeat_interleave(features, self.lengths)
-        raise ValueError(f"Cannot expand to {dest.name}")
+        return self._hierarchy.expand(features, source, dest)
 
     def count(
         self: Polymer,
@@ -823,7 +672,7 @@ class Polymer:
         Returns:
             Count tensor with one value per scale unit.
         """
-        return self.reduce(ops.to_int64(mask), scale, Reduction.SUM)
+        return self._hierarchy.count(mask, scale)
 
     def index(self: Polymer, scale: Scale) -> Array:
         """
@@ -850,9 +699,7 @@ class Polymer:
             # Use for attention masking (same-residue attention)
             >>> mask = res_idx[:, None] == res_idx[None, :]
         """
-        n = self.size(scale)
-        idx = ops.arange(n, like=self.coordinates)
-        return self.expand(idx, scale, Scale.ATOM)
+        return self._hierarchy.index(scale)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Geometry Operations
@@ -1083,8 +930,8 @@ class Polymer:
         """
         Unified selection implementation for all scales.
 
-        Uses helper methods to derive masks, slice fields, and compute
-        scale-specific metadata (sizes, polymer_count, lengths).
+        Uses the hierarchy to derive masks, compute new sizes/lengths,
+        and slice fields accordingly.
 
         Args:
             mask: Boolean mask at the specified scale.
@@ -1100,16 +947,19 @@ class Polymer:
         # Step 2: Slice all fields using existing _slice_all
         sliced = self._slice_all(atom_mask, res_mask, chn_mask)
 
-        # Step 3: Compute sizes dict
-        sizes = self._compute_sizes(atom_mask, res_mask, chn_mask, scale)
+        # Step 3: Use hierarchy to compute new sizes and metadata
+        new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
+        new_polymer_count = self._hierarchy.compute_polymer_count(atom_mask, res_mask, scale)
 
-        # Step 4: Compute polymer_count
-        new_polymer_count = self._compute_polymer_count(atom_mask, res_mask, scale)
+        # Extract sizes dict and lengths for Polymer constructor (legacy format)
+        sizes = {
+            Scale.RESIDUE: new_per[(Scale.ATOM, Scale.RESIDUE)],
+            Scale.CHAIN: new_per[(Scale.ATOM, Scale.CHAIN)],
+            Scale.MOLECULE: new_per[(Scale.ATOM, Scale.MOLECULE)],
+        }
+        lengths = new_per[(Scale.RESIDUE, Scale.CHAIN)]
 
-        # Step 5: Compute lengths
-        lengths = self._compute_lengths(res_mask, chn_mask, scale)
-
-        # Step 6: Construct Polymer
+        # Step 4: Construct Polymer
         return Polymer(
             coordinates=sliced['coordinates'],
             atoms=sliced['atoms'],

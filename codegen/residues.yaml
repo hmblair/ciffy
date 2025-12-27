@@ -1,0 +1,187 @@
+# Curated biochemistry identifiers for code generation
+# Edit this file to add/remove residues from code generation
+#
+# This file is the single source of truth for:
+# - Which residues are included in the generated code (from the CCD)
+# - Which residues are ions
+# - Which nucleotides are purines vs pyrimidines
+
+# Only these residues will be included from the CCD.
+# Set to null to include all residues (not recommended - CCD has ~40k entries).
+residue_whitelist:
+  # Standard RNA nucleotides
+  - A
+  - C
+  - G
+  - U
+  - N     # Unknown nucleotide (ribose-phosphate backbone only)
+
+  # Standard DNA nucleotides
+  - DA
+  - DC
+  - DG
+  - DT
+
+  # Standard amino acids (20)
+  - ALA
+  - ARG
+  - ASN
+  - ASP
+  - CYS
+  - GLN
+  - GLU
+  - GLY
+  - HIS
+  - ILE
+  - LEU
+  - LYS
+  - MET
+  - PHE
+  - PRO
+  - SER
+  - THR
+  - TRP
+  - TYR
+  - VAL
+  - UNK   # Unknown amino acid
+
+  # Common modified nucleotides
+  - PSU   # Pseudouridine
+  - 5MU   # 5-methyluridine
+  - 1MG   # 1-methylguanosine
+  - 2MG   # 2-methylguanosine
+  - 7MG   # 7-methylguanosine
+  - M2G   # N2-methylguanosine
+  - OMG   # 2'-O-methylguanosine
+  - OMC   # 2'-O-methylcytidine
+  - OMU   # 2'-O-methyluridine
+  - 5MC   # 5-methylcytidine
+  - H2U   # Dihydrouridine
+  - 4SU   # 4-thiouridine
+  - FHU   # 5-fluorohydroxyuridine (modified uracil)
+  - PPU   # Puromycin (modified adenosine)
+  - I     # Inosine
+  - 2MA   # 2-methyladenosine-5'-monophosphate (RNA)
+  - 6MZ   # N6-methyladenosine-5'-monophosphate (RNA)
+
+  # Additional modified amino acids
+  - MEQ   # N5-methylglutamine
+  - MS6   # 2-amino-4-(methylsulfanyl)butane-1-thiol
+  - 4D4   # Modified arginine
+
+  # Common modified amino acids
+  - MSE   # Selenomethionine
+  - SEP   # Phosphoserine
+  - TPO   # Phosphothreonine
+  - PTR   # Phosphotyrosine
+  - CSO   # S-hydroxycysteine
+  - OCS   # Cysteinesulfonic acid
+  - HYP   # Hydroxyproline
+  - MLY   # N-dimethyl-lysine
+
+  # Water, ions, and common ligands
+  - HOH   # Water
+  - MG    # Magnesium ion
+  - K     # Potassium ion
+  - NA    # Sodium ion
+  - ZN    # Zinc ion
+  - ACT   # Acetate ion
+  - G7M   # 2'-O-7-methylguanosine (modified RNA)
+  - 6O1   # Evernimicin (antibiotic ligand)
+  - GTP   # Guanosine triphosphate
+  - CCC   # Cytidine-5'-monophosphate
+  - GNG   # Guanine
+  - CS    # Cesium ion
+
+# Single-atom ions (used for classification)
+ions:
+  - AG
+  - AL
+  - AU
+  - BA
+  - BR
+  - CA
+  - CD
+  - CL
+  - CO
+  - CS
+  - CU
+  - F
+  - FE
+  - HG
+  - I
+  - K
+  - LI
+  - MG
+  - MN
+  - NA
+  - NI
+  - PB
+  - PT
+  - RB
+  - SE
+  - SR
+  - W
+  - ZN
+
+# Purine nucleotides (use CHI_PURINE glycosidic angle: O4'-C1'-N9-C4)
+purine_residues:
+  # Standard RNA/DNA
+  - A
+  - G
+  - DA
+  - DG
+  # Modified purines
+  - I      # Inosine
+  - 1MG    # 1-methylguanosine
+  - 2MG    # 2-methylguanosine
+  - 7MG    # 7-methylguanosine
+  - M2G    # N2-methylguanosine
+  - OMG    # 2'-O-methylguanosine
+  - 2MA    # 2-methyladenosine
+  - 6MZ    # N6-methyladenosine
+  - G7M    # 2'-O-7-methylguanosine
+  - PPU    # Puromycin (modified adenosine)
+  - GTP    # Guanosine triphosphate
+  - GNG    # Guanine
+
+# Pyrimidine nucleotides (use CHI_PYRIMIDINE glycosidic angle: O4'-C1'-N1-C2)
+pyrimidine_residues:
+  # Standard RNA/DNA
+  - C
+  - U
+  - DC
+  - DT
+  - N      # Unknown nucleotide (treated as pyrimidine for backbone)
+  # Modified pyrimidines
+  - PSU    # Pseudouridine
+  - 5MU    # 5-methyluridine
+  - 5MC    # 5-methylcytidine
+  - OMC    # 2'-O-methylcytidine
+  - OMU    # 2'-O-methyluridine
+  - H2U    # Dihydrouridine
+  - 4SU    # 4-thiouridine
+  - FHU    # 5-fluorohydroxyuridine
+  - CCC    # Cytidine-5'-monophosphate
+
+# Molecule type classification rules
+# Maps CCD _chem_comp.type patterns to Molecule enum values.
+# Rules are evaluated in order; first match wins.
+# Pattern matching is case-insensitive substring search.
+molecule_classification:
+  # Polymer types (order matters: more specific patterns first)
+  - pattern: "RNA"
+    molecule_type: RNA
+  - pattern: "DNA"
+    molecule_type: DNA
+  - pattern: "D-PEPTIDE"
+    molecule_type: PROTEIN_D
+  - pattern: "PEPTIDE"
+    molecule_type: PROTEIN
+
+  # Non-polymer types
+  - pattern: "NON-POLYMER"
+    molecule_type: LIGAND  # Default for non-polymers; water/ions handled specially
+
+# Default molecule type when no pattern matches
+molecule_classification_default: OTHER

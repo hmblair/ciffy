@@ -344,6 +344,158 @@ class Polymer:
                 result[name] = value
         return result
 
+    def _derive_masks(
+        self: Polymer,
+        input_mask: Array,
+        input_scale: Scale,
+        remove_empty_residues: bool = False,
+    ) -> tuple[Array, Array, Array]:
+        """
+        Derive masks at all scales from an input mask at a specific scale.
+
+        Args:
+            input_mask: Boolean mask at input_scale.
+            input_scale: Scale of the input mask (ATOM, RESIDUE, or CHAIN).
+            remove_empty_residues: If True, remove residues with 0 atoms
+                (ATOM scale behavior).
+
+        Returns:
+            Tuple of (atom_mask, res_mask, chn_mask).
+        """
+        if input_scale == Scale.ATOM:
+            atom_mask = input_mask
+            # Count atoms per residue after masking
+            res_sizes = self.count(input_mask, Scale.RESIDUE)
+            if remove_empty_residues:
+                res_mask = res_sizes > 0
+            else:
+                res_mask = ops.ones(self.size(Scale.RESIDUE), like=self.coordinates, dtype='bool')
+            # Derive chain mask from residue mask
+            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            chn_mask = new_lengths > 0
+
+        elif input_scale == Scale.RESIDUE:
+            res_mask = input_mask
+            # Expand residue mask to atoms
+            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            # Derive chain mask
+            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            chn_mask = new_lengths > 0
+
+        elif input_scale == Scale.CHAIN:
+            chn_mask = input_mask
+            # Expand to residues and atoms
+            res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
+            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+
+        else:
+            raise ValueError(f"Selection not supported at {input_scale.name} scale")
+
+        return atom_mask, res_mask, chn_mask
+
+    def _compute_sizes(
+        self: Polymer,
+        atom_mask: Array,
+        res_mask: Array,
+        chn_mask: Array,
+        input_scale: Scale,
+    ) -> dict[Scale, Array]:
+        """
+        Compute the sizes dict for the new Polymer.
+
+        Semantics differ by input_scale:
+        - ATOM: Count atoms per unit after masking, filter empty residues
+        - RESIDUE/CHAIN: Use original sizes, just filter by masks
+
+        Args:
+            atom_mask: Boolean mask for atoms.
+            res_mask: Boolean mask for residues.
+            chn_mask: Boolean mask for chains.
+            input_scale: Scale of the original input mask.
+
+        Returns:
+            Dict mapping Scale to atom counts per unit.
+        """
+        if input_scale == Scale.ATOM:
+            # Count atoms per unit after masking
+            res_sizes_after = self.count(atom_mask, Scale.RESIDUE)
+            chn_sizes_after = self.count(atom_mask, Scale.CHAIN)
+            mol_sizes = self.count(atom_mask, Scale.MOLECULE)
+
+            return {
+                Scale.RESIDUE: res_sizes_after[res_mask],
+                Scale.CHAIN: chn_sizes_after[chn_mask],
+                Scale.MOLECULE: mol_sizes,
+            }
+        else:
+            # For RESIDUE/CHAIN: use original sizes filtered by masks
+            orig_res_sizes = self._sizes[Scale.RESIDUE]
+
+            if input_scale == Scale.RESIDUE:
+                # Compute chain sizes by summing masked residue sizes
+                masked_res_sizes = orig_res_sizes * ops.to_int64(res_mask)
+                chn_sizes = self.rreduce(masked_res_sizes, Scale.CHAIN, Reduction.SUM)
+            else:  # CHAIN
+                chn_sizes = self._sizes[Scale.CHAIN]
+
+            # Filter residue sizes by mask
+            filtered_res_sizes = orig_res_sizes[res_mask]
+
+            # Total atom count for molecule
+            total_atoms = filtered_res_sizes.sum().item()
+
+            return {
+                Scale.RESIDUE: filtered_res_sizes,
+                Scale.CHAIN: chn_sizes[chn_mask],
+                Scale.MOLECULE: ops.array([total_atoms], like=self.coordinates),
+            }
+
+    def _compute_polymer_count(
+        self: Polymer,
+        atom_mask: Array,
+        res_mask: Array,
+        input_scale: Scale,
+    ) -> int:
+        """
+        Compute new polymer_count based on selection scale.
+
+        Args:
+            atom_mask: Boolean mask for atoms.
+            res_mask: Boolean mask for residues.
+            input_scale: Scale of the original input mask.
+
+        Returns:
+            New polymer_count value.
+        """
+        if input_scale == Scale.ATOM:
+            return atom_mask[:self.polymer_count].sum().item()
+        else:
+            res_sizes = self._sizes[Scale.RESIDUE][res_mask]
+            return res_sizes.sum().item()
+
+    def _compute_lengths(
+        self: Polymer,
+        res_mask: Array,
+        chn_mask: Array,
+        input_scale: Scale,
+    ) -> Array:
+        """
+        Compute new chain lengths.
+
+        Args:
+            res_mask: Boolean mask for residues.
+            chn_mask: Boolean mask for chains.
+            input_scale: Scale of the original input mask.
+
+        Returns:
+            Array of chain lengths.
+        """
+        if input_scale == Scale.CHAIN:
+            return self.lengths[chn_mask]
+        else:
+            new_lengths = self.rreduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM)
+            return new_lengths[chn_mask]
+
     def _convert_backend(self, to_func) -> dict:
         """
         Convert all Field arrays to a target backend, pass through Metadata.
@@ -926,9 +1078,94 @@ class Polymer:
         from .selection import mask
         return mask(self, indices, source, dest)
 
+    def _select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
+        """
+        Unified selection implementation for all scales.
+
+        Uses helper methods to derive masks, slice fields, and compute
+        scale-specific metadata (sizes, polymer_count, lengths).
+
+        Args:
+            mask: Boolean mask at the specified scale.
+            scale: Scale of the input mask (ATOM, RESIDUE, or CHAIN).
+
+        Returns:
+            New Polymer with selected units.
+        """
+        # Step 1: Derive masks at all scales
+        remove_empty = (scale == Scale.ATOM)
+        atom_mask, res_mask, chn_mask = self._derive_masks(mask, scale, remove_empty)
+
+        # Step 2: Slice all fields using existing _slice_all
+        sliced = self._slice_all(atom_mask, res_mask, chn_mask)
+
+        # Step 3: Compute sizes dict
+        sizes = self._compute_sizes(atom_mask, res_mask, chn_mask, scale)
+
+        # Step 4: Compute polymer_count
+        new_polymer_count = self._compute_polymer_count(atom_mask, res_mask, scale)
+
+        # Step 5: Compute lengths
+        lengths = self._compute_lengths(res_mask, chn_mask, scale)
+
+        # Step 6: Construct Polymer
+        return Polymer(
+            coordinates=sliced['coordinates'],
+            atoms=sliced['atoms'],
+            elements=sliced['elements'],
+            sequence=sliced['sequence'],
+            sizes=sizes,
+            id=sliced['pdb_id'],
+            names=sliced['names'],
+            strands=sliced['strands'],
+            lengths=lengths,
+            polymer_count=new_polymer_count,
+            molecule_types=sliced['molecule_types'],
+            descriptions=sliced['descriptions'],
+            bfactors=sliced['bfactors'],
+            resolution=sliced['resolution'],
+        )
+
+    def select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
+        """
+        Select units at the specified scale.
+
+        This is the unified selection method that handles different scales
+        with appropriate semantics for unresolved (0-atom) residues.
+
+        Args:
+            mask: Boolean mask of units to keep at the specified scale.
+            scale: Scale of the mask (ATOM, RESIDUE, or CHAIN).
+
+        Returns:
+            New Polymer with selected units.
+
+        Semantics by scale:
+            - ATOM: Residues with 0 atoms after masking are REMOVED.
+            - RESIDUE: Selected residues are KEPT even if they have 0 atoms.
+            - CHAIN: All residues in selected chains are KEPT.
+
+        Example:
+            >>> # Select atoms (removes empty residues)
+            >>> backbone = polymer.select(backbone_mask, Scale.ATOM)
+            >>>
+            >>> # Select residues (keeps unresolved)
+            >>> adenines = polymer.select(polymer.sequence == Residue.A, Scale.RESIDUE)
+            >>>
+            >>> # Select chains (keeps all residues)
+            >>> chain_a = polymer.select(chain_mask, Scale.CHAIN)
+        """
+        if scale not in (Scale.ATOM, Scale.RESIDUE, Scale.CHAIN):
+            raise ValueError(f"Selection not supported at {scale.name} scale")
+        return self._select(mask, scale)
+
     def __getitem__(self: Polymer, key: Array | slice) -> Polymer:
         """
         Select atoms by boolean mask or slice.
+
+        Residues with 0 atoms after masking are removed. For selection
+        that preserves unresolved residues, use select() with the
+        appropriate scale.
 
         Args:
             key: Boolean mask of atoms to keep, or slice for contiguous range.
@@ -940,48 +1177,9 @@ class Polymer:
         if isinstance(key, slice):
             mask = ops.zeros(self.size(), like=self.coordinates, dtype='bool')
             mask[key] = True
-            return self[mask]
+            return self.select(mask, Scale.ATOM)
 
-        mask = key
-
-        # Slice coordinates directly
-        coordinates = self.coordinates[mask]
-        atoms = self.atoms[mask]
-        elements = self.elements[mask]
-
-        chn_sizes = self.count(mask, Scale.CHAIN)
-        res_sizes = self.count(mask, Scale.RESIDUE)
-        mol_sizes = self.count(mask, Scale.MOLECULE)
-
-        # Determine which residues have atoms
-        chn_mask = chn_sizes > 0
-        residues = ops.repeat_interleave(chn_mask, self.lengths)
-
-        lengths = self.lengths[chn_mask]
-
-        sizes = {
-            Scale.RESIDUE: res_sizes[residues],
-            Scale.CHAIN: chn_sizes[chn_mask],
-            Scale.MOLECULE: mol_sizes,
-        }
-
-        sequence = self.sequence[residues]
-        names = filter_by_mask(self.names, chn_mask)
-        strands = filter_by_mask(self.strands, chn_mask)
-
-        # Calculate new polymer_count: count how many of the first
-        # polymer_count atoms survive the mask (direct slice avoids O(N) allocation)
-        new_polymer_count = mask[:self.polymer_count].sum().item()
-
-        # Slice bfactors if present
-        bfactors = self._bfactors[mask] if self._bfactors is not None else None
-
-        return Polymer(
-            coordinates, atoms, elements, sequence, sizes,
-            self.pdb_id, names, strands, lengths, new_polymer_count,
-            bfactors=bfactors,
-            resolution=self._resolution,
-        )
+        return self.select(key, Scale.ATOM)
 
     def by_index(self: Polymer, ix: Array | int) -> Polymer:
         """
@@ -1057,6 +1255,29 @@ class Polymer:
         """
         from .selection import by_residue_index
         return by_residue_index(self, ix)
+
+    def canonical(self: Polymer) -> Polymer:
+        """
+        Filter to canonical residue types only.
+
+        Returns a new Polymer containing only standard residues:
+        - 4 RNA nucleotides (A, C, G, U)
+        - 4 DNA nucleotides (DA, DC, DG, DT)
+        - 20 amino acids
+
+        This removes modified residues, unknown residues, and ligands,
+        making the polymer compatible with standard models.
+
+        Returns:
+            New Polymer with only canonical residue types.
+
+        Example:
+            >>> polymer = ciffy.load("structure.cif").poly().canonical()
+            >>> # Now safe to use with flow models
+            >>> latents = model.encode(polymer)
+        """
+        from .biochemistry import CANONICAL_ALL
+        return self.by_residue(CANONICAL_ALL)
 
     def by_type(self: Polymer, mol: Molecule) -> Polymer:
         """

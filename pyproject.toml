@@ -27,7 +27,7 @@ dependencies = ["numpy", "rich"]
 [project.optional-dependencies]
 torch = ["torch"]
 vis = ["matplotlib"]
-dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "biopython"]
+dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "biopython", "mypy"]
 
 [project.scripts]
 ciffy = "ciffy.cli:main"
@@ -90,3 +90,24 @@ environment = { CIFFY_NO_OPENMP="1" }
 [tool.cibuildwheel.windows]
 before-build = "pip install numpy"
 environment = { CIFFY_NO_OPENMP="1" }
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "^ciffy/nn/",
+    "^ciffy/sampling/",
+    "^tests/",
+]
+
+[[tool.mypy.overrides]]
+module = "ciffy._c"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "ciffy.backend.*"
+disallow_untyped_defs = true

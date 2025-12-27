@@ -9,9 +9,14 @@ This module provides functions for:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from ..backend import Array, is_torch
+
+if TYPE_CHECKING:
+    from ..biochemistry import Residue
 from .primitives import cross, dot, norm, normalize, clone, to_scalar
 
 

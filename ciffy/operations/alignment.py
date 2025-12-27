@@ -271,7 +271,7 @@ def coordinate_covariance(
 def _rmsd_polymer(
     polymer1: "Polymer",
     polymer2: "Polymer",
-    scale: "Scale" = None,
+    scale: "Scale | None" = None,
 ) -> Array:
     """
     Compute Kabsch distance (aligned RMSD) between polymer structures.
@@ -405,7 +405,7 @@ kabsch_distance = rmsd
 def align(
     polymer1: "Polymer",
     polymer2: "Polymer",
-    scale: "Scale" = None,
+    scale: "Scale | None" = None,
 ) -> Tuple["Polymer", "Polymer"]:
     """
     Align two polymer structures using the Kabsch algorithm.

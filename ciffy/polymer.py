@@ -1763,10 +1763,11 @@ class Polymer:
 
     def detach(self: Polymer) -> Polymer:
         """
-        Detach all tensors from their computation graphs (torch backend only).
+        Detach all float tensors from their computation graphs (torch backend only).
 
-        Detaches the coordinate tensor from its computation graph. For NumPy
-        arrays, this is a no-op since NumPy doesn't have computation graphs.
+        Detaches all float Fields (coordinates, bfactors) from their computation
+        graphs. For NumPy arrays, this is a no-op since NumPy doesn't have
+        computation graphs.
 
         Returns:
             Self, for method chaining.
@@ -1778,8 +1779,12 @@ class Polymer:
             >>> loss.backward()
             >>> polymer.detach()
         """
-        if is_torch(self._coordinates) and self._coordinates is not None:
-            self._coordinates = self._coordinates.detach()
+        float_dtypes = (Dtype.FLOAT16, Dtype.FLOAT32, Dtype.FLOAT64)
+        for name, field in self._get_fields().items():
+            if field.dtype in float_dtypes:
+                value = getattr(self, field.private_name, None)
+                if value is not None and is_torch(value):
+                    setattr(self, field.private_name, value.detach())
         return self
 
     # ─────────────────────────────────────────────────────────────────────────

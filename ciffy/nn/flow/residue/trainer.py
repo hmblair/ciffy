@@ -387,7 +387,7 @@ class ResidueFlowTrainer:
             },
             "data": {
                 "data_dir": self.config.data.data_dir,
-                "residues": self.config.data.residue_names,
+                "residue": self.config.data.residue,
                 "min_coverage": self.config.data.min_coverage,
                 "train_split": self.config.data.train_split,
             },

@@ -164,8 +164,8 @@ def main():
     print("Creating PolymerFlowModel")
     print("=" * 60)
 
-    # Use from_residue_models to convert residue keys to int keys
-    polymer_model = PolymerFlowModel.from_residue_models(models)
+    # Create polymer model from residue models
+    polymer_model = PolymerFlowModel(models)
     print(f"\nPolymerFlowModel created:")
     print(f"  Supported residues: {[r.name for r in polymer_model.supported_residues]}")
     print(f"  Latent dimension: {polymer_model.latent_dim}")

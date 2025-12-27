@@ -378,14 +378,6 @@ def _parse_sequence(sequence: str) -> list[int]:
     return residue_indices
 
 
-def _find_atom_index(atom_names: tuple[str, ...], target: str) -> int | None:
-    """Find index of atom by name in atom_names tuple."""
-    try:
-        return atom_names.index(target)
-    except ValueError:
-        return None
-
-
 @dataclass
 class _PrevResidueState:
     """State from previous residue needed for positioning next residue."""

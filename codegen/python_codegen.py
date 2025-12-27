@@ -536,15 +536,6 @@ def generate_python_residues(
     lines.append('')
     lines.append('Residue._init_members()')
     lines.append('')
-    lines.append('')
-
-    # CIF name mappings
-    lines.append("CIF_RESIDUE_NAMES: dict[str, int] = {")
-    for idx, res in enumerate(all_residues):
-        for cif in res.cif_names:
-            lines.append(f'    "{cif}": {idx},')
-    lines.append("}")
-    lines.append('')
 
     _write_validated_python(
         biochem_dir / "_generated_residues.py",

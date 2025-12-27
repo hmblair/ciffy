@@ -67,7 +67,7 @@ def residue_models():
 @pytest.fixture
 def polymer_model(residue_models):
     """Create a PolymerFlowModel for testing."""
-    return PolymerFlowModel.from_residue_models(residue_models)
+    return PolymerFlowModel(residue_models)
 
 
 class TestPolymerFlowModel:
@@ -85,7 +85,7 @@ class TestPolymerFlowModel:
             Residue.G: create_test_residue_model(Residue.G, n_atoms=12, latent_dim=8),
         }
         with pytest.raises(ValueError, match="same latent_dim"):
-            PolymerFlowModel.from_residue_models(models)
+            PolymerFlowModel(models)
 
     def test_init_stores_latent_dim(self, polymer_model):
         """Test that latent_dim is correctly set."""
@@ -231,7 +231,7 @@ class TestPolymerFlowModelSaveLoad:
         models = {
             Residue.A: create_test_residue_model(Residue.A, n_atoms=10, latent_dim=6),
         }
-        return PolymerFlowModel.from_residue_models(models)
+        return PolymerFlowModel(models)
 
     def test_save_load_roundtrip(self, single_residue_model, tmp_path):
         """Test save and load produces equivalent model."""

@@ -17,7 +17,7 @@ Example (stateless API):
     ...     Residue.A: ResidueFlowModel.load("models/A"),
     ...     Residue.G: ResidueFlowModel.load("models/G"),
     ... }
-    >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
+    >>> polymer_flow = PolymerFlowModel(models)
     >>>
     >>> # Encode polymer coordinates (sequence as int array)
     >>> sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
@@ -111,7 +111,7 @@ class PolymerFlowModel(nn.Module):
         atom_counts: Dict mapping residue type (int) to atom count.
 
     Example (with Polymer - recommended):
-        >>> polymer_flow = PolymerFlowModel.from_residue_models(models)
+        >>> polymer_flow = PolymerFlowModel(models)
         >>> latents = polymer_flow.encode_polymer(polymer)
         >>> new_polymer = polymer_flow.decode_to_polymer(latents, polymer)
 
@@ -227,26 +227,6 @@ class PolymerFlowModel(nn.Module):
                 f"Residue type {residue_type} not supported. "
                 f"Supported types: {sorted(self._supported_types_set)}"
             )
-
-    @classmethod
-    def from_residue_models(
-        cls,
-        models: dict["Residue", "ResidueFlowModel"],
-    ) -> "PolymerFlowModel":
-        """
-        Create from a dict keyed by Residue enum.
-
-        .. deprecated::
-            Use ``PolymerFlowModel(models)`` directly instead.
-            The constructor now accepts both Residue and int keys.
-
-        Args:
-            models: Dict mapping Residue enum to ResidueFlowModel.
-
-        Returns:
-            New PolymerFlowModel instance.
-        """
-        return cls(models)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Stateful Lazy API

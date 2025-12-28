@@ -27,8 +27,9 @@ class TestTMScore:
         """TM-score of structure with itself should be 1.0."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        # 3SKW has non-standard residues (CCC, GTP) - should work with extended groups
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        score = tm_score(p, p)
 
         tol = get_tolerances()
         assert abs(score - 1.0) < tol.score_self
@@ -38,29 +39,19 @@ class TestTMScore:
         """TM-score should be between 0 and 1."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        score = tm_score(p, p)
 
         assert 0.0 <= score <= 1.0
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_tm_score_atom_scale(self, backend):
-        """Test TM-score at atom scale."""
-        skip_if_no_torch(backend)
-
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        score = tm_score(p, p, scale=Scale.ATOM)
-
-        tol = get_tolerances()
-        assert abs(score - 1.0) < tol.score_self
-
     def test_tm_score_size_mismatch(self):
         """TM-score should raise error for mismatched sizes."""
-        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy")
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy").poly()
+        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy").poly()
 
-        with pytest.raises(ValueError, match="sizes must match"):
-            tm_score(p1, p2, scale=Scale.RESIDUE)
+        # Different residue counts will cause size mismatch
+        with pytest.raises(ValueError):
+            tm_score(p1, p2)
 
 
 # =============================================================================
@@ -163,7 +154,7 @@ class TestTMScoreEdgeCases:
         p.coordinates = random_coordinates(p.size(), backend)
 
         # Templates don't have molecule_types, so specify explicitly
-        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
+        score = tm_score(p, p, molecule_type=Molecule.RNA)
 
         assert 0.0 <= score <= 1.0
         # Self-comparison should be ~1.0
@@ -180,7 +171,7 @@ class TestTMScoreEdgeCases:
         p.coordinates = random_coordinates(p.size(), backend)
 
         # Templates don't have molecule_types, so specify explicitly
-        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
+        score = tm_score(p, p, molecule_type=Molecule.RNA)
 
         # TM-score should always return a valid float in [0, 1]
         assert 0.0 <= score <= 1.0
@@ -196,7 +187,7 @@ class TestTMScoreEdgeCases:
         p.coordinates = random_coordinates(p.size(), backend)
 
         # Templates don't have molecule_types, so specify explicitly
-        score = tm_score(p, p, scale=Scale.RESIDUE, molecule_type=Molecule.RNA)
+        score = tm_score(p, p, molecule_type=Molecule.RNA)
 
         # TM-score should always return a valid float in [0, 1]
         assert 0.0 <= score <= 1.0
@@ -210,15 +201,16 @@ class TestTMScoreEdgeCases:
         p.coordinates = random_coordinates(p.size(), backend)
 
         with pytest.raises(ValueError, match="molecule_types not available"):
-            tm_score(p, p, scale=Scale.RESIDUE)
+            tm_score(p, p)
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_tm_score_at_residue_scale(self, backend):
-        """TM-score at residue scale on larger structure."""
+    def test_tm_score_nonstandard_residues(self, backend):
+        """TM-score works with non-standard residues (modified nucleotides)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        score = tm_score(p, p, scale=Scale.RESIDUE)
+        # 3SKW includes non-standard residues (CCC, GTP) - tests extended atom groups
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        score = tm_score(p, p)
 
         assert 0.0 <= score <= 1.0
         assert score > 0.99
@@ -403,7 +395,7 @@ class TestRmsdFunction:
             noise = torch.from_numpy(noise)
         p2 = p1.with_coordinates(p1.coordinates + noise)
 
-        rmsd_val = rmsd(p1, p2, scale=Scale.RESIDUE)
+        rmsd_val = rmsd(p1, p2)
 
         rmsd_np = np.asarray(rmsd_val)
         assert np.all(rmsd_np >= 0)

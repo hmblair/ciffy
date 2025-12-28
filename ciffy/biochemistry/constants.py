@@ -34,6 +34,7 @@ Flat groups:
 - **Sidechain**: Protein sidechain atoms (non-backbone)
 
 Hierarchical groups:
+- **ProteinBackbone**: Protein backbone atoms (N, CA, C, O) across amino acids
 - **Sugar**: Ribose/deoxyribose atoms (C1'-C5', O2'-O5', hydrogens)
 - **PhosphateGroup**: Phosphate atoms (P, OP1, OP2, OP3)
 - **PurineBase**: Full purine nucleobase (A, G, DA, DG)
@@ -110,6 +111,17 @@ _AMINO_ACIDS = [
 
 # All canonical residue types (for filtering) - stores residue indices
 CANONICAL_ALL = [res.value for _, res in _RNA_NUCLEOTIDES + _DNA_NUCLEOTIDES + _AMINO_ACIDS]
+
+# Dynamically detect all nucleotide-like and protein-like residues
+# (includes non-standard/modified residues with appropriate backbone atoms)
+_ALL_NUCLEOTIDE_LIKE = [
+    (res.name, res) for res in Residue.all()
+    if hasattr(res, 'C1p') and not hasattr(res, 'CA')
+]
+_ALL_PROTEIN_LIKE = [
+    (res.name, res) for res in Residue.all()
+    if hasattr(res, 'CA') and not hasattr(res, 'C1p')
+]
 
 
 # =============================================================================
@@ -200,16 +212,19 @@ _PYRIMIDINE_BASE_NAMES = {
 # Build hierarchical atom groups
 # =============================================================================
 
-# Sugar atoms - present in all nucleotides
-Sugar = build_atom_group("Sugar", _ALL_NUCLEOTIDES, _SUGAR_NAMES)
+# Sugar atoms - present in all nucleotide-like residues (including modified)
+Sugar = build_atom_group("Sugar", _ALL_NUCLEOTIDE_LIKE, _SUGAR_NAMES)
 
-# Phosphate atoms - present in all nucleotides
-PhosphateGroup = build_atom_group("PhosphateGroup", _ALL_NUCLEOTIDES, _PHOSPHATE_NAMES)
+# Phosphate atoms - present in all nucleotide-like residues
+PhosphateGroup = build_atom_group("PhosphateGroup", _ALL_NUCLEOTIDE_LIKE, _PHOSPHATE_NAMES)
 
-# Purine hierarchy - A, G, DA, DG only
+# Purine hierarchy - A, G, DA, DG only (canonical)
 PurineImidazole = build_atom_group("PurineImidazole", _PURINES, _PURINE_IMIDAZOLE_NAMES)
 PurinePyrimidine = build_atom_group("PurinePyrimidine", _PURINES, _PURINE_PYRIMIDINE_NAMES)
 PurineBase = build_atom_group("PurineBase", _PURINES, _PURINE_BASE_NAMES)
 
-# Pyrimidine base - C, U, DC, DT only
+# Pyrimidine base - C, U, DC, DT only (canonical)
 PyrimidineBase = build_atom_group("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BASE_NAMES)
+
+# Protein backbone - hierarchical access to N, CA, C, O across all protein-like residues
+ProteinBackbone = build_atom_group("ProteinBackbone", _ALL_PROTEIN_LIKE, _PROTEIN_BACKBONE_NAMES)

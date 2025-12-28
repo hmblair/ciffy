@@ -46,7 +46,6 @@ packages = [
     "ciffy.geometry",
     "ciffy.io",
     "ciffy.operations",
-    "ciffy.selection",
     "ciffy.utils",
     "ciffy.visualize",
     # Excluded from distribution (research code):

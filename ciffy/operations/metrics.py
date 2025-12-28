@@ -14,10 +14,47 @@ if TYPE_CHECKING:
     from ..polymer import Polymer
 
 
+def _get_representative_coords(polymer: "Polymer", mol_type: Molecule) -> Array:
+    """
+    Get representative atom coordinates for TM-score calculation.
+
+    For proteins, selects Cα atoms. For RNA/DNA, selects C1' atoms.
+
+    Args:
+        polymer: The polymer to extract coordinates from.
+        mol_type: Molecule type determining which atoms to select.
+
+    Returns:
+        Coordinates array of shape (n_residues, 3).
+
+    Raises:
+        ValueError: If representative atoms don't match residue count
+            (e.g., missing atoms from unresolved residues).
+    """
+    from ..biochemistry.constants import Sugar, ProteinBackbone
+
+    n_residues = polymer.size(Scale.RESIDUE)
+
+    if mol_type == Molecule.PROTEIN:
+        atom_name = "Cα"
+        rep_atoms = polymer.by_atom(ProteinBackbone.CA.index())
+    else:
+        atom_name = "C1'"
+        rep_atoms = polymer.by_atom(Sugar.C1p.index())
+
+    n_found = rep_atoms.size()
+    if n_found != n_residues:
+        raise ValueError(
+            f"Missing {atom_name} atoms: found {n_found} but polymer has {n_residues} residues. "
+            f"This may indicate unresolved residues or non-standard residue types."
+        )
+
+    return rep_atoms.coordinates
+
+
 def tm_score(
     pred: Polymer,
     ref: Polymer,
-    scale: Scale = Scale.RESIDUE,
     molecule_type: Molecule | None = None,
 ) -> float:
     """
@@ -30,7 +67,6 @@ def tm_score(
     Args:
         pred: Predicted structure.
         ref: Reference structure (used for length normalization).
-        scale: Scale at which to compute (typically RESIDUE for Cα).
         molecule_type: Molecule type for d_0 calculation. If None,
             auto-detected from ref.molecule_types (raises ValueError
             if not available).
@@ -38,32 +74,36 @@ def tm_score(
     Returns:
         TM-score value between 0 and 1.
 
+    Raises:
+        ValueError: If representative atoms are missing (unresolved residues
+            or non-standard residue types without Cα/C1').
+
     Note:
+        Uses representative atoms per residue:
+        - Protein: Cα atoms
+        - RNA/DNA: C1' atoms
+
         Uses molecule-type-specific normalization:
         - Protein: d_0 = 1.24 * (L - 15)^(1/3) - 1.8
         - RNA/DNA: d_0 = 0.6 * sqrt(L - 5) - 2.5
     """
     from .alignment import kabsch_align
 
-    # Get coordinates at specified scale
-    if scale == Scale.ATOM:
-        pred_coords = pred.coordinates
-        ref_coords = ref.coordinates
-    else:
-        pred_coords = pred.reduce(pred.coordinates, scale)
-        ref_coords = ref.reduce(ref.coordinates, scale)
+    # Determine molecule type (needed for representative atom selection)
+    mol_type = molecule_type if molecule_type is not None else _get_molecule_type(ref)
+
+    # Get representative atom coordinates (Cα for protein, C1' for RNA/DNA)
+    pred_coords = _get_representative_coords(pred, mol_type)
+    ref_coords = _get_representative_coords(ref, mol_type)
 
     # Length for normalization (from reference)
     L = ref_coords.shape[0]
 
     if pred_coords.shape[0] != L:
         raise ValueError(
-            f"Structure sizes must match: pred has {pred_coords.shape[0]}, "
-            f"ref has {L} at scale {scale.name}"
+            f"Structure sizes must match: pred has {pred_coords.shape[0]} residues, "
+            f"ref has {L} residues"
         )
-
-    # Determine molecule type for d_0 calculation
-    mol_type = molecule_type if molecule_type is not None else _get_molecule_type(ref)
 
     # Compute d_0 based on molecule type
     d_0 = _compute_d0(L, mol_type)

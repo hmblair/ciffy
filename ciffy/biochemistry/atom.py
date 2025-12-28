@@ -128,6 +128,48 @@ class Atom(int):
         """The integer value (for compatibility). Prefer using the Atom directly."""
         return int(self)
 
+    # Class-level cache for from_value lookup
+    _registry: dict[int, Atom] | None = None
+
+    @classmethod
+    def from_value(cls, value: int) -> Atom:
+        """
+        Get an Atom by its unique integer value.
+
+        Args:
+            value: The atom's unique integer value.
+
+        Returns:
+            The Atom with that value.
+
+        Raises:
+            KeyError: If no atom with that value exists.
+
+        Example:
+            >>> Atom.from_value(2)
+            Atom(P, 2)
+        """
+        if cls._registry is None:
+            # Lazy-load registry from ATOM_NAMES
+            from ._generated_atoms import ATOM_NAMES
+            cls._registry = {v: cls(name, v) for v, name in ATOM_NAMES.items()}
+
+        if value not in cls._registry:
+            raise KeyError(f"No atom with value {value}")
+        return cls._registry[value]
+
+    @classmethod
+    def count(cls) -> int:
+        """
+        Return the vocabulary size for atoms (max value + 1).
+
+        Use this for embedding layer dimensions.
+        """
+        if cls._registry is None:
+            from ._generated_atoms import ATOM_NAMES
+            cls._registry = {v: cls(name, v) for v, name in ATOM_NAMES.items()}
+        return max(cls._registry.keys()) + 1
+
 
 class AtomGroup:
     """

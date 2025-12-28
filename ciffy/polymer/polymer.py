@@ -24,7 +24,7 @@ from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, creat
 from .hierarchy import _Hierarchy
 from ..biochemistry import (
     Residue,
-    ATOM_NAMES,
+    Atom,
     ELEMENT_NAMES,
 )
 from ..utils import all_equal, filter_by_mask
@@ -1557,7 +1557,12 @@ class Polymer:
         Returns:
             List of atom name strings.
         """
-        return [ATOM_NAMES.get(ix.item(), '?') for ix in self.atoms]
+        def get_name(value: int) -> str:
+            try:
+                return Atom.from_value(value).name
+            except KeyError:
+                return '?'
+        return [get_name(ix.item()) for ix in self.atoms]
 
     def chain_info(self: Polymer) -> list[dict]:
         """

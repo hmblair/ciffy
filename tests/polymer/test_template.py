@@ -489,7 +489,6 @@ class TestTerminalAtoms:
     def test_protein_terminal_atoms(self):
         """Protein should only have OXT on C-terminus, H2/H3 on N-terminus."""
         from ciffy import from_sequence, Scale
-        from ciffy.biochemistry import ATOM_NAMES
 
         polymer = from_sequence("AAA")  # 3 alanines
         apr = list(polymer.counts(Scale.RESIDUE))

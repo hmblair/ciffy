@@ -29,7 +29,7 @@ def _validate_poly_only(polymer: "Polymer", operation: str) -> None:
     Raises:
         ValueError: If polymer has non-polymer atoms.
     """
-    if polymer.nonpoly > 0:
+    if polymer.nonpoly() > 0:
         raise ValueError(
             f"{operation} requires poly-only polymers (no HETATM atoms). "
             f"Use polymer.poly() to get the polymer portion first."

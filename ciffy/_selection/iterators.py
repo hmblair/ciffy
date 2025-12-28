@@ -33,7 +33,7 @@ def poly(polymer: Polymer) -> Polymer:
         >>> rna = poly(p)  # Get polymer only
         >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
     """
-    if polymer.nonpoly == 0:
+    if polymer.nonpoly() == 0:
         return polymer
 
     # Create atom mask for polymer atoms only (first polymer_count atoms)
@@ -64,7 +64,7 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
     """
     from ..hetero import HeteroAtoms
 
-    if polymer.nonpoly == 0:
+    if polymer.nonpoly() == 0:
         return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
 
     pc = polymer.polymer_count

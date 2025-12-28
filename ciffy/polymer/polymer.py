@@ -574,9 +574,8 @@ class Polymer:
     # Computed Properties
     # ─────────────────────────────────────────────────────────────────────────
 
-    @property
     def nonpoly(self) -> int:
-        """Number of non-polymer atoms (waters, ions, ligands)."""
+        """Return the number of non-polymer atoms (waters, ions, ligands)."""
         return self._hierarchy.nonpoly
 
     @property
@@ -1027,7 +1026,7 @@ class Polymer:
         Returns:
             Boolean array at dest scale.
         """
-        from ..selection import mask
+        from .._selection import mask
         return mask(self, indices, source, dest)
 
     def _to_mask(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Array:
@@ -1200,7 +1199,7 @@ class Polymer:
         Returns:
             New Polymer with matching atoms.
         """
-        from ..selection import by_atom
+        from .._selection import by_atom
         return by_atom(self, name)
 
     def by_residue(self: Polymer, res: Array | int) -> Polymer:
@@ -1218,7 +1217,7 @@ class Polymer:
             >>> adenosines = polymer.by_residue(Residue.A)
             >>> purines = polymer.by_residue([Residue.A, Residue.G])
         """
-        from ..selection import by_residue
+        from .._selection import by_residue
         return by_residue(self, res)
 
     def canonical(self: Polymer) -> Polymer:
@@ -1254,7 +1253,7 @@ class Polymer:
         Returns:
             New Polymer with chains of that type.
         """
-        from ..selection import by_type
+        from .._selection import by_type
         return by_type(self, mol)
 
     def poly(self: Polymer) -> Polymer:
@@ -1275,7 +1274,7 @@ class Polymer:
             >>> rna = p.poly()  # Get polymer only
             >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
         """
-        from ..selection import poly
+        from .._selection import poly
         return poly(self)
 
     def hetero(self: Polymer) -> "HeteroAtoms":
@@ -1295,7 +1294,7 @@ class Polymer:
             >>> if not hetero_atoms.empty():
             ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
         """
-        from ..selection import hetero
+        from .._selection import hetero
         return hetero(self)
 
     def chains(
@@ -1311,7 +1310,7 @@ class Polymer:
         Yields:
             Individual chain Polymers.
         """
-        from ..selection import chains
+        from .._selection import chains
         return chains(self, mol)
 
     def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
@@ -1324,7 +1323,7 @@ class Polymer:
         Returns:
             Boolean tensor where True indicates resolved units.
         """
-        from ..selection import resolved
+        from .._selection import resolved
         return resolved(self, scale)
 
     def strip(self: Polymer, scale: Scale = Scale.RESIDUE) -> Polymer:
@@ -1337,7 +1336,7 @@ class Polymer:
         Returns:
             New Polymer without empty units.
         """
-        from ..selection import strip
+        from .._selection import strip
         return strip(self, scale)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1346,22 +1345,22 @@ class Polymer:
 
     def backbone(self: Polymer) -> Polymer:
         """Select backbone atoms (sugar-phosphate for RNA/DNA, N-CA-C-O for protein)."""
-        from ..selection import backbone
+        from .._selection import backbone
         return backbone(self)
 
     def nucleobase(self: Polymer) -> Polymer:
         """Select RNA nucleobase atoms."""
-        from ..selection import nucleobase
+        from .._selection import nucleobase
         return nucleobase(self)
 
     def phosphate(self: Polymer) -> Polymer:
         """Select RNA/DNA phosphate atoms."""
-        from ..selection import phosphate
+        from .._selection import phosphate
         return phosphate(self)
 
     def sidechain(self: Polymer) -> Polymer:
         """Select protein sidechain atoms."""
-        from ..selection import sidechain
+        from .._selection import sidechain
         return sidechain(self)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1423,7 +1422,7 @@ class Polymer:
                 f"extend() requires a single-chain polymer. "
                 f"Got {self.size(Scale.CHAIN)} chains."
             )
-        if self.nonpoly > 0:
+        if self.nonpoly() > 0:
             raise ValueError(
                 "extend() requires a poly-only polymer (no HETATM atoms). "
                 "Use polymer.poly() first."

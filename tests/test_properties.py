@@ -260,7 +260,7 @@ class TestNonpoly:
         from ciffy import load
 
         polymer = load(cif_file, backend=backend)
-        assert polymer.nonpoly >= 0
+        assert polymer.nonpoly() >= 0
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_nonpoly_plus_polymer_equals_total(self, cif_file, backend):
@@ -268,7 +268,7 @@ class TestNonpoly:
         from ciffy import load
 
         polymer = load(cif_file, backend=backend)
-        assert polymer.polymer_count + polymer.nonpoly == polymer.size()
+        assert polymer.polymer_count + polymer.nonpoly() == polymer.size()
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_nonpoly_consistent_with_poly_size(self, cif_file, backend):
@@ -278,7 +278,7 @@ class TestNonpoly:
         polymer = load(cif_file, backend=backend)
         poly_size = polymer.poly().size()
 
-        assert polymer.nonpoly == polymer.size() - poly_size
+        assert polymer.nonpoly() == polymer.size() - poly_size
 
     def test_nonpoly_zero_for_template(self, backend):
         """nonpoly is 0 for template-generated polymers."""
@@ -286,7 +286,7 @@ class TestNonpoly:
 
         polymer = from_sequence("acgu", backend=backend)
 
-        assert polymer.nonpoly == 0
+        assert polymer.nonpoly() == 0
         assert polymer.polymer_count == polymer.size()
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
@@ -297,4 +297,4 @@ class TestNonpoly:
         polymer = load(cif_file, backend=backend)
         hetero_size = polymer.hetero().size()
 
-        assert polymer.nonpoly == hetero_size
+        assert polymer.nonpoly() == hetero_size

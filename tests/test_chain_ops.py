@@ -95,7 +95,7 @@ class TestJoin:
         p2 = ciffy.load("tests/data/9MDS.cif")
 
         # Skip if test structure doesn't have HETATM
-        if p2.nonpoly == 0:
+        if p2.nonpoly() == 0:
             pytest.skip("Test structure has no HETATM atoms")
 
         # Should fail because p2 has HETATM
@@ -191,7 +191,7 @@ class TestExtend:
         p = ciffy.load("tests/data/9MDS.cif")
 
         # Skip if test structure doesn't have HETATM
-        if p.nonpoly == 0:
+        if p.nonpoly() == 0:
             pytest.skip("Test structure has no HETATM atoms")
 
         with pytest.raises(ValueError, match="poly-only"):

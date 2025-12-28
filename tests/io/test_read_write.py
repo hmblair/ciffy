@@ -554,7 +554,7 @@ class TestPolymerCountInvariant:
         from ciffy import load
 
         polymer = load(cif_file, backend=backend)
-        assert polymer.nonpoly >= 0, f"nonpoly should be >= 0, got {polymer.nonpoly}"
+        assert polymer.nonpoly() >= 0, f"nonpoly should be >= 0, got {polymer.nonpoly()}"
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_polymer_plus_nonpoly_equals_total(self, cif_file, backend):
@@ -563,5 +563,5 @@ class TestPolymerCountInvariant:
 
         polymer = load(cif_file, backend=backend)
         total = polymer.size()
-        assert polymer.polymer_count + polymer.nonpoly == total, \
-            f"polymer_count ({polymer.polymer_count}) + nonpoly ({polymer.nonpoly}) != total ({total})"
+        assert polymer.polymer_count + polymer.nonpoly() == total, \
+            f"polymer_count ({polymer.polymer_count}) + nonpoly ({polymer.nonpoly()}) != total ({total})"

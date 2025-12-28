@@ -92,7 +92,7 @@ class TestReduce:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
         # Structure has hetero atoms
-        if p.nonpoly > 0:
+        if p.nonpoly() > 0:
             result = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
 
             # Result size should match number of residues

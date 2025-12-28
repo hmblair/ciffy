@@ -15,7 +15,6 @@
 #include "parser.h"
 #include "registry.h"
 #include "../log.h"
-#include "../profile.h"
 
 #include <math.h>    /* for isnan */
 #include <unistd.h>  /* for isatty */
@@ -522,7 +521,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
     /* ── Precompute Line Pointers ────────────────────────────────────────── */
     /* Required for _get_field_ptr used in counting and metadata extraction */
 
-    PROFILE_START(line_precomp);
     CifError err = _precompute_lines(&blocks->b[BLOCK_ATOM], ctx);
     if (err != CIF_OK) return err;
 
@@ -538,7 +536,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         _free_lines(&blocks->b[BLOCK_POLY]);
         return err;
     }
-    PROFILE_END(line_precomp);
 
     LOG_DEBUG("Line pointers precomputed for all blocks");
 
@@ -546,7 +543,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
     /* Compute field execution order and parse: chains, residues, models, atoms,
      * names, res_per_chain, strands, sequence */
 
-    PROFILE_START(metadata);
     ParsePlan plan;
     err = _plan_parse(&plan, ctx);
     if (err != CIF_OK) {
@@ -563,7 +559,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         _free_lines(&blocks->b[BLOCK_CHAIN]);
         return err;
     }
-    PROFILE_END(metadata);
 
     LOG_INFO("Parsing structure: %d models, %d chains, %d residues, %d atoms",
              cif->models, cif->chains, cif->residues, cif->atoms);
@@ -607,8 +602,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
 
     int original_atoms = cif->atoms;
     LOG_DEBUG("Beginning batch atom parsing (%d atoms)...", cif->atoms);
-
-    PROFILE_START(batch_parse);
 
     /* Allocate is_nonpoly for two-pointer placement (sized for ORIGINAL atom count) */
     cif->is_nonpoly = calloc((size_t)original_atoms, sizeof(int));
@@ -700,11 +693,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         LOG_WARNING("[%s] Found %d atoms with invalid (NaN) coordinates",
                     cif->id ? cif->id : "unknown", nan_count);
     }
-    PROFILE_END(batch_parse);
 
     /* ── Residue/Chain Counting ────────────────────────────────────────────── */
-
-    PROFILE_START(residue_count);
 
     /* Count atoms per residue (is_nonpoly already filled, nonpoly count already set) */
     cif->atoms_per_res = _count_atoms_per_residue(cif, &blocks->b[BLOCK_ATOM], cif->residues,
@@ -743,8 +733,6 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         free(cif->chain_mask);
         cif->chain_mask = NULL;
     }
-
-    PROFILE_END(residue_count);
 
     LOG_INFO("Parsed %d polymer atoms, %d non-polymer atoms", cif->polymer, cif->nonpoly);
     LOG_DEBUG("CIF structure parsing complete");

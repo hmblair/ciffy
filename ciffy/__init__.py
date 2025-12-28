@@ -89,12 +89,6 @@ except ImportError:
 # Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map
 
-# Expose profiling function if available (when built with CIFFY_PROFILE=1)
-try:
-    from ._c import _get_profile
-except (ImportError, AttributeError):
-    pass  # Profiling not enabled in this build
-
 # Convenience aliases - these are commonly used so we keep them
 ATOM = Scale.ATOM
 RESIDUE = Scale.RESIDUE

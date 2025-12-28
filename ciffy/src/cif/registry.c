@@ -9,7 +9,6 @@
 #include "registry.h"
 #include "parser.h"
 #include "../log.h"
-#include "../profile.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -1209,26 +1208,8 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
 
         /* Call each field's batch callback */
         for (int f = 0; f < group->field_count; f++) {
-            FieldId fid = group->fields[f];
-            const FieldDef *def = &FIELDS[fid];
-
-#ifdef CIFFY_PROFILE
-            struct timespec _t_start, _t_end;
-            clock_gettime(CLOCK_MONOTONIC, &_t_start);
-#endif
+            const FieldDef *def = &FIELDS[group->fields[f]];
             def->batch_row_func(cif, block, row, all_field_indices[f], scratch);
-
-#ifdef CIFFY_PROFILE
-            clock_gettime(CLOCK_MONOTONIC, &_t_end);
-            double elapsed = (_t_end.tv_sec - _t_start.tv_sec) +
-                           (_t_end.tv_nsec - _t_start.tv_nsec) / 1e9;
-            switch (fid) {
-                case FIELD_COORDS:   g_profile.batch_coords += elapsed; break;
-                case FIELD_ELEMENTS: g_profile.batch_elements += elapsed; break;
-                case FIELD_TYPES:    g_profile.batch_types += elapsed; break;
-                default: break;
-            }
-#endif
         }
     }
 

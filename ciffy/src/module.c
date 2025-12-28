@@ -10,13 +10,7 @@
 #define CIFFY_MAIN_MODULE
 #include "module.h"
 #include "log.h"
-#include "profile.h"
 #include "internal/internal_module.h"
-
-#ifdef CIFFY_PROFILE
-/* Global profile instance for timing data */
-CifProfile g_profile = {0};
-#endif
 
 
 /**
@@ -409,7 +403,6 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     (void)self;
 
     __py_init();
-    PROFILE_RESET();
 
     CifErrorContext ctx = CIF_ERROR_INIT;
 
@@ -499,10 +492,8 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
 
     /* Load the entire file into memory */
-    PROFILE_START(file_load);
     char *buffer = NULL;
     CifError err = _load_file(file, &buffer, &ctx);
-    PROFILE_END(file_load);
     if (err != CIF_OK) {
         _free_filter(&filter);
         return _set_py_error(&ctx, file);
@@ -525,7 +516,6 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     _next_block(&cursor);
 
     /* Parse all blocks in the file */
-    PROFILE_START(block_parse);
     while (*cursor.ptr != '\0') {
         mmBlock block = _read_block(&cursor, &ctx);
         if (block.category == NULL) {
@@ -538,7 +528,6 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
         _store_or_free_block(&block, &blocks);
     }
-    PROFILE_END(block_parse);
 
     /* Extract molecular data from parsed blocks (includes line_precomp, metadata, batch_parse, residue_count) */
     err = _fill_cif(&cif, &blocks, metadata_only, &filter, &ctx);
@@ -571,7 +560,6 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     _free_block_list(&blocks);
 
     /* Convert to Python objects */
-    PROFILE_START(py_convert);
     PyObject *dict = _c_to_py(cif);
     if (dict == NULL) return NULL;
 
@@ -596,63 +584,8 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         free(cif.descriptions);
     }
 
-    PROFILE_END(py_convert);
     return dict;
 }
-
-
-#ifdef CIFFY_PROFILE
-/**
- * @brief Get profiling data from the last _load() call.
- *
- * Returns a dict with timing breakdown for each parsing phase.
- * Only available when compiled with CIFFY_PROFILE defined.
- *
- * @return Dict with timing in seconds, or None if profiling disabled
- */
-static PyObject *_get_profile(PyObject *self, PyObject *args) {
-    (void)self;
-    (void)args;
-
-    PyObject *dict = PyDict_New();
-    if (dict == NULL) return NULL;
-
-    /* Helper macro to add a timing value to the dict */
-    #define ADD_TIMING(name) do { \
-        PyObject *val = PyFloat_FromDouble(g_profile.name); \
-        if (val == NULL) { Py_DECREF(dict); return NULL; } \
-        if (PyDict_SetItemString(dict, #name, val) < 0) { \
-            Py_DECREF(val); Py_DECREF(dict); return NULL; \
-        } \
-        Py_DECREF(val); \
-    } while(0)
-
-    ADD_TIMING(file_load);
-    ADD_TIMING(block_parse);
-    ADD_TIMING(line_precomp);
-    ADD_TIMING(metadata);
-    ADD_TIMING(batch_parse);
-    ADD_TIMING(residue_count);
-    ADD_TIMING(py_convert);
-    /* Sub-phases of batch_parse */
-    ADD_TIMING(batch_coords);
-    ADD_TIMING(batch_elements);
-    ADD_TIMING(batch_types);
-
-    #undef ADD_TIMING
-
-    return dict;
-}
-#else
-/**
- * @brief Stub when profiling is disabled - returns None.
- */
-static PyObject *_get_profile(PyObject *self, PyObject *args) {
-    (void)self;
-    (void)args;
-    Py_RETURN_NONE;
-}
-#endif
 
 
 /**
@@ -830,12 +763,6 @@ static PyMethodDef methods[] = {
      "    IOError: If file cannot be written\n"
      "    TypeError: If arguments have wrong type\n"
      "    MemoryError: If allocation fails\n"},
-    {"_get_profile", _get_profile, METH_NOARGS,
-     "Get profiling data from the last _load() call.\n\n"
-     "Returns:\n"
-     "    dict or None: Timing breakdown if profiling enabled, else None.\n"
-     "    Keys: file_load, block_parse, line_precomp, metadata,\n"
-     "          batch_parse, residue_count, py_convert (all in seconds)\n"},
     {"_cartesian_to_internal", py_cartesian_to_internal, METH_VARARGS,
      "Convert Cartesian coordinates to internal coordinates.\n\n"
      "Args:\n"

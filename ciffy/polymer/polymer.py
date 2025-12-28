@@ -1308,21 +1308,17 @@ class Polymer:
         from .._selection import hetero
         return hetero(self)
 
-    def chains(
-        self: Polymer,
-        mol: Molecule | None = None,
-    ) -> Generator[Polymer, None, None]:
+    def chains(self: Polymer) -> Generator[Polymer, None, None]:
         """
-        Iterate over chains, optionally filtered by type.
+        Iterate over chains.
 
-        Args:
-            mol: Optional molecule type filter.
+        To filter by molecule type, use `polymer.by_type(mol).chains()`.
 
         Yields:
             Individual chain Polymers.
         """
         from .._selection import chains
-        return chains(self, mol)
+        return chains(self)
 
     def resolved(self: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
         """

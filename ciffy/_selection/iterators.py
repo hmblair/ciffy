@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from ..hetero import HeteroAtoms
 
 from ..backend import ops
-from ..biochemistry import Scale, Molecule
+from ..biochemistry import Scale
 
 
 def poly(polymer: Polymer) -> Polymer:
@@ -77,16 +77,14 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
     )
 
 
-def chains(
-    polymer: Polymer,
-    mol: Molecule | None = None,
-) -> Generator[Polymer, None, None]:
+def chains(polymer: Polymer) -> Generator[Polymer, None, None]:
     """
-    Iterate over chains, optionally filtered by type.
+    Iterate over chains.
+
+    To filter by molecule type, use `polymer.by_type(mol).chains()`.
 
     Args:
         polymer: Source polymer.
-        mol: Optional molecule type filter.
 
     Yields:
         Individual chain Polymers.
@@ -94,6 +92,4 @@ def chains(
     from .filters import by_index
 
     for ix in range(polymer.size(Scale.CHAIN)):
-        chain = by_index(polymer, ix)
-        if mol is None or chain.istype(mol):
-            yield chain
+        yield by_index(polymer, ix)

@@ -297,6 +297,96 @@ extern char *_get_field_ptr(mmBlock *block, int row, int attr_idx, size_t *len);
 
 
 /**
+ * @brief Parse Python skip parameter to FieldSkipMask.
+ *
+ * Handles three cases:
+ *   - None or missing -> SKIP_NONE (load all fields)
+ *   - "metadata" string -> SKIP_METADATA preset
+ *   - List of field names -> build skip mask from names
+ *
+ * @param py_skip Python object (None, str, or list)
+ * @param skip_mask Output skip mask
+ * @return 0 on success, -1 on error (Python exception set)
+ */
+static int _parse_skip_param(PyObject *py_skip, FieldSkipMask *skip_mask) {
+    CifErrorContext ctx = CIF_ERROR_INIT;
+
+    /* None or missing -> load all fields */
+    if (py_skip == NULL || py_skip == Py_None) {
+        *skip_mask = SKIP_NONE;
+        return 0;
+    }
+
+    /* String preset (e.g., "metadata") */
+    if (PyUnicode_Check(py_skip)) {
+        const char *preset = PyUnicode_AsUTF8(py_skip);
+        if (preset == NULL) return -1;
+
+        if (strcmp(preset, "metadata") == 0) {
+            *skip_mask = SKIP_METADATA;
+            return 0;
+        }
+
+        /* Single field name - treat as list of one */
+        int fid = _field_name_to_id(preset);
+        if (fid < 0) {
+            PyErr_Format(PyExc_ValueError, "Unknown field name: '%s'", preset);
+            return -1;
+        }
+
+        /* Check if field is skippable */
+        FieldSkipMask mask = (1U << fid);
+        *skip_mask = _validate_skip_mask(mask, &ctx);
+        if (ctx.code != CIF_OK) {
+            PyErr_Format(PyExc_ValueError, "%s", ctx.message);
+            return -1;
+        }
+        return 0;
+    }
+
+    /* List of field names */
+    if (PyList_Check(py_skip)) {
+        FieldSkipMask mask = SKIP_NONE;
+        Py_ssize_t n = PyList_Size(py_skip);
+
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *item = PyList_GetItem(py_skip, i);
+            if (!PyUnicode_Check(item)) {
+                PyErr_SetString(PyExc_TypeError,
+                    "skip list must contain strings");
+                return -1;
+            }
+
+            const char *name = PyUnicode_AsUTF8(item);
+            if (name == NULL) return -1;
+
+            int fid = _field_name_to_id(name);
+            if (fid < 0) {
+                PyErr_Format(PyExc_ValueError,
+                    "Unknown field name in skip list: '%s'", name);
+                return -1;
+            }
+
+            mask |= (1U << fid);
+        }
+
+        /* Validate the combined mask */
+        *skip_mask = _validate_skip_mask(mask, &ctx);
+        if (ctx.code != CIF_OK) {
+            PyErr_Format(PyExc_ValueError, "%s", ctx.message);
+            return -1;
+        }
+        return 0;
+    }
+
+    PyErr_SetString(PyExc_TypeError,
+        "skip must be None, a string preset (e.g., 'metadata'), "
+        "or a list of field names");
+    return -1;
+}
+
+
+/**
  * @brief Parse entity descriptions from _entity.pdbx_description.
  *
  * Maps descriptions from entity_id to per-chain via _struct_asym.entity_id.
@@ -407,18 +497,24 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifErrorContext ctx = CIF_ERROR_INIT;
 
     /* Parse arguments: filename (required) + optional keywords */
-    static char *kwlist[] = {"filename", "load_descriptions", "metadata_only",
+    static char *kwlist[] = {"filename", "load_descriptions", "skip",
                              "molecule_types", "chains", NULL};
     const char *file = NULL;
     int load_descriptions = 0;  /* Default: false */
-    int metadata_only = 0;      /* Default: false - load full data */
+    PyObject *py_skip = NULL;   /* Default: None - load all fields */
     PyObject *py_mol_types = NULL;  /* Optional list of molecule type ints */
     PyObject *py_chains = NULL;     /* Optional list of chain name strings */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|ppOO", kwlist,
-                                      &file, &load_descriptions, &metadata_only,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|pOOO", kwlist,
+                                      &file, &load_descriptions, &py_skip,
                                       &py_mol_types, &py_chains)) {
         return NULL;
+    }
+
+    /* Parse skip parameter to FieldSkipMask */
+    FieldSkipMask skip_mask;
+    if (_parse_skip_param(py_skip, &skip_mask) < 0) {
+        return NULL;  /* Exception already set */
     }
 
     /* Build LoadFilter from Python arguments */
@@ -530,7 +626,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
 
     /* Extract molecular data from parsed blocks (includes line_precomp, metadata, batch_parse, residue_count) */
-    err = _fill_cif(&cif, &blocks, metadata_only, &filter, &ctx);
+    err = _fill_cif(&cif, &blocks, skip_mask, &filter, &ctx);
     if (err != CIF_OK) {
         free(cif.id);
         _free_block_list(&blocks);
@@ -540,8 +636,9 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     }
 
     /* Optionally parse descriptions (after _fill_cif so chains is populated) */
-    /* Skip in metadata_only mode since we don't need descriptions for indexing */
-    if (load_descriptions && !metadata_only) {
+    /* Skip if coordinates are skipped (metadata-only mode) since we don't need descriptions for indexing */
+    bool skip_batch = _is_field_skipped(FIELD_COORDS, skip_mask);
+    if (load_descriptions && !skip_batch) {
         err = _parse_descriptions(&cif, &blocks, &ctx);
         if (err != CIF_OK) {
             free(cif.id);

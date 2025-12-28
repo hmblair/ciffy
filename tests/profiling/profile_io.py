@@ -85,6 +85,9 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     def load_ciffy():
         return ciffy.load(filepath, backend="numpy")
 
+    def load_ciffy_metadata():
+        return ciffy.load_metadata(filepath)
+
     def load_biopython():
         return _bio_get_coords(pdb_id, filepath)
 
@@ -108,6 +111,9 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     # Benchmark each (Timer.benchmark handles warmup internally)
     result = Timer.benchmark(load_ciffy, runs=runs)
     results["ciffy"] = result.to_dict()
+
+    result = Timer.benchmark(load_ciffy_metadata, runs=runs)
+    results["ciffy_metadata"] = result.to_dict()
 
     if has_biopython:
         result = Timer.benchmark(load_biopython, runs=runs)
@@ -191,6 +197,12 @@ def print_results(results: dict, profile: dict = None) -> None:
     if profile is not None:
         print_profile_breakdown(profile, c['mean']*1000)
 
+    # Print metadata-only timing
+    if results.get("ciffy_metadata"):
+        cm = results["ciffy_metadata"]
+        speedup = c["mean"] / cm["mean"] if cm["mean"] > 0 else 0
+        print(f"ciffy meta:  {cm['mean']*1000:7.2f} ms ± {cm['std']*1000:.2f} ms ({speedup:.1f}x faster)")
+
     if results["biopython"]:
         bp = results["biopython"]
         print(f"BioPython:   {bp['mean']*1000:7.2f} ms ± {bp['std']*1000:.2f} ms")
@@ -211,13 +223,20 @@ def print_results(results: dict, profile: dict = None) -> None:
 def generate_markdown_table(all_results: list[dict]) -> str:
     """Generate a markdown table from benchmark results."""
     lines = [
-        "| Structure | Atoms | ciffy | BioPython | Biotite |",
-        "|-----------|------:|------:|----------:|--------:|",
+        "| Structure | Atoms | ciffy | ciffy meta | BioPython | Biotite |",
+        "|-----------|------:|------:|-----------:|----------:|--------:|",
     ]
 
     for r in all_results:
         c = r["ciffy"]
         ciffy_ms = f"{c['mean']*1000:.2f} ms"
+
+        if r.get("ciffy_metadata"):
+            cm = r["ciffy_metadata"]
+            meta_speedup = c["mean"] / cm["mean"] if cm["mean"] > 0 else 0
+            ciffy_meta_str = f"{cm['mean']*1000:.2f} ms ({meta_speedup:.1f}x)"
+        else:
+            ciffy_meta_str = "—"
 
         if r["biopython"]:
             bp = r["biopython"]
@@ -234,7 +253,7 @@ def generate_markdown_table(all_results: list[dict]) -> str:
             biotite_str = "—"
 
         lines.append(
-            f"| {r['pdb_id']} | {r['atoms']:,} | {ciffy_ms} | {biopython_str} | {biotite_str} |"
+            f"| {r['pdb_id']} | {r['atoms']:,} | {ciffy_ms} | {ciffy_meta_str} | {biopython_str} | {biotite_str} |"
         )
 
     return "\n".join(lines)

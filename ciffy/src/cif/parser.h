@@ -15,6 +15,7 @@
 #include <stdbool.h>
 
 #include "io.h"
+#include "registry.h"  /* For FieldSkipMask */
 
 /**
  * @brief Filter options for partial loading.
@@ -108,12 +109,12 @@ char *_get_id(ParseCursor *cursor, CifErrorContext *ctx);
  *
  * @param cif Output structure to populate
  * @param blocks Parsed block collection
- * @param metadata_only If true, skip batch parsing (for fast indexing)
+ * @param skip_mask Bitmask of fields to skip (use SKIP_NONE for all, SKIP_METADATA for metadata only)
  * @param filter Optional filter for partial loading (NULL = load all)
  * @param ctx Error context, populated on failure
  * @return CIF_OK on success, error code on failure
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
                    const LoadFilter *filter, CifErrorContext *ctx);
 
 /**

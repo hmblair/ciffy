@@ -545,6 +545,81 @@ const FieldDef *_get_fields(void) {
 
 
 /* ============================================================================
+ * SKIP MASK API
+ * Functions for field name lookup and skip mask validation.
+ * ============================================================================ */
+
+/**
+ * @brief Field name to ID mapping table.
+ *
+ * Maps user-facing field names to their FieldId enum values.
+ * Names match both internal names and Python-facing names.
+ */
+static const struct {
+    const char *name;
+    FieldId id;
+} FIELD_NAME_MAP[] = {
+    /* Skippable fields - these can be skipped by users */
+    { "coordinates", FIELD_COORDS },
+    { "coords", FIELD_COORDS },  /* Alias */
+    { "bfactors", FIELD_BFACTORS },
+    { "types", FIELD_TYPES },
+    { "atoms", FIELD_TYPES },  /* Python name */
+    { "elements", FIELD_ELEMENTS },
+    { "sequence", FIELD_SEQUENCE },
+    { "residues", FIELD_SEQUENCE },  /* Python name */
+    { "res_per_chain", FIELD_RES_PER_CHAIN },
+    { "atoms_per_res", FIELD_ATOMS_PER_RES },
+    { "descriptions", FIELD_DESCRIPTIONS },
+    { "resolution", FIELD_RESOLUTION },
+
+    /* Core fields - listed for error messages but cannot be skipped */
+    { "models", FIELD_MODELS },
+    { "chains", FIELD_CHAINS },
+    { "names", FIELD_NAMES },
+    { "chain_names", FIELD_NAMES },  /* Python name */
+    { "strands", FIELD_STRANDS },
+    { "strand_names", FIELD_STRANDS },  /* Python name */
+    { "molecule_types", FIELD_MOL_TYPES },
+
+    { NULL, -1 }  /* Sentinel */
+};
+
+int _field_name_to_id(const char *name) {
+    if (name == NULL) return -1;
+
+    for (int i = 0; FIELD_NAME_MAP[i].name != NULL; i++) {
+        if (strcmp(name, FIELD_NAME_MAP[i].name) == 0) {
+            return (int)FIELD_NAME_MAP[i].id;
+        }
+    }
+    return -1;  /* Unknown field */
+}
+
+FieldSkipMask _validate_skip_mask(FieldSkipMask skip_mask, CifErrorContext *ctx) {
+    /* Check for core fields being skipped */
+    FieldSkipMask invalid = skip_mask & SKIP_CORE_MASK;
+
+    if (invalid != 0) {
+        /* Find first invalid field for error message */
+        const char *field_name = "unknown";
+        for (int i = 0; i < FIELD_COUNT; i++) {
+            if (invalid & (1U << i)) {
+                field_name = FIELDS[i].name;
+                break;
+            }
+        }
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+            "Cannot skip core field '%s' - required for structure integrity",
+            field_name);
+        return 0;
+    }
+
+    return skip_mask;
+}
+
+
+/* ============================================================================
  * TOPOLOGICAL SORT
  * Computes field execution order from dependencies.
  * ============================================================================ */
@@ -1269,11 +1344,17 @@ int _get_alloc_size(const mmCIF *cif, const FieldDef *def) {
     return count * def->elements_per_item;
 }
 
-CifError _allocate_field_arrays(mmCIF *cif, CifErrorContext *ctx) {
-    LOG_DEBUG("Allocating field arrays");
+CifError _allocate_field_arrays(mmCIF *cif, FieldSkipMask skip_mask, CifErrorContext *ctx) {
+    LOG_DEBUG("Allocating field arrays (skip_mask=0x%x)", skip_mask);
 
     for (int i = 0; i < FIELD_COUNT; i++) {
         const FieldDef *def = &FIELDS[i];
+
+        /* Skip fields that are in the skip_mask */
+        if (_is_field_skipped(def->id, skip_mask)) {
+            LOG_DEBUG("Skipping allocation for field '%s' (in skip_mask)", def->name);
+            continue;
+        }
 
         if (def->size_source == SIZE_NONE || def->element_size == 0) {
             continue;

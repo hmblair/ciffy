@@ -19,6 +19,7 @@ def load(
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
+    skip: Union[str, List[str], None] = None,
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -40,6 +41,15 @@ def load(
             If None, all chains are loaded. Can be combined with molecule_types.
         model: Model number to load for multi-model structures (e.g., NMR
             ensembles). Currently only model 1 is supported. Default is 1.
+        skip: Fields to skip loading. Can be:
+            - None: Load all fields (default)
+            - "metadata": Skip heavy atom-level fields (coordinates, bfactors,
+              atoms, elements, atoms_per_res). Useful for fast indexing.
+            - A single field name: Skip that field (e.g., "bfactors")
+            - A list of field names: Skip multiple fields
+            Skippable fields: coordinates, bfactors, atoms (types), elements,
+            sequence (residues), res_per_chain, atoms_per_res, resolution.
+            Core fields (chains, names, etc.) cannot be skipped.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -47,7 +57,8 @@ def load(
     Raises:
         OSError: If the file does not exist.
         RuntimeError: If parsing fails.
-        ValueError: If backend is not "numpy" or "torch".
+        ValueError: If backend is not "numpy" or "torch", or if skip contains
+            invalid or core field names.
         NotImplementedError: If model is not 1.
 
     Example:
@@ -72,6 +83,12 @@ def load(
 
         >>> # Combine filters: only RNA chains named A or B
         >>> rna_ab = load("1abc.cif", molecule_types=Molecule.RNA, chains=["A", "B"])
+
+        >>> # Skip loading B-factors for faster loading
+        >>> polymer = load("1abc.cif", skip="bfactors")
+
+        >>> # Skip multiple fields
+        >>> polymer = load("1abc.cif", skip=["bfactors", "resolution"])
     """
     # Import here to avoid circular imports
     from ..polymer import Polymer
@@ -111,7 +128,7 @@ def load(
             chain_filter = list(chains)
 
     # Load returns a dict with all parsed data
-    data = _load(file, load_descriptions=load_descriptions, molecule_types=mol_type_filter, chains=chain_filter)
+    data = _load(file, load_descriptions=load_descriptions, skip=skip, molecule_types=mol_type_filter, chains=chain_filter)
 
     # Extract fields from dict
     id = data["id"]
@@ -187,6 +204,8 @@ def load_metadata(file: str) -> dict:
 
     This is ~3x faster than full load() for large structures.
 
+    Equivalent to: load(file, skip='metadata')
+
     Args:
         file: Path to the CIF file.
 
@@ -216,7 +235,7 @@ def load_metadata(file: str) -> dict:
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')
 
-    data = _load(file, metadata_only=True)
+    data = _load(file, skip='metadata')
 
     atoms_per_chain = data["atoms_per_chain"]
     molecule_types = data["molecule_types"]

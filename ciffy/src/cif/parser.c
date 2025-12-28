@@ -499,14 +499,13 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
  *   1. Validate required blocks exist
  *   2. Count models, chains, residues, atoms
  *   3. Parse chain/residue metadata
- *   4. Batch parse atom data (parallelized) - skipped if metadata_only
- *   5. Reorder atoms (polymer first) - skipped if metadata_only
+ *   4. Batch parse atom data (parallelized) - skipped if skip_mask includes batch fields
+ *   5. Reorder atoms (polymer first) - skipped if batch fields skipped
  *
- * @param metadata_only If true, skip batch parsing and only compute counts.
- *                      Used for fast dataset indexing.
+ * @param skip_mask Bitmask of fields to skip (SKIP_NONE for all, SKIP_METADATA for metadata only).
  * @param filter Optional filter for partial loading (NULL = load all).
  */
-CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
+CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
                    const LoadFilter *filter, CifErrorContext *ctx) {
     LOG_DEBUG("Starting CIF structure parsing");
 
@@ -580,9 +579,12 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         LOG_INFO("Chain filter: %d/%d chains included", included, cif->original_chains);
     }
 
-    /* ── metadata_only: Skip batch parsing, just compute atoms_per_chain ───── */
-    if (metadata_only) {
-        LOG_DEBUG("metadata_only mode: skipping batch parsing");
+    /* ── Check if we should skip batch parsing ────────────────────────────── */
+    /* Skip if coordinates are skipped (the main heavy field) */
+    bool skip_batch = _is_field_skipped(FIELD_COORDS, skip_mask);
+
+    if (skip_batch) {
+        LOG_DEBUG("skip_mask includes batch fields: skipping batch parsing");
 
         _free_lines(&blocks->b[BLOCK_POLY]);
         _free_lines(&blocks->b[BLOCK_CHAIN]);
@@ -593,7 +595,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
         _free_lines(&blocks->b[BLOCK_ATOM]);
         if (cif->atoms_per_chain == NULL) return ctx->code;
 
-        LOG_DEBUG("metadata_only: computed atoms_per_chain for %d chains", cif->chains);
+        LOG_DEBUG("metadata only: computed atoms_per_chain for %d chains", cif->chains);
         return CIF_OK;
     }
 
@@ -650,7 +652,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, bool metadata_only,
 
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
     /* NOTE: cif->atoms is now the FILTERED count */
-    err = _allocate_field_arrays(cif, ctx);
+    err = _allocate_field_arrays(cif, skip_mask, ctx);
     if (err != CIF_OK) {
         free(cif->is_nonpoly);
         if (cif->is_excluded) free(cif->is_excluded);

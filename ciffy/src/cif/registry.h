@@ -124,6 +124,7 @@
 #define _CIFFY_REGISTRY_H
 
 #include <stdbool.h>
+#include <stdint.h>  /* For uint32_t (FieldSkipMask) */
 #include "../error.h"
 #include "io.h"  /* For mmBlock */
 
@@ -320,6 +321,72 @@ typedef struct {
 
 
 /* ============================================================================
+ * FIELD SKIP MASK
+ * Bitmask for selectively skipping field loading.
+ * ============================================================================ */
+
+/**
+ * @brief Bitmask type for skipping fields during loading.
+ *
+ * Each bit corresponds to a FieldId. Set bit means skip that field.
+ */
+typedef uint32_t FieldSkipMask;
+
+/* Pre-defined skip mask presets */
+#define SKIP_NONE       ((FieldSkipMask)0)
+
+/* SKIP_METADATA: Skip heavy atom-level fields (what load_metadata uses) */
+#define SKIP_METADATA   ((FieldSkipMask)( \
+    (1U << FIELD_COORDS) | \
+    (1U << FIELD_BFACTORS) | \
+    (1U << FIELD_TYPES) | \
+    (1U << FIELD_ELEMENTS) | \
+    (1U << FIELD_ATOMS_PER_RES) \
+))
+
+/* Core fields that cannot be skipped (structure integrity) */
+#define SKIP_CORE_MASK  ((FieldSkipMask)( \
+    (1U << FIELD_MODELS) | \
+    (1U << FIELD_CHAINS) | \
+    (1U << FIELD_RESIDUES) | \
+    (1U << FIELD_ATOMS) | \
+    (1U << FIELD_NAMES) | \
+    (1U << FIELD_STRANDS) | \
+    (1U << FIELD_MOL_TYPES) \
+))
+
+/**
+ * @brief Check if a field should be skipped.
+ *
+ * @param fid Field identifier
+ * @param skip_mask Bitmask of fields to skip
+ * @return true if field should be skipped
+ */
+static inline bool _is_field_skipped(FieldId fid, FieldSkipMask skip_mask) {
+    return (skip_mask & (1U << fid)) != 0;
+}
+
+/**
+ * @brief Convert field name string to FieldId.
+ *
+ * @param name Field name (e.g., "coordinates", "bfactors")
+ * @return FieldId if found, -1 if unknown (returned as int for signedness)
+ */
+int _field_name_to_id(const char *name);
+
+/**
+ * @brief Validate a skip mask.
+ *
+ * Ensures no core fields are being skipped.
+ *
+ * @param skip_mask Mask to validate
+ * @param ctx Error context, populated if validation fails
+ * @return Validated mask on success, 0 with error set on failure
+ */
+FieldSkipMask _validate_skip_mask(FieldSkipMask skip_mask, CifErrorContext *ctx);
+
+
+/* ============================================================================
  * BATCH EXECUTION
  * Runtime batch grouping and execution for fields from the same block.
  * ============================================================================ */
@@ -498,10 +565,13 @@ int _get_alloc_size(const mmCIF *cif, const FieldDef *def);
  * element_size, and elements_per_item. Must be called after count
  * fields (atoms, chains, residues) are populated.
  *
+ * Skips allocation for fields in skip_mask.
+ *
  * @param cif Structure with count fields already populated
+ * @param skip_mask Bitmask of fields to skip
  * @param ctx Error context
  * @return CIF_OK on success, CIF_ERR_ALLOC on failure
  */
-CifError _allocate_field_arrays(mmCIF *cif, CifErrorContext *ctx);
+CifError _allocate_field_arrays(mmCIF *cif, FieldSkipMask skip_mask, CifErrorContext *ctx);
 
 #endif /* _CIFFY_REGISTRY_H */

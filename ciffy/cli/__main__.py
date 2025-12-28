@@ -352,6 +352,33 @@ def _cluster_command(args):
 
     from ciffy.operations.cluster import cluster
 
+    # Validate split arguments
+    if args.split and not args.output:
+        print("Error: --split requires --output to specify output directory", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse split ratios if provided
+    split_ratios = None
+    if args.split:
+        try:
+            parts = [float(x.strip()) for x in args.split.split(",")]
+            if len(parts) == 2:
+                train, test = parts
+                val = 0.0
+            elif len(parts) == 3:
+                train, val, test = parts
+            else:
+                raise ValueError("Expected 2 or 3 values")
+
+            if not (0.99 <= train + val + test <= 1.01):
+                raise ValueError(f"Ratios must sum to 1.0, got {train + val + test}")
+
+            split_ratios = (train, val, test)
+        except ValueError as e:
+            print(f"Error: Invalid --split format: {e}", file=sys.stderr)
+            print("Expected format: '0.8,0.1,0.1' (train,val,test)", file=sys.stderr)
+            sys.exit(1)
+
     # Expand glob patterns
     paths = []
     for pattern in args.files:
@@ -390,8 +417,42 @@ def _cluster_command(args):
         print(f"Found {result.n_clusters} clusters from {result.n_structures} structures")
         print()
 
-    # Output representatives
-    if args.output:
+    # Handle split mode
+    if split_ratios:
+        from ciffy.nn.split import DataSplit
+
+        train, val, test = split_ratios
+        split = DataSplit.from_clusters(
+            result.paths,
+            result.labels.tolist(),
+            train=train,
+            val=val,
+            test=test,
+            seed=args.seed,
+        )
+
+        if not args.quiet:
+            print(f"Split: train={len(split.train)}, val={len(split.val)}, test={len(split.test)}")
+
+        # Create directories
+        try:
+            dirs = split.to_directories(
+                args.output,
+                symlink=not args.copy,
+                exist_ok=False,
+            )
+        except FileExistsError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.quiet:
+            link_type = "copied" if args.copy else "symlinked"
+            for name, dir_path in dirs.items():
+                n_files = len(list(dir_path.glob("*.cif")))
+                print(f"  {dir_path}/ ({n_files} files {link_type})")
+
+    # Output representatives (non-split mode)
+    elif args.output:
         # Write representative paths to file
         with open(args.output, "w") as f:
             for rep in result.representatives:
@@ -1140,7 +1201,24 @@ def main():
     )
     cluster_parser.add_argument(
         "--output", "-o",
-        help="Write representative paths to file (default: stdout)",
+        help="Without --split: write representative paths to file. "
+             "With --split: create train/val/test directories here.",
+    )
+    cluster_parser.add_argument(
+        "--split", "-s",
+        help="Split into train/val/test directories. Format: 'train,val,test' "
+             "e.g., '0.8,0.1,0.1'. Requires --output for directory path.",
+    )
+    cluster_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for split reproducibility (default: 42)",
+    )
+    cluster_parser.add_argument(
+        "--copy",
+        action="store_true",
+        help="Copy files instead of symlinking (with --split)",
     )
     cluster_parser.add_argument(
         "--threads", "-j",

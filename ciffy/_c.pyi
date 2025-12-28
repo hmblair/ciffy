@@ -48,32 +48,6 @@ def _find_connected_components(
     n_atoms: int,
 ) -> tuple[ndarray, ndarray, int]: ...
 
-# Z-matrix functions
-def _build_zmatrix_parallel(
-    atoms: ndarray,
-    sequence: ndarray,
-    res_sizes: ndarray,
-    lengths: ndarray,
-    offsets: ndarray,
-    neighbors: ndarray,
-) -> tuple[ndarray, ndarray, ndarray]: ...
-
-def _build_atom_indexed_zmatrix_parallel(
-    atoms: ndarray,
-    sequence: ndarray,
-    res_sizes: ndarray,
-    lengths: ndarray,
-    offsets: ndarray,
-    neighbors: ndarray,
-) -> tuple[ndarray, ndarray, ndarray]: ...
-
-def _build_canonical_zmatrix(
-    atoms: ndarray,
-    sequence: ndarray,
-    res_sizes: ndarray,
-    lengths: ndarray,
-) -> tuple[ndarray, ndarray, ndarray]: ...
-
 # Internal coordinate functions
 def _cartesian_to_internal(
     coordinates: ndarray,

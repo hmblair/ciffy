@@ -33,12 +33,6 @@ PyObject *py_build_bond_graph(PyObject *self, PyObject *args);
 PyObject *py_edges_to_csr(PyObject *self, PyObject *args);
 
 /**
- * Build Z-matrix for all chains in parallel.
- * Python: _build_zmatrix_parallel(offsets, neighbors, n_atoms, chain_starts, chain_sizes, roots) -> (zmatrix, counts)
- */
-PyObject *py_build_zmatrix_parallel(PyObject *self, PyObject *args);
-
-/**
  * Backward pass for cartesian_to_internal.
  * Python: _cartesian_to_internal_backward(coords, indices, distances, angles,
  *             grad_distances, grad_angles, grad_dihedrals) -> grad_coords
@@ -89,13 +83,6 @@ PyObject *py_nerf_reconstruct_leveled_anchored(PyObject *self, PyObject *args);
 PyObject *py_nerf_reconstruct_backward_leveled_anchored(PyObject *self, PyObject *args);
 
 /**
- * Build canonical Z-matrix using natural atom order and precomputed references.
- * Python: _build_canonical_zmatrix(atoms, sequence, res_sizes, chain_lengths,
- *             bond_offsets, bond_neighbors) -> (zmatrix, dihedral_types)
- */
-PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
-
-/**
  * Place a single atom using NERF algorithm.
  * Python: _nerf_place_atom(a, b, c, distance, angle, dihedral) -> result
  *
@@ -103,15 +90,6 @@ PyObject *py_build_canonical_zmatrix(PyObject *self, PyObject *args);
  * and internal coordinates (distance, angle, dihedral in radians).
  */
 PyObject *py_nerf_place_atom(PyObject *self, PyObject *args);
-
-/**
- * Build atom-indexed Z-matrix for all chains in parallel.
- * Row k corresponds to atom k (natural ordering).
- *
- * Python: _build_atom_indexed_zmatrix_parallel(offsets, neighbors, n_atoms,
- *             chain_starts, chain_sizes, roots) -> (zmatrix, levels, counts)
- */
-PyObject *py_build_atom_indexed_zmatrix_parallel(PyObject *self, PyObject *args);
 
 /**
  * Convert Cartesian to internal coordinates using parent array.

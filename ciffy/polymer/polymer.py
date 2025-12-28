@@ -659,6 +659,17 @@ class Polymer:
         """Return the number of atoms."""
         return self.size()
 
+    def copy(self: Polymer) -> Polymer:
+        """Return a deep copy of this Polymer."""
+        from ..backend import ops
+        return self._clone(
+            coordinates=ops.clone(self.coordinates),
+            atoms=ops.clone(self.atoms),
+            elements=ops.clone(self.elements),
+            sequence=ops.clone(self.sequence),
+            bfactors=ops.clone(self.bfactors) if self.bfactors is not None else None,
+        )
+
     def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:
         """
         Get counts at a scale, optionally per outer unit.
@@ -1415,10 +1426,10 @@ class Polymer:
             >>> custom_coords = model.predict_residue()
             >>> p = p.extend(Residue.A, coords=custom_coords)
         """
-        from ..geometry import position_residue
+        from ..geometry import position_residue, position_residue_fast
         from ..biochemistry.linking import LINKING_BY_TYPE
         from ..utils import atoms_to_col_map
-        from .builder import expand_residue
+        from .builder import expand_residue, _resolve_frame_indices
 
         # Validate single chain and poly-only
         if self.size(Scale.CHAIN) != 1:
@@ -1457,10 +1468,7 @@ class Polymer:
         check_compatible(self.coordinates, coords, "coords")
 
         # Get last residue's state
-        last_res_coords, _, last_res_atom_to_col, last_res_type = self._residue_slice(-1)
-
-        # Build atom_to_col for new residue
-        new_res_atom_to_col = atoms_to_col_map(new_res_atoms)
+        last_res_coords, last_res_atoms_arr, last_res_atom_to_col, last_res_type = self._residue_slice(-1)
 
         # Get linking definition
         link_def = LINKING_BY_TYPE.get(last_res_type.molecule_type)
@@ -1471,15 +1479,33 @@ class Polymer:
             )
 
         # Position the new residue
-        positioned_coords = position_residue(
-            prev_coords=last_res_coords,
-            next_coords=coords,
-            prev_atom_to_col=last_res_atom_to_col,
-            next_atom_to_col=new_res_atom_to_col,
-            prev_residue=last_res_type,
-            next_residue=residue,
-            transform=transform,
-        )
+        if transform is not None:
+            # Fast path with cached frame indices
+            # Convert atoms arrays to tuples for frame resolution
+            last_res_atoms = tuple(int(a) for a in last_res_atoms_arr)
+            prev_frame = _resolve_frame_indices(last_res_type.value, last_res_atoms)
+            next_frame = _resolve_frame_indices(residue.value, new_res_atoms)
+            positioned_coords = position_residue_fast(
+                last_res_coords,
+                coords,
+                transform,
+                prev_frame.prev_cols,
+                prev_frame.prev_z_toward,
+                next_frame.next_cols,
+                next_frame.next_z_toward,
+            )
+        else:
+            # Slow path for linear extension (needs backbone span calculation)
+            new_res_atom_to_col = atoms_to_col_map(new_res_atoms)
+            positioned_coords = position_residue(
+                prev_coords=last_res_coords,
+                next_coords=coords,
+                prev_atom_to_col=last_res_atom_to_col,
+                next_atom_to_col=new_res_atom_to_col,
+                prev_residue=last_res_type,
+                next_residue=residue,
+                transform=None,
+            )
 
         # Concatenate arrays
         new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)

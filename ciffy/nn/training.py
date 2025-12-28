@@ -1,74 +1,42 @@
 """
 Reusable training utilities for PyTorch models.
 
-This module provides function-based training primitives that work with
-any PyTorch model and PolymerDataset. Designed for single-sample training
-(batch_size=1) with DataLoader integration for shuffling and multiprocessing.
+This module provides checkpoint and device utilities that work with
+any PyTorch model. For training loops, use Fabric-based trainers directly.
 
 Example:
-    >>> from ciffy.nn import PolymerDataset, PolymerVAE
-    >>> from ciffy.nn.training import (
-    ...     set_seed, get_device, train_epoch,
-    ...     save_checkpoint, polymer_collate_fn, get_worker_init_fn,
-    ... )
-    >>> from torch.utils.data import DataLoader
+    >>> from ciffy.nn.training import get_device, save_checkpoint, load_checkpoint
     >>>
-    >>> set_seed(42)
     >>> device = get_device("auto")
-    >>> dataset = PolymerDataset("./data")
-    >>> loader = DataLoader(
-    ...     dataset, batch_size=1, shuffle=True,
-    ...     collate_fn=polymer_collate_fn,
-    ...     worker_init_fn=get_worker_init_fn(42),
-    ... )
-    >>> model = PolymerVAE().to(device)
-    >>> optimizer = torch.optim.AdamW(model.parameters())
-    >>>
-    >>> def loss_fn(model, polymer):
-    ...     return model.compute_loss(polymer.to(device))
-    >>>
-    >>> metrics = train_epoch(model, loader, loss_fn, optimizer)
+    >>> model = MyModel().to(device)
+    >>> # ... training ...
+    >>> save_checkpoint("checkpoint.pt", model, optimizer, epoch=10)
 """
 
 from __future__ import annotations
 
 import dataclasses
 import logging
-import random
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 try:
-    import numpy as np
     import torch
     import torch.nn as nn
     import torch.optim as optim
-    from torch.utils.data import DataLoader
 
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    np = None
     torch = None
     nn = None
     optim = None
-    DataLoader = None
-
-try:
-    from tqdm import tqdm
-
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    tqdm = None
 
 if TYPE_CHECKING:
     import torch
     import torch.nn as nn
     import torch.optim as optim
-    from torch.utils.data import DataLoader
 
 
 logger = logging.getLogger(__name__)
@@ -114,42 +82,6 @@ class ExperimentResult:
     checkpoint_path: str | None = None
     log_file: str | None = None
     error: str | None = None
-
-
-def set_seed(seed: int, deterministic: bool = False) -> None:
-    """
-    Set random seeds for reproducibility across Python, NumPy, and PyTorch.
-
-    Args:
-        seed: Random seed value.
-        deterministic: If True, enable PyTorch deterministic mode. This makes
-            operations reproducible but may reduce performance. Affects cudnn
-            and CUDA operations.
-
-    Note:
-        For distributed training, each rank should use ``seed + rank`` for
-        different random states while maintaining reproducibility.
-
-    Example:
-        >>> set_seed(42)
-        >>> # For distributed training:
-        >>> set_seed(42 + rank)
-    """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch is required for set_seed")
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-    if deterministic:
-        torch.use_deterministic_algorithms(True)
-        if torch.backends.cudnn.is_available():
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
 
 
 def get_device(
@@ -343,471 +275,9 @@ def load_checkpoint(
     return checkpoint
 
 
-def _log_bad_loss(
-    loss_type: str,
-    sample: Any,
-    losses: dict[str, "torch.Tensor"],
-    model: "nn.Module",
-    n_samples: int,
-    n_skipped: int,
-) -> None:
-    """Log debug information when a bad loss (NaN/Inf) is encountered.
-
-    This helps diagnose training instabilities by providing:
-    - Sample characteristics (shape, dtype, value ranges)
-    - Loss breakdown (which component is bad)
-    - Model parameter statistics
-    """
-    import torch
-
-    parts = [f"\n{'='*60}", f"BAD LOSS DETECTED: {loss_type}", f"{'='*60}"]
-
-    # Sample info
-    parts.append(f"\nSample info (after {n_samples} good, {n_skipped} skipped):")
-    if hasattr(sample, "shape"):
-        parts.append(f"  Shape: {sample.shape}")
-        parts.append(f"  Dtype: {sample.dtype}")
-        if hasattr(sample, "min") and hasattr(sample, "max"):
-            try:
-                parts.append(f"  Value range: [{sample.min().item():.4g}, {sample.max().item():.4g}]")
-                if torch.isnan(sample).any():
-                    parts.append(f"  WARNING: Sample contains NaN values!")
-                if torch.isinf(sample).any():
-                    parts.append(f"  WARNING: Sample contains Inf values!")
-            except Exception:
-                pass
-    elif isinstance(sample, (tuple, list)) and len(sample) > 0:
-        parts.append(f"  Sample is tuple/list with {len(sample)} elements")
-        for i, elem in enumerate(sample[:3]):  # First 3 elements
-            if hasattr(elem, "shape"):
-                parts.append(f"    [{i}] shape={elem.shape}, dtype={elem.dtype}")
-                try:
-                    if torch.isnan(elem).any():
-                        parts.append(f"        WARNING: Element [{i}] contains NaN!")
-                    if torch.isinf(elem).any():
-                        parts.append(f"        WARNING: Element [{i}] contains Inf!")
-                except Exception:
-                    pass
-
-    # Loss breakdown
-    parts.append(f"\nLoss breakdown:")
-    for key, value in losses.items():
-        if isinstance(value, torch.Tensor):
-            val = value.item() if value.numel() == 1 else str(value)
-            status = ""
-            if torch.isnan(value).any():
-                status = " <- NaN!"
-            elif torch.isinf(value).any():
-                status = " <- Inf!"
-            parts.append(f"  {key}: {val}{status}")
-
-    # Model parameter stats
-    parts.append(f"\nModel parameter statistics:")
-    n_nan_params = 0
-    n_inf_params = 0
-    param_stats = []
-    for name, param in model.named_parameters():
-        if param.requires_grad and param.numel() > 0:
-            try:
-                has_nan = torch.isnan(param).any().item()
-                has_inf = torch.isinf(param).any().item()
-                if has_nan:
-                    n_nan_params += 1
-                    param_stats.append(f"  {name}: contains NaN!")
-                elif has_inf:
-                    n_inf_params += 1
-                    param_stats.append(f"  {name}: contains Inf!")
-            except Exception:
-                pass
-
-    if n_nan_params > 0 or n_inf_params > 0:
-        parts.append(f"  Parameters with NaN: {n_nan_params}")
-        parts.append(f"  Parameters with Inf: {n_inf_params}")
-        parts.extend(param_stats[:5])  # Show first 5 problematic params
-        if len(param_stats) > 5:
-            parts.append(f"  ... and {len(param_stats) - 5} more")
-    else:
-        parts.append("  All parameters are finite (problem is in forward pass)")
-
-    parts.append(f"{'='*60}\n")
-
-    # Print to stderr to ensure visibility (logger may not be captured in subprocesses)
-    import sys
-    print("\n".join(parts), file=sys.stderr)
-    logger.warning("\n".join(parts))
-
-
-def train_epoch(
-    model: "nn.Module",
-    dataloader: "DataLoader",
-    loss_fn: Callable[["nn.Module", Any], dict[str, "torch.Tensor"]],
-    optimizer: "optim.Optimizer",
-    *,
-    device: Optional["torch.device"] = None,
-    grad_clip: Optional[float] = None,
-    scheduler: Optional[Any] = None,
-    step_scheduler_per_batch: bool = False,
-    progress_bar: bool = True,
-    rank: Optional[int] = None,
-    world_size: Optional[int] = None,
-    diagnostics: Optional[Any] = None,
-) -> dict[str, float]:
-    """
-    Train model for one epoch with flexible loss function.
-
-    This is a generic training loop that works with any model and loss function.
-    The loss function receives the model and a single sample, and returns a dict
-    containing at least a "loss" key.
-
-    Args:
-        model: PyTorch model to train.
-        dataloader: DataLoader yielding samples. Use ``batch_size=1`` for
-            variable-length polymers with ``polymer_collate_fn``.
-        loss_fn: Callable with signature ``(model, sample) -> dict``.
-            Must return dict with at least ``"loss"`` key containing a scalar
-            tensor. May include other metrics like ``"recon_loss"``, ``"kl_loss"``.
-        optimizer: Optimizer for parameter updates.
-        device: Target device. If None, no device transfer is performed
-            (loss_fn should handle device placement).
-        grad_clip: Max gradient norm for clipping. None to disable.
-        scheduler: Optional learning rate scheduler.
-        step_scheduler_per_batch: If True, step scheduler after each batch.
-            If False (default), scheduler should be stepped after epoch.
-        progress_bar: If True, show tqdm progress bar.
-        rank: Process rank for distributed training. Progress bar only
-            shown on rank 0.
-        world_size: Total number of processes for distributed training.
-        diagnostics: Optional TrainingDiagnostics instance for tracking
-            gradient norms, parameter statistics, etc. If provided, diagnostic
-            metrics are computed after backward pass and included in results.
-
-    Returns:
-        Dict of averaged metrics over the epoch. Always includes:
-        - ``"n_samples"``: Number of successfully processed samples
-        - ``"n_skipped"``: Number of skipped samples (None or errors)
-        Plus any keys returned by loss_fn (e.g., ``"loss"``, ``"recon_loss"``).
-
-    Example:
-        >>> def vae_loss_fn(model, polymer):
-        ...     polymer = polymer.poly().to(device)
-        ...     return model.compute_loss(polymer)
-        >>>
-        >>> metrics = train_epoch(model, loader, vae_loss_fn, optimizer)
-        >>> print(f"Loss: {metrics['loss']:.4f}, Samples: {metrics['n_samples']}")
-    """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch is required for train_epoch")
-
-    model.train()
-    metrics_accum: dict[str, float] = defaultdict(float)
-    diag_snapshot: dict[str, float] = {}  # Diagnostic metrics (not averaged)
-    n_samples = 0
-    n_skipped = 0
-    # Track skip reasons for debugging
-    skip_reasons: dict[str, int] = {"none": 0, "nan": 0, "inf": 0, "error": 0}
-
-    # Progress bar (only rank 0 in distributed)
-    show_progress = progress_bar and (rank is None or rank == 0)
-    if show_progress and TQDM_AVAILABLE:
-        pbar = tqdm(dataloader, desc="Training")
-    else:
-        pbar = dataloader
-
-    for sample in pbar:
-        # Skip None samples (filtered by collate_fn)
-        if sample is None:
-            n_skipped += 1
-            skip_reasons["none"] += 1
-            continue
-
-        try:
-            # Move sample to device if specified and sample supports it
-            if device is not None and hasattr(sample, "to"):
-                sample = sample.to(device)
-
-            # Compute loss
-            optimizer.zero_grad()
-            losses = loss_fn(model, sample)
-            loss = losses["loss"]
-
-            # Skip bad losses (NaN or Inf)
-            if torch.isnan(loss) or torch.isinf(loss):
-                n_skipped += 1
-                # Log debug info about the bad loss
-                if torch.isnan(loss):
-                    skip_reasons["nan"] += 1
-                    _log_bad_loss("NaN", sample, losses, model, n_samples, n_skipped)
-                else:
-                    skip_reasons["inf"] += 1
-                    _log_bad_loss("Inf", sample, losses, model, n_samples, n_skipped)
-                continue
-
-            # Backward pass
-            loss.backward()
-
-            # Compute diagnostics after backward, before optimizer step
-            if diagnostics is not None:
-                diag_metrics = diagnostics.compute(optimizer, scheduler)
-                # Diagnostics are snapshot values, keep latest (not averaged)
-                diag_snapshot.update(diag_metrics)
-
-            # Gradient clipping
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-
-            # Optimizer step
-            optimizer.step()
-
-            # Scheduler step (per-batch)
-            if scheduler is not None and step_scheduler_per_batch:
-                scheduler.step()
-
-            # Accumulate metrics
-            for key, value in losses.items():
-                if isinstance(value, torch.Tensor):
-                    metrics_accum[key] += value.item()
-                else:
-                    metrics_accum[key] += value
-            n_samples += 1
-
-            # Update progress bar with all loss metrics
-            if show_progress and TQDM_AVAILABLE:
-                postfix = {}
-                for key in metrics_accum:
-                    if key == "loss" or key.endswith("_loss"):
-                        postfix[key] = f"{metrics_accum[key]/n_samples:.4f}"
-                postfix["n"] = n_samples
-                if n_skipped > 0:
-                    postfix["skip"] = n_skipped
-                pbar.set_postfix(postfix)
-
-        except Exception as e:
-            n_skipped += 1
-            skip_reasons["error"] += 1
-            # Log the actual error for debugging
-            import sys
-            print(f"Sample error: {type(e).__name__}: {e}", file=sys.stderr)
-            logger.debug(f"Skipping sample due to error: {e}")
-            continue
-
-    # Average metrics
-    result: dict[str, float] = {}
-    if n_samples > 0:
-        for key, value in metrics_accum.items():
-            result[key] = value / n_samples
-    else:
-        # All samples were skipped - this is a training failure
-        total_samples = n_samples + n_skipped
-
-        # Build skip reason breakdown
-        reasons = []
-        if skip_reasons["none"] > 0:
-            reasons.append(f"  - None/empty samples: {skip_reasons['none']}")
-        if skip_reasons["nan"] > 0:
-            reasons.append(f"  - NaN loss: {skip_reasons['nan']}")
-        if skip_reasons["inf"] > 0:
-            reasons.append(f"  - Inf loss: {skip_reasons['inf']}")
-        if skip_reasons["error"] > 0:
-            reasons.append(f"  - Errors: {skip_reasons['error']}")
-
-        reason_str = "\n".join(reasons) if reasons else "  - Unknown reason"
-
-        msg = (
-            f"\n{'='*60}\n"
-            f"TRAINING FAILURE: All {total_samples} samples were skipped!\n"
-            f"\nSkip breakdown:\n{reason_str}\n"
-            f"\nPossible causes:\n"
-            f"  1. Empty dataset (no valid samples)\n"
-            f"  2. Model producing NaN/Inf from the start\n"
-            f"  3. Data preprocessing issue (NaN/Inf in inputs)\n"
-            f"  4. Learning rate too high causing immediate instability\n"
-            f"{'='*60}"
-        )
-        # Print to stderr to ensure visibility in subprocesses
-        import sys
-        print(msg, file=sys.stderr)
-        logger.warning(msg)
-        result["loss"] = float("inf")
-
-    result["n_samples"] = float(n_samples)
-    result["n_skipped"] = float(n_skipped)
-
-    # Add diagnostic snapshot (not averaged, latest values)
-    result.update(diag_snapshot)
-
-    return result
-
-
-def polymer_collate_fn(batch: list[Any]) -> Any | None:
-    """
-    Collate function for PolymerDataset that filters None values.
-
-    Since we use ``batch_size=1`` for variable-length polymers, this function
-    simply returns the single item or None if the batch is empty/invalid.
-
-    Args:
-        batch: List of samples from dataset (typically length 1).
-
-    Returns:
-        Single sample if valid, None if all samples were None.
-
-    Example:
-        >>> loader = DataLoader(
-        ...     dataset,
-        ...     batch_size=1,
-        ...     collate_fn=polymer_collate_fn,
-        ... )
-    """
-    # Filter out None values
-    valid = [x for x in batch if x is not None]
-    if not valid:
-        return None
-    # batch_size=1: return single item
-    return valid[0]
-
-
-def get_worker_init_fn(base_seed: Optional[int] = None) -> Callable[[int], None]:
-    """
-    Get worker initialization function for DataLoader multiprocessing.
-
-    Ensures each worker has a different but reproducible random seed,
-    preventing all workers from generating the same random sequences.
-
-    Args:
-        base_seed: Base seed value. Each worker gets ``base_seed + worker_id``.
-            If None, workers use arbitrary seeds (non-reproducible).
-
-    Returns:
-        Worker init function to pass to ``DataLoader(worker_init_fn=...)``.
-
-    Example:
-        >>> loader = DataLoader(
-        ...     dataset,
-        ...     num_workers=4,
-        ...     worker_init_fn=get_worker_init_fn(seed=42),
-        ... )
-    """
-    if not TORCH_AVAILABLE:
-        raise ImportError("PyTorch is required for get_worker_init_fn")
-
-    def worker_init_fn(worker_id: int) -> None:
-        if base_seed is not None:
-            seed = base_seed + worker_id
-            random.seed(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-
-    return worker_init_fn
-
-
-class BetaScheduler:
-    """
-    Scheduler for VAE beta (KL weight) annealing.
-
-    Annealing the KL weight helps prevent posterior collapse in VAEs.
-    Starting with low beta allows the model to learn reconstruction first,
-    then gradually increasing beta encourages use of the latent space.
-
-    Supported schedules:
-        - ``"constant"``: Fixed beta throughout training
-        - ``"linear"``: Linear increase from 0 to target_beta over warmup_epochs
-        - ``"cosine"``: Cosine annealing from 0 to target_beta
-        - ``"cyclical"``: Cycle between 0 and target_beta multiple times
-
-    Example:
-        >>> scheduler = BetaScheduler(
-        ...     schedule="linear",
-        ...     target_beta=1.0,
-        ...     warmup_epochs=50,
-        ...     total_epochs=100,
-        ... )
-        >>> for epoch in range(100):
-        ...     beta = scheduler.get_beta(epoch)
-        ...     model.loss_fn.beta = beta  # Update model's beta
-        ...     train_epoch(...)
-
-    Args:
-        schedule: Annealing schedule type.
-        target_beta: Target beta value (reached after warmup).
-        warmup_epochs: Number of epochs to reach target_beta (for linear/cosine).
-        total_epochs: Total training epochs (required for cyclical).
-        n_cycles: Number of annealing cycles (for cyclical schedule).
-        start_beta: Starting beta value. Default 0.0.
-    """
-
-    def __init__(
-        self,
-        schedule: str = "linear",
-        target_beta: float = 1.0,
-        warmup_epochs: int = 10,
-        total_epochs: int = 100,
-        n_cycles: int = 4,
-        start_beta: float = 0.0,
-    ):
-        valid_schedules = ("constant", "linear", "cosine", "cyclical")
-        if schedule not in valid_schedules:
-            raise ValueError(f"schedule must be one of {valid_schedules}, got '{schedule}'")
-
-        self.schedule = schedule
-        self.target_beta = target_beta
-        self.warmup_epochs = warmup_epochs
-        self.total_epochs = total_epochs
-        self.n_cycles = n_cycles
-        self.start_beta = start_beta
-
-    def get_beta(self, epoch: int) -> float:
-        """
-        Get beta value for the given epoch.
-
-        Args:
-            epoch: Current epoch (0-indexed).
-
-        Returns:
-            Beta value for this epoch.
-        """
-        if self.schedule == "constant":
-            return self.target_beta
-
-        elif self.schedule == "linear":
-            if epoch >= self.warmup_epochs:
-                return self.target_beta
-            progress = epoch / max(self.warmup_epochs, 1)
-            return self.start_beta + (self.target_beta - self.start_beta) * progress
-
-        elif self.schedule == "cosine":
-            if epoch >= self.warmup_epochs:
-                return self.target_beta
-            progress = epoch / max(self.warmup_epochs, 1)
-            # Cosine annealing: starts slow, accelerates in middle, slows at end
-            import math
-            cosine_progress = 0.5 * (1 - math.cos(math.pi * progress))
-            return self.start_beta + (self.target_beta - self.start_beta) * cosine_progress
-
-        elif self.schedule == "cyclical":
-            # Cyclical annealing: repeat linear warmup n_cycles times
-            cycle_length = self.total_epochs / self.n_cycles
-            cycle_epoch = epoch % cycle_length
-            progress = cycle_epoch / max(cycle_length * 0.5, 1)  # Warmup is half the cycle
-            progress = min(progress, 1.0)
-            return self.start_beta + (self.target_beta - self.start_beta) * progress
-
-        return self.target_beta
-
-    def __repr__(self) -> str:
-        return (
-            f"BetaScheduler(schedule='{self.schedule}', "
-            f"target_beta={self.target_beta}, warmup_epochs={self.warmup_epochs})"
-        )
-
-
 __all__ = [
     "ExperimentResult",
-    "set_seed",
     "get_device",
     "save_checkpoint",
     "load_checkpoint",
-    "train_epoch",
-    "polymer_collate_fn",
-    "get_worker_init_fn",
-    "BetaScheduler",
 ]

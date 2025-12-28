@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 
-from ..backend import is_torch, Array, svd, det
+from ..backend import is_torch, Array, svd, det, has_nan, has_inf
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -34,12 +34,28 @@ def kabsch_rotation(coords1: Array, coords2: Array) -> Array:
 
     Returns:
         Rotation matrix R of shape (3, 3). Apply as: coords1_aligned = coords1 @ R.T
+
+    Raises:
+        ValueError: If SVD fails due to invalid coordinates (NaN, inf, or
+            extreme values causing overflow).
     """
     # Cross-covariance matrix H = X^T @ Y
     H = coords1.T @ coords2
 
     # SVD: H = U @ S @ Vt
-    U, S, Vt = svd(H)
+    try:
+        U, S, Vt = svd(H)
+    except Exception as e:
+        # Check for common causes and provide helpful error message
+        if has_nan(H) or has_inf(H):
+            raise ValueError(
+                "RMSD failed: covariance matrix contains NaN or infinity. "
+                "Check input coordinates for invalid values."
+            ) from e
+        raise ValueError(
+            "RMSD failed: SVD did not converge. "
+            "This may indicate extreme coordinate values causing overflow."
+        ) from e
 
     # Optimal rotation: R = V @ U^T
     R = Vt.T @ U.T

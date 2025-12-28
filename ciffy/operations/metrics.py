@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, svdvals, det, multiply
+from ..backend import Array, is_torch, svdvals, det, multiply, has_nan, has_inf
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -383,7 +383,18 @@ def _rmsd_polymer(
     cov = coordinate_covariance(polymer1_c, polymer2_c, scale)
 
     # SVD to find optimal rotation
-    sigma = svdvals(cov)
+    try:
+        sigma = svdvals(cov)
+    except Exception as e:
+        if has_nan(cov) or has_inf(cov):
+            raise ValueError(
+                "RMSD failed: covariance matrix contains NaN or infinity. "
+                "Check input coordinates for invalid values."
+            ) from e
+        raise ValueError(
+            "RMSD failed: SVD did not converge. "
+            "This may indicate extreme coordinate values causing overflow."
+        ) from e
     cov_det = det(cov)
 
     # Handle reflection case

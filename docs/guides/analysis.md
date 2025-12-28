@@ -257,3 +257,55 @@ rmsd_per_chain = ciffy.rmsd(p1, p2, scale=ciffy.CHAIN).sqrt()
 for name, rmsd in zip(p1.names, rmsd_per_chain):
     print(f"Chain {name}: RMSD = {rmsd:.2f} Å")
 ```
+
+## Gaussian Network Model (GNM)
+
+The `GNM` class models molecular dynamics as a network of harmonic springs, useful for predicting flexibility and identifying correlated motions.
+
+### Basic Usage
+
+```python
+from ciffy.operations import GNM
+import numpy as np
+
+# Build contact map from residue distances (7Å cutoff is typical)
+distances = polymer.pairwise_distances(scale=ciffy.RESIDUE)
+adj = (distances < 7.0).astype(np.float32)
+np.fill_diagonal(adj, 0)  # No self-connections
+
+# Create GNM model
+gnm = GNM(adj)
+
+# Position variances (correlates with B-factors)
+bfactors = gnm.variances
+
+# Identify coupled residue motions
+coupled = gnm.cross_correlations  # Normalized to [-1, 1]
+```
+
+### Normal Mode Analysis
+
+Extract slow collective motions that often correspond to functional dynamics:
+
+```python
+# Get 5 slowest modes (skip trivial translation mode)
+eigenvalues, modes = gnm.modes(k=5)
+
+# First mode is the slowest/largest amplitude motion
+slowest_mode = modes[:, 0]
+
+# Identify residues with largest displacement in this mode
+flexible_residues = np.abs(slowest_mode).argsort()[-10:]
+```
+
+### Finding Correlated Motions
+
+```python
+# Cross-correlations show which residues move together
+cross_corr = gnm.cross_correlations
+
+# Find residues strongly correlated with residue 50
+residue_idx = 50
+correlated = np.where(cross_corr[residue_idx] > 0.5)[0]
+anticorrelated = np.where(cross_corr[residue_idx] < -0.5)[0]
+```

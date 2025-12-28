@@ -21,8 +21,8 @@ Quick Start - Standalone Usage:
     ...     logger.log(metrics, step=epoch)
     >>> diagnostics.cleanup()
 
-Quick Start - Integrated with BaseTrainer:
-    Simply add diagnostics config to your training config:
+Quick Start - Integrated with Trainer:
+    Add diagnostics config to your training config:
 
     >>> from ciffy.nn import DiagnosticsConfig
     >>>
@@ -31,8 +31,8 @@ Quick Start - Integrated with BaseTrainer:
     ...     track_parameters=True,
     ...     track_learning_rate=True,
     ... )
-    >>> trainer = MyTrainer(config, model, dataset, logger=wandb_logger)
-    >>> trainer.train()  # Diagnostics automatically logged to wandb
+    >>> trainer = MyTrainer(config)
+    >>> trainer.train()  # Diagnostics automatically logged
 
     Or in YAML config:
 

@@ -6,10 +6,10 @@ implement the MetricsLogger protocol from base_trainer.
 
 Example:
     >>> from ciffy.nn.loggers import WandbLogger
-    >>> from ciffy.nn import BaseTrainer, TrainingConfig
+    >>> from ciffy.nn.diffusion import LatentDiffusionTrainer
     >>>
     >>> logger = WandbLogger(project="my-project", config=config.to_dict())
-    >>> trainer = BaseTrainer(config, model, dataset, logger=logger)
+    >>> trainer = LatentDiffusionTrainer(config, metrics_logger=logger)
     >>> trainer.train()
 """
 

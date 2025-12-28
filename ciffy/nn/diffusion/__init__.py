@@ -31,7 +31,6 @@ from .trainer import (
     DiffusionModelConfig,
     DiffusionDataConfig,
     DiffusionConfig,
-    DiffusionTrainer,
 )
 from .metrics import (
     TimestepLossProfile,
@@ -74,11 +73,10 @@ __all__ = [
     "EMA",
     "create_ema_model",
     "update_ema_model",
-    # Trainer
+    # Config classes
     "DiffusionModelConfig",
     "DiffusionDataConfig",
     "DiffusionConfig",
-    "DiffusionTrainer",
     # Metrics
     "TimestepLossProfile",
     "SampleQualityMetrics",

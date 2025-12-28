@@ -44,7 +44,6 @@ from .training import (
 )
 from .base_trainer import (
     BaseConfig,
-    BaseTrainer,
     TrainingConfig,
     OutputConfig,
     WandbConfig,
@@ -97,7 +96,6 @@ from .diffusion import (
     create_ema_model,
     update_ema_model,
     DiffusionConfig,
-    DiffusionTrainer,
     # Latent diffusion
     LatentDenoiserConfig,
     LatentDenoiser,
@@ -138,9 +136,8 @@ __all__ = [
     "polymer_collate_fn",
     "get_worker_init_fn",
     "BetaScheduler",
-    # Base trainer framework
+    # Config framework
     "BaseConfig",
-    "BaseTrainer",
     "TrainingConfig",
     "OutputConfig",
     "WandbConfig",
@@ -202,9 +199,8 @@ __all__ = [
     "EMA",
     "create_ema_model",
     "update_ema_model",
-    # Diffusion trainer (from diffusion/)
+    # Diffusion config (from diffusion/)
     "DiffusionConfig",
-    "DiffusionTrainer",
     # Latent diffusion (from diffusion/)
     "LatentDenoiserConfig",
     "LatentDenoiser",

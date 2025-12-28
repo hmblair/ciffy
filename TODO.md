@@ -218,6 +218,76 @@ def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
 
 ---
 
+### GNM (Gaussian Network Model) Extensions
+
+**Goal**: Extend `ciffy/operations/gnm.py` with commonly-used GNM operations for structural biology research.
+
+**Current state**: Basic functions exist (`graph_laplacian`, `gnm_correlations`, `gnm_variances`).
+
+**Missing high-priority functions**:
+
+| Function | Description |
+|----------|-------------|
+| `contact_map(polymer, cutoff=7.0)` | Build adjacency matrix from Polymer coordinates (Cα or centroid distances). Essential preprocessing step. |
+| `gnm_modes(adj, k=None)` | Extract eigenvectors (normal modes) of Kirchhoff matrix. Returns (eigenvalues, eigenvectors). |
+| `gnm_eigenvalues(adj)` | Get eigenvalues (squared frequencies) - cheaper than full mode decomposition. |
+| `cross_correlations(adj)` | Normalized correlation matrix (range [-1, 1]) for identifying coupled motions. |
+
+**Implementation notes**:
+
+```python
+def contact_map(polymer: Polymer, cutoff: float = 7.0, scale: Scale = Scale.RESIDUE) -> Array:
+    """Build adjacency matrix from inter-residue distances."""
+    dists = polymer.pairwise_distances(scale=scale)
+    return (dists < cutoff).astype(float)
+
+def gnm_modes(adj: Array, k: int | None = None) -> tuple[Array, Array]:
+    """Compute GNM normal modes (eigenvectors of Kirchhoff matrix)."""
+    L = graph_laplacian(adj)
+    eigenvalues, eigenvectors = eigh(L)
+    # Skip trivial zero mode, return slowest k modes
+    return eigenvalues[1:k+1], eigenvectors[:, 1:k+1]
+
+def cross_correlations(adj: Array) -> Array:
+    """Normalized cross-correlation matrix."""
+    corr = gnm_correlations(adj)
+    std = sqrt(diagonal(corr))
+    return corr / outer(std, std)
+```
+
+**Design consideration**: Consider wrapping in a `GNM` class to compute the pseudo-inverse once and reuse it across multiple queries (correlations, variances, cross-correlations all need the same pinv):
+
+```python
+class GNM:
+    def __init__(self, adj: Array, rtol: float = 1e-2):
+        self.adj = adj
+        self.laplacian = graph_laplacian(adj)
+        self._pinv = pinv(self.laplacian, rtol=rtol)  # Computed once
+
+    @property
+    def correlations(self) -> Array:
+        return self._pinv
+
+    @property
+    def variances(self) -> Array:
+        return diagonal(self._pinv)
+
+    @property
+    def cross_correlations(self) -> Array:
+        std = sqrt(self.variances)
+        return self._pinv / outer(std, std)
+
+    def modes(self, k: int | None = None) -> tuple[Array, Array]:
+        eigenvalues, eigenvectors = eigh(self.laplacian)
+        return eigenvalues[1:k+1], eigenvectors[:, 1:k+1]
+```
+
+**Files affected**:
+- `ciffy/operations/gnm.py`
+- `tests/test_gnm.py`
+
+---
+
 ## LOW Priority
 
 ### Extract Frame Computation to Geometry Helper
@@ -241,25 +311,22 @@ def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
 
 ---
 
-### Clean Up Deprecated C Code
+### ~~Clean Up Deprecated C Code~~ ✅ DONE
 
-**Goal**: Remove unused internal coordinate C functions from the extension module.
+**Completed**: Removed dead Z-matrix code from C extension (commit 80db388).
 
-The following C functions in `ciffy/src/internal/` are no longer used by the Python API:
-- `py_cartesian_to_internal*`
-- `py_nerf_reconstruct*`
-- `py_build_zmatrix*`
+**Removed**:
+- `py_build_zmatrix_parallel`
 - `py_build_canonical_zmatrix`
+- `py_build_atom_indexed_zmatrix_parallel`
+- All Z-matrix C implementations (~2000 lines)
 
-**Keep** (still used):
-- `py_build_bond_graph`
-- `py_edges_to_csr`
-- `py_find_connected_components`
-
-**Files affected**:
-- `ciffy/src/internal/internal_module.c`
-- `ciffy/src/internal/internal_module.h`
-- `ciffy/src/module.c`
+**Kept** (still used):
+- `py_cartesian_to_internal*` - Internal coordinate conversion
+- `py_nerf_reconstruct*` - NERF-based coordinate reconstruction
+- `py_build_bond_graph` - Bond graph construction
+- `py_edges_to_csr` - CSR format conversion
+- `py_find_connected_components` - Graph component detection
 
 ---
 

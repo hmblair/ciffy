@@ -45,10 +45,10 @@ from .residue import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    # Frame computation
+    # Frame indices and computation
+    FrameIndices,
+    compute_frame_from_indices,
     compute_glycosidic_frame,
-    compute_o3p_frame,
-    compute_p_frame,
     # SE(3) transforms
     compute_relative_transform,
     apply_relative_transform,
@@ -57,7 +57,7 @@ from .residue import (
     align_to_frame,
     extract_residues_with_links,
     position_next_residue,
-    compute_link_frames,
+    ResidueDataset,
     # Training
     train_pca_flow,
     ResidueFlowTrainer,
@@ -82,10 +82,10 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    # Frame computation
+    # Frame indices and computation
+    "FrameIndices",
+    "compute_frame_from_indices",
     "compute_glycosidic_frame",
-    "compute_o3p_frame",
-    "compute_p_frame",
     # SE(3) transforms
     "compute_relative_transform",
     "apply_relative_transform",
@@ -94,7 +94,7 @@ __all__ = [
     "align_to_frame",
     "extract_residues_with_links",
     "position_next_residue",
-    "compute_link_frames",
+    "ResidueDataset",
     # Training
     "train_pca_flow",
     "ResidueFlowTrainer",

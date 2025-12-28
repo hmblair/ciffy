@@ -53,8 +53,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Import positioning function (works with both numpy and torch)
-from ciffy.nn.flow.residue.data import position_next_residue
+# Import frame indices and positioning (for potential future use)
+from ciffy.nn.flow.residue.data import FrameIndices, position_next_residue
 from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:

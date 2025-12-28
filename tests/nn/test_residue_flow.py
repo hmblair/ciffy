@@ -376,41 +376,43 @@ class TestResidueFlowModel:
         """Test positioning next residue using transform."""
         from ciffy.nn.flow.residue.data import (
             position_next_residue,
-            compute_link_frames,
+            FrameIndices,
+        )
+        from ciffy.geometry import (
+            compute_frame_from_indices,
             compute_relative_transform,
+            apply_relative_transform,
         )
         from ciffy.biochemistry import Residue
 
         np.random.seed(42)
 
-        # Create synthetic residue coordinates
-        # We need atoms: C4', C3', O3' for res1 and P, O5', OP1 for res2
-        atoms = list(Residue.A.index()[:22])  # Get atom indices
+        # Use all atoms from Residue.A (FrameIndices needs C4 for glycosidic frame)
+        atoms = np.array(list(Residue.A.index()), dtype=np.int64)
         n_atoms = len(atoms)
+
+        # Precompute frame indices once
+        indices = FrameIndices.from_atoms(atoms, Residue.A)
 
         # Random coordinates (just for testing transform logic)
         coords1 = np.random.randn(n_atoms, 3).astype(np.float32)
         coords2 = np.random.randn(n_atoms, 3).astype(np.float32)
 
-        # Compute transform from coords1 to coords2
-        o1, R1, o2, R2 = compute_link_frames(coords1, coords2, atoms, Residue.A)
+        # Compute transform from coords1 to coords2 using precomputed indices
+        o1, R1 = compute_frame_from_indices(coords1, indices.prev_cols, indices.prev_z_toward)
+        o2, R2 = compute_frame_from_indices(coords2, indices.next_cols, indices.next_z_toward)
         transform = compute_relative_transform(o1, R1, o2, R2)
 
         # Position coords2 using the transform (should recover original positions)
-        coords2_positioned = position_next_residue(
-            coords1, coords2, transform, atoms, Residue.A
-        )
+        coords2_positioned = position_next_residue(coords1, coords2, transform, indices)
 
         # The P atom should be at the target position
-        atom_to_col = {a: i for i, a in enumerate(atoms)}
-        p_idx = atom_to_col[Residue.A.P.value]
+        p_idx = int(indices.next_cols[0])  # P is the origin of next frame
 
         # P position from original coords2 after positioning
         p_positioned = coords2_positioned[p_idx]
         # Target P position from transform
-        o1_new, R1_new, _, _ = compute_link_frames(coords1, coords2, atoms, Residue.A)
-        from ciffy.nn.flow.residue.data import apply_relative_transform
-        target_p, _ = apply_relative_transform(o1_new, R1_new, transform)
+        target_p, _ = apply_relative_transform(o1, R1, transform)
 
         np.testing.assert_allclose(p_positioned, target_p, atol=1e-5)
 

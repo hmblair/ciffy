@@ -293,7 +293,7 @@ def _get_molecule_type(polymer: Polymer) -> Molecule:
 # RMSD (Root Mean Square Deviation)
 # =============================================================================
 
-def _rmsd_coords(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
+def _rmsd_coords(coords1: Array, coords2: Array, scale=None, eps: float = 0.0) -> Array:
     """
     Compute Kabsch-aligned RMSD between coordinate sets.
 
@@ -302,11 +302,27 @@ def _rmsd_coords(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
     Args:
         coords1: First coordinates, shape (N, 3) or (B, N, 3).
         coords2: Second coordinates, shape (N, 3) or (B, N, 3).
+        scale: Unused (for compatibility with Polymer dispatch).
         eps: Small value added before sqrt for gradient stability.
 
     Returns:
         RMSD value(s). Shape () for 2D input, (B,) for 3D input.
     """
+    if type(coords1) != type(coords2):
+        raise TypeError(f"Both inputs must be same type, got {type(coords1).__name__} and {type(coords2).__name__}")
+
+    if coords1.shape != coords2.shape:
+        raise ValueError(f"Shape mismatch: {coords1.shape} vs {coords2.shape}")
+
+    if coords1.ndim == 2:
+        if coords1.shape[1] != 3:
+            raise ValueError(f"Expected shape (N, 3), got {coords1.shape}")
+    elif coords1.ndim == 3:
+        if coords1.shape[2] != 3:
+            raise ValueError(f"Expected shape (B, N, 3), got {coords1.shape}")
+    else:
+        raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {coords1.ndim}D")
+
     # Handle both 2D and 3D by adding batch dim if needed
     squeeze = coords1.ndim == 2
     if squeeze:
@@ -506,32 +522,12 @@ def _rmsd_dispatch(a, b, scale=None, eps=0.0):
     )
 
 
-def _rmsd_array(a: Array, b: Array, scale=None, eps: float = 0.0) -> Array:
-    """RMSD for numpy/torch arrays using backend-agnostic operations."""
-    if type(a) != type(b):
-        raise TypeError(f"Both inputs must be same type, got {type(a).__name__} and {type(b).__name__}")
-
-    if a.shape != b.shape:
-        raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-
-    if a.ndim == 2:
-        if a.shape[1] != 3:
-            raise ValueError(f"Expected shape (N, 3), got {a.shape}")
-    elif a.ndim == 3:
-        if a.shape[2] != 3:
-            raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-    else:
-        raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
-
-    return _rmsd_coords(a, b, eps=eps)
-
-
-_rmsd_dispatch.register(np.ndarray, _rmsd_array)
+_rmsd_dispatch.register(np.ndarray, _rmsd_coords)
 
 # Register torch.Tensor if available
 try:
     import torch
-    _rmsd_dispatch.register(torch.Tensor, _rmsd_array)
+    _rmsd_dispatch.register(torch.Tensor, _rmsd_coords)
 except ImportError:
     pass
 

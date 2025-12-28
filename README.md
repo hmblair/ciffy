@@ -38,6 +38,15 @@ pip install ciffy[vis]  # matplotlib for visualization
 pip install ciffy[dev]  # all dependencies for development
 ```
 
+#### System Dependencies
+
+For sequence-based clustering (used in `ciffy cluster` and homology-aware data splitting):
+
+```bash
+# Install MMseqs2 via conda/mamba
+mamba install -c conda-forge -c bioconda mmseqs2
+```
+
 ## Backends
 
 `ciffy` supports two array backends:
@@ -151,6 +160,9 @@ ciffy experiment configs/*.yaml
 # Copy example config and customize for your setup:
 # cp examples/configs/inference_example.yaml configs/inference.yaml
 ciffy inference configs/inference.yaml
+
+# Cluster structures by sequence identity (requires mmseqs2)
+ciffy cluster data/*.cif --threshold 0.5
 ```
 
 Example output:

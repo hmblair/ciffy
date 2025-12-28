@@ -198,10 +198,10 @@ Count atoms or True values per unit:
 
 ```python
 # Atoms per residue
-atoms_per_res = polymer.sizes(ciffy.RESIDUE)
+atoms_per_res = polymer.counts(ciffy.RESIDUE)
 
 # Atoms per chain
-atoms_per_chain = polymer.sizes(ciffy.CHAIN)
+atoms_per_chain = polymer.counts(ciffy.CHAIN)
 
 # Count specific atoms per residue
 nitrogen_mask = polymer.elements == 7

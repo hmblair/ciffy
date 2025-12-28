@@ -134,11 +134,11 @@ Get the number of atoms in each residue or chain:
 
 ```python
 # Atoms per residue
-atoms_per_res = polymer.sizes(ciffy.RESIDUE)
+atoms_per_res = polymer.counts(ciffy.RESIDUE)
 print(f"First residue has {atoms_per_res[0]} atoms")
 
 # Atoms per chain
-atoms_per_chain = polymer.sizes(ciffy.CHAIN)
+atoms_per_chain = polymer.counts(ciffy.CHAIN)
 for name, count in zip(polymer.names, atoms_per_chain):
     print(f"Chain {name}: {count} atoms")
 ```

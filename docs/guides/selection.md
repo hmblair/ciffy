@@ -83,7 +83,7 @@ heteroatoms = polymer.hetero()
 
 # Check counts
 print(f"Polymer atoms: {polymer.polymer_count}")
-print(f"Non-polymer atoms: {polymer.nonpoly}")
+print(f"Non-polymer atoms: {polymer.nonpoly()}")
 ```
 
 !!! note

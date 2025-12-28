@@ -105,7 +105,7 @@ rna_chains = polymer.by_type(ciffy.RNA)
 backbone = polymer.backbone()
 
 # Molecule type per chain (parsed from CIF _entity_poly block)
-mol_types = polymer.molecule_type  # Array of Molecule enum values
+mol_types = polymer.molecule_types  # Array of Molecule enum values
 
 # Load with entity descriptions (off by default for performance)
 polymer = ciffy.load("structure.cif", load_descriptions=True)

@@ -373,7 +373,7 @@ print(template.names)  # ['A', 'B']
 
 # Each chain has correct molecule type
 for chain in template.chains():
-    print(f"{chain.names[0]}: {chain.molecule_type[0]}")
+    print(f"{chain.names[0]}: {chain.molecule_types[0]}")
 # A: Molecule.RNA
 # B: Molecule.PROTEIN
 ```

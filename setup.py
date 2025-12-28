@@ -167,7 +167,16 @@ def generate_hash_tables(force=False):
 
     print("Generating hash lookup tables...")
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.path.dirname(__file__)
+    # Build PYTHONPATH that includes:
+    # 1. Project directory (for codegen module)
+    # 2. Current sys.path (includes pip's isolated build env with dependencies)
+    # 3. Any existing PYTHONPATH
+    project_dir = os.path.dirname(__file__)
+    paths = [project_dir] + sys.path
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    if existing_pythonpath:
+        paths.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in paths if p)
 
     # Run as module to support relative imports
     result = subprocess.run(
@@ -186,14 +195,38 @@ def generate_hash_tables(force=False):
     # Final check - ensure all generated files were created
     if not check_generated_files_exist():
         missing = get_missing_files()
+        stderr = result.stderr if result.returncode != 0 else ""
         print("\n" + "=" * 70)
         print("ERROR: Code generation failed")
         print("=" * 70)
         print(f"\nMissing files ({len(missing)}):")
         for f in missing:
             print(f"  - {f}")
-        print("\nThis usually means gperf failed. Check that gperf is installed correctly:")
-        print("  gperf --version")
+
+        # Provide targeted error message based on failure mode
+        if "ModuleNotFoundError" in stderr or "No module named" in stderr:
+            # Extract module name from error
+            import re
+            match = re.search(r"No module named ['\"]?(\w+)['\"]?", stderr)
+            module_name = match.group(1) if match else "unknown"
+            print(f"\nA required Python module is missing: {module_name}")
+            print("This is a build dependency issue. Install the missing module:")
+            print(f"  pip install {module_name}")
+            print("\nIf you're installing ciffy, this indicates a packaging bug.")
+            print("Please report this issue at: https://github.com/hmblair/ciffy/issues")
+        elif "gperf" in stderr.lower() or not gperf_path:
+            print("\nThis usually means gperf failed. Check that gperf is installed correctly:")
+            print("  gperf --version")
+            print("\nTo install gperf:")
+            print("  - Ubuntu/Debian: sudo apt install gperf")
+            print("  - Fedora/RHEL:   sudo dnf install gperf")
+            print("  - macOS:         brew install gperf")
+            print("  - Conda:         conda install -c conda-forge gperf")
+        else:
+            print("\nCode generation failed. See error above for details.")
+            if stderr:
+                print(f"\nError output:\n{stderr[:500]}")
+
         print("=" * 70 + "\n")
         sys.exit(1)
 

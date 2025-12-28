@@ -42,7 +42,7 @@ static PyObject *_set_py_error(CifErrorContext *ctx, const char *filename) {
 
         case CIF_ERR_BLOCK:
             return PyErr_Format(PyExc_ValueError,
-                "Missing required block in '%s': %s", filename, ctx->message);
+                "Missing or malformed block in '%s': %s", filename, ctx->message);
 
         case CIF_ERR_BOUNDS:
             return PyErr_Format(PyExc_IndexError,

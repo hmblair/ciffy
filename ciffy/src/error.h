@@ -24,7 +24,7 @@ typedef enum {
     CIF_ERR_IO       = -2,  /**< File I/O error */
     CIF_ERR_PARSE    = -3,  /**< Parsing error (malformed data) */
     CIF_ERR_ATTR     = -4,  /**< Missing or invalid attribute */
-    CIF_ERR_BLOCK    = -5,  /**< Missing required CIF block */
+    CIF_ERR_BLOCK    = -5,  /**< Missing or malformed CIF block */
     CIF_ERR_BOUNDS   = -6,  /**< Index out of bounds */
     CIF_ERR_OVERFLOW = -7,  /**< Buffer overflow prevented */
     CIF_ERR_LOOKUP   = -8,  /**< Hash table lookup failed (unknown token) */

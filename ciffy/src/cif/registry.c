@@ -692,9 +692,9 @@ CifError _validate_blocks_registry(mmBlockList *blocks, CifErrorContext *ctx) {
 
         mmBlock *block = _get_block_by_id(blocks, BLOCKS[i].id);
         if (block == NULL || block->category == NULL) {
-            LOG_ERROR("Missing required block '%s'", BLOCKS[i].category);
+            LOG_ERROR("Missing or malformed block '%s'", BLOCKS[i].category);
             CIF_SET_ERROR(ctx, CIF_ERR_BLOCK,
-                "Missing required %s block", BLOCKS[i].category);
+                "Missing or malformed %s block", BLOCKS[i].category);
             return CIF_ERR_BLOCK;
         }
     }

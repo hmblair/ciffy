@@ -1635,21 +1635,26 @@ class Polymer:
         Returns:
             List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
         """
-        mol_types = to_numpy(self.molecule_types) if self._molecule_types is not None else None
+        # Handle empty or minimal polymers
+        names = self._names
+        if names is None or len(names) == 0:
+            return []
+
+        mol_types = to_numpy(self._molecule_types) if self._molecule_types is not None else None
         residue_counts = to_numpy(self.lengths)
         atom_counts = to_numpy(self._hierarchy.sizes(Scale.CHAIN))
-        elements = to_numpy(self.elements)
+        elements = to_numpy(self._elements) if self._elements is not None else None
 
         rows = []
         atom_offset = 0
 
-        for i, name in enumerate(self.names):
+        for i, name in enumerate(names):
             mol = molecule_type(int(mol_types[i])) if mol_types is not None else Molecule.UNKNOWN
             n_residues = int(residue_counts[i])
             n_atoms = int(atom_counts[i])
 
             # For ions, prefix with element symbol (e.g., "MG ION")
-            if mol == Molecule.ION and n_atoms > 0:
+            if mol == Molecule.ION and n_atoms > 0 and elements is not None:
                 element_name = ELEMENT_NAMES.get(int(elements[atom_offset]), "")
                 type_str = f"{element_name} {mol.name}" if element_name else mol.name
             else:

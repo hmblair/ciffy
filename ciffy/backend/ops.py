@@ -507,25 +507,34 @@ def to_int64(arr: Array) -> Array:
     return arr.astype(np.int64)
 
 
-def isin(arr: Array, values: list | tuple) -> Array:
+def isin(arr: Array, values: Array) -> Array:
     """
     Check if elements of arr are in values.
 
     Args:
         arr: Input array to check.
-        values: List/tuple of values to check against.
+        values: Array of values to check against (must match arr backend).
 
     Returns:
         Boolean array of same shape as arr, True where element is in values.
+
+    Raises:
+        TypeError: If arr and values have different backends.
     """
-    if is_torch(arr):
+    arr_is_torch = is_torch(arr)
+    values_is_torch = is_torch(values)
+
+    if arr_is_torch != values_is_torch:
+        arr_backend = "torch" if arr_is_torch else "numpy"
+        values_backend = "torch" if values_is_torch else "numpy"
+        raise TypeError(
+            f"Backend mismatch: arr is {arr_backend}, values is {values_backend}. "
+            f"Convert to same backend first."
+        )
+
+    if arr_is_torch:
         import torch
-        # Convert values to tensor on same device if needed
-        if isinstance(values, torch.Tensor):
-            test_tensor = values.to(device=arr.device, dtype=arr.dtype)
-        else:
-            test_tensor = torch.tensor(values, device=arr.device, dtype=arr.dtype)
-        return torch.isin(arr, test_tensor)
+        return torch.isin(arr, values.to(device=arr.device, dtype=arr.dtype))
     return np.isin(arr, values)
 
 

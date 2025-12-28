@@ -25,9 +25,10 @@ Example - Using DataSplit class directly:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, Generic, Sequence, Hashable
+from typing import TypeVar, Generic, Sequence
 import random
 
 T = TypeVar("T")
@@ -380,6 +381,83 @@ class DataSplit(Generic[T]):
 
     def __repr__(self) -> str:
         return self.summary()
+
+    def to_directories(
+        self,
+        output_dir: str | Path,
+        symlink: bool = True,
+        exist_ok: bool = False,
+    ) -> dict[str, Path]:
+        """
+        Create train/val/test directories with symlinks or copies of files.
+
+        This provides a simple way to persist splits and integrate with
+        PolymerDataset, which accepts directory paths.
+
+        Args:
+            output_dir: Parent directory for split subdirectories.
+                Creates output_dir/train/, output_dir/val/, output_dir/test/.
+            symlink: If True (default), create symbolic links to original files.
+                If False, copy files (uses more disk space but is portable).
+            exist_ok: If True, skip files that already exist in the destination.
+                If False (default), raise an error if destination exists.
+
+        Returns:
+            Dict mapping split names to directory paths:
+            {"train": Path(...), "val": Path(...), "test": Path(...)}
+
+        Raises:
+            TypeError: If items are not Path objects.
+            FileExistsError: If destination files exist and exist_ok=False.
+
+        Example:
+            >>> split = DataSplit.by_sequence_identity(paths, threshold=0.5)
+            >>> dirs = split.to_directories("data/splits/")
+            >>>
+            >>> # Use with PolymerDataset
+            >>> from ciffy.nn import PolymerDataset
+            >>> train_dataset = PolymerDataset(dirs["train"])
+            >>> val_dataset = PolymerDataset(dirs["val"])
+            >>>
+            >>> # Later experiments reuse the directories directly
+            >>> train_dataset = PolymerDataset("data/splits/train")
+        """
+        output_dir = Path(output_dir)
+        result = {}
+
+        for name, items in [("train", self.train), ("val", self.val), ("test", self.test)]:
+            if not items:
+                continue
+
+            # Validate items are paths
+            if not all(isinstance(item, Path) for item in items):
+                raise TypeError(
+                    f"to_directories() requires Path items, got {type(items[0]).__name__}. "
+                    f"Use DataSplit.from_paths() or by_sequence_identity() to create path-based splits."
+                )
+
+            split_dir = output_dir / name
+            split_dir.mkdir(parents=True, exist_ok=True)
+
+            for item in items:
+                dest = split_dir / item.name
+
+                if dest.exists() or dest.is_symlink():
+                    if exist_ok:
+                        continue
+                    raise FileExistsError(
+                        f"Destination already exists: {dest}. "
+                        f"Use exist_ok=True to skip existing files."
+                    )
+
+                if symlink:
+                    dest.symlink_to(item.resolve())
+                else:
+                    shutil.copy2(item, dest)
+
+            result[name] = split_dir
+
+        return result
 
 
 def split_by_structure(

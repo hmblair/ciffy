@@ -515,3 +515,102 @@ class TestImports:
         assert callable(split_by_sequence)
         assert hasattr(DataSplit, "by_sequence_identity")
         assert hasattr(DataSplit, "from_clusters")
+
+
+# =============================================================================
+# Test DataSplit.to_directories
+# =============================================================================
+
+class TestToDirectories:
+    """Tests for DataSplit.to_directories method."""
+
+    def test_creates_directories_with_symlinks(self, tmp_path):
+        """Creates train/val/test directories with symlinks."""
+        from ciffy.nn.split import DataSplit
+
+        paths = [Path(get_test_cif(name)) for name in ["3SKW", "9GCM"]]
+        split = DataSplit.from_paths(paths, train=0.5, val=0.0, test=0.5, seed=42)
+
+        dirs = split.to_directories(tmp_path, symlink=True)
+
+        assert "train" in dirs or "test" in dirs
+        for name, dir_path in dirs.items():
+            assert dir_path.is_dir()
+            files = list(dir_path.glob("*.cif"))
+            assert len(files) >= 1
+            assert all(f.is_symlink() for f in files)
+
+    def test_creates_directories_with_copies(self, tmp_path):
+        """Creates directories with file copies when symlink=False."""
+        from ciffy.nn.split import DataSplit
+
+        paths = [Path(get_test_cif("3SKW"))]
+        split = DataSplit.from_paths(paths, train=1.0, val=0.0, test=0.0, seed=42)
+
+        dirs = split.to_directories(tmp_path, symlink=False)
+
+        train_files = list(dirs["train"].glob("*.cif"))
+        assert len(train_files) == 1
+        assert not train_files[0].is_symlink()
+        assert train_files[0].stat().st_size > 0
+
+    def test_works_with_polymer_dataset(self, tmp_path):
+        """Directories work with PolymerDataset."""
+        from ciffy.nn.split import DataSplit
+        from ciffy.nn import PolymerDataset
+
+        paths = [Path(get_test_cif(name)) for name in ["3SKW", "9GCM"]]
+        split = DataSplit.from_paths(paths, train=1.0, val=0.0, test=0.0, seed=42)
+
+        dirs = split.to_directories(tmp_path)
+        dataset = PolymerDataset(dirs["train"])
+
+        assert len(dataset) == 2
+
+    def test_exist_ok_skips_existing(self, tmp_path):
+        """exist_ok=True skips existing files."""
+        from ciffy.nn.split import DataSplit
+
+        paths = [Path(get_test_cif("3SKW"))]
+        split = DataSplit.from_paths(paths, train=1.0, val=0.0, test=0.0, seed=42)
+
+        # Create once
+        split.to_directories(tmp_path)
+
+        # Should not raise with exist_ok=True
+        dirs = split.to_directories(tmp_path, exist_ok=True)
+        assert "train" in dirs
+
+    def test_raises_on_existing_without_exist_ok(self, tmp_path):
+        """Raises FileExistsError when destination exists."""
+        from ciffy.nn.split import DataSplit
+
+        paths = [Path(get_test_cif("3SKW"))]
+        split = DataSplit.from_paths(paths, train=1.0, val=0.0, test=0.0, seed=42)
+
+        split.to_directories(tmp_path)
+
+        with pytest.raises(FileExistsError):
+            split.to_directories(tmp_path, exist_ok=False)
+
+    def test_raises_on_non_path_items(self, tmp_path):
+        """Raises TypeError for non-Path items."""
+        from ciffy.nn.split import DataSplit
+
+        split = DataSplit.from_items([1, 2, 3], train=0.67, val=0.0, test=0.33)
+
+        with pytest.raises(TypeError, match="requires Path"):
+            split.to_directories(tmp_path)
+
+    def test_skips_empty_splits(self, tmp_path):
+        """Doesn't create directories for empty splits."""
+        from ciffy.nn.split import DataSplit
+
+        paths = [Path(get_test_cif("3SKW"))]
+        split = DataSplit.from_paths(paths, train=1.0, val=0.0, test=0.0, seed=42)
+
+        dirs = split.to_directories(tmp_path)
+
+        assert "train" in dirs
+        assert "val" not in dirs
+        assert "test" not in dirs

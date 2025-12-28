@@ -110,15 +110,15 @@ def join(*polymers: "Polymer") -> "Polymer":
     if len(non_empty) == 1:
         p = non_empty[0]
         return Polymer(
-            coordinates=ops.clone(p.coordinates),
-            atoms=ops.clone(p.atoms),
-            elements=ops.clone(p.elements),
-            sequence=ops.clone(p.sequence),
             sizes={
                 Scale.RESIDUE: ops.clone(p._sizes[Scale.RESIDUE]),
                 Scale.CHAIN: ops.clone(p._sizes[Scale.CHAIN]),
                 Scale.MOLECULE: ops.clone(p._sizes[Scale.MOLECULE]),
             },
+            coordinates=ops.clone(p.coordinates),
+            atoms=ops.clone(p.atoms),
+            elements=ops.clone(p.elements),
+            sequence=ops.clone(p.sequence),
             pdb_id=p.pdb_id,
             names=list(p.names),
             strands=list(p.strands),
@@ -178,11 +178,11 @@ def join(*polymers: "Polymer") -> "Polymer":
         pdb_id = "joined"
 
     return Polymer(
+        sizes=sizes,
         coordinates=coordinates,
         atoms=atoms,
         elements=elements,
         sequence=sequence,
-        sizes=sizes,
         pdb_id=pdb_id,
         names=names,
         strands=strands,

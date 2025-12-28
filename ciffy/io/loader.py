@@ -147,11 +147,11 @@ def load(
 
     # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(
-        coordinates,
-        atoms,
-        elements,
-        residues,
-        sizes,
+        sizes=sizes,
+        coordinates=coordinates,
+        atoms=atoms,
+        elements=elements,
+        sequence=residues,
         pdb_id=id,
         names=chain_names,
         strands=strand_names,

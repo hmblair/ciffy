@@ -180,7 +180,7 @@ class Polymer:
 
     # Molecule-level
     pdb_id = Metadata(Scale.MOLECULE)
-    polymer_count = Metadata(Scale.MOLECULE)
+    polymer_count = Metadata(Scale.MOLECULE, required=False)  # Defaults to all atoms
     resolution = Metadata(Scale.MOLECULE, required=False)
 
     # Per-chain lists
@@ -190,75 +190,86 @@ class Polymer:
 
     def __init__(
         self: Polymer,
-        coordinates: Array,
-        atoms: Array,
-        elements: Array,
-        sequence: Array,
         sizes: dict[Scale, Array],
-        pdb_id: str,
-        names: list[str],
-        strands: list[str],
-        lengths: Array,
-        polymer_count: int | None = None,
-        molecule_types: Array | None = None,
-        descriptions: list[str] | None = None,
-        bfactors: Array | None = None,
-        resolution: float | None = None,
+        **fields,
     ) -> None:
         """
         Initialize a Polymer structure.
 
+        All Field and Metadata descriptors defined on the class can be passed
+        as keyword arguments. Required fields (coordinates, atoms, elements,
+        sequence, pdb_id, names, strands, lengths) must be provided.
+
         Args:
-            coordinates: (N, 3) tensor of atom positions.
-            atoms: (N,) tensor of atom type indices.
-            elements: (N,) tensor of element indices.
-            sequence: (R,) tensor of residue type indices.
-            sizes: Dict mapping Scale to atom counts per unit.
-            pdb_id: PDB identifier.
-            names: List of chain names.
-            strands: List of strand identifiers.
-            lengths: (C,) tensor of residues per chain.
-            polymer_count: Number of polymer atoms. If None, all atoms
-                are assumed to be polymer atoms.
-            molecule_types: (C,) array of molecule types per chain from CIF.
-                If None, molecule types will be inferred from residue indices.
-            descriptions: List of entity descriptions per chain, or None.
-            bfactors: (N,) array of B-factors (temperature factors) per atom.
-                Higher values indicate greater atomic mobility/disorder.
-            resolution: Structure resolution in Angstroms (from _refine.ls_d_res_high).
-                None if not available (e.g., NMR structures).
+            sizes: Dict mapping Scale to atom counts per unit at each level.
+            **fields: Field and Metadata values matching class descriptors:
+                - coordinates: (N, 3) array of atom positions.
+                - atoms: (N,) array of atom type indices.
+                - elements: (N,) array of element indices.
+                - sequence: (R,) array of residue type indices.
+                - lengths: (C,) array of residues per chain.
+                - pdb_id: PDB identifier string.
+                - names: List of chain names.
+                - strands: List of strand identifiers.
+                - polymer_count: Number of polymer atoms (default: all atoms).
+                - molecule_types: (C,) array of molecule types per chain.
+                - descriptions: List of entity descriptions per chain.
+                - bfactors: (N,) array of B-factors per atom.
+                - resolution: Structure resolution in Angstroms.
 
         Raises:
-            ValueError: If tensor sizes are inconsistent.
+            TypeError: If required fields are missing or unknown fields provided.
+            ValueError: If field sizes are inconsistent.
+
+        Example:
+            >>> polymer = Polymer(
+            ...     sizes={Scale.RESIDUE: sizes_r, Scale.CHAIN: sizes_c, ...},
+            ...     coordinates=coords,
+            ...     atoms=atoms,
+            ...     elements=elements,
+            ...     sequence=seq,
+            ...     lengths=lengths,
+            ...     pdb_id="1ABC",
+            ...     names=["A", "B"],
+            ...     strands=["1", "2"],
+            ... )
         """
-        self.pdb_id = pdb_id or UNKNOWN
-        self.names = names
-        self.strands = strands
+        # Assign all descriptor fields from kwargs
+        missing = []
+        for name, desc in self._get_descriptors().items():
+            if name in fields:
+                value = fields.pop(name)
+                setattr(self, desc.private_name, value)
+            elif desc.required:
+                missing.append(name)
+            else:
+                setattr(self, desc.private_name, None)
 
-        # Store polymer_count (nonpoly is computed as a property)
-        # If polymer_count is None, assume all atoms are polymer (backward compat)
-        total_atoms = arr_size(coordinates, 0)
-        self.polymer_count = polymer_count if polymer_count is not None else total_atoms
+        if missing:
+            raise TypeError(
+                f"__init__() missing required keyword arguments: {missing}"
+            )
+        if fields:
+            raise TypeError(
+                f"__init__() got unexpected keyword arguments: {list(fields.keys())}"
+            )
 
-        # Store all fields first
-        self._coordinates = coordinates
-        self._atoms = atoms
-        self._elements = elements
-        self._sequence = sequence
-        self._lengths = lengths
-        self._molecule_types = molecule_types
-        self._descriptions = descriptions
-        self._bfactors = bfactors
-        self._resolution = resolution
+        # Apply defaults for special cases
+        if not self._pdb_id:
+            self._pdb_id = UNKNOWN
+
+        # polymer_count defaults to total atom count (backward compat)
+        if self._polymer_count is None:
+            self._polymer_count = arr_size(self._coordinates, 0)
 
         self._validate_consistency(sizes)
 
         # Create hierarchy for scale operations
         self._hierarchy = _Hierarchy.from_sizes_and_lengths(
             sizes=sizes,
-            lengths=lengths,
-            polymer_count=self.polymer_count,
-            ref=coordinates,
+            lengths=self._lengths,
+            polymer_count=self._polymer_count,
+            ref=self._coordinates,
         )
 
         self._bonds: np.ndarray | None = None

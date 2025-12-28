@@ -343,15 +343,15 @@ def from_sequence(
     n_atoms = len(atoms_arr)
 
     polymer = Polymer(
-        coordinates=coords,
-        atoms=atoms_arr,
-        elements=elements_arr,
-        sequence=np.array(all_residue_indices, dtype=np.int64),
         sizes={
             Scale.RESIDUE: np.array(all_atoms_per_res, dtype=np.int64),
             Scale.CHAIN: np.array(atoms_per_chain, dtype=np.int64),
             Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
         },
+        coordinates=coords,
+        atoms=atoms_arr,
+        elements=elements_arr,
+        sequence=np.array(all_residue_indices, dtype=np.int64),
         pdb_id=id,
         names=chain_names,
         strands=chain_names,
@@ -431,15 +431,15 @@ def from_extract(
     total_atoms = n_residues * n_atoms
 
     polymer = Polymer(
-        coordinates=flat_coords,
-        atoms=all_atoms,
-        elements=all_elements,
-        sequence=sequence,
         sizes={
             Scale.RESIDUE: atoms_per_res,
             Scale.CHAIN: np.array([total_atoms], dtype=np.int64),
             Scale.MOLECULE: np.array([total_atoms], dtype=np.int64),
         },
+        coordinates=flat_coords,
+        atoms=all_atoms,
+        elements=all_elements,
+        sequence=sequence,
         pdb_id=id,
         names=["A"],
         strands=["A"],

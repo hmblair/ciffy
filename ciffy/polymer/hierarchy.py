@@ -111,17 +111,20 @@ class _Hierarchy:
         Returns:
             New _Hierarchy instance.
         """
-        # Build the unified _per dict
+        # Use lengths as fallback ref for array creation when coordinates is None
+        arr_ref = ref if ref is not None else lengths
+
+        # Build the unified _per dict (values may be None if fields were skipped)
         per = {
             # Atoms per {residue, chain, molecule}
-            (Scale.ATOM, Scale.RESIDUE): sizes[Scale.RESIDUE],
-            (Scale.ATOM, Scale.CHAIN): sizes[Scale.CHAIN],
-            (Scale.ATOM, Scale.MOLECULE): sizes[Scale.MOLECULE],
+            (Scale.ATOM, Scale.RESIDUE): sizes.get(Scale.RESIDUE),
+            (Scale.ATOM, Scale.CHAIN): sizes.get(Scale.CHAIN),
+            (Scale.ATOM, Scale.MOLECULE): sizes.get(Scale.MOLECULE),
             # Residues per {chain, molecule}
             (Scale.RESIDUE, Scale.CHAIN): lengths,
-            (Scale.RESIDUE, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=ref),
+            (Scale.RESIDUE, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
             # Chains per molecule
-            (Scale.CHAIN, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=ref),
+            (Scale.CHAIN, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
         }
         return cls(per, polymer_count, ref)
 
@@ -160,11 +163,24 @@ class _Hierarchy:
             Number of units at the specified scale.
         """
         if scale == Scale.ATOM:
-            return self._per[(Scale.ATOM, Scale.MOLECULE)][0].item()
+            arr = self._per[(Scale.ATOM, Scale.MOLECULE)]
+            if arr is None:
+                # Fallback: sum of atoms_per_chain
+                chain_arr = self._per[(Scale.ATOM, Scale.CHAIN)]
+                return int(chain_arr.sum()) if chain_arr is not None else 0
+            return arr[0].item()
         if scale == Scale.RESIDUE:
-            return arr_size(self._per[(Scale.ATOM, Scale.RESIDUE)], 0)
+            arr = self._per[(Scale.ATOM, Scale.RESIDUE)]
+            if arr is None:
+                # Fallback: sum of res_per_chain
+                return int(self._per[(Scale.RESIDUE, Scale.CHAIN)].sum())
+            return arr_size(arr, 0)
         if scale == Scale.CHAIN:
-            return arr_size(self._per[(Scale.ATOM, Scale.CHAIN)], 0)
+            arr = self._per[(Scale.ATOM, Scale.CHAIN)]
+            if arr is None:
+                # Fallback: length of res_per_chain
+                return arr_size(self._per[(Scale.RESIDUE, Scale.CHAIN)], 0)
+            return arr_size(arr, 0)
         if scale == Scale.MOLECULE:
             return 1
         raise ValueError(f"Unknown scale: {scale}")

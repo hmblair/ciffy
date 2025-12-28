@@ -144,7 +144,9 @@ def load(
     polymer_count = data["polymer_count"]
     molecule_types = data["molecule_types"]
 
-    mol_sizes = np.array([len(coordinates)], dtype=np.int64)
+    # Compute total atoms - use sum of atoms_per_chain if coordinates is None (skip='metadata')
+    total_atoms = len(coordinates) if coordinates is not None else int(np.sum(atoms_per_chain))
+    mol_sizes = np.array([total_atoms], dtype=np.int64)
 
     sizes = {
         Scale.RESIDUE: atoms_per_res,

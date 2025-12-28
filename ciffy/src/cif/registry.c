@@ -111,6 +111,7 @@ static void _batch_coords(mmCIF *cif, mmBlock *block, int row,
 static void _batch_elements(mmCIF *cif, mmBlock *block, int row,
                             const int *idx, char *scratch) {
     (void)scratch;
+    if (cif->elements == NULL) return;  /* Field may be skipped */
     cif->elements[cif->write_dest] = _lookup_element_fast(block, row, idx[0], _lookup_element);
 }
 
@@ -120,6 +121,7 @@ static void _batch_elements(mmCIF *cif, mmBlock *block, int row,
  */
 static void _batch_types(mmCIF *cif, mmBlock *block, int row,
                          const int *idx, char *scratch) {
+    if (cif->types == NULL) return;  /* Field may be skipped */
     cif->types[cif->write_dest] = _lookup_atom_type_fast(block, row, idx[0], idx[1],
                                                           _lookup_atom, scratch);
 }
@@ -1170,11 +1172,15 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
             BATCH_FLOAT(bfactors[dest], bfactor_idx);
         }
 
-        /* Element symbol -> element index */
-        BATCH_LOOKUP(elements[dest], elem_idx, _lookup_element, elem_buf);
+        /* Element symbol -> element index (may be skipped) */
+        if (elements) {
+            BATCH_LOOKUP(elements[dest], elem_idx, _lookup_element, elem_buf);
+        }
 
-        /* Residue_Atom -> atom type index */
-        BATCH_LOOKUP2(types[dest], comp_idx, atom_idx, '_', _lookup_atom, scratch);
+        /* Residue_Atom -> atom type index (may be skipped) */
+        if (types) {
+            BATCH_LOOKUP2(types[dest], comp_idx, atom_idx, '_', _lookup_atom, scratch);
+        }
     }
 
     return CIF_OK;

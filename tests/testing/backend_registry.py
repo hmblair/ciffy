@@ -272,7 +272,7 @@ def generate_isin_inputs() -> dict[str, Any]:
     np.random.seed(_random_seed())
     return {
         "arr": np.random.randint(0, 20, size=50).astype(np.int64),
-        "values": [1, 5, 10, 15],
+        "values": np.array([1, 5, 10, 15], dtype=np.int64),
     }
 
 

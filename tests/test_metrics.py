@@ -441,3 +441,95 @@ class TestRmsdFunction:
 
         assert rmsd_scalar >= 0
         assert rmsd_scalar < 1.0  # Should be small for small perturbation
+
+
+# =============================================================================
+# Test Intersect
+# =============================================================================
+
+class TestIntersect:
+    """Tests for ciffy.intersect function."""
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_intersect_identical(self, backend):
+        """Intersect of identical polymers returns same atoms."""
+        skip_if_no_torch(backend)
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        a, b = ciffy.intersect(p, p)
+
+        assert len(a) == len(p)
+        assert len(b) == len(p)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_intersect_missing_atoms(self, backend):
+        """Intersect handles missing atoms correctly."""
+        skip_if_no_torch(backend)
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        # Remove first 10 atoms from p2
+        p2 = p1[10:]
+
+        a, b = ciffy.intersect(p1, p2)
+
+        # Both should have same size (the intersection)
+        assert len(a) == len(b)
+        # Should be smaller than p2 (which was already smaller)
+        assert len(a) <= len(p2)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_intersect_atoms_match(self, backend):
+        """Intersected polymers have matching atom types."""
+        skip_if_no_torch(backend)
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p2 = p1[10:]
+
+        a, b = ciffy.intersect(p1, p2)
+
+        # Atom types should be identical
+        a_atoms = np.asarray(a.atoms)
+        b_atoms = np.asarray(b.atoms)
+        assert np.array_equal(a_atoms, b_atoms)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_intersect_enables_rmsd(self, backend):
+        """Intersect enables RMSD between polymers with different atoms."""
+        skip_if_no_torch(backend)
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p2 = p1[10:].copy()
+
+        # Add some noise to p2 coordinates
+        np.random.seed(42)
+        noise = np.random.randn(len(p2), 3).astype(np.float32) * 0.5
+        if backend == "torch":
+            import torch
+            noise = torch.from_numpy(noise)
+        p2.coordinates = p2.coordinates + noise
+
+        # Direct RMSD would fail (different sizes)
+        # But intersect + RMSD should work
+        a, b = ciffy.intersect(p1, p2)
+        rmsd_val = rmsd(a, b)
+
+        rmsd_np = np.asarray(rmsd_val)
+        assert np.all(rmsd_np >= 0)
+
+    def test_intersect_residue_mismatch_raises(self):
+        """Intersect raises ValueError for different residue counts."""
+        p1 = ciffy.load(get_test_cif("3SKW")).poly()
+        p2 = ciffy.load(get_test_cif("9GCM")).poly()
+
+        with pytest.raises(ValueError, match="residue count"):
+            ciffy.intersect(p1, p2)
+
+    def test_intersect_backend_mismatch_raises(self):
+        """Intersect raises TypeError for mixed backends."""
+        skip_if_no_torch("torch")
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy").poly()
+        p2 = ciffy.load(get_test_cif("3SKW"), backend="torch").poly()
+
+        with pytest.raises(TypeError, match="Backend mismatch"):
+            ciffy.intersect(p1, p2)

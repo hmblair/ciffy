@@ -6,8 +6,6 @@ Pure functions for geometry, selection, reduction, and alignment operations.
 
 from .reduction import Reduction, REDUCTIONS
 from .alignment import (
-    coordinate_covariance,
-    kabsch_distance,
     kabsch_rotation,
     kabsch_align,
     align,
@@ -15,6 +13,10 @@ from .alignment import (
 )
 from .extract import extract
 from .gnm import graph_laplacian, gnm_correlations, gnm_variances
+from .metrics import tm_score, lddt, rmsd, coordinate_covariance
+
+# Legacy alias
+kabsch_distance = rmsd
 
 __all__ = [
     "Reduction",
@@ -30,4 +32,8 @@ __all__ = [
     "graph_laplacian",
     "gnm_correlations",
     "gnm_variances",
+    # Structure comparison metrics
+    "tm_score",
+    "lddt",
+    "rmsd",
 ]

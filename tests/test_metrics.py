@@ -404,6 +404,9 @@ class TestRmsdFunction:
         """RMSD raises ValueError for mismatched sizes."""
         p1 = ciffy.from_sequence("acgu", backend="numpy")
         p2 = ciffy.from_sequence("acguacgu", backend="numpy")
+        # Set coordinates (from_sequence doesn't populate them)
+        p1.coordinates = random_coordinates(p1.size(), "numpy")
+        p2.coordinates = random_coordinates(p2.size(), "numpy")
 
         # Just check that it raises ValueError (message may vary)
         with pytest.raises(ValueError):

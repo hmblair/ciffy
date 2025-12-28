@@ -1,16 +1,18 @@
 """
-Structure comparison metrics: TM-score and lDDT.
+Structure comparison metrics: RMSD, TM-score, and lDDT.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from functools import singledispatch
+from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch
+from ..backend import Array, is_torch, svdvals, det, multiply
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
+    import torch
     from ..polymer import Polymer
 
 
@@ -267,7 +269,10 @@ def _get_molecule_type(polymer: Polymer) -> Molecule:
     """
     from ..biochemistry._generated_molecule import molecule_type
 
-    mol_types = polymer.molecule_types
+    try:
+        mol_types = polymer.molecule_types
+    except AttributeError:
+        mol_types = None
     if mol_types is None:
         raise ValueError("Cannot determine molecule type: molecule_types not available on this polymer")
     if is_torch(mol_types):
@@ -282,3 +287,258 @@ def _get_molecule_type(polymer: Polymer) -> Molecule:
 
     # Fallback to PROTEIN if no valid type found
     return Molecule.PROTEIN
+
+
+# =============================================================================
+# RMSD (Root Mean Square Deviation)
+# =============================================================================
+
+def _rmsd_single(coords1: Array, coords2: Array) -> float:
+    """
+    Compute Kabsch-aligned RMSD between two coordinate sets.
+
+    This is the core RMSD computation used by both Polymer and array versions.
+
+    Args:
+        coords1: First coordinates, shape (N, 3).
+        coords2: Second coordinates, shape (N, 3).
+
+    Returns:
+        RMSD value (float).
+    """
+    from .alignment import kabsch_align
+
+    aligned, _, _ = kabsch_align(coords1, coords2, center=True)
+    diff = aligned - coords2
+
+    if is_torch(diff):
+        import torch
+        msd = (diff ** 2).mean()
+        return torch.sqrt(torch.clamp(msd, min=0.0)).item()
+    else:
+        msd = (diff ** 2).mean()
+        return float(np.sqrt(max(msd, 0.0)))
+
+
+def coordinate_covariance(
+    polymer1: "Polymer",
+    polymer2: "Polymer",
+    scale: "Scale",
+) -> Array:
+    """
+    Compute coordinate covariance matrices between two polymers.
+
+    The covariance is computed by taking the outer product of coordinates
+    and reducing at the specified scale.
+
+    Args:
+        polymer1: First polymer structure.
+        polymer2: Second polymer structure (must have same atom count).
+        scale: Scale at which to compute covariance (e.g., MOLECULE).
+
+    Returns:
+        Array of covariance matrices, one per scale unit.
+    """
+    outer_prod = multiply(
+        polymer1.coordinates[:, None, :],
+        polymer2.coordinates[:, :, None],
+    )
+    return polymer1.reduce(outer_prod, scale)
+
+
+def _rmsd_polymer(
+    polymer1: "Polymer",
+    polymer2: "Polymer",
+    scale: "Scale | None" = None,
+) -> Array:
+    """
+    Compute Kabsch distance (aligned RMSD) between polymer structures.
+
+    Uses singular value decomposition to find the optimal rotation
+    that minimizes the distance between the two structures. The
+    polymers must have the same number of atoms and atom ordering.
+
+    Args:
+        polymer1: First polymer structure.
+        polymer2: Second polymer structure.
+        scale: Scale at which to compute distance. Default is MOLECULE.
+
+    Returns:
+        Array of RMSD values (Angstroms), one per scale unit.
+
+    Note:
+        Single-atom molecules (ions, water) produce degenerate covariance
+        matrices, leading to numerical instability in the SVD. Use .poly()
+        to exclude non-polymer atoms before computing RMSD if your structure
+        contains such molecules.
+    """
+    if scale is None:
+        scale = Scale.MOLECULE
+
+    # Center both structures
+    polymer1_c, _ = polymer1.center(scale)
+    polymer2_c, _ = polymer2.center(scale)
+
+    # Compute coordinate covariance
+    cov = coordinate_covariance(polymer1_c, polymer2_c, scale)
+
+    # SVD to find optimal rotation
+    sigma = svdvals(cov)
+    cov_det = det(cov)
+
+    # Handle reflection case
+    if is_torch(sigma):
+        import torch
+        sigma = sigma.clone()
+        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
+    else:
+        sigma = sigma.copy()
+        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
+    sigma = sigma.mean(-1)
+
+    # Get variances of both point clouds
+    var1 = polymer1_c.moment(2, scale).mean(-1)
+    var2 = polymer2_c.moment(2, scale).mean(-1)
+
+    # Compute Kabsch distance (RMSD)
+    msd = var1 + var2 - 2 * sigma
+    if is_torch(msd):
+        import torch
+        return torch.sqrt(torch.clamp(msd, min=0.0))
+    else:
+        return np.sqrt(np.maximum(msd, 0.0))
+
+
+# =============================================================================
+# Unified RMSD interface using singledispatch
+# =============================================================================
+
+# Type stubs for static type checking
+@overload
+def rmsd(a: Array, b: Array, scale: None = None) -> Array | float: ...
+
+@overload
+def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None) -> Array: ...
+
+
+@singledispatch
+def _rmsd_dispatch(a, b, scale=None):
+    """Internal singledispatch for rmsd."""
+    raise TypeError(
+        f"rmsd() not supported for type {type(a).__name__}. "
+        f"Expected Polymer or numpy/torch array."
+    )
+
+
+@_rmsd_dispatch.register(np.ndarray)
+def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None) -> np.ndarray | float:
+    """RMSD for numpy arrays."""
+    if not isinstance(b, np.ndarray):
+        raise TypeError(f"Both inputs must be numpy arrays, got {type(b).__name__}")
+
+    if a.shape != b.shape:
+        raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
+
+    if a.ndim == 2:
+        # Single pair: (N, 3)
+        if a.shape[1] != 3:
+            raise ValueError(f"Expected shape (N, 3), got {a.shape}")
+        return _rmsd_single(a, b)
+
+    elif a.ndim == 3:
+        # Batch: (B, N, 3)
+        if a.shape[2] != 3:
+            raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
+        return np.array([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+
+    else:
+        raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
+
+
+# Register torch.Tensor if available
+try:
+    import torch
+
+    @_rmsd_dispatch.register(torch.Tensor)
+    def _rmsd_tensor(a: torch.Tensor, b: torch.Tensor, scale=None) -> torch.Tensor | float:
+        """RMSD for torch tensors."""
+        if not isinstance(b, torch.Tensor):
+            raise TypeError(f"Both inputs must be torch tensors, got {type(b).__name__}")
+
+        if a.shape != b.shape:
+            raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
+
+        if a.ndim == 2:
+            # Single pair: (N, 3)
+            if a.shape[1] != 3:
+                raise ValueError(f"Expected shape (N, 3), got {a.shape}")
+            return _rmsd_single(a, b)
+
+        elif a.ndim == 3:
+            # Batch: (B, N, 3)
+            if a.shape[2] != 3:
+                raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
+            return torch.tensor([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+
+        else:
+            raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) tensor, got {a.ndim}D")
+
+except ImportError:
+    pass
+
+
+# Register Polymer type - must be done after Polymer is importable
+# We use a lazy registration pattern to avoid circular imports
+_polymer_registered = False
+
+
+def _ensure_polymer_registered():
+    """Lazily register Polymer type with rmsd dispatcher."""
+    global _polymer_registered
+    if _polymer_registered:
+        return
+
+    from ..polymer import Polymer
+    _rmsd_dispatch.register(Polymer, _rmsd_polymer)
+    _polymer_registered = True
+
+
+def rmsd(a: "Array | Polymer", b: "Array | Polymer", scale: "Scale | None" = None) -> Array | float:
+    """
+    Compute Kabsch-aligned RMSD between structures or coordinate arrays.
+
+    This function dispatches based on the input type:
+    - Polymer objects: Uses optimized hierarchical computation
+    - numpy/torch arrays: Direct coordinate-based computation
+
+    Args:
+        a: First structure (Polymer) or coordinates (array).
+        b: Second structure (Polymer) or coordinates (array).
+        scale: For Polymer inputs, the scale at which to compute RMSD
+            (default: MOLECULE). Ignored for array inputs.
+
+    Returns:
+        For Polymer: Array of RMSD values, one per scale unit.
+        For arrays (N, 3): Single RMSD value (float).
+        For arrays (B, N, 3): Array of B RMSD values.
+
+    Examples:
+        >>> import ciffy
+        >>> from ciffy.operations import rmsd
+        >>> # Polymer RMSD
+        >>> p1 = ciffy.load("struct1.cif")
+        >>> p2 = ciffy.load("struct2.cif")
+        >>> rmsd_val = rmsd(p1, p2)
+        >>>
+        >>> # Array RMSD (single pair)
+        >>> coords1 = np.random.randn(100, 3)
+        >>> coords2 = np.random.randn(100, 3)
+        >>> rmsd_val = rmsd(coords1, coords2)
+        >>>
+        >>> # Batched array RMSD
+        >>> batch1 = np.random.randn(32, 100, 3)
+        >>> batch2 = np.random.randn(32, 100, 3)
+        >>> rmsd_vals = rmsd(batch1, batch2)  # shape (32,)
+    """
+    _ensure_polymer_registered()
+    return _rmsd_dispatch(a, b, scale)

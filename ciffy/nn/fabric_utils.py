@@ -16,6 +16,7 @@ def create_fabric(
     device: str = "auto",
     precision: str = "32-true",
     strategy: str = "auto",
+    num_devices: int = 1,
 ) -> "Fabric":
     """
     Create a configured Fabric instance for training.
@@ -24,7 +25,7 @@ def create_fabric(
         device: Device to use. Options:
             - "auto": Automatically select GPU if available, else CPU
             - "cpu": Force CPU
-            - "cuda": Use CUDA GPU
+            - "cuda": Use CUDA GPU (first available)
             - "cuda:0", "cuda:1": Specific GPU
             - "mps": Apple Silicon GPU
         precision: Training precision. Options:
@@ -35,6 +36,8 @@ def create_fabric(
             - "auto": Automatic selection
             - "ddp": Distributed Data Parallel
             - "fsdp": Fully Sharded Data Parallel
+        num_devices: Number of devices to use. Default 1 for single-GPU.
+            Set higher for multi-GPU DDP training.
 
     Returns:
         Configured Fabric instance.
@@ -46,20 +49,36 @@ def create_fabric(
     """
     from lightning.fabric import Fabric
 
-    # Parse device string to accelerator
+    # Parse device string to accelerator and devices
+    devices: int | list[int] = num_devices
+
     if device == "auto":
         accelerator = "auto"
+        devices = num_devices
     elif device == "cpu":
         accelerator = "cpu"
+        devices = 1  # CPU doesn't benefit from multiple "devices"
     elif device.startswith("cuda"):
         accelerator = "cuda"
+        # Handle cuda:N format to select specific GPU
+        if ":" in device:
+            try:
+                gpu_id = int(device.split(":")[1])
+                devices = [gpu_id]
+            except (ValueError, IndexError):
+                devices = num_devices
+        else:
+            devices = num_devices
     elif device == "mps":
         accelerator = "mps"
+        devices = 1  # MPS is single-device
     else:
         accelerator = "auto"
+        devices = num_devices
 
     return Fabric(
         accelerator=accelerator,
+        devices=devices,
         precision=precision,
         strategy=strategy,
     )

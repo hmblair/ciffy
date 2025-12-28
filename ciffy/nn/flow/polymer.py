@@ -53,11 +53,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Keep imports from data.py for functions that accept atoms array (ML-friendly signature)
-from ciffy.nn.flow.residue.data import (
-    position_next_residue,
-    position_next_residue_torch,
-)
+# Import positioning function (works with both numpy and torch)
+from ciffy.nn.flow.residue.data import position_next_residue
 from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:
@@ -639,12 +636,21 @@ class PolymerFlowModel(nn.Module):
         if len(sequence) == 0:
             return [template.with_coordinates(np.empty((0, 3)))]
 
+        # Create output template with only atoms this model knows about
+        # This ensures the output polymer matches the sampled coordinates
+        from ciffy import from_sequence as _from_sequence
+        output_template = _from_sequence(
+            template.sequence_str(),
+            atoms=self.atom_filter,
+            id=template.pdb_id or "sampled",
+        )
+
         # Sample coordinates
         coords_list = self._sample_coords(sequence, n_samples, temperature)
 
-        # Convert to Polymers with template metadata
+        # Convert to Polymers with correct atom structure
         return [
-            template.with_coordinates(coords.detach().cpu().numpy())
+            output_template.with_coordinates(coords.detach().cpu().numpy())
             for coords in coords_list
         ]
 
@@ -654,8 +660,11 @@ class PolymerFlowModel(nn.Module):
         return np.array(sorted(int(k) for k in self.residue_models.keys()), dtype=np.int64)
 
     @property
-    def supported_residues(self) -> list["AtomGroup"]:
-        """List of residue types this model can handle (as AtomGroup)."""
+    def residue_types(self) -> list["AtomGroup"]:
+        """List of residue types this model can handle (as AtomGroup/Residue).
+
+        For the set of integer indices, use `supported_residues` instead.
+        """
         from ciffy.biochemistry import Residue
         return [Residue.from_index(int(k)) for k in sorted(self.residue_models.keys(), key=int)]
 

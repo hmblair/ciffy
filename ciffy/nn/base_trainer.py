@@ -98,6 +98,7 @@ class TrainingConfig:
     grad_clip: float | None = None
     device: str = "auto"
     precision: str = "32-true"
+    num_devices: int = 1  # Number of GPUs for DDP training
     seed: int | None = None
     num_workers: int = 0
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)

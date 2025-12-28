@@ -280,18 +280,21 @@ class LatentDiffusionTrainer:
             max_residues=config.data.max_residues,
         )
 
-        if not compat_report.is_compatible:
+        # Warn about compatibility issues but continue if any samples are valid
+        if compat_report.valid_samples == 0:
             raise ValueError(
-                f"Flow model incompatible with dataset!\n\n"
+                f"No compatible samples found in dataset!\n\n"
                 f"{compat_report.format_summary()}\n\n"
                 f"The flow model expects specific atom counts per residue type "
-                f"that don't match the structures in your dataset."
+                f"that don't match the structures in your dataset.\n"
+                f"Structures with modified residues are automatically skipped."
             )
 
         if compat_report.valid_fraction < 0.5 and not quiet:
             logger.warning(
                 f"Low data compatibility ({compat_report.valid_fraction * 100:.1f}%):\n"
-                f"{compat_report.format_summary()}"
+                f"{compat_report.format_summary()}\n"
+                f"Incompatible structures will be skipped during training."
             )
 
         # Create filtered dataset with full diagnostics
@@ -359,6 +362,7 @@ class LatentDiffusionTrainer:
             self._fabric = create_fabric(
                 device=self.config.training.device,
                 precision=self.config.training.precision,
+                num_devices=self.config.training.num_devices,
             )
             self._fabric.launch()
         return self._fabric

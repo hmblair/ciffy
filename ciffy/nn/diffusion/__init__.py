@@ -58,6 +58,21 @@ from .latent_trainer import (
     latent_collate_fn,
     LatentDiffusionTrainer,
 )
+from .coordinate_denoiser import (
+    CoordinateDenoiserConfig,
+    CoordinateDenoiser,
+)
+from .coordinate_diffusion import (
+    CoordinateDiffusionConfig,
+    CoordinateDiffusionModel,
+)
+from .coordinate_trainer import (
+    CoordinateDiffusionDataConfig,
+    CoordinateDiffusionTrainingConfig,
+    CoordinateDataset,
+    coordinate_collate_fn,
+    CoordinateDiffusionTrainer,
+)
 
 __all__ = [
     # Noise schedules
@@ -97,4 +112,14 @@ __all__ = [
     "LatentEncodingDataset",
     "latent_collate_fn",
     "LatentDiffusionTrainer",
+    # Coordinate diffusion
+    "CoordinateDenoiserConfig",
+    "CoordinateDenoiser",
+    "CoordinateDiffusionConfig",
+    "CoordinateDiffusionModel",
+    "CoordinateDiffusionDataConfig",
+    "CoordinateDiffusionTrainingConfig",
+    "CoordinateDataset",
+    "coordinate_collate_fn",
+    "CoordinateDiffusionTrainer",
 ]

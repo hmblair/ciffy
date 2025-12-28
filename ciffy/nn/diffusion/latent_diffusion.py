@@ -377,41 +377,58 @@ class LatentDiffusionModel(nn.Module):
 
         Args:
             template: Template Polymer with sequence and topology information.
-                Must have numpy backend (will be validated).
+                Accepts either numpy or torch backend; output matches input.
             n_samples: Number of independent conformations to generate.
             temperature: Sampling temperature. For diffusion models, this is
                 currently ignored (reserved for future use). Default 1.0.
             **kwargs: Passed to internal sampling (e.g., num_steps, eta, progress).
 
         Returns:
-            List of n_samples Polymers with generated coordinates.
+            List of n_samples Polymers with generated coordinates (same backend as template).
 
         Raises:
-            ValueError: If template has incompatible backend or unsupported residues.
+            ValueError: If template contains unsupported residues.
 
         Example:
             >>> model = LatentDiffusionModel(config)
             >>> template = ciffy.load("structure.cif").poly()
             >>> samples = model.sample(template, n_samples=10)
         """
-        # Validate template backend
-        if template.backend != "numpy":
-            raise ValueError(
-                f"Template must have numpy backend, got '{template.backend}'. "
-                f"Call template.numpy() first."
-            )
-
         # Get sequence and validate against flow model
         sequence = template.sequence
 
         # Sample coordinates
         coords_list = self._sample_coords(sequence, n_samples, **kwargs)
 
-        # Convert to Polymers with template metadata
-        return [
-            template.with_coordinates(coords.cpu().numpy())
-            for coords in coords_list
-        ]
+        # Check if template atom count matches flow model expectations
+        expected_atoms = sum(
+            self.flow_model.residue_models[str(int(r))].n_atoms
+            for r in sequence
+        )
+
+        # Convert coords to match template backend
+        use_torch = template.backend == "torch"
+        if use_torch:
+            coords_list = [coords.to(template.coordinates.device) for coords in coords_list]
+        else:
+            coords_list = [coords.cpu().numpy() for coords in coords_list]
+
+        if template.size() == expected_atoms:
+            # Template matches - use with_coordinates for efficiency
+            return [template.with_coordinates(coords) for coords in coords_list]
+        else:
+            # Template has different atoms (e.g., missing atoms) - build fresh polymers
+            from ciffy.polymer import from_sequence
+
+            # Create template with flow model's expected atoms
+            flow_template = from_sequence(
+                template.sequence_str(),
+                atoms=self.flow_model.atom_filter,
+                id=template.pdb_id,
+            )
+            if use_torch:
+                flow_template = flow_template.torch().to(template.coordinates.device)
+            return [flow_template.with_coordinates(coords) for coords in coords_list]
 
     def sample_from_sequence(
         self,

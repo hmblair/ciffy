@@ -343,6 +343,10 @@ def svd(arr: Array) -> tuple[Array, Array, Array]:
     """
     if is_torch(arr):
         import torch
+        # MPS doesn't support SVD - fallback to CPU
+        if arr.device.type == "mps":
+            U, S, Vh = torch.linalg.svd(arr.cpu())
+            return U.to(arr.device), S.to(arr.device), Vh.to(arr.device)
         return torch.linalg.svd(arr)
     return np.linalg.svd(arr)
 
@@ -359,6 +363,9 @@ def svdvals(arr: Array) -> Array:
     """
     if is_torch(arr):
         import torch
+        # MPS doesn't support SVD - fallback to CPU
+        if arr.device.type == "mps":
+            return torch.linalg.svdvals(arr.cpu()).to(arr.device)
         return torch.linalg.svdvals(arr)
     return np.linalg.svd(arr, compute_uv=False)
 

@@ -241,135 +241,11 @@ def apply_relative_transform(
 
 
 # =============================================================================
-# PyTorch GPU-Compatible Implementations
+# Deprecated: PyTorch-specific wrappers (no longer needed)
 # =============================================================================
 # The geometry module now supports both NumPy and PyTorch backends via inline dispatch.
-# These wrappers are kept for backward compatibility.
-
-
-def _axis_angle_to_rotation_matrix_torch(axis_angle: torch.Tensor) -> torch.Tensor:
-    """
-    Convert axis-angle to rotation matrix (Rodrigues' formula).
-
-    Args:
-        axis_angle: (3,) axis-angle vector.
-
-    Returns:
-        (3, 3) rotation matrix.
-    """
-    return _axis_angle_to_rotation_geometry(axis_angle)
-
-
-def compute_o3p_frame_torch(
-    coords: torch.Tensor,
-    atom_to_col: dict[int, int],
-    residue: "Residue",
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute the O3' frame for a residue (PyTorch version).
-
-    Uses ciffy.geometry.compute_o3p_frame which has inline backend dispatch.
-
-    Args:
-        coords: (n_atoms, 3) coordinates tensor.
-        atom_to_col: Dict mapping atom type index to column index.
-        residue: Residue type.
-
-    Returns:
-        origin: (3,) O3' position.
-        R: (3, 3) rotation matrix.
-    """
-    return _compute_o3p_frame_geometry(coords, atom_to_col, residue)
-
-
-def compute_p_frame_torch(
-    coords: torch.Tensor,
-    atom_to_col: dict[int, int],
-    residue: "Residue",
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute the P frame for a residue (PyTorch version).
-
-    Uses ciffy.geometry.compute_p_frame which has inline backend dispatch.
-
-    Args:
-        coords: (n_atoms, 3) coordinates tensor.
-        atom_to_col: Dict mapping atom type index to column index.
-        residue: Residue type.
-
-    Returns:
-        origin: (3,) P position.
-        R: (3, 3) rotation matrix.
-    """
-    return _compute_p_frame_geometry(coords, atom_to_col, residue)
-
-
-def apply_relative_transform_torch(
-    origin1: torch.Tensor,
-    R1: torch.Tensor,
-    rel_transform: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply relative transform to get frame 2 from frame 1 (PyTorch version).
-
-    Uses ciffy.geometry.apply_relative_transform which has inline backend dispatch.
-
-    Args:
-        origin1: (3,) source frame origin.
-        R1: (3, 3) source frame rotation.
-        rel_transform: (6,) vector [axis-angle (3), translation (3)].
-
-    Returns:
-        origin2, R2: Target frame origin and rotation.
-    """
-    return _apply_relative_transform_geometry(origin1, R1, rel_transform)
-
-
-def position_next_residue_torch(
-    coords1: torch.Tensor,
-    coords2: torch.Tensor,
-    rel_transform: torch.Tensor,
-    atom_to_col: dict[int, int],
-    residue: "Residue",
-) -> torch.Tensor:
-    """
-    Position residue 2 relative to residue 1 using the link transform (PyTorch version).
-
-    This is the GPU-compatible version of position_next_residue. It keeps all
-    computation on the same device as the input tensors.
-
-    Note: For performance-critical code, use ciffy.geometry.position_residue_fast()
-    with pre-resolved frame column indices to avoid Python attribute lookups.
-
-    Args:
-        coords1: (n_atoms, 3) coordinates of first residue.
-        coords2: (n_atoms, 3) coordinates of second residue (in canonical frame).
-        rel_transform: (6,) SE(3) transform [axis-angle, translation].
-        atom_to_col: Dict mapping atom type index to column index.
-        residue: Residue type.
-
-    Returns:
-        (n_atoms, 3) positioned coordinates of second residue.
-    """
-    # Compute O3' frame from coords1
-    o3p_origin, o3p_R = compute_o3p_frame_torch(coords1, atom_to_col, residue)
-
-    # Apply transform to get target P frame
-    target_p_origin, target_p_R = apply_relative_transform_torch(
-        o3p_origin, o3p_R, rel_transform
-    )
-
-    # Compute current P frame from coords2
-    current_p_origin, current_p_R = compute_p_frame_torch(coords2, atom_to_col, residue)
-
-    # Compute rigid transformation to align current P frame to target P frame
-    R_correction = target_p_R @ current_p_R.T
-    t_correction = target_p_origin - R_correction @ current_p_origin
-
-    # Apply transformation
-    coords2_positioned = (R_correction @ coords2.T).T + t_correction
-
-    return coords2_positioned
+# Use the regular functions (compute_o3p_frame, position_next_residue, etc.) directly -
+# they work with both backends.
 
 
 # =============================================================================
@@ -639,13 +515,20 @@ def extract_residues_with_links(
         transforms: (n_instances, 6) SE(3) transforms [axis-angle, translation].
         atoms: 1D int64 array of atom type indices in column order.
     """
-    # Required atoms for link computation
-    required_link_atoms = {
-        residue_type.C4p.value, residue_type.C3p.value, residue_type.O3p.value,
-        residue_type.P.value, residue_type.O5p.value, residue_type.OP1.value,
-    }
+    from ciffy.biochemistry import Residue
+
+    # Helper to get required link atoms for a residue type
+    def get_required_link_atoms(res_type: "Residue") -> set[int]:
+        return {
+            res_type.C4p.value, res_type.C3p.value, res_type.O3p.value,
+            res_type.P.value, res_type.O5p.value, res_type.OP1.value,
+        }
+
+    # Required atoms for the target residue type
+    required_link_atoms_1 = get_required_link_atoms(residue_type)
 
     # Phase 1: Extract raw pairs with bond length filtering
+    # For each target residue, get the transform to the NEXT residue (any type)
     all_pairs = []  # (raw_coords1, raw_atoms1, raw_coords2, raw_atoms2)
 
     for path in cif_paths:
@@ -655,39 +538,37 @@ def extract_residues_with_links(
         try:
             poly = ciffy.load(str(path)).poly()
             seq = to_numpy(poly.sequence)
-            residue_indices = [i for i in range(len(seq)) if seq[i] == residue_type.value]
-
-            if len(residue_indices) < 2:
-                if verbose:
-                    print("< 2 residues")
-                continue
+            n_residues = len(seq)
 
             per_res_atoms = poly.reduce(poly.atoms, Scale.RESIDUE, Reduction.COLLATE)
             per_res_coords = poly.reduce(poly.coordinates, Scale.RESIDUE, Reduction.COLLATE)
 
             count = 0
-            for i in range(len(residue_indices) - 1):
-                idx1, idx2 = residue_indices[i], residue_indices[i + 1]
-
-                # Must be truly adjacent in sequence
-                if idx2 != idx1 + 1:
+            for idx1 in range(n_residues - 1):
+                # First residue must be target type
+                if seq[idx1] != residue_type.value:
                     continue
+
+                # Second residue is simply the next one (any type)
+                idx2 = idx1 + 1
+                res_type_2 = Residue.from_index(int(seq[idx2]))
 
                 atoms1 = to_numpy(per_res_atoms[idx1]).tolist()
                 atoms2 = to_numpy(per_res_atoms[idx2]).tolist()
 
-                # Both must have required link atoms
-                if not required_link_atoms.issubset(set(atoms1)):
+                # Both must have required link atoms (using correct residue types)
+                if not required_link_atoms_1.issubset(set(atoms1)):
                     continue
-                if not required_link_atoms.issubset(set(atoms2)):
+                required_link_atoms_2 = get_required_link_atoms(res_type_2)
+                if not required_link_atoms_2.issubset(set(atoms2)):
                     continue
 
                 coords1 = to_numpy(per_res_coords[idx1])
                 coords2 = to_numpy(per_res_coords[idx2])
 
-                # Check O3'-P bond length (use each residue's own atom ordering)
+                # Check O3'-P bond length (use each residue's own atom indices)
                 o3p_idx_1 = atoms1.index(residue_type.O3p.value)
-                p_idx_2 = atoms2.index(residue_type.P.value)
+                p_idx_2 = atoms2.index(res_type_2.P.value)
                 bond_length = np.linalg.norm(coords2[p_idx_2] - coords1[o3p_idx_1])
 
                 if bond_length > max_bond_length:

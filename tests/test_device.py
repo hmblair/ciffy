@@ -77,31 +77,24 @@ class TestDeviceOperations:
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
     def test_rmsd_on_device(self, any_polymer_torch, device):
-        """Test RMSD calculation on GPU devices.
-
-        Note: MPS doesn't support SVD operations, so RMSD (which uses Kabsch
-        alignment with SVD) will fail on MPS.
-        """
+        """Test RMSD calculation on GPU devices."""
         skip_if_no_device(device)
         import ciffy
 
         # Use .poly() to exclude ligands/water.
         p_gpu = any_polymer_torch.poly().to(device)
 
-        if device == "mps":
-            # MPS doesn't support SVD, so RMSD will fail
-            with pytest.raises(NotImplementedError, match="MPS device"):
-                ciffy.rmsd(p_gpu, p_gpu, ciffy.MOLECULE)
-        else:
-            # CUDA: Calculate RMSD against self (should be ~0)
-            rmsd = ciffy.rmsd(p_gpu, p_gpu, ciffy.MOLECULE)
+        # Calculate RMSD against self (should be ~0)
+        # Note: MPS doesn't support SVD natively, but we fall back to CPU
+        rmsd = ciffy.rmsd(p_gpu, p_gpu, ciffy.MOLECULE)
 
-            # Result should be on device and close to 0
-            # CUDA SVD (cuSOLVER) has lower precision than CPU
-            assert rmsd.device.type == device
-            n_atoms = p_gpu.coordinates.shape[0]
-            tolerance = max(1e-2, (n_atoms ** 0.5) * 2e-4)
-            assert rmsd.item() < tolerance, f"RMSD {rmsd.item():.6f} >= {tolerance:.6f} for {n_atoms} atoms"
+        # Result should be on device and close to 0
+        assert rmsd.device.type == device
+        n_atoms = p_gpu.coordinates.shape[0]
+        # MPS uses CPU fallback for SVD which can have slightly lower precision
+        precision_factor = 5e-4 if device == "mps" else 2e-4
+        tolerance = max(1e-2, (n_atoms ** 0.5) * precision_factor)
+        assert rmsd.item() < tolerance, f"RMSD {rmsd.item():.6f} >= {tolerance:.6f} for {n_atoms} atoms"
 
 
 class TestMixedDeviceHandling:

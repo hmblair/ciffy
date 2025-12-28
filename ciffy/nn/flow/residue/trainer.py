@@ -24,6 +24,7 @@ from ...base_trainer import BaseConfig, DataConfig, OutputConfig, TrainingConfig
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
+    from lightning.fabric import Fabric
 
 
 @dataclass
@@ -186,6 +187,19 @@ class ResidueFlowTrainer:
         self.config = config or ResidueFlowTrainingConfig()
         self.quiet = quiet
         self.train_dataset: ResidueDataset | None = None
+        self._fabric: "Fabric | None" = None
+
+    def _get_fabric(self) -> "Fabric":
+        """Get or create Fabric instance for training."""
+        if self._fabric is None:
+            from ...fabric_utils import create_fabric
+
+            self._fabric = create_fabric(
+                device=self.config.training.device,
+                precision=self.config.training.precision,
+            )
+            self._fabric.launch()
+        return self._fabric
 
     @property
     def train_dataset_size(self) -> int:
@@ -490,7 +504,8 @@ class ResidueFlowTrainer:
             print(f"Extracted {n_train} train, {n_test} test instances with {n_atoms} atoms each")
             print(f"Extended representation: {train_extended.shape[1]} dimensions")
 
-        # Train with proper train/test split
+        # Train with proper train/test split using Fabric
+        fabric = self._get_fabric()
         flow, info = train_pca_flow(
             train_data=train_extended,
             test_data=test_extended,
@@ -502,9 +517,10 @@ class ResidueFlowTrainer:
             n_epochs=self.config.training.epochs,
             batch_size=self.config.data.batch_size,
             lr=self.config.training.lr,
-            device=self._get_device(),
+            device=self._get_device(),  # Still passed for fallback/logging
             verbose=verbose,
             progress_callback=progress_callback,
+            fabric=fabric,
         )
 
         # Create ResidueFlowModel wrapper
@@ -602,7 +618,8 @@ class ResidueFlowTrainer:
             print(f"Extracted {n_train} train, {n_test} test instances with {n_atoms} atoms each")
             print(f"Extended representation: {train_extended.shape[1]} dimensions")
 
-        # Train with provided split
+        # Train with provided split using Fabric
+        fabric = self._get_fabric()
         flow, info = train_pca_flow(
             train_data=train_extended,
             test_data=test_extended,
@@ -614,9 +631,10 @@ class ResidueFlowTrainer:
             n_epochs=self.config.training.epochs,
             batch_size=self.config.data.batch_size,
             lr=self.config.training.lr,
-            device=self._get_device(),
+            device=self._get_device(),  # Still passed for fallback/logging
             verbose=verbose,
             progress_callback=progress_callback,
+            fabric=fabric,
         )
 
         # Create ResidueFlowModel wrapper

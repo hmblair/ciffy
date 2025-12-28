@@ -1,8 +1,12 @@
 """
 Training utilities for PCA + Flow models.
+
+Uses PyTorch Lightning Fabric for device handling and mixed precision.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -10,6 +14,9 @@ import torch.optim as optim
 
 from .model import PCAFlow
 from .data import compute_pca
+
+if TYPE_CHECKING:
+    from lightning.fabric import Fabric
 
 # Pre-computed constant for Gaussian log-prob (avoids np call in training loop)
 _LOG_2PI = float(np.log(2 * np.pi))
@@ -57,6 +64,7 @@ def train_pca_flow(
     verbose: bool = True,
     progress_tracker: "TrainingProgress | None" = None,
     progress_callback: Callable[[int, int, dict], None] | None = None,
+    fabric: "Fabric | None" = None,
 ) -> tuple[PCAFlow, dict]:
     """
     Train a PCA + Flow model on data with proper train/test evaluation.
@@ -80,6 +88,9 @@ def train_pca_flow(
         progress_tracker: Internal progress tracker (for verbose output).
         progress_callback: External callback for progress updates.
             Signature: callback(epoch, total_epochs, metrics)
+        fabric: Optional Lightning Fabric instance for device handling.
+            If provided, handles device placement and enables mixed precision.
+            If None, falls back to manual device management.
 
     Returns:
         flow: Trained PCAFlow model.
@@ -135,29 +146,45 @@ def train_pca_flow(
         n_layers=n_layers,
         hidden_dim=hidden_dim,
         bound=bound,
-    ).to(device)
+    )
 
     # Keep reference to original for saving (compiled wrapper has different state_dict keys)
     flow_original = flow
 
-    # Compile model for faster training (PyTorch 2.0+)
-    # Use reduce-overhead mode for small models with many iterations
-    if hasattr(torch, 'compile') and device != "cpu":
-        try:
-            flow = torch.compile(flow, mode="reduce-overhead")
-            if verbose:
-                print("Using torch.compile for accelerated training")
-        except Exception:
-            pass  # Fall back to eager mode if compilation fails
+    # Setup optimizer
+    optimizer = optim.Adam(flow.parameters(), lr=lr)
+
+    # Use Fabric if provided, otherwise fall back to manual device management
+    use_fabric = fabric is not None
+    if use_fabric:
+        flow, optimizer = fabric.setup(flow, optimizer)
+        if verbose:
+            # Get precision string from Fabric's internal precision plugin
+            precision_plugin = getattr(fabric, "_precision", None)
+            precision_str = getattr(precision_plugin, "precision", "32-true") if precision_plugin else "32-true"
+            print(f"Using Fabric ({fabric.device}, precision={precision_str})")
+    else:
+        flow = flow.to(device)
+        # Compile model for faster training (PyTorch 2.0+)
+        if hasattr(torch, 'compile') and device != "cpu":
+            try:
+                flow = torch.compile(flow, mode="reduce-overhead")
+                if verbose:
+                    print("Using torch.compile for accelerated training")
+            except Exception:
+                pass  # Fall back to eager mode if compilation fails
 
     # Prepare training data
-    X_train = torch.from_numpy(train_data).float().to(device)
+    X_train = torch.from_numpy(train_data).float()
+    if use_fabric:
+        X_train = fabric.to_device(X_train)
+    else:
+        X_train = X_train.to(device)
 
     # Count parameters
     n_params = sum(p.numel() for p in flow.parameters() if p.requires_grad)
 
     # Training loop
-    optimizer = optim.Adam(flow.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
     losses = []
 
@@ -181,8 +208,10 @@ def train_pca_flow(
             progress_tracker.start_epoch()
 
         flow.train()
-        perm = torch.randperm(n_train, device=device)
-        epoch_loss = torch.tensor(0.0, device=device)
+        # Get actual device (Fabric may remap)
+        actual_device = fabric.device if use_fabric else device
+        perm = torch.randperm(n_train, device=actual_device)
+        epoch_loss = torch.tensor(0.0, device=actual_device)
         n_batches = 0
 
         for i in range(0, n_train, batch_size):
@@ -193,7 +222,11 @@ def train_pca_flow(
             log_pz = -0.5 * (z ** 2 + _LOG_2PI).sum(dim=-1)
             loss = -(log_pz + log_det).mean()
 
-            loss.backward()
+            # Use Fabric's backward for mixed precision scaling
+            if use_fabric:
+                fabric.backward(loss)
+            else:
+                loss.backward()
             optimizer.step()
 
             epoch_loss += loss.detach()  # No GPU sync per batch
@@ -233,7 +266,11 @@ def train_pca_flow(
 
     # Evaluate on test data (held-out)
     if test_data is not None and len(test_data) > 0:
-        X_test = torch.from_numpy(test_data).float().to(device)
+        X_test = torch.from_numpy(test_data).float()
+        if use_fabric:
+            X_test = fabric.to_device(X_test)
+        else:
+            X_test = X_test.to(device)
         with torch.no_grad():
             X_test_recon = flow.decode(flow.encode(X_test)).cpu().numpy()
         test_rmsd = _compute_aligned_rmsd(test_data, X_test_recon, n_atoms)

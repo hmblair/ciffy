@@ -116,6 +116,7 @@ class TrainingConfig:
         weight_decay: L2 regularization weight.
         grad_clip: Maximum gradient norm for clipping. None to disable.
         device: Device string ('auto', 'cuda', 'cpu', 'mps', or 'cuda:N').
+        precision: Training precision ('32-true', '16-mixed', 'bf16-mixed').
         seed: Random seed for reproducibility. None for no seeding.
         num_workers: Number of DataLoader workers.
         scheduler: Learning rate scheduler configuration.
@@ -127,6 +128,7 @@ class TrainingConfig:
     weight_decay: float = 0.0
     grad_clip: float | None = None
     device: str = "auto"
+    precision: str = "32-true"
     seed: int | None = None
     num_workers: int = 0
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)

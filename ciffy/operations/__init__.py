@@ -11,6 +11,7 @@ from .alignment import (
     kabsch_rotation,
     kabsch_align,
     align,
+    intersect,
 )
 from .extract import extract
 from .gnm import graph_laplacian, gnm_correlations, gnm_variances
@@ -23,6 +24,7 @@ __all__ = [
     "kabsch_rotation",
     "kabsch_align",
     "align",
+    "intersect",
     "extract",
     # GNM utilities
     "graph_laplacian",

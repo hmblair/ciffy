@@ -67,7 +67,7 @@ from .io.writer import write_cif
 from .ensemble import Ensemble
 
 # Operations - commonly used, re-exported at top level
-from .operations.alignment import kabsch_distance as rmsd, align
+from .operations.alignment import kabsch_distance as rmsd, align, intersect
 from .operations.metrics import tm_score, lddt
 from .operations.chain import join
 from .operations.reduction import Reduction

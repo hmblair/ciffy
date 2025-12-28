@@ -520,8 +520,11 @@ def isin(arr: Array, values: list | tuple) -> Array:
     """
     if is_torch(arr):
         import torch
-        # Convert values to tensor on same device
-        test_tensor = torch.tensor(values, device=arr.device, dtype=arr.dtype)
+        # Convert values to tensor on same device if needed
+        if isinstance(values, torch.Tensor):
+            test_tensor = values.to(device=arr.device, dtype=arr.dtype)
+        else:
+            test_tensor = torch.tensor(values, device=arr.device, dtype=arr.dtype)
         return torch.isin(arr, test_tensor)
     return np.isin(arr, values)
 

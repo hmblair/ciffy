@@ -18,6 +18,31 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
+# Backend Validation
+# =============================================================================
+
+def _check_backends(*arrays: Array) -> None:
+    """
+    Check that all arrays have the same backend.
+
+    Raises:
+        TypeError: If backends don't match.
+    """
+    if len(arrays) < 2:
+        return
+
+    first_is_torch = is_torch(arrays[0])
+    for i, arr in enumerate(arrays[1:], 1):
+        if is_torch(arr) != first_is_torch:
+            first_backend = "torch" if first_is_torch else "numpy"
+            other_backend = "torch" if is_torch(arr) else "numpy"
+            raise TypeError(
+                f"Backend mismatch: arrays[0] is {first_backend}, "
+                f"arrays[{i}] is {other_backend}. Convert to same backend first."
+            )
+
+
+# =============================================================================
 # Dispatch Table
 # =============================================================================
 
@@ -46,6 +71,7 @@ def scatter_sum(src: Array, index: Array, dim_size: int) -> Array:
     Returns:
         Array of shape (dim_size, ...) with summed values.
     """
+    _check_backends(src, index)
     return _get_ops(src).scatter_sum(src, index, dim_size)
 
 
@@ -61,6 +87,7 @@ def scatter_mean(src: Array, index: Array, dim_size: int) -> Array:
     Returns:
         Array of shape (dim_size, ...) with averaged values.
     """
+    _check_backends(src, index)
     return _get_ops(src).scatter_mean(src, index, dim_size)
 
 
@@ -76,6 +103,7 @@ def scatter_max(src: Array, index: Array, dim_size: int) -> tuple[Array, Array |
     Returns:
         Tuple of (max_values, argmax_indices). argmax_indices may be None.
     """
+    _check_backends(src, index)
     return _get_ops(src).scatter_max(src, index, dim_size)
 
 
@@ -91,6 +119,7 @@ def scatter_min(src: Array, index: Array, dim_size: int) -> tuple[Array, Array |
     Returns:
         Tuple of (min_values, argmin_indices). argmin_indices may be None.
     """
+    _check_backends(src, index)
     return _get_ops(src).scatter_min(src, index, dim_size)
 
 
@@ -109,6 +138,7 @@ def repeat_interleave(arr: Array, repeats: Array) -> Array:
     Returns:
         Array with repeated elements.
     """
+    _check_backends(arr, repeats)
     return _get_ops(arr).repeat_interleave(arr, repeats)
 
 
@@ -123,6 +153,7 @@ def cdist(x1: Array, x2: Array) -> Array:
     Returns:
         Distance matrix of shape (M, N).
     """
+    _check_backends(x1, x2)
     return _get_ops(x1).cdist(x1, x2)
 
 
@@ -140,6 +171,7 @@ def cat(arrays: list, axis: int = 0) -> Array:
     if len(arrays) == 0:
         raise ValueError("Cannot concatenate empty list")
 
+    _check_backends(*arrays)
     ops = _get_ops(arrays[0])
     # Handle axis/dim naming difference
     if get_backend(arrays[0]) == Backend.TORCH:
@@ -158,6 +190,7 @@ def multiply(a: Array, b: Array) -> Array:
     Returns:
         Element-wise product.
     """
+    _check_backends(a, b)
     return _get_ops(a).multiply(a, b)
 
 
@@ -521,18 +554,8 @@ def isin(arr: Array, values: Array) -> Array:
     Raises:
         TypeError: If arr and values have different backends.
     """
-    arr_is_torch = is_torch(arr)
-    values_is_torch = is_torch(values)
-
-    if arr_is_torch != values_is_torch:
-        arr_backend = "torch" if arr_is_torch else "numpy"
-        values_backend = "torch" if values_is_torch else "numpy"
-        raise TypeError(
-            f"Backend mismatch: arr is {arr_backend}, values is {values_backend}. "
-            f"Convert to same backend first."
-        )
-
-    if arr_is_torch:
+    _check_backends(arr, values)
+    if is_torch(arr):
         import torch
         return torch.isin(arr, values.to(device=arr.device, dtype=arr.dtype))
     return np.isin(arr, values)

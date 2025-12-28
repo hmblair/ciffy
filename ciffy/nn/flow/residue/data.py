@@ -241,14 +241,6 @@ def apply_relative_transform(
 
 
 # =============================================================================
-# Deprecated: PyTorch-specific wrappers (no longer needed)
-# =============================================================================
-# The geometry module now supports both NumPy and PyTorch backends via inline dispatch.
-# Use the regular functions (compute_o3p_frame, position_next_residue, etc.) directly -
-# they work with both backends.
-
-
-# =============================================================================
 # Single Residue Extraction
 # =============================================================================
 

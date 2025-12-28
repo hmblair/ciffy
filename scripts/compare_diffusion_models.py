@@ -543,8 +543,8 @@ def evaluate_model(
 
     for i, cif_path in enumerate(test_files[:num_samples]):
         try:
-            # Load structure - filter to RNA only for consistency with training
-            polymer = ciffy.load(str(cif_path)).by_type(Molecule.RNA).poly()
+            # Load structure - filter to RNA only and remove modified residues
+            polymer = ciffy.load(str(cif_path)).by_type(Molecule.RNA).poly().canonical()
 
             # Get original coordinates
             original_coords = polymer.coordinates.copy()

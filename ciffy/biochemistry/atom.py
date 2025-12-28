@@ -180,6 +180,9 @@ class AtomGroup:
     - Groups (Sugar, etc.): AtomGroup without geometry
     - Subsets: AtomGroup with filtered geometry
 
+    Supports lazy loading: if `loader` is provided instead of `members`,
+    data is loaded on first access.
+
     Attributes:
         name: Group name (e.g., "A", "Sugar", "A_subset").
         value: Residue index (None for plain groups).
@@ -206,20 +209,22 @@ class AtomGroup:
 
     __slots__ = (
         'name', '_members', '_index_cache',
-        'value', 'molecule_type', 'abbrev', 'ideal', 'bonds',
+        'value', 'molecule_type', 'abbrev', '_ideal', '_bonds',
+        '_loader',  # Lazy loader function
         '_orig_locals',  # For subset geometry filtering
     )
 
     def __init__(
         self,
         name: str,
-        members: dict[str, Atom | AtomGroup],
+        members: dict[str, Atom | AtomGroup] | None = None,
         *,
         value: int | None = None,
         molecule_type: int | None = None,
         abbrev: str | None = None,
         ideal: NDArray[np.float32] | None = None,
         bonds: NDArray[np.int64] | None = None,
+        loader: Callable[[], tuple[dict, NDArray | None, NDArray | None]] | None = None,
         _orig_locals: dict[int, int] | None = None,
     ) -> None:
         """
@@ -228,11 +233,14 @@ class AtomGroup:
         Args:
             name: Group name.
             members: Dict mapping names to Atom or nested AtomGroup.
+                If None and loader is provided, will be loaded lazily.
             value: Residue index (for residues only).
             molecule_type: Molecule type (for residues only).
             abbrev: Single-letter abbreviation (for residues only).
             ideal: Ideal coordinates, (n_atoms, 3) float32.
             bonds: Bond pairs, (n_bonds, 2) int64.
+            loader: Optional function returning (members, ideal, bonds).
+                Used for lazy loading - data loaded on first access.
             _orig_locals: Internal - maps atom value to original local index.
         """
         self.name = name
@@ -241,16 +249,40 @@ class AtomGroup:
         self.value = value
         self.molecule_type = molecule_type
         self.abbrev = abbrev
-        self.ideal = ideal
-        self.bonds = bonds
+        self._ideal = ideal
+        self._bonds = bonds
+        self._loader = loader
         self._orig_locals = _orig_locals
+
+    def _ensure_loaded(self) -> None:
+        """Load data if using lazy loading."""
+        if self._members is None and self._loader is not None:
+            members, ideal, bonds = self._loader()
+            self._members = members
+            self._ideal = ideal
+            self._bonds = bonds
+            self._loader = None  # Clear loader after use
+
+    @property
+    def ideal(self) -> NDArray[np.float32] | None:
+        """Ideal coordinates, shape (n_atoms, 3)."""
+        self._ensure_loaded()
+        return self._ideal
+
+    @property
+    def bonds(self) -> NDArray[np.int64] | None:
+        """Bond pairs, shape (n_bonds, 2)."""
+        self._ensure_loaded()
+        return self._bonds
 
     def __getattr__(self, name: str) -> Atom | AtomGroup:
         """Access member by name: group.P -> Atom or nested AtomGroup."""
         if name.startswith('_'):
             raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+        # Ensure data is loaded before accessing members
+        self._ensure_loaded()
         members = object.__getattribute__(self, '_members')
-        if name in members:
+        if members is not None and name in members:
             return members[name]
         group_name = object.__getattribute__(self, 'name')
         raise AttributeError(f"'{group_name}' has no member '{name}'")
@@ -263,6 +295,7 @@ class AtomGroup:
             Sorted array of unique atom values.
         """
         if self._index_cache is None:
+            self._ensure_loaded()
             values = []
             for v in self._members.values():
                 if isinstance(v, AtomGroup):
@@ -274,16 +307,19 @@ class AtomGroup:
 
     def __iter__(self) -> Iterator[Atom]:
         """Iterate over Atom members (skips nested AtomGroups)."""
+        self._ensure_loaded()
         for v in self._members.values():
             if isinstance(v, Atom):
                 yield v
 
     def __len__(self) -> int:
         """Number of direct members."""
+        self._ensure_loaded()
         return len(self._members)
 
     def __contains__(self, item: str | int | Atom) -> bool:
         """Check if name, value, or Atom is in group."""
+        self._ensure_loaded()
         if isinstance(item, str):
             return item in self._members
         if isinstance(item, int):
@@ -309,6 +345,7 @@ class AtomGroup:
             >>> Residue.A[2]  # Get atom with value 2
             Atom(P, 2)
         """
+        self._ensure_loaded()
         for member in self._members.values():
             if isinstance(member, Atom) and int(member) == value:
                 return member
@@ -336,6 +373,7 @@ class AtomGroup:
             return f"Residue.{self.name}({atom_str})"
 
         # Plain AtomGroup
+        self._ensure_loaded()
         n_groups = sum(1 for v in self._members.values() if isinstance(v, AtomGroup))
         if n_atoms <= 8:
             atom_str = ", ".join(f"{name}={val}" for name, val in atoms)
@@ -349,6 +387,7 @@ class AtomGroup:
 
     def items(self) -> Iterator[tuple[str, Atom]]:
         """Iterate over (name, Atom) pairs (skips nested AtomGroups)."""
+        self._ensure_loaded()
         for k, v in self._members.items():
             if isinstance(v, Atom):
                 yield k, v
@@ -359,6 +398,7 @@ class AtomGroup:
 
     def list(self) -> list[str]:
         """List of atom names."""
+        self._ensure_loaded()
         return list(self._members.keys())
 
     @property
@@ -409,6 +449,7 @@ class AtomGroup:
         Returns:
             New AtomGroup with filtered atoms and geometry.
         """
+        self._ensure_loaded()
         # Filter atoms with renumbered locals
         filtered = {}
         new_local = 0
@@ -481,6 +522,7 @@ class AtomGroup:
         Returns:
             New AtomGroup with filtered atoms and geometry.
         """
+        self._ensure_loaded()
         keep_indices = {int(v) for k, v in self._members.items()
                         if isinstance(v, Atom) and k not in names}
         return self.subset(keep_indices)
@@ -503,6 +545,7 @@ class AtomGroup:
         Returns:
             New AtomGroup with filtered atoms and geometry.
         """
+        self._ensure_loaded()
         keep_indices = {int(v) for v in self._members.values()
                         if isinstance(v, Atom) and predicate(v)}
         return self.subset(keep_indices)

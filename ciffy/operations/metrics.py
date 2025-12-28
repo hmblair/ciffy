@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp
+from ..backend import Array, is_torch, is_numpy, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp, stack
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -434,11 +434,10 @@ def _rmsd_dispatch(a, b, scale=None, eps=0.0):
     )
 
 
-@_rmsd_dispatch.register(np.ndarray)
-def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None, eps: float = 0.0) -> np.ndarray:
-    """RMSD for numpy arrays."""
-    if not isinstance(b, np.ndarray):
-        raise TypeError(f"Both inputs must be numpy arrays, got {type(b).__name__}")
+def _rmsd_array(a: Array, b: Array, scale=None, eps: float = 0.0) -> Array:
+    """RMSD for numpy/torch arrays using backend-agnostic operations."""
+    if type(a) != type(b):
+        raise TypeError(f"Both inputs must be same type, got {type(a).__name__} and {type(b).__name__}")
 
     if a.shape != b.shape:
         raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
@@ -453,41 +452,18 @@ def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None, eps: float = 0.0) ->
         # Batch: (B, N, 3)
         if a.shape[2] != 3:
             raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-        return np.stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
+        return stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
 
     else:
         raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
 
 
+_rmsd_dispatch.register(np.ndarray, _rmsd_array)
+
 # Register torch.Tensor if available
 try:
     import torch
-
-    @_rmsd_dispatch.register(torch.Tensor)
-    def _rmsd_tensor(a: torch.Tensor, b: torch.Tensor, scale=None, eps: float = 0.0) -> torch.Tensor:
-        """RMSD for torch tensors."""
-        if not isinstance(b, torch.Tensor):
-            raise TypeError(f"Both inputs must be torch tensors, got {type(b).__name__}")
-
-        if a.shape != b.shape:
-            raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-
-        if a.ndim == 2:
-            # Single pair: (N, 3)
-            if a.shape[1] != 3:
-                raise ValueError(f"Expected shape (N, 3), got {a.shape}")
-            return _rmsd_single(a, b, eps=eps)
-
-        elif a.ndim == 3:
-            # Batch: (B, N, 3)
-            if a.shape[2] != 3:
-                raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-            # Use torch.stack to preserve gradients
-            return torch.stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
-
-        else:
-            raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) tensor, got {a.ndim}D")
-
+    _rmsd_dispatch.register(torch.Tensor, _rmsd_array)
 except ImportError:
     pass
 

@@ -50,6 +50,7 @@ from .ops import (
     scatter_mean,
     cdist,
     cat,
+    stack,
     repeat_interleave,
     # Array creation/manipulation
     clone,
@@ -95,6 +96,7 @@ __all__ = [
     "scatter_mean",
     "cdist",
     "cat",
+    "stack",
     "repeat_interleave",
     # Array creation/manipulation
     "clone",

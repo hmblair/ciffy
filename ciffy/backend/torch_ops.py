@@ -205,6 +205,11 @@ def cat(tensors: list, dim: int = 0) -> torch.Tensor:
     return torch.cat(tensors, dim=dim)
 
 
+def stack(tensors: list, dim: int = 0) -> torch.Tensor:
+    """Stack tensors along a new dimension."""
+    return torch.stack(tensors, dim=dim)
+
+
 def multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Element-wise multiplication."""
     return torch.multiply(a, b)

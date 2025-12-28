@@ -179,6 +179,28 @@ def cat(arrays: list, axis: int = 0) -> Array:
     return ops.cat(arrays, axis=axis)
 
 
+def stack(arrays: list, axis: int = 0) -> Array:
+    """
+    Stack arrays along a new axis.
+
+    Args:
+        arrays: List of arrays to stack.
+        axis: Axis along which to stack.
+
+    Returns:
+        Stacked array with new dimension.
+    """
+    if len(arrays) == 0:
+        raise ValueError("Cannot stack empty list")
+
+    _check_backends(*arrays)
+    ops = _get_ops(arrays[0])
+    # Handle axis/dim naming difference
+    if get_backend(arrays[0]) == Backend.TORCH:
+        return ops.stack(arrays, dim=axis)
+    return ops.stack(arrays, axis=axis)
+
+
 def multiply(a: Array, b: Array) -> Array:
     """
     Element-wise multiplication.

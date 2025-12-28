@@ -164,7 +164,7 @@ class Polymer:
     # Per-atom arrays
     coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
     atoms = Field(Scale.ATOM, dtype=Dtype.INT)
-    elements = Field(Scale.ATOM, dtype=Dtype.INT)
+    elements = Field(Scale.ATOM, dtype=Dtype.INT, required=False)
     bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
 
     # Per-residue arrays
@@ -665,7 +665,7 @@ class Polymer:
         return self._clone(
             coordinates=ops.clone(self.coordinates),
             atoms=ops.clone(self.atoms),
-            elements=ops.clone(self.elements),
+            elements=ops.clone(self.elements) if self.elements is not None else None,
             sequence=ops.clone(self.sequence),
             bfactors=ops.clone(self.bfactors) if self.bfactors is not None else None,
         )

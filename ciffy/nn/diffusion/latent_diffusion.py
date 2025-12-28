@@ -27,8 +27,8 @@ Example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Union
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 try:
     import torch
@@ -53,6 +53,7 @@ import numpy as np
 
 from .latent_denoiser import LatentDenoiser, LatentDenoiserConfig
 from .process import CosineNoiseSchedule, DiffusionProcess, LinearNoiseSchedule
+from ..model_registry import register_model
 
 
 @dataclass
@@ -74,6 +75,7 @@ class LatentDiffusionConfig:
     freeze_flow_model: bool = True
 
 
+@register_model("latent_diffusion")
 class LatentDiffusionModel(nn.Module):
     """Latent diffusion model for polymer structure generation.
 
@@ -498,6 +500,89 @@ class LatentDiffusionModel(nn.Module):
 
         # Decode
         return self.decode(x.squeeze(0), sequence.cpu().numpy())
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Unified Save/Load (SaveableModel protocol)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_save_state(self) -> tuple[dict[str, "torch.Tensor"], dict[str, Any]]:
+        """Get state for unified save format.
+
+        Returns:
+            Tuple of (tensors_dict, config_dict) for safetensors serialization.
+        """
+        tensors = {}
+
+        # Denoiser tensors
+        for k, v in self.denoiser.state_dict().items():
+            tensors[f"denoiser.{k}"] = v
+
+        # Flow model tensors (nested, with prefix)
+        flow_tensors, flow_config = self.flow_model.get_save_state()
+        for k, v in flow_tensors.items():
+            tensors[f"flow_model.{k}"] = v
+
+        # Config
+        config = {
+            "num_timesteps": self.config.num_timesteps,
+            "noise_schedule": self.config.noise_schedule,
+            "freeze_flow_model": self.config.freeze_flow_model,
+            "denoiser": asdict(self.config.denoiser),
+            "flow_model": flow_config,
+        }
+
+        return tensors, config
+
+    @classmethod
+    def from_save_state(
+        cls,
+        tensors: dict[str, "torch.Tensor"],
+        config: dict[str, Any],
+        device: str = "cpu",
+    ) -> "LatentDiffusionModel":
+        """Reconstruct model from unified save format.
+
+        Args:
+            tensors: Loaded tensors dict with prefixed keys.
+            config: Loaded config dict.
+            device: Device to load model to.
+
+        Returns:
+            Reconstructed LatentDiffusionModel.
+        """
+        from ciffy.nn.flow import PolymerFlowModel
+
+        # Extract flow model tensors and reconstruct
+        flow_tensors = {
+            k[len("flow_model."):]: v
+            for k, v in tensors.items()
+            if k.startswith("flow_model.")
+        }
+        flow_model = PolymerFlowModel.from_save_state(
+            flow_tensors, config["flow_model"], device=device
+        )
+
+        # Build config
+        denoiser_config = LatentDenoiserConfig(**config["denoiser"])
+        model_config = LatentDiffusionConfig(
+            denoiser=denoiser_config,
+            num_timesteps=config["num_timesteps"],
+            noise_schedule=config["noise_schedule"],
+            freeze_flow_model=config["freeze_flow_model"],
+        )
+
+        # Create model
+        model = cls(model_config, flow_model=flow_model)
+
+        # Load denoiser weights
+        denoiser_tensors = {
+            k[len("denoiser."):]: v
+            for k, v in tensors.items()
+            if k.startswith("denoiser.")
+        }
+        model.denoiser.load_state_dict(denoiser_tensors)
+
+        return model.to(device)
 
 
 __all__ = [

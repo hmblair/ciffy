@@ -47,7 +47,7 @@ Example (stateful lazy API):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import numpy as np
 import torch
@@ -58,6 +58,7 @@ from ciffy.nn.flow.residue.data import (
     position_next_residue,
     position_next_residue_torch,
 )
+from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -82,6 +83,7 @@ def _normalize_key(key) -> int:
     return key.value
 
 
+@register_model("polymer_flow")
 class PolymerFlowModel(nn.Module):
     """
     Orchestrates per-residue flow models for full polymer encoding/decoding.
@@ -753,6 +755,99 @@ class PolymerFlowModel(nn.Module):
                 path / res_name,
                 device=device,
                 jit=jit,
+            )
+
+        return cls(residue_models)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Unified Save/Load (SaveableModel protocol)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_save_state(self) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+        """Get state for unified save format.
+
+        Returns:
+            Tuple of (tensors_dict, config_dict) for safetensors serialization.
+        """
+        from ciffy.biochemistry import Residue
+
+        tensors = {}
+        residue_configs = {}
+
+        for res_type_str, model in self.residue_models.items():
+            res_name = Residue.from_index(int(res_type_str)).name
+
+            # Prefix all tensors with residue name
+            for k, v in model.flow.state_dict().items():
+                tensors[f"{res_name}.{k}"] = v
+
+            # Store per-residue config
+            residue_configs[res_name] = {
+                "atom_indices": [int(x) for x in model._atom_indices],
+                "n_atoms": model.n_atoms,
+                "n_layers": len(model.flow.layers) // 2,
+                "hidden_dim": model.flow.layers[1].net.net[0].out_features,
+                "bound": float(model.flow.bound) if model.flow.bound is not None else None,
+            }
+
+        config = {
+            "latent_dim": self.latent_dim,
+            "residues": residue_configs,
+        }
+
+        return tensors, config
+
+    @classmethod
+    def from_save_state(
+        cls,
+        tensors: dict[str, torch.Tensor],
+        config: dict[str, Any],
+        device: str = "cpu",
+    ) -> "PolymerFlowModel":
+        """Reconstruct model from unified save format.
+
+        Args:
+            tensors: Loaded tensors dict with prefixed keys.
+            config: Loaded config dict.
+            device: Device to load model to.
+
+        Returns:
+            Reconstructed PolymerFlowModel.
+        """
+        from ciffy.biochemistry import Residue
+        from ciffy.nn.flow.residue import ResidueFlowModel, PCAFlow
+
+        residue_models = {}
+
+        for res_name, res_config in config["residues"].items():
+            res_type = getattr(Residue, res_name)
+
+            # Extract tensors for this residue
+            prefix = f"{res_name}."
+            res_tensors = {
+                k[len(prefix):]: v
+                for k, v in tensors.items()
+                if k.startswith(prefix)
+            }
+
+            # Reconstruct PCAFlow
+            V = res_tensors["V"].float()
+            mean = res_tensors["mean"].float()
+
+            flow = PCAFlow(
+                V, mean,
+                n_layers=res_config["n_layers"],
+                hidden_dim=res_config["hidden_dim"],
+                bound=res_config["bound"],
+            ).to(device)
+            flow.load_state_dict(res_tensors)
+
+            # Create ResidueFlowModel
+            residue_models[res_type.value] = ResidueFlowModel(
+                flow=flow,
+                residue=res_type,
+                atom_indices=res_config["atom_indices"],
+                n_atoms=res_config["n_atoms"],
             )
 
         return cls(residue_models)

@@ -55,6 +55,8 @@ def register_model(name: str) -> Callable[[type], type]:
                 f"Model '{name}' is already registered to {_MODEL_REGISTRY[name].__name__}"
             )
         _MODEL_REGISTRY[name] = cls
+        # Store model type on class for save/load
+        cls._model_type = name
         return cls
 
     return decorator

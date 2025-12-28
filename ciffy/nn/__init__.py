@@ -79,7 +79,8 @@ from .runners import (
 from .protocols import PolymerGenerativeModel, PolymerEncoder, PolymerPropertyPredictor
 from .schedulers import create_scheduler, get_current_lr
 from .early_stopping import EarlyStopper
-from .model_registry import register_model, get_model_class
+from .model_registry import register_model, get_model_class, list_registered_models
+from .model_io import save_model, load_model, get_model_info, SaveableModel
 from .inference import load_model_from_checkpoint, generate_samples
 from .inference_config import InferenceConfig
 from .split import DataSplit, DataScalingSplit, split_by_structure, create_scaling_split
@@ -163,8 +164,14 @@ __all__ = [
     "PolymerGenerativeModel",
     "PolymerEncoder",
     "PolymerPropertyPredictor",
+    "SaveableModel",
     "register_model",
     "get_model_class",
+    "list_registered_models",
+    # Model I/O
+    "save_model",
+    "load_model",
+    "get_model_info",
     # Schedulers and early stopping
     "create_scheduler",
     "get_current_lr",

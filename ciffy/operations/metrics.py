@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, is_numpy, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp, stack
+from ..backend import Array, is_torch, is_numpy, svd, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp, clone
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -293,26 +293,98 @@ def _get_molecule_type(polymer: Polymer) -> Molecule:
 # RMSD (Root Mean Square Deviation)
 # =============================================================================
 
-def _rmsd_single(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
+def _rmsd_coords(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
     """
-    Compute Kabsch-aligned RMSD between two coordinate sets.
+    Compute Kabsch-aligned RMSD between coordinate sets.
 
-    This is the core RMSD computation used by both Polymer and array versions.
+    Supports both single pairs (N, 3) and batched inputs (B, N, 3).
 
     Args:
-        coords1: First coordinates, shape (N, 3).
-        coords2: Second coordinates, shape (N, 3).
+        coords1: First coordinates, shape (N, 3) or (B, N, 3).
+        coords2: Second coordinates, shape (N, 3) or (B, N, 3).
         eps: Small value added before sqrt for gradient stability.
 
     Returns:
-        Scalar RMSD value as a 0-d array (preserves gradients for torch).
+        RMSD value(s). Shape () for 2D input, (B,) for 3D input.
     """
-    from .alignment import kabsch_align
+    # Handle both 2D and 3D by adding batch dim if needed
+    squeeze = coords1.ndim == 2
+    if squeeze:
+        coords1 = coords1[None, :, :]  # (1, N, 3)
+        coords2 = coords2[None, :, :]
 
-    aligned, _, _ = kabsch_align(coords1, coords2, center=True)
+    # Center coordinates: mean over atoms (axis=1)
+    if is_torch(coords1):
+        centroid1 = coords1.mean(dim=1, keepdim=True)
+        centroid2 = coords2.mean(dim=1, keepdim=True)
+    else:
+        centroid1 = coords1.mean(axis=1, keepdims=True)
+        centroid2 = coords2.mean(axis=1, keepdims=True)
+
+    c1 = coords1 - centroid1  # (B, N, 3)
+    c2 = coords2 - centroid2  # (B, N, 3)
+
+    # Cross-covariance: H = c1^T @ c2, batched as (B, 3, N) @ (B, N, 3) -> (B, 3, 3)
+    if is_torch(c1):
+        H = c1.transpose(-2, -1) @ c2
+    else:
+        H = np.swapaxes(c1, -2, -1) @ c2
+
+    # Batched SVD
+    try:
+        U, S, Vt = svd(H)
+    except Exception as e:
+        if has_nan(H) or has_inf(H):
+            raise ValueError(
+                "RMSD failed: covariance matrix contains NaN or infinity. "
+                "Check input coordinates for invalid values."
+            ) from e
+        raise ValueError(
+            "RMSD failed: SVD did not converge. "
+            "This may indicate extreme coordinate values causing overflow."
+        ) from e
+
+    # Optimal rotation: R = V @ U^T -> (B, 3, 3)
+    if is_torch(Vt):
+        R = Vt.transpose(-2, -1) @ U.transpose(-2, -1)
+    else:
+        R = np.swapaxes(Vt, -2, -1) @ np.swapaxes(U, -2, -1)
+
+    # Handle reflection case (det(R) < 0)
+    d = det(R)
+    Vt = clone(Vt)
+    if is_torch(Vt):
+        mask = d < 0
+        Vt[mask, -1, :] *= -1
+        R = Vt.transpose(-2, -1) @ U.transpose(-2, -1)
+    else:
+        mask = d < 0
+        Vt[mask, -1, :] *= -1
+        R = np.swapaxes(Vt, -2, -1) @ np.swapaxes(U, -2, -1)
+
+    # Apply rotation: aligned = c1 @ R^T + centroid2
+    if is_torch(R):
+        aligned = c1 @ R.transpose(-2, -1) + centroid2
+    else:
+        aligned = c1 @ np.swapaxes(R, -2, -1) + centroid2
+
+    # Compute RMSD
     diff = aligned - coords2
-    msd = (diff ** 2).mean()
-    return sqrt(clamp(msd, min_val=0.0) + eps)
+    if is_torch(diff):
+        msd = (diff ** 2).mean(dim=(-2, -1))  # Mean over N and 3
+    else:
+        msd = (diff ** 2).mean(axis=(-2, -1))
+
+    result = sqrt(clamp(msd, min_val=0.0) + eps)
+
+    # Remove batch dim if input was 2D
+    if squeeze:
+        if is_torch(result):
+            result = result.squeeze(0)
+        else:
+            result = result.squeeze()
+
+    return result
 
 
 def coordinate_covariance(
@@ -443,19 +515,15 @@ def _rmsd_array(a: Array, b: Array, scale=None, eps: float = 0.0) -> Array:
         raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
 
     if a.ndim == 2:
-        # Single pair: (N, 3)
         if a.shape[1] != 3:
             raise ValueError(f"Expected shape (N, 3), got {a.shape}")
-        return _rmsd_single(a, b, eps=eps)
-
     elif a.ndim == 3:
-        # Batch: (B, N, 3)
         if a.shape[2] != 3:
             raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-        return stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
-
     else:
         raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
+
+    return _rmsd_coords(a, b, eps=eps)
 
 
 _rmsd_dispatch.register(np.ndarray, _rmsd_array)

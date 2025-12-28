@@ -4,6 +4,7 @@ CIF file loading functionality.
 
 from __future__ import annotations
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Union, List
 
 import numpy as np
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from ..biochemistry import Molecule
 
 def load(
-    file: str,
+    file: str | Path,
     backend: str | None = None,
     load_descriptions: bool = False,
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
@@ -94,6 +95,10 @@ def load(
     from ..polymer import Polymer
     from ..biochemistry import Scale, Molecule
     from .._c import _load
+
+    # Convert Path to str for C extension compatibility
+    if isinstance(file, Path):
+        file = str(file)
 
     # Handle backend parameter
     if backend is None:
@@ -196,7 +201,7 @@ def load(
     return polymer
 
 
-def load_metadata(file: str) -> dict:
+def load_metadata(file: str | Path) -> dict:
     """
     Load only metadata from a CIF file (fast path for indexing).
 
@@ -233,6 +238,10 @@ def load_metadata(file: str) -> dict:
         Molecule types: [0 0 0 0 0]  # All protein
     """
     from .._c import _load
+
+    # Convert Path to str for C extension compatibility
+    if isinstance(file, Path):
+        file = str(file)
 
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')

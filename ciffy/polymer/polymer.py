@@ -199,19 +199,19 @@ class Polymer:
         """
         Initialize a Polymer structure.
 
-        When called with no arguments, creates an empty Polymer with 0 atoms
-        and 0 chains. Otherwise, all Field and Metadata descriptors defined
-        on the class can be passed as keyword arguments.
+        When called with no arguments (or only pdb_id), creates an empty
+        Polymer with 0 atoms and 0 chains. Otherwise, a hierarchy must be
+        provided along with the field data.
 
         Args:
             hierarchy: _Hierarchy object containing scale bookkeeping.
-                If None, creates an empty polymer.
+                If None, creates an empty polymer (only pdb_id allowed).
             **fields: Field and Metadata values matching class descriptors:
                 - coordinates: (N, 3) array of atom positions.
                 - atoms: (N,) array of atom type indices.
                 - elements: (N,) array of element indices.
                 - sequence: (R,) array of residue type indices.
-                - pdb_id: PDB identifier string (optional).
+                - pdb_id: PDB identifier string (optional, allowed without hierarchy).
                 - names: List of chain names.
                 - strands: List of strand identifiers.
                 - molecule_types: (C,) array of molecule types per chain.
@@ -220,8 +220,8 @@ class Polymer:
                 - resolution: Structure resolution in Angstroms.
 
         Raises:
-            TypeError: If required fields are missing or unknown fields provided.
-            ValueError: If field sizes are inconsistent.
+            TypeError: If fields other than pdb_id are passed without hierarchy.
+            ValueError: If field sizes are inconsistent with hierarchy.
 
         Example:
             >>> empty = Polymer()
@@ -230,8 +230,15 @@ class Polymer:
             >>> empty.size(Scale.CHAIN)
             0
         """
-        # Create empty hierarchy if not provided
+        # Validate: only pdb_id allowed without hierarchy
         if hierarchy is None:
+            invalid_fields = [k for k in fields if k != 'pdb_id']
+            if invalid_fields:
+                raise TypeError(
+                    f"Cannot pass {invalid_fields} without hierarchy. "
+                    f"Only 'pdb_id' is allowed for empty polymers."
+                )
+            # Create empty hierarchy
             ref = np.zeros((0, 3), dtype=np.float32)
             hierarchy = _Hierarchy.from_sizes_and_lengths(
                 sizes={

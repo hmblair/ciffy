@@ -655,6 +655,10 @@ class Polymer:
             return arr_size(self.coordinates, 0)
         return self._hierarchy.size(scale)
 
+    def __len__(self: Polymer) -> int:
+        """Return the number of atoms."""
+        return self.size()
+
     def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:
         """
         Get counts at a scale, optionally per outer unit.

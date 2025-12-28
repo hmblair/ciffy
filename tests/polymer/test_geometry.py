@@ -7,7 +7,7 @@ Tests pairwise_distances, knn, center, align, and moment.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif, BACKENDS, random_coordinates
+from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly
 from tests.testing import get_tolerances
 
 
@@ -18,7 +18,7 @@ class TestPairwiseDistances:
         """pairwise_distances with 1 atom returns 1x1 zero matrix."""
         import ciffy
 
-        p = ciffy.from_sequence("g", backend=backend)
+        p = get_single_chain_poly(backend)
         single = p[:1]
 
         dists = single.pairwise_distances()
@@ -31,7 +31,7 @@ class TestPairwiseDistances:
         """pairwise_distances with 2 atoms returns 2x2 symmetric matrix."""
         import ciffy
 
-        p = ciffy.from_sequence("ac", backend=backend)
+        p = get_single_chain_poly(backend)
         # Take first 2 atoms
         two = p[:2]
 
@@ -52,7 +52,7 @@ class TestPairwiseDistances:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         n_res = p.size(Scale.RESIDUE)
 
         dists = p.pairwise_distances(scale=Scale.RESIDUE)
@@ -83,7 +83,7 @@ class TestKNN:
         """knn raises ValueError when k >= n."""
         import ciffy
 
-        p = ciffy.from_sequence("ac", backend=backend)
+        p = get_single_chain_poly(backend)
         n = p.size()
 
         with pytest.raises(ValueError, match="must be less than"):
@@ -93,7 +93,7 @@ class TestKNN:
         """knn raises ValueError when k > n."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         n = p.size()
 
         with pytest.raises(ValueError, match="must be less than"):
@@ -103,7 +103,7 @@ class TestKNN:
         """knn on single atom raises ValueError."""
         import ciffy
 
-        p = ciffy.from_sequence("g", backend=backend)[:1]
+        p = get_single_chain_poly(backend)[:1]
 
         with pytest.raises(ValueError):
             p.knn(k=1)
@@ -136,7 +136,7 @@ class TestKNN:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acguacgu", backend=backend)
+        p = get_single_chain_poly(backend, "acguacgu")  # 8 residues for k=3
         n_res = p.size(Scale.RESIDUE)
         k = min(3, n_res - 1)
 
@@ -210,7 +210,7 @@ class TestCenter:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = get_single_chain_poly(backend)
         # Give non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend, scale=1.0)
 
@@ -329,7 +329,7 @@ class TestWithCoordinates:
         """with_coordinates creates new polymer with new coords."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         original_coords = np.asarray(p.coordinates).copy()
 
         np.random.seed(42)
@@ -352,7 +352,7 @@ class TestWithCoordinates:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         np.random.seed(42)
         if backend == "torch":
@@ -586,7 +586,7 @@ class TestScale:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         n_res = p.size(Scale.RESIDUE)
         scaled, stds = p.scale(Scale.RESIDUE)
 
@@ -748,8 +748,8 @@ class TestAlignFunction:
         """align raises ValueError for different-sized polymers."""
         import ciffy
 
-        p1 = ciffy.from_sequence("acgu", backend=backend)
-        p2 = ciffy.from_sequence("acguacgu", backend=backend)
+        p1 = get_single_chain_poly(backend)
+        p2 = get_single_chain_poly(backend, "acguacgu")
 
         with pytest.raises(ValueError, match="same size"):
             ciffy.align(p1, p2)

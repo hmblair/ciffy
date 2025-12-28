@@ -209,3 +209,27 @@ def skip_if_no_device(device: str) -> None:
         pytest.skip("CUDA not available")
     elif device == "mps" and not mps_available():
         pytest.skip("MPS not available")
+
+
+# =============================================================================
+# Test polymer helpers
+# =============================================================================
+
+def get_single_chain_poly(backend: str = "numpy", sequence: str = "acgu"):
+    """Get a small single-chain polymer with random coordinates.
+
+    Use this for tests that need a polymer with coordinates but aren't
+    specifically testing template generation.
+
+    Args:
+        backend: "numpy" or "torch"
+        sequence: Sequence string (default "acgu" for 4-residue RNA)
+
+    Returns:
+        Polymer with random coordinates, single chain.
+    """
+    import ciffy
+
+    template = ciffy.from_sequence(sequence, backend=backend)
+    coords = random_coordinates(template.size(), backend, scale=10.0)
+    return template.with_coordinates(coords)

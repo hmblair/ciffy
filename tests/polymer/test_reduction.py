@@ -7,7 +7,7 @@ Tests reduce, rreduce, expand, and count methods.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif, BACKENDS
+from tests.utils import get_test_cif, BACKENDS, get_single_chain_poly
 
 
 class TestReduce:
@@ -18,7 +18,7 @@ class TestReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = get_single_chain_poly(backend, "a")  # Single residue
         result = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
 
         assert result.shape == (1, 3)
@@ -28,7 +28,7 @@ class TestReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         result = p.reduce(p.coordinates, Scale.CHAIN, Reduction.MEAN)
 
         assert result.shape == (1, 3)
@@ -38,7 +38,7 @@ class TestReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         result = p.reduce(p.coordinates, Scale.MOLECULE, Reduction.MEAN)
 
         assert result.shape == (1, 3)
@@ -48,7 +48,7 @@ class TestReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         mean = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
         summed = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.SUM)
@@ -107,7 +107,7 @@ class TestResidueReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = get_single_chain_poly(backend)
         # Create per-residue feature
         residue_feature = p.sequence.float() if backend == "torch" else p.sequence.astype(np.float32)
 
@@ -119,7 +119,7 @@ class TestResidueReduce:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # Create dummy per-residue features
         if backend == "torch":
@@ -164,7 +164,7 @@ class TestExpand:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # Create per-chain feature (single chain)
         if backend == "torch":
@@ -189,7 +189,7 @@ class TestExpand:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # Create per-residue features
         n_res = p.size(Scale.RESIDUE)
@@ -208,7 +208,7 @@ class TestExpand:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # Per-chain feature
         if backend == "torch":
@@ -226,7 +226,7 @@ class TestExpand:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         if backend == "torch":
             import torch
@@ -246,7 +246,7 @@ class TestCount:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         if backend == "torch":
             import torch
@@ -265,7 +265,7 @@ class TestCount:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         if backend == "torch":
             import torch
@@ -309,7 +309,7 @@ class TestCount:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # Mask only first half of atoms
         n = p.size()
@@ -336,7 +336,7 @@ class TestPer:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         result = p.counts(Scale.RESIDUE, per=Scale.RESIDUE)
 
         # Should be all ones
@@ -349,7 +349,7 @@ class TestPer:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         result = p.counts(Scale.CHAIN)
 
         # Single chain, should have one element
@@ -363,7 +363,7 @@ class TestPer:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
         result = p.counts(Scale.RESIDUE, per=Scale.CHAIN)
 
         # Should match lengths attribute
@@ -377,7 +377,7 @@ class TestPer:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = get_single_chain_poly(backend)
 
         # CHAIN per RESIDUE doesn't make sense
         with pytest.raises(ValueError):

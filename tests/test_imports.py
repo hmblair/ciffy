@@ -216,20 +216,20 @@ class TestAtomGroup:
         from ciffy.biochemistry import Sugar, PurineBase, PyrimidineBase
 
         polymer = from_sequence("acgu")
-        total_atoms = polymer.coordinates.shape[0]
+        total_atoms = polymer.size()
 
         # Select sugar atoms - should be present in all 4 residues
         sugar = polymer.by_atom(Sugar.index())
-        assert sugar.coordinates.shape[0] > 0
-        assert sugar.coordinates.shape[0] < total_atoms
+        assert sugar.size() > 0
+        assert sugar.size() < total_atoms
 
         # Select purine base atoms - only A and G
         purine = polymer.by_atom(PurineBase.index())
-        assert purine.coordinates.shape[0] > 0
+        assert purine.size() > 0
 
         # Select pyrimidine base atoms - only C and U
         pyrimidine = polymer.by_atom(PyrimidineBase.index())
-        assert pyrimidine.coordinates.shape[0] > 0
+        assert pyrimidine.size() > 0
 
         # Purine + pyrimidine should not overlap (different chemical identity)
         purine_values = set(PurineBase.index().tolist())
@@ -245,11 +245,11 @@ class TestAtomGroup:
 
         # Select all C5' atoms (one per residue)
         c5p = polymer.by_atom(Sugar.C5p.index())
-        assert c5p.coordinates.shape[0] == 4  # One per residue
+        assert c5p.size() == 4  # One per residue
 
         # Select all purine N1 atoms (only A and G have purine N1)
         n1_purine = polymer.by_atom(PurineBase.N1.index())
-        assert n1_purine.coordinates.shape[0] == 2  # A and G only
+        assert n1_purine.size() == 2  # A and G only
 
     def test_iteration_and_containment(self):
         """Test __iter__ and __contains__ on AtomGroup (hierarchical)."""

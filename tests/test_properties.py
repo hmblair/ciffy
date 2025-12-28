@@ -36,13 +36,18 @@ class TestBfactors:
 
         assert polymer.bfactors.shape == (polymer.size(),)
 
-    def test_bfactors_none_for_template(self, backend):
-        """bfactors is None for template-generated polymers."""
+    def test_bfactors_raises_for_template(self, backend):
+        """bfactors raises AttributeError for template-generated polymers."""
         from ciffy import from_sequence
 
         polymer = from_sequence("acgu", backend=backend)
 
-        assert polymer.bfactors is None
+        # Templates don't have bfactors - accessing raises AttributeError
+        with pytest.raises(AttributeError, match="bfactors"):
+            _ = polymer.bfactors
+
+        # But the private attribute returns None
+        assert polymer._bfactors is None
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_bfactors_preserved_after_selection(self, cif_file, backend):

@@ -66,6 +66,9 @@ from .constants import (
 # Canonical residue lists
 from .constants import CANONICAL_ALL
 
+# Van der Waals radii
+from .constants import VDW_RADII, VDW_RADII_ARRAY
+
 from .linking import (
     LinkingDefinition,
     NUCLEIC_ACID_LINK,
@@ -117,6 +120,9 @@ __all__ = [
     "PyrimidineBase",
     # Canonical residue lists
     "CANONICAL_ALL",
+    # Van der Waals radii
+    "VDW_RADII",
+    "VDW_RADII_ARRAY",
     # Linking
     "LinkingDefinition",
     "NUCLEIC_ACID_LINK",

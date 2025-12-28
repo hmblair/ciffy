@@ -37,16 +37,14 @@ UNKNOWN = "UNKNOWN"
 class _BaseDescriptor:
     """Base class for Polymer field/metadata descriptors."""
 
-    __slots__ = ('scale', 'required', 'is_list', 'name', 'private_name')
+    __slots__ = ('scale', 'is_list', 'name', 'private_name')
 
     def __init__(
         self,
         scale: Scale,
-        required: bool = False,
         is_list: bool = False,
     ):
         self.scale = scale
-        self.required = required
         self.is_list = is_list
         self.name = ""
         self.private_name = ""
@@ -59,7 +57,7 @@ class _BaseDescriptor:
         if obj is None:
             return self  # Class-level access returns descriptor
         value = getattr(obj, self.private_name, None)
-        if value is None and self.required:
+        if value is None:
             raise AttributeError(f"'{self.name}' is not available on this Polymer")
         return value
 
@@ -74,11 +72,13 @@ class Field(_BaseDescriptor):
     Fields describe arrays at different scales (atom, residue, chain) with dtype
     information for backend conversion between NumPy and PyTorch.
 
+    Accessing a field that is None raises AttributeError. Use the private attribute
+    (e.g., `_coordinates`) to check without raising.
+
     Args:
         scale: Scale at which the field is defined (Scale.ATOM, RESIDUE, CHAIN).
         dtype: Data type category (Dtype.FLOAT or Dtype.INT). Precision is
             preserved from the source array during backend conversion.
-        required: Whether the field must have a value (raises AttributeError if None).
         validate: Whether to validate backend/device compatibility on set.
 
     Example:
@@ -92,10 +92,9 @@ class Field(_BaseDescriptor):
         self,
         scale: Scale,
         dtype: Dtype | None = None,
-        required: bool = False,
         validate: bool = True,
     ):
-        super().__init__(scale, required, is_list=False)
+        super().__init__(scale, is_list=False)
         self.dtype = dtype
         self.validate = validate
 
@@ -108,7 +107,7 @@ class Field(_BaseDescriptor):
         setattr(obj, self.private_name, value)
 
     def __repr__(self):
-        return f"Field({self.scale.name}, dtype={self.dtype}, required={self.required})"
+        return f"Field({self.scale.name}, dtype={self.dtype})"
 
 
 class Metadata(_BaseDescriptor):
@@ -118,9 +117,10 @@ class Metadata(_BaseDescriptor):
     Metadata describes simple values like scalars, strings, or lists that don't need
     backend conversion but still need proper slicing behavior.
 
+    Unlike Field, accessing metadata that is None returns None (not an error).
+
     Args:
         scale: Scale at which the metadata is defined (Scale.CHAIN, MOLECULE).
-        required: Whether the metadata must have a value.
         is_list: True for Python list fields (names, strands, descriptions).
 
     Example:
@@ -128,8 +128,14 @@ class Metadata(_BaseDescriptor):
         >>> names = Metadata(Scale.CHAIN, is_list=True)
     """
 
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self  # Class-level access returns descriptor
+        # Metadata returns None if not set (unlike Field which raises)
+        return getattr(obj, self.private_name, None)
+
     def __repr__(self):
-        return f"Metadata({self.scale.name}, required={self.required}, is_list={self.is_list})"
+        return f"Metadata({self.scale.name}, is_list={self.is_list})"
 
 
 class Polymer:
@@ -217,20 +223,13 @@ class Polymer:
             ValueError: If field sizes are inconsistent.
         """
         # Assign all descriptor fields from kwargs
-        missing = []
         for name, desc in self._get_descriptors().items():
             if name in fields:
                 value = fields.pop(name)
                 setattr(self, desc.private_name, value)
-            elif desc.required:
-                missing.append(name)
             else:
                 setattr(self, desc.private_name, None)
 
-        if missing:
-            raise TypeError(
-                f"__init__() missing required keyword arguments: {missing}"
-            )
         if fields:
             raise TypeError(
                 f"__init__() got unexpected keyword arguments: {list(fields.keys())}"
@@ -1047,7 +1046,7 @@ class Polymer:
 
         # Handle slice
         if isinstance(selector, slice):
-            mask = ops.zeros(max_size, like=self.coordinates, dtype='bool')
+            mask = ops.zeros(max_size, like=self._hierarchy._ref, dtype='bool')
             mask[selector] = True
             return mask
 
@@ -1076,7 +1075,7 @@ class Polymer:
                     f"{scale.name} index {ix} out of range for Polymer with {max_size} {scale.name.lower()}s"
                 )
 
-        mask = ops.zeros(max_size, like=self.coordinates, dtype='bool')
+        mask = ops.zeros(max_size, like=self._hierarchy._ref, dtype='bool')
         for ix in indices:
             mask[ix] = True
         return mask
@@ -1421,17 +1420,20 @@ class Polymer:
         name: str = "A",
     ) -> Polymer:
         """
-        Append a residue to the end of a polymer.
+        Append a residue to the end of a polymer (for autoregressive generation).
 
         Creates a new Polymer with an additional residue. If the polymer is empty,
         creates the first residue. Otherwise, positions the residue relative to
         the last residue using the provided transform.
 
+        Note: This method requires the polymer to have coordinates. For templates
+        (from from_sequence()), use with_coordinates() first.
+
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
             coords: (n_atoms, 3) coordinates of the residue in its local frame.
             transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
-                Use linear_extend_transform() to compute this for ideal chains.
+                Typically predicted by a generative model.
                 Required when extending a non-empty polymer, ignored for empty.
             atoms: Atom type indices. Required for non-empty polymers with atom data.
             elements: Element indices. Required for non-empty polymers with element data.
@@ -1441,22 +1443,23 @@ class Polymer:
             New Polymer with the residue appended.
 
         Raises:
+            AttributeError: If polymer has no coordinates.
             ValueError: If polymer has multiple chains, has HETATM atoms,
                 or required parameters are missing.
 
         Example:
             >>> from ciffy import Residue, Polymer
-            >>> from ciffy.polymer import expand_residue, linear_extend_transform
+            >>> from ciffy.polymer import expand_residue
             >>>
             >>> # Start from empty polymer
             >>> poly = Polymer.create_empty()
             >>> atoms, elements, coords = expand_residue(Residue.A)
             >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
             >>>
-            >>> # Extend with more residues
-            >>> atoms2, elements2, coords2 = expand_residue(Residue.C, start_terminal=False)
-            >>> transform = linear_extend_transform(...)
-            >>> poly = poly.extend(Residue.C, coords2, transform, atoms2, elements2)
+            >>> # Extend with model-predicted coordinates and transform
+            >>> atoms2, elements2, _ = expand_residue(Residue.C, start_terminal=False)
+            >>> predicted_coords, predicted_transform = model.predict(...)
+            >>> poly = poly.extend(Residue.C, predicted_coords, predicted_transform, atoms2, elements2)
         """
         from ..geometry import position_residue_fast
         from ..biochemistry.linking import LINKING_BY_TYPE
@@ -1481,8 +1484,7 @@ class Polymer:
         # Transform is required for non-empty polymers
         if transform is None:
             raise ValueError(
-                "transform is required when extending a non-empty polymer. "
-                "Use linear_extend_transform() to compute it."
+                "transform is required when extending a non-empty polymer."
             )
 
         # Validate atoms/elements are provided when required
@@ -1651,7 +1653,7 @@ class Polymer:
         Returns:
             List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
         """
-        mol_types = to_numpy(self.molecule_types) if self.molecule_types is not None else None
+        mol_types = to_numpy(self.molecule_types) if self._molecule_types is not None else None
         residue_counts = to_numpy(self.lengths)
         atom_counts = to_numpy(self._hierarchy.sizes(Scale.CHAIN))
         elements = to_numpy(self.elements)
@@ -1720,8 +1722,7 @@ class Polymer:
         Returns:
             New Polymer with NumPy arrays. If already NumPy, returns self.
         """
-        from ..backend import is_numpy
-        if is_numpy(self.coordinates):
+        if self.backend == "numpy":
             return self
 
         converted = self._convert_backend(to_numpy)
@@ -1738,8 +1739,8 @@ class Polymer:
         Raises:
             ImportError: If PyTorch is not installed.
         """
-        from ..backend import to_torch, is_torch
-        if is_torch(self.coordinates):
+        from ..backend import to_torch
+        if self.backend == "torch":
             return self
 
         converted = self._convert_backend(to_torch)
@@ -1768,8 +1769,7 @@ class Polymer:
             >>> p_fp16 = p.to(dtype=torch.float16)
             >>> p_gpu_fp16 = p.to("cuda", torch.float16)
         """
-        from ..backend import is_torch
-        if not is_torch(self.coordinates):
+        if self.backend != "torch":
             raise ValueError("to() is only supported for torch backend. "
                            "Use polymer.torch().to(...) to convert first.")
 
@@ -1901,6 +1901,9 @@ class Polymer:
         """
         Create a copy with new coordinates.
 
+        Can be used to add coordinates to a template (from from_sequence())
+        or to replace coordinates on an existing polymer.
+
         Args:
             coordinates: New coordinate tensor. Must match the polymer's
                 backend and device.
@@ -1913,7 +1916,9 @@ class Polymer:
             ValueError: If device doesn't match (for PyTorch tensors).
         """
         # Validate backend and device compatibility
-        check_compatible(self.coordinates, coordinates, "coordinates")
+        # Use atoms as reference if coordinates is None (template case)
+        ref = self._coordinates if self._coordinates is not None else self.atoms
+        check_compatible(ref, coordinates, "coordinates")
 
         result = copy(self)
         result._coordinates = coordinates

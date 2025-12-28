@@ -98,11 +98,12 @@ class TestFromSequence:
         polymer = from_sequence("acgu", backend=backend)
         assert polymer.backend == backend
 
+        # Templates have atoms but no coordinates
         if backend == "numpy":
-            assert isinstance(polymer.coordinates, np.ndarray)
+            assert isinstance(polymer.atoms, np.ndarray)
         else:
             import torch
-            assert isinstance(polymer.coordinates, torch.Tensor)
+            assert isinstance(polymer.atoms, torch.Tensor)
 
     @pytest.mark.parametrize("id_arg,expected_id", [
         ("my_rna", "my_rna"),
@@ -195,10 +196,14 @@ class TestFromSequenceIntegration:
     """Integration tests for template polymers."""
 
     def test_can_write_to_cif(self, tmp_path):
-        """Test template polymer can be written to CIF."""
+        """Test polymer with coordinates can be written to CIF."""
         from ciffy import from_sequence
+        import numpy as np
 
-        polymer = from_sequence("acgu", id="test_rna")
+        template = from_sequence("acgu", id="test_rna")
+        # Add coordinates to template
+        coords = np.random.randn(template.size(), 3).astype(np.float32)
+        polymer = template.with_coordinates(coords)
         output_path = tmp_path / "test.cif"
 
         # Should not raise
@@ -399,7 +404,8 @@ class TestFromSequenceMultiChain:
 
         assert polymer.backend == "torch"
         assert polymer.size(Scale.CHAIN) == 2
-        assert isinstance(polymer.coordinates, torch.Tensor)
+        # Templates have atoms (tensors) but no coordinates
+        assert isinstance(polymer.atoms, torch.Tensor)
 
     def test_atoms_per_chain(self):
         """Test atoms are correctly distributed per chain."""
@@ -635,72 +641,6 @@ class TestBondsAndLinking:
         # In v2, bonds is a numpy array of shape (n_bonds, 2)
         assert Residue.A.bonds.shape[1] == 2  # Each bond has 2 atoms
 
-    def test_chain_extends_linearly(self):
-        """Test that chain extends linearly without overlapping residues."""
-        import numpy as np
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence("aaaa")
-        res_sizes = list(polymer.counts(Scale.RESIDUE))
-
-        # Compute centroids of each residue
-        centroids = []
-        offset = 0
-        for size in res_sizes:
-            centroids.append(polymer.coordinates[offset:offset + size].mean(axis=0))
-            offset += size
-
-        # Check that consecutive residues are properly spaced
-        for i in range(len(centroids) - 1):
-            dist = np.linalg.norm(centroids[i + 1] - centroids[i])
-            assert dist > 5.0, f"Residues {i} and {i+1} too close: {dist:.2f}Å"
-            assert dist < 15.0, f"Residues {i} and {i+1} too far: {dist:.2f}Å"
-
-    def test_rna_residues_spaced(self):
-        """Test that RNA residues are appropriately spaced (no overlapping)."""
-        import numpy as np
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence("aa")
-        res_sizes = list(polymer.counts(Scale.RESIDUE))
-
-        # Get centroids
-        first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
-        second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
-
-        # Distance should be sufficient to avoid clashes
-        distance = np.linalg.norm(second_centroid - first_centroid)
-        assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small"
-
-    @pytest.mark.filterwarnings("ignore:Sequence 'AA' contains only nucleotide")
-    def test_protein_residues_spaced(self):
-        """Test that protein residues are appropriately spaced (no overlapping)."""
-        import numpy as np
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence("AA")
-        res_sizes = list(polymer.counts(Scale.RESIDUE))
-
-        # Get centroids
-        first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
-        second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
-
-        # Distance should be sufficient (proteins are smaller than nucleotides)
-        distance = np.linalg.norm(second_centroid - first_centroid)
-        assert distance > 2.5, f"Centroid distance {distance:.2f}Å too small"
-
-    def test_dna_residues_spaced(self):
-        """Test that DNA residues are appropriately spaced (no overlapping)."""
-        import numpy as np
-        from ciffy import from_sequence, Scale
-
-        polymer = from_sequence("at")  # DNA (has 't')
-        res_sizes = list(polymer.counts(Scale.RESIDUE))
-
-        # Get centroids
-        first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
-        second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
-
-        # Distance should be sufficient to avoid clashes
-        distance = np.linalg.norm(second_centroid - first_centroid)
-        assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small"
+    # Note: Tests for residue spacing were removed because from_sequence()
+    # no longer builds coordinates. Templates are now coordinate-free.
+    # Use Polymer.extend() or load() for polymers with coordinates.

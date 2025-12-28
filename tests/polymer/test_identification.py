@@ -181,15 +181,16 @@ class TestIstype:
             assert not single_rna.istype(Molecule.PROTEIN)
             assert not single_rna.istype(Molecule.DNA)
 
-    def test_istype_raises_without_molecule_types(self, backend):
-        """istype raises ValueError when molecule_types not available."""
+    def test_istype_works_for_templates(self, backend):
+        """istype works for template-generated polymers."""
         from ciffy import from_sequence, Molecule
 
-        # Template polymers don't have molecule_types
+        # Template polymers have molecule_types
         polymer = from_sequence("acgu", backend=backend)
 
-        with pytest.raises(ValueError, match="molecule_types not available"):
-            polymer.istype(Molecule.RNA)
+        # Should work and return True for RNA template
+        assert polymer.istype(Molecule.RNA)
+        assert not polymer.istype(Molecule.PROTEIN)
 
     def test_istype_all_molecule_types(self, backend):
         """istype works with all molecule types."""

@@ -45,8 +45,71 @@ Hierarchical groups:
 
 from typing import Callable
 
+import numpy as np
+
 from .atom import Atom, AtomGroup, build_atom_group
 from ._generated_residues import Residue
+from ._generated_elements import Element
+
+
+# =============================================================================
+# Van der Waals Radii (Bondi, 1964)
+# =============================================================================
+# Reference: Bondi, A. (1964). "van der Waals Volumes and Radii".
+# J. Phys. Chem. 68 (3): 441–451. doi:10.1021/j100785a001
+#
+# Used for clash detection and steric overlap calculations.
+
+VDW_RADII: dict[Element, float] = {
+    # Common organic elements
+    Element.H: 1.20,
+    Element.C: 1.70,
+    Element.N: 1.55,
+    Element.O: 1.52,
+    Element.P: 1.80,
+    Element.S: 1.80,
+    # Halogens
+    Element.F: 1.47,
+    Element.CL: 1.75,
+    Element.BR: 1.85,
+    Element.I: 1.98,
+    # Alkali metals
+    Element.LI: 1.82,
+    Element.NA: 2.27,
+    Element.K: 2.75,
+    Element.RB: 3.03,
+    Element.CS: 3.43,
+    # Alkaline earth metals
+    Element.MG: 1.73,
+    Element.CA: 2.31,
+    Element.SR: 2.49,
+    Element.BA: 2.68,
+    # Transition metals (using covalent + 0.9 Å where Bondi unavailable)
+    Element.MN: 1.97,
+    Element.FE: 1.94,
+    Element.CO: 1.92,
+    Element.NI: 1.84,
+    Element.CU: 1.86,
+    Element.ZN: 1.39,
+    Element.MO: 2.17,
+    Element.AG: 2.11,
+    Element.CD: 2.18,
+    Element.W: 2.18,
+    Element.PT: 2.13,
+    Element.AU: 2.14,
+    Element.HG: 2.23,
+    # Other elements
+    Element.AL: 1.84,
+    Element.SE: 1.90,
+    Element.PB: 2.02,
+}
+
+# Pre-compute array for fast lookup by atomic number
+# Index by atomic number, 0.0 for unknown elements
+_max_atomic_num = max(e.value for e in Element) + 1
+VDW_RADII_ARRAY: np.ndarray = np.zeros(_max_atomic_num, dtype=np.float32)
+for elem, radius in VDW_RADII.items():
+    VDW_RADII_ARRAY[elem.value] = radius
 
 
 # =============================================================================

@@ -33,7 +33,7 @@ def mask(
         Boolean array at dest scale.
     """
     counts = polymer.size(source)
-    objects = ops.zeros(counts, like=polymer.coordinates, dtype='bool')
+    objects = ops.zeros(counts, like=polymer._hierarchy._ref, dtype='bool')
     objects[indices] = True
     return polymer.expand(objects, source, dest)
 

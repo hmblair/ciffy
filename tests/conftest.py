@@ -19,6 +19,7 @@ import pytest
 from tests.utils import (
     get_test_cif, TEST_PDBS, LARGE_PDBS, DATA_DIR,
     BACKENDS, TORCH_AVAILABLE, skip_if_no_torch,
+    get_single_chain_poly, random_coordinates,
 )
 
 
@@ -147,16 +148,14 @@ def single_atom_polymer(backend):
 
 @pytest.fixture
 def single_residue_polymer(backend):
-    """Polymer with 1 residue (multiple atoms)."""
-    from ciffy import from_sequence
-    return from_sequence("a", backend=backend)
+    """Polymer with 1 residue (multiple atoms) and coordinates."""
+    return get_single_chain_poly(backend, "a")
 
 
 @pytest.fixture
 def single_chain_polymer(backend):
-    """Polymer with 1 chain, multiple residues."""
-    from ciffy import from_sequence
-    return from_sequence("acgu", backend=backend)
+    """Polymer with 1 chain, multiple residues and coordinates."""
+    return get_single_chain_poly(backend, "acgu")
 
 
 @pytest.fixture

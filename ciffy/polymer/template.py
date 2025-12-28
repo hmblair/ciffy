@@ -1,8 +1,9 @@
 """
 Template polymer generation from sequences.
 
-Generates Polymer objects with correct atom types, elements, and residue
-sequences using ideal CCD coordinates.
+Generates Polymer templates with correct atom types, elements, and residue
+sequences, but without coordinates. Use Polymer.with_coordinates() to add
+predicted coordinates.
 """
 
 from __future__ import annotations
@@ -153,31 +154,31 @@ def _build_chain(
     atom_filter: dict[int, Sequence[int]] | None = None,
 ) -> dict:
     """
-    Build arrays for a single chain from sequence.
+    Build arrays for a single chain from sequence (no coordinates).
 
     Args:
         sequence: Single-letter sequence string.
         atom_filter: Optional dict mapping residue type to allowed atom values.
 
     Returns:
-        Dict with coordinates, atoms, elements, sequence, sizes.
+        Dict with atoms, elements, sequence, atoms_per_residue, residue_indices, molecule_type.
     """
-    from .builder import expand_residue, linear_extend_transform
+    from .builder import expand_residue
 
     residue_indices, mol_type = _parse_sequence(sequence)
 
     if not residue_indices:
         return {
-            'coordinates': np.empty((0, 3), dtype=np.float32),
             'atoms': np.empty(0, dtype=np.int64),
             'elements': np.empty(0, dtype=np.int64),
-            'sequence': np.empty(0, dtype=np.int64),
             'atoms_per_residue': [],
             'residue_indices': [],
+            'molecule_type': mol_type,
         }
 
-    # Build chain by extending from empty polymer
-    poly = Polymer.create_empty()
+    all_atoms = []
+    all_elements = []
+    atoms_per_residue = []
     n_residues = len(residue_indices)
 
     for i, res_idx in enumerate(residue_indices):
@@ -185,8 +186,8 @@ def _build_chain(
         is_first = (i == 0)
         is_last = (i == n_residues - 1)
 
-        # Get atom data with appropriate terminal filtering
-        atoms, elements, coords = expand_residue(
+        # Get atom data with appropriate terminal filtering (ignore coords)
+        atoms, elements, _ = expand_residue(
             residue, start_terminal=is_first, end_terminal=is_last
         )
 
@@ -196,29 +197,17 @@ def _build_chain(
             keep = [j for j, a in enumerate(atoms) if a in allowed]
             atoms = atoms[keep]
             elements = elements[keep]
-            coords = coords[keep]
 
-        if poly.empty():
-            poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
-        else:
-            # Compute transform for positioning
-            prev_coords, prev_atoms, _, prev_res = poly._residue_slice(-1)
-            transform = linear_extend_transform(prev_coords, prev_atoms, prev_res, atoms, residue)
-            poly = poly.extend(residue, coords, transform, atoms, elements)
+        all_atoms.append(atoms)
+        all_elements.append(elements)
+        atoms_per_residue.append(len(atoms))
 
-    # Extract arrays for return dict
     return {
-        'coordinates': np.asarray(poly.coordinates),
-        'atoms': np.asarray(poly.atoms),
-        'elements': np.asarray(poly.elements),
-        'sequence': np.asarray(poly.sequence),
-        'sizes': {
-            Scale.RESIDUE: np.asarray(poly._sizes[Scale.RESIDUE]),
-            Scale.CHAIN: np.asarray(poly._sizes[Scale.CHAIN]),
-            Scale.MOLECULE: np.asarray(poly._sizes[Scale.MOLECULE]),
-        },
+        'atoms': np.concatenate(all_atoms) if all_atoms else np.empty(0, dtype=np.int64),
+        'elements': np.concatenate(all_elements) if all_elements else np.empty(0, dtype=np.int64),
+        'atoms_per_residue': atoms_per_residue,
         'residue_indices': residue_indices,
-        'atoms_per_residue': list(poly.counts(Scale.RESIDUE)),
+        'molecule_type': mol_type,
     }
 
 
@@ -235,9 +224,9 @@ def from_sequence(
     """
     Generate a template Polymer from a sequence string or list of sequences.
 
-    Creates a Polymer with correct atom types, elements, and residue sequence
-    using ideal CCD coordinates. Useful for generative modeling where coordinates
-    are generated separately.
+    Creates a Polymer template with correct atom types, elements, and residue
+    sequence, but without coordinates. Use Polymer.with_coordinates() to add
+    predicted coordinates.
 
     Args:
         sequence: Single-letter sequence string, or list of strings for multi-chain.
@@ -252,12 +241,14 @@ def from_sequence(
         atoms: Optional dict mapping residue type (int) to atom values to include.
 
     Returns:
-        Polymer with ideal CCD coordinates.
+        Polymer template (coordinates=None). Use with_coordinates() to add coords.
 
     Examples:
-        >>> rna = from_sequence("acgu")
-        >>> rna.size(Scale.RESIDUE)
+        >>> template = from_sequence("acgu")
+        >>> template.size(Scale.RESIDUE)
         4
+        >>> template.coordinates  # None - template has no coordinates
+        >>> polymer = template.with_coordinates(predicted_coords)
 
         >>> protein = from_sequence("MGKLF")
         >>> protein.size(Scale.RESIDUE)
@@ -274,7 +265,6 @@ def from_sequence(
         return Polymer.create_empty(pdb_id=id, backend=backend)
 
     # Build each chain
-    all_coords = []
     all_atoms = []
     all_elements = []
     all_atoms_per_res = []
@@ -282,11 +272,11 @@ def from_sequence(
     atoms_per_chain = []
     residues_per_chain = []
     chain_names = []
+    molecule_types = []
 
     for chain_idx, seq in enumerate(sequences):
         chain_data = _build_chain(seq, atom_filter=atoms)
 
-        all_coords.append(chain_data['coordinates'])
         all_atoms.append(chain_data['atoms'])
         all_elements.append(chain_data['elements'])
         all_atoms_per_res.extend(chain_data['atoms_per_residue'])
@@ -294,9 +284,9 @@ def from_sequence(
         atoms_per_chain.append(len(chain_data['atoms']))
         residues_per_chain.append(len(chain_data['residue_indices']))
         chain_names.append(_generate_chain_name(chain_idx))
+        molecule_types.append(chain_data['molecule_type'].value)
 
     # Concatenate arrays
-    coords = np.concatenate(all_coords, axis=0) if all_coords else np.empty((0, 3), dtype=np.float32)
     atoms_arr = np.concatenate(all_atoms) if all_atoms else np.empty(0, dtype=np.int64)
     elements_arr = np.concatenate(all_elements) if all_elements else np.empty(0, dtype=np.int64)
 
@@ -310,24 +300,25 @@ def from_sequence(
     }
     lengths = np.array(residues_per_chain, dtype=np.int64)
 
-    # Create hierarchy
+    # Create hierarchy (use atoms array as ref for backend)
     from .hierarchy import _Hierarchy
     hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
         lengths=lengths,
         polymer_count=n_atoms,
-        ref=coords,
+        ref=atoms_arr,
     )
 
     polymer = Polymer(
         hierarchy,
-        coordinates=coords,
+        coordinates=None,
         atoms=atoms_arr,
         elements=elements_arr,
         sequence=np.array(all_residue_indices, dtype=np.int64),
         pdb_id=id,
         names=chain_names,
         strands=chain_names,
+        molecule_types=np.array(molecule_types, dtype=np.int64),
     )
 
     return polymer.torch() if backend == "torch" else polymer

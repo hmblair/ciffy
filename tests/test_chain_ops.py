@@ -6,7 +6,52 @@ import pytest
 import ciffy
 from ciffy import Residue, Scale, join
 from ciffy import from_sequence
-from ciffy.polymer import expand_residue, linear_extend_transform
+from ciffy.polymer import expand_residue
+# Import internal function for testing linear extension
+from ciffy.polymer.builder import linear_extend_transform
+
+
+def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
+    """Create a template with ideal coordinates for testing.
+
+    This helper exists because from_sequence() now returns templates without
+    coordinates. For tests that need coordinates, we build them manually.
+    """
+    template = from_sequence(sequence, backend=backend)
+    if template.empty():
+        return template
+
+    # Build ideal coordinates by extending from empty
+    poly = ciffy.Polymer.create_empty(backend=backend)
+    sequences = [sequence] if isinstance(sequence, str) else sequence
+
+    for seq in sequences:
+        residue_indices = list(template.sequence[:len(seq)])
+        for i, res_idx in enumerate(residue_indices):
+            residue = Residue.from_index(int(res_idx))
+            is_first = (i == 0)
+            is_last = (i == len(residue_indices) - 1)
+
+            atoms, elements, coords = expand_residue(
+                residue, start_terminal=is_first, end_terminal=is_last
+            )
+
+            if poly.empty():
+                poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
+            else:
+                last_res_coords, last_res_atoms, _, last_res_type = poly._residue_slice(-1)
+                transform = linear_extend_transform(
+                    last_res_coords, last_res_atoms, last_res_type, atoms, residue
+                )
+                if backend == "torch":
+                    import torch
+                    coords = torch.from_numpy(coords)
+                    transform = torch.from_numpy(transform)
+                    atoms = torch.from_numpy(atoms)
+                    elements = torch.from_numpy(elements)
+                poly = poly.extend(residue, coords, transform, atoms, elements)
+
+    return poly
 
 
 def extend_with_linear(poly, residue):
@@ -38,8 +83,8 @@ class TestJoin:
 
     def test_join_two_polymers(self):
         """Join two single-chain RNA polymers."""
-        p1 = from_sequence("ac")
-        p2 = from_sequence("gu")
+        p1 = template_with_coords("ac")
+        p2 = template_with_coords("gu")
 
         combined = join(p1, p2)
 
@@ -56,9 +101,9 @@ class TestJoin:
 
     def test_join_three_polymers(self):
         """Join three polymers."""
-        p1 = from_sequence("a")
-        p2 = from_sequence("c")
-        p3 = from_sequence("g")
+        p1 = template_with_coords("a")
+        p2 = template_with_coords("c")
+        p3 = template_with_coords("g")
 
         combined = join(p1, p2, p3)
 
@@ -68,8 +113,9 @@ class TestJoin:
 
     def test_join_multichain_polymers(self):
         """Join polymers that already have multiple chains."""
-        p1 = from_sequence(["ac", "gu"])  # 2 chains
-        p2 = from_sequence("aa")  # 1 chain
+        # Build multi-chain by joining single chains
+        p1 = join(template_with_coords("ac"), template_with_coords("gu"))  # 2 chains
+        p2 = template_with_coords("aa")  # 1 chain
 
         combined = join(p1, p2)
 
@@ -78,7 +124,7 @@ class TestJoin:
 
     def test_join_single_polymer(self):
         """Join with single polymer returns a copy."""
-        p = from_sequence("acgu")
+        p = template_with_coords("acgu")
 
         combined = join(p)
 
@@ -91,7 +137,7 @@ class TestJoin:
 
     def test_join_empty_polymers(self):
         """Join with empty polymers skips them."""
-        p1 = from_sequence("ac")
+        p1 = template_with_coords("ac")
         p_empty = from_sequence("")
 
         combined = join(p1, p_empty)
@@ -116,7 +162,7 @@ class TestJoin:
 
     def test_join_hetatm_error(self):
         """Join with HETATM atoms raises error."""
-        p1 = from_sequence("ac")
+        p1 = template_with_coords("ac")
         p2 = ciffy.load("tests/data/9MDS.cif")
 
         # Skip if test structure doesn't have HETATM
@@ -129,8 +175,11 @@ class TestJoin:
 
     def test_join_preserves_pdb_id_when_same(self):
         """Join preserves PDB ID when all are the same."""
-        p1 = from_sequence("ac", id="TEST")
-        p2 = from_sequence("gu", id="TEST")
+        p1 = template_with_coords("ac")
+        p2 = template_with_coords("gu")
+        # Set same pdb_id on both
+        p1._pdb_id = "TEST"
+        p2._pdb_id = "TEST"
 
         combined = join(p1, p2)
 
@@ -138,8 +187,11 @@ class TestJoin:
 
     def test_join_different_pdb_ids_becomes_joined(self):
         """Join with different PDB IDs becomes 'joined'."""
-        p1 = from_sequence("ac", id="TEST1")
-        p2 = from_sequence("gu", id="TEST2")
+        p1 = template_with_coords("ac")
+        p2 = template_with_coords("gu")
+        # Manually set different IDs
+        p1._pdb_id = "TEST1"
+        p2._pdb_id = "TEST2"
 
         combined = join(p1, p2)
 
@@ -148,8 +200,9 @@ class TestJoin:
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_join_backend_preserved(self, backend):
         """Join preserves backend."""
-        p1 = from_sequence("ac", backend=backend)
-        p2 = from_sequence("gu", backend=backend)
+        pytest.importorskip("torch")
+        p1 = template_with_coords("ac", backend=backend)
+        p2 = template_with_coords("gu", backend=backend)
 
         combined = join(p1, p2)
 
@@ -161,7 +214,7 @@ class TestExtend:
 
     def test_extend_rna(self):
         """Extend RNA chain with a new residue."""
-        p = from_sequence("ac")
+        p = template_with_coords("ac")
         initial_size = p.size()
         initial_res = p.size(Scale.RESIDUE)
 
@@ -179,7 +232,7 @@ class TestExtend:
 
     def test_extend_preserves_original(self):
         """Extend returns new polymer, original unchanged."""
-        p = from_sequence("ac")
+        p = template_with_coords("ac")
         original_size = p.size()
         original_seq = p.sequence_str()
 
@@ -195,7 +248,7 @@ class TestExtend:
 
     def test_extend_chain_multiple(self):
         """Extend chain multiple times."""
-        p = from_sequence("a")
+        p = template_with_coords("a")
 
         # Extend with c, g, u
         for residue in [Residue.C, Residue.G, Residue.U]:
@@ -206,7 +259,8 @@ class TestExtend:
 
     def test_extend_multichain_error(self):
         """Extend fails on multi-chain polymer."""
-        p = from_sequence(["ac", "gu"])
+        # Build multi-chain by joining
+        p = join(template_with_coords("ac"), template_with_coords("gu"))
         atoms, elements, coords = expand_residue(Residue.A, start_terminal=False)
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
@@ -227,9 +281,18 @@ class TestExtend:
         with pytest.raises(ValueError, match="poly-only"):
             p.extend(Residue.A, coords, transform, atoms, elements)
 
+    def test_extend_template_error(self):
+        """Extend fails on template (no coordinates)."""
+        template = from_sequence("ac")
+        atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+        transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
+
+        with pytest.raises(AttributeError, match="coordinates"):
+            template.extend(Residue.G, coords, transform, atoms, elements)
+
     def test_extend_with_custom_coords(self):
         """Extend with explicit coordinates."""
-        p = from_sequence("ac")
+        p = template_with_coords("ac")
 
         # Get new residue data
         atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
@@ -245,24 +308,9 @@ class TestExtend:
         assert extended.size(Scale.RESIDUE) == 3
         assert extended.sequence_str() == "acg"
 
-    def test_extend_wrong_atom_count_error(self):
-        """Extend fails if atoms/elements don't match coords."""
-        p = from_sequence("ac")
-
-        # Get atoms for G but use wrong coord shape
-        atoms, elements, _ = expand_residue(Residue.G, start_terminal=False)
-        wrong_coords = np.zeros((3, 3), dtype=np.float32)  # Wrong shape
-        transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
-
-        # Should fail because coords shape doesn't match atoms
-        # Note: the new extend() doesn't validate coord/atom count explicitly
-        # but position_residue_fast will fail with wrong shapes
-        # Let's just test that it works with correct shapes
-        pass  # Skip this test as error is caught differently now
-
     def test_extend_residue_spacing(self):
         """Extended residues are properly spaced (non-overlapping)."""
-        p = from_sequence("a")
+        p = template_with_coords("a")
         extended = extend_with_linear(p, Residue.C)
 
         # Get centroids of each residue
@@ -284,7 +332,7 @@ class TestExtend:
         """Extend preserves backend."""
         pytest.importorskip("torch")
 
-        p = from_sequence("ac", backend=backend)
+        p = template_with_coords("ac", backend=backend)
 
         # Use explicit extend with numpy arrays (will be converted)
         extended = extend_with_linear(p, Residue.G)
@@ -297,10 +345,10 @@ class TestJoinAndExtendIntegration:
 
     def test_extend_then_join(self):
         """Extend chain then join with another."""
-        p1 = from_sequence("a")
+        p1 = template_with_coords("a")
         p1 = extend_with_linear(p1, Residue.C)
 
-        p2 = from_sequence("gu")
+        p2 = template_with_coords("gu")
 
         combined = join(p1, p2)
 
@@ -310,8 +358,8 @@ class TestJoinAndExtendIntegration:
 
     def test_join_then_iterate_chains(self):
         """Join polymers then iterate over chains."""
-        p1 = from_sequence("ac")
-        p2 = from_sequence("gu")
+        p1 = template_with_coords("ac")
+        p2 = template_with_coords("gu")
 
         combined = join(p1, p2)
 
@@ -319,3 +367,39 @@ class TestJoinAndExtendIntegration:
         assert len(chains) == 2
         assert chains[0].sequence_str() == "ac"
         assert chains[1].sequence_str() == "gu"
+
+
+class TestFromSequenceTemplate:
+    """Tests for from_sequence() returning templates."""
+
+    def test_template_has_no_coordinates(self):
+        """from_sequence() returns template without coordinates."""
+        template = from_sequence("acgu")
+
+        assert template.size(Scale.RESIDUE) == 4
+        assert template.size() > 0  # Has atoms
+
+        with pytest.raises(AttributeError, match="coordinates"):
+            _ = template.coordinates
+
+    def test_template_has_atoms_and_elements(self):
+        """Template has atom and element data."""
+        template = from_sequence("acgu")
+
+        # Should have atoms and elements
+        assert template.atoms is not None
+        assert template.elements is not None
+        assert len(template.atoms) == template.size()
+        assert len(template.elements) == template.size()
+
+    def test_template_with_coordinates(self):
+        """Can add coordinates to template with with_coordinates()."""
+        template = from_sequence("acgu")
+
+        # Create dummy coordinates
+        coords = np.zeros((template.size(), 3), dtype=np.float32)
+
+        polymer = template.with_coordinates(coords)
+
+        assert polymer.coordinates is not None
+        assert np.allclose(polymer.coordinates, coords)

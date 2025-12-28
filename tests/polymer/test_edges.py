@@ -39,8 +39,8 @@ class TestEmptyPolymer:
         """Empty polymer has (0, 3) coordinate shape."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        polymer = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        empty = polymer[polymer.atoms < 0]
 
         assert empty.coordinates.shape == (0, 3)
 
@@ -81,8 +81,8 @@ class TestSingleAtomPolymer:
         """Single atom polymer has (1, 3) coordinates."""
         import ciffy
 
-        template = ciffy.from_sequence("g", backend=backend)
-        single = template[:1]
+        polymer = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        single = polymer[:1]
 
         assert single.coordinates.shape == (1, 3)
 
@@ -90,8 +90,8 @@ class TestSingleAtomPolymer:
         """Single atom pairwise_distances returns 1x1 zero matrix."""
         import ciffy
 
-        template = ciffy.from_sequence("g", backend=backend)
-        single = template[:1]
+        polymer = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        single = polymer[:1]
 
         dists = single.pairwise_distances()
         assert dists.shape == (1, 1)
@@ -103,8 +103,8 @@ class TestSingleAtomPolymer:
         """Single atom knn raises ValueError (need at least 2 points)."""
         import ciffy
 
-        template = ciffy.from_sequence("g", backend=backend)
-        single = template[:1]
+        polymer = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        single = polymer[:1]
 
         with pytest.raises(ValueError):
             single.knn(k=1)
@@ -136,7 +136,8 @@ class TestSingleResiduePolymer:
         import ciffy
         from ciffy import Scale, Reduction
 
-        p = ciffy.from_sequence("a", backend=backend)
+        full = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        p = full.select(0, Scale.RESIDUE)  # Select first residue
         result = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
 
         assert result.shape == (1, 3)
@@ -270,17 +271,6 @@ class TestChainsGenerator:
 
         assert len(dna_chains) == 0
 
-    def test_chains_filter_requires_molecule_types(self, backend):
-        """chains(mol=...) raises ValueError when molecule_types not available."""
-        import ciffy
-        from ciffy import Molecule
-        import pytest
-
-        p = ciffy.from_sequence("acgu", backend=backend)  # Template, no molecule_types
-        with pytest.raises(ValueError, match="molecule_types not available"):
-            list(p.chains(mol=Molecule.DNA))
-
-
 class TestResolvedStrip:
     """Test resolved() and strip() edge cases."""
 
@@ -333,7 +323,7 @@ class TestBackendConversion:
         """Round-trip numpy -> torch -> numpy preserves data."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         coords_orig = p.coordinates.copy()
 
         p_torch = p.torch()
@@ -348,7 +338,7 @@ class TestBackendConversion:
         """to() raises ValueError on numpy backend."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
 
         with pytest.raises(ValueError, match="torch backend"):
             p.to("cpu")
@@ -357,7 +347,7 @@ class TestBackendConversion:
         """to() with no args returns same object."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
         p2 = p.to()
 
         assert p2 is p
@@ -371,7 +361,7 @@ class TestArraySetterValidation:
         import ciffy
         import torch
 
-        p_numpy = ciffy.from_sequence("acgu", backend="numpy")
+        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         torch_coords = torch.randn(p_numpy.size(), 3)
 
         with pytest.raises(TypeError, match="Cannot assign torch"):
@@ -381,7 +371,7 @@ class TestArraySetterValidation:
         """Setting torch coordinates with numpy raises TypeError."""
         import ciffy
 
-        p_torch = ciffy.from_sequence("acgu", backend="torch")
+        p_torch = ciffy.load(get_test_cif("3SKW"), backend="torch")
         numpy_coords = np.random.randn(p_torch.size(), 3).astype(np.float32)
 
         with pytest.raises(TypeError, match="Cannot assign numpy"):
@@ -392,7 +382,7 @@ class TestArraySetterValidation:
         import ciffy
         import torch
 
-        p_numpy = ciffy.from_sequence("acgu", backend="numpy")
+        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         torch_atoms = torch.zeros(p_numpy.size(), dtype=torch.long)
 
         with pytest.raises(TypeError, match="Cannot assign torch"):
@@ -403,7 +393,7 @@ class TestArraySetterValidation:
         import ciffy
         import torch
 
-        p_numpy = ciffy.from_sequence("acgu", backend="numpy")
+        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         torch_elements = torch.zeros(p_numpy.size(), dtype=torch.long)
 
         with pytest.raises(TypeError, match="Cannot assign torch"):
@@ -415,7 +405,7 @@ class TestArraySetterValidation:
         import torch
         from ciffy import Scale
 
-        p_numpy = ciffy.from_sequence("acgu", backend="numpy")
+        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         torch_seq = torch.zeros(p_numpy.size(Scale.RESIDUE), dtype=torch.long)
 
         with pytest.raises(TypeError, match="Cannot assign torch"):
@@ -737,7 +727,7 @@ class TestDetach:
         """detach() is a no-op on numpy backend."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         original_coords = p.coordinates.copy()
 
         p.detach()
@@ -749,7 +739,7 @@ class TestDetach:
         import ciffy
         import torch
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
         p.coordinates = p.coordinates.clone().requires_grad_(True)
 
         assert p.coordinates.requires_grad
@@ -763,7 +753,7 @@ class TestDetach:
         import ciffy
         import torch
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
         original_coords = p.coordinates.clone()
 
         p.coordinates = p.coordinates.requires_grad_(True)

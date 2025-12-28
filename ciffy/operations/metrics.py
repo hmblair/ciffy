@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, svdvals, det, multiply, has_nan, has_inf
+from ..backend import Array, is_torch, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -293,7 +293,7 @@ def _get_molecule_type(polymer: Polymer) -> Molecule:
 # RMSD (Root Mean Square Deviation)
 # =============================================================================
 
-def _rmsd_single(coords1: Array, coords2: Array) -> float:
+def _rmsd_single(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
     """
     Compute Kabsch-aligned RMSD between two coordinate sets.
 
@@ -302,22 +302,17 @@ def _rmsd_single(coords1: Array, coords2: Array) -> float:
     Args:
         coords1: First coordinates, shape (N, 3).
         coords2: Second coordinates, shape (N, 3).
+        eps: Small value added before sqrt for gradient stability.
 
     Returns:
-        RMSD value (float).
+        Scalar RMSD value as a 0-d array (preserves gradients for torch).
     """
     from .alignment import kabsch_align
 
     aligned, _, _ = kabsch_align(coords1, coords2, center=True)
     diff = aligned - coords2
-
-    if is_torch(diff):
-        import torch
-        msd = (diff ** 2).mean()
-        return torch.sqrt(torch.clamp(msd, min=0.0)).item()
-    else:
-        msd = (diff ** 2).mean()
-        return float(np.sqrt(max(msd, 0.0)))
+    msd = (diff ** 2).mean()
+    return sqrt(clamp(msd, min=0.0) + eps)
 
 
 def coordinate_covariance(
@@ -350,6 +345,7 @@ def _rmsd_polymer(
     polymer1: "Polymer",
     polymer2: "Polymer",
     scale: "Scale | None" = None,
+    eps: float = 0.0,
 ) -> Array:
     """
     Compute Kabsch distance (aligned RMSD) between polymer structures.
@@ -413,11 +409,7 @@ def _rmsd_polymer(
 
     # Compute Kabsch distance (RMSD)
     msd = var1 + var2 - 2 * sigma
-    if is_torch(msd):
-        import torch
-        return torch.sqrt(torch.clamp(msd, min=0.0))
-    else:
-        return np.sqrt(np.maximum(msd, 0.0))
+    return sqrt(clamp(msd, min=0.0) + eps)
 
 
 # =============================================================================

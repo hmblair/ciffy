@@ -7,7 +7,7 @@ Tests by_atom, by_residue, by_type, by_index, mask, and __getitem__.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif, BACKENDS
+from tests.utils import get_test_cif, BACKENDS, get_single_chain_poly
 
 
 class TestByAtom:
@@ -121,15 +121,7 @@ class TestByType:
 
         assert result.empty()
 
-    def test_by_type_requires_molecule_types(self, backend):
-        """by_type raises ValueError when molecule_types not available."""
-        import ciffy
-        from ciffy import Molecule
-        import pytest
-
-        p = ciffy.from_sequence("acgu", backend=backend)  # Template, no molecule_types
-        with pytest.raises(ValueError, match="molecule_types not available"):
-            p.by_type(Molecule.DNA)
+    # Note: test_by_type_requires_molecule_types removed - templates now have molecule_types
 
     def test_by_type_all_match(self, backend):
         """by_type on matching type returns full structure."""

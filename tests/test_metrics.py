@@ -193,15 +193,16 @@ class TestTMScoreEdgeCases:
         assert 0.0 <= score <= 1.0
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_tm_score_requires_molecule_types(self, backend):
-        """TM-score raises ValueError when molecule_types not available and not specified."""
+    def test_tm_score_works_for_templates(self, backend):
+        """TM-score works for template-generated polymers (which have molecule_types)."""
         skip_if_no_torch(backend)
 
         p = ciffy.from_sequence("acgu", backend=backend)
         p.coordinates = random_coordinates(p.size(), backend)
 
-        with pytest.raises(ValueError, match="molecule_types not available"):
-            tm_score(p, p)
+        # Templates have molecule_types, so this should work
+        score = tm_score(p, p)
+        assert 0.0 <= score <= 1.0
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_tm_score_nonstandard_residues(self, backend):

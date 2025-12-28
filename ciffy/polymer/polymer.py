@@ -162,13 +162,13 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     # Per-atom arrays
-    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
-    atoms = Field(Scale.ATOM, dtype=Dtype.INT)
+    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
+    atoms = Field(Scale.ATOM, dtype=Dtype.INT, required=False)
     elements = Field(Scale.ATOM, dtype=Dtype.INT, required=False)
     bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
 
     # Per-residue arrays
-    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT)
+    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT, required=False)
 
     # Per-chain arrays (lengths is handled by hierarchy, not a descriptor)
     molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT, required=False, validate=False)
@@ -182,8 +182,8 @@ class Polymer:
     resolution = Metadata(Scale.MOLECULE, required=False)
 
     # Per-chain lists
-    names = Metadata(Scale.CHAIN, is_list=True)
-    strands = Metadata(Scale.CHAIN, is_list=True)
+    names = Metadata(Scale.CHAIN, is_list=True, required=False)
+    strands = Metadata(Scale.CHAIN, is_list=True, required=False)
     descriptions = Metadata(Scale.CHAIN, is_list=True, required=False)
 
     def __init__(
@@ -662,12 +662,16 @@ class Polymer:
     def copy(self: Polymer) -> Polymer:
         """Return a deep copy of this Polymer."""
         from ..backend import ops
+
+        def _clone_if_present(arr):
+            return ops.clone(arr) if arr is not None else None
+
         return self._clone(
-            coordinates=ops.clone(self.coordinates),
-            atoms=ops.clone(self.atoms),
-            elements=ops.clone(self.elements) if self.elements is not None else None,
-            sequence=ops.clone(self.sequence),
-            bfactors=ops.clone(self.bfactors) if self.bfactors is not None else None,
+            coordinates=_clone_if_present(self.coordinates),
+            atoms=_clone_if_present(self.atoms),
+            elements=_clone_if_present(self.elements),
+            sequence=_clone_if_present(self.sequence),
+            bfactors=_clone_if_present(self.bfactors),
         )
 
     def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:

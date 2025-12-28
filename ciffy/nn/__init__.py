@@ -107,6 +107,9 @@ from .diffusion import (
     LatentDiffusionTrainer,
 )
 
+# Flow models (triggers @register_model decorators)
+from .flow import PolymerFlowModel
+
 __all__ = [
     # Data validation and filtering
     "DataCompatibilityReport",
@@ -209,6 +212,8 @@ __all__ = [
     "LatentDiffusionModel",
     "LatentDiffusionTrainingConfig",
     "LatentDiffusionTrainer",
+    # Flow models
+    "PolymerFlowModel",
 ]
 
 # Optional geometric deep learning module

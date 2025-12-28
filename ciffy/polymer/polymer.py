@@ -99,11 +99,11 @@ class Field(_BaseDescriptor):
         self.validate = validate
 
     def __set__(self, obj, value):
-        # Validate backend/device compatibility if enabled and reference exists
+        # Validate backend/device compatibility if enabled and hierarchy exists
         if self.validate and value is not None:
-            ref = getattr(obj, '_coordinates', None)
-            if ref is not None:
-                check_compatible(ref, value, self.name)
+            hierarchy = getattr(obj, '_hierarchy', None)
+            if hierarchy is not None:
+                check_compatible(hierarchy._ref, value, self.name)
         setattr(obj, self.private_name, value)
 
     def __repr__(self):

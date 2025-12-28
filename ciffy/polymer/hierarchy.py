@@ -8,12 +8,26 @@ that depend solely on size bookkeeping without requiring actual atomic data.
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from ..backend import Array, ops, size as arr_size
 from ..biochemistry import Scale
 from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 
 if TYPE_CHECKING:
     pass
+
+
+def _empty_per() -> dict[tuple[Scale, Scale], np.ndarray]:
+    """Create the _per dict for an empty hierarchy."""
+    return {
+        (Scale.ATOM, Scale.RESIDUE): np.array([], dtype=np.int64),
+        (Scale.ATOM, Scale.CHAIN): np.array([], dtype=np.int64),
+        (Scale.ATOM, Scale.MOLECULE): np.array([0], dtype=np.int64),
+        (Scale.RESIDUE, Scale.CHAIN): np.array([], dtype=np.int64),
+        (Scale.RESIDUE, Scale.MOLECULE): np.array([0], dtype=np.int64),
+        (Scale.CHAIN, Scale.MOLECULE): np.array([0], dtype=np.int64),
+    }
 
 
 class _Hierarchy:
@@ -44,18 +58,28 @@ class _Hierarchy:
 
     def __init__(
         self,
-        per: dict[tuple[Scale, Scale], Array],
-        polymer_count: int,
-        ref: Array,
+        per: dict[tuple[Scale, Scale], Array] | None = None,
+        polymer_count: int = 0,
+        ref: Array | None = None,
     ):
         """
         Initialize a hierarchy.
 
+        When called with no arguments, creates an empty hierarchy with 0 atoms,
+        0 residues, and 0 chains.
+
         Args:
             per: Dict mapping (inner_scale, outer_scale) to count arrays.
+                If None, creates an empty hierarchy.
             polymer_count: Number of polymer atoms.
             ref: Reference array for backend/device detection.
+                If None, uses a numpy array.
         """
+        if per is None:
+            per = _empty_per()
+        if ref is None:
+            ref = np.zeros((0, 3), dtype=np.float32)
+
         self._per = per
         self._polymer_count = polymer_count
         self._ref = ref

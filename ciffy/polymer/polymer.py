@@ -238,18 +238,7 @@ class Polymer:
                     f"Cannot pass {invalid_fields} without hierarchy. "
                     f"Only 'pdb_id' is allowed for empty polymers."
                 )
-            # Create empty hierarchy
-            ref = np.zeros((0, 3), dtype=np.float32)
-            hierarchy = _Hierarchy.from_sizes_and_lengths(
-                sizes={
-                    Scale.RESIDUE: np.array([], dtype=np.int64),
-                    Scale.CHAIN: np.array([], dtype=np.int64),
-                    Scale.MOLECULE: np.array([0], dtype=np.int64),
-                },
-                lengths=np.array([], dtype=np.int64),
-                polymer_count=0,
-                ref=ref,
-            )
+            hierarchy = _Hierarchy()
 
         # Assign all descriptor fields from kwargs
         for name, desc in self._get_descriptors().items():

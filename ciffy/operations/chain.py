@@ -96,10 +96,8 @@ def join(*polymers: "Polymer") -> "Polymer":
     non_empty = [p for p in polymers if not p.empty()]
     if not non_empty:
         # All empty - return first polymer's empty copy
-        return Polymer.create_empty(
-            pdb_id=polymers[0].pdb_id,
-            backend=polymers[0].backend,
-        )
+        empty = Polymer(pdb_id=polymers[0].pdb_id)
+        return empty.torch() if polymers[0].backend == "torch" else empty
 
     # Validate all inputs
     backend = _validate_same_backend(*non_empty)

@@ -193,18 +193,19 @@ class Polymer:
 
     def __init__(
         self: Polymer,
-        hierarchy: _Hierarchy,
+        hierarchy: _Hierarchy | None = None,
         **fields,
     ) -> None:
         """
         Initialize a Polymer structure.
 
-        All Field and Metadata descriptors defined on the class can be passed
-        as keyword arguments. Required fields (coordinates, atoms, elements,
-        sequence, names, strands) must be provided.
+        When called with no arguments, creates an empty Polymer with 0 atoms
+        and 0 chains. Otherwise, all Field and Metadata descriptors defined
+        on the class can be passed as keyword arguments.
 
         Args:
             hierarchy: _Hierarchy object containing scale bookkeeping.
+                If None, creates an empty polymer.
             **fields: Field and Metadata values matching class descriptors:
                 - coordinates: (N, 3) array of atom positions.
                 - atoms: (N,) array of atom type indices.
@@ -221,7 +222,28 @@ class Polymer:
         Raises:
             TypeError: If required fields are missing or unknown fields provided.
             ValueError: If field sizes are inconsistent.
+
+        Example:
+            >>> empty = Polymer()
+            >>> empty.size()
+            0
+            >>> empty.size(Scale.CHAIN)
+            0
         """
+        # Create empty hierarchy if not provided
+        if hierarchy is None:
+            ref = np.zeros((0, 3), dtype=np.float32)
+            hierarchy = _Hierarchy.from_sizes_and_lengths(
+                sizes={
+                    Scale.RESIDUE: np.array([], dtype=np.int64),
+                    Scale.CHAIN: np.array([], dtype=np.int64),
+                    Scale.MOLECULE: np.array([0], dtype=np.int64),
+                },
+                lengths=np.array([], dtype=np.int64),
+                polymer_count=0,
+                ref=ref,
+            )
+
         # Assign all descriptor fields from kwargs
         for name, desc in self._get_descriptors().items():
             if name in fields:
@@ -512,46 +534,6 @@ class Polymer:
         hierarchy = data.pop('hierarchy', self._hierarchy)
 
         return Polymer(hierarchy, **data)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Factory Methods
-    # ─────────────────────────────────────────────────────────────────────────
-
-    @classmethod
-    def create_empty(cls, pdb_id: str | None = None, backend: str = "numpy") -> "Polymer":
-        """
-        Create an empty Polymer with 0 atoms and 0 chains.
-
-        Useful as a base case for operations that may produce empty results,
-        or for testing edge cases.
-
-        Args:
-            pdb_id: PDB identifier for the empty polymer.
-            backend: Array backend, either "numpy" or "torch".
-
-        Returns:
-            An empty Polymer with no atoms, residues, or chains.
-
-        Example:
-            >>> empty = Polymer.create_empty()
-            >>> empty.size()
-            0
-            >>> empty.size(Scale.CHAIN)
-            0
-        """
-        ref = np.zeros((0, 3), dtype=np.float32)
-        hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes={
-                Scale.RESIDUE: np.array([], dtype=np.int64),
-                Scale.CHAIN: np.array([], dtype=np.int64),
-                Scale.MOLECULE: np.array([0], dtype=np.int64),
-            },
-            lengths=np.array([], dtype=np.int64),
-            polymer_count=0,
-            ref=ref,
-        )
-        polymer = cls(hierarchy, pdb_id=pdb_id)
-        return polymer.torch() if backend == "torch" else polymer
 
     # ─────────────────────────────────────────────────────────────────────────
     # Computed Properties
@@ -1452,7 +1434,7 @@ class Polymer:
             >>> from ciffy.polymer import expand_residue
             >>>
             >>> # Start from empty polymer
-            >>> poly = Polymer.create_empty()
+            >>> poly = Polymer()
             >>> atoms, elements, coords = expand_residue(Residue.A)
             >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
             >>>

@@ -262,7 +262,8 @@ def from_sequence(
     sequences = [s for s in sequences if s]
 
     if not sequences:
-        return Polymer.create_empty(pdb_id=id, backend=backend)
+        empty = Polymer(pdb_id=id)
+        return empty.torch() if backend == "torch" else empty
 
     # Build each chain
     all_atoms = []

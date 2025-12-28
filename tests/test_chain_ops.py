@@ -22,7 +22,9 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
         return template
 
     # Build ideal coordinates by extending from empty
-    poly = ciffy.Polymer.create_empty(backend=backend)
+    poly = ciffy.Polymer()
+    if backend == "torch":
+        poly = poly.torch()
     sequences = [sequence] if isinstance(sequence, str) else sequence
 
     for seq in sequences:

@@ -312,7 +312,7 @@ def _rmsd_single(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
     aligned, _, _ = kabsch_align(coords1, coords2, center=True)
     diff = aligned - coords2
     msd = (diff ** 2).mean()
-    return sqrt(clamp(msd, min=0.0) + eps)
+    return sqrt(clamp(msd, min_val=0.0) + eps)
 
 
 def coordinate_covariance(
@@ -358,6 +358,7 @@ def _rmsd_polymer(
         polymer1: First polymer structure.
         polymer2: Second polymer structure.
         scale: Scale at which to compute distance. Default is MOLECULE.
+        eps: Small value added before sqrt for gradient stability.
 
     Returns:
         Array of RMSD values (Angstroms), one per scale unit.
@@ -409,7 +410,7 @@ def _rmsd_polymer(
 
     # Compute Kabsch distance (RMSD)
     msd = var1 + var2 - 2 * sigma
-    return sqrt(clamp(msd, min=0.0) + eps)
+    return sqrt(clamp(msd, min_val=0.0) + eps)
 
 
 # =============================================================================
@@ -418,14 +419,14 @@ def _rmsd_polymer(
 
 # Type stubs for static type checking
 @overload
-def rmsd(a: Array, b: Array, scale: None = None) -> Array | float: ...
+def rmsd(a: Array, b: Array, scale: None = None, eps: float = 0.0) -> Array: ...
 
 @overload
-def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None) -> Array: ...
+def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None, eps: float = 0.0) -> Array: ...
 
 
 @singledispatch
-def _rmsd_dispatch(a, b, scale=None):
+def _rmsd_dispatch(a, b, scale=None, eps=0.0):
     """Internal singledispatch for rmsd."""
     raise TypeError(
         f"rmsd() not supported for type {type(a).__name__}. "
@@ -434,7 +435,7 @@ def _rmsd_dispatch(a, b, scale=None):
 
 
 @_rmsd_dispatch.register(np.ndarray)
-def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None) -> np.ndarray | float:
+def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None, eps: float = 0.0) -> np.ndarray:
     """RMSD for numpy arrays."""
     if not isinstance(b, np.ndarray):
         raise TypeError(f"Both inputs must be numpy arrays, got {type(b).__name__}")
@@ -446,13 +447,13 @@ def _rmsd_ndarray(a: np.ndarray, b: np.ndarray, scale=None) -> np.ndarray | floa
         # Single pair: (N, 3)
         if a.shape[1] != 3:
             raise ValueError(f"Expected shape (N, 3), got {a.shape}")
-        return _rmsd_single(a, b)
+        return _rmsd_single(a, b, eps=eps)
 
     elif a.ndim == 3:
         # Batch: (B, N, 3)
         if a.shape[2] != 3:
             raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-        return np.array([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+        return np.stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
 
     else:
         raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) array, got {a.ndim}D")
@@ -463,7 +464,7 @@ try:
     import torch
 
     @_rmsd_dispatch.register(torch.Tensor)
-    def _rmsd_tensor(a: torch.Tensor, b: torch.Tensor, scale=None) -> torch.Tensor | float:
+    def _rmsd_tensor(a: torch.Tensor, b: torch.Tensor, scale=None, eps: float = 0.0) -> torch.Tensor:
         """RMSD for torch tensors."""
         if not isinstance(b, torch.Tensor):
             raise TypeError(f"Both inputs must be torch tensors, got {type(b).__name__}")
@@ -475,13 +476,14 @@ try:
             # Single pair: (N, 3)
             if a.shape[1] != 3:
                 raise ValueError(f"Expected shape (N, 3), got {a.shape}")
-            return _rmsd_single(a, b)
+            return _rmsd_single(a, b, eps=eps)
 
         elif a.ndim == 3:
             # Batch: (B, N, 3)
             if a.shape[2] != 3:
                 raise ValueError(f"Expected shape (B, N, 3), got {a.shape}")
-            return torch.tensor([_rmsd_single(c1, c2) for c1, c2 in zip(a, b)])
+            # Use torch.stack to preserve gradients
+            return torch.stack([_rmsd_single(c1, c2, eps=eps) for c1, c2 in zip(a, b)])
 
         else:
             raise ValueError(f"Expected 2D (N, 3) or 3D (B, N, 3) tensor, got {a.ndim}D")
@@ -506,7 +508,12 @@ def _ensure_polymer_registered():
     _polymer_registered = True
 
 
-def rmsd(a: "Array | Polymer", b: "Array | Polymer", scale: "Scale | None" = None) -> Array | float:
+def rmsd(
+    a: "Array | Polymer",
+    b: "Array | Polymer",
+    scale: "Scale | None" = None,
+    eps: float = 0.0,
+) -> Array:
     """
     Compute Kabsch-aligned RMSD between structures or coordinate arrays.
 
@@ -519,11 +526,18 @@ def rmsd(a: "Array | Polymer", b: "Array | Polymer", scale: "Scale | None" = Non
         b: Second structure (Polymer) or coordinates (array).
         scale: For Polymer inputs, the scale at which to compute RMSD
             (default: MOLECULE). Ignored for array inputs.
+        eps: Small value added before sqrt for gradient stability.
+            Useful when using RMSD as a training loss.
 
     Returns:
         For Polymer: Array of RMSD values, one per scale unit.
-        For arrays (N, 3): Single RMSD value (float).
+        For arrays (N, 3): Scalar RMSD value (0-d array).
         For arrays (B, N, 3): Array of B RMSD values.
+
+    Note:
+        For torch inputs, gradients flow through the computation.
+        Use eps > 0 (e.g., 1e-8) when training to avoid gradient
+        instability near RMSD = 0.
 
     Examples:
         >>> import ciffy
@@ -542,6 +556,10 @@ def rmsd(a: "Array | Polymer", b: "Array | Polymer", scale: "Scale | None" = Non
         >>> batch1 = np.random.randn(32, 100, 3)
         >>> batch2 = np.random.randn(32, 100, 3)
         >>> rmsd_vals = rmsd(batch1, batch2)  # shape (32,)
+        >>>
+        >>> # Training with gradient stability
+        >>> loss = rmsd(pred_coords, target_coords, eps=1e-8)
+        >>> loss.backward()
     """
     _ensure_polymer_registered()
-    return _rmsd_dispatch(a, b, scale)
+    return _rmsd_dispatch(a, b, scale, eps)

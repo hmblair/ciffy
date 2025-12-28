@@ -519,7 +519,7 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     @classmethod
-    def create_empty(cls, pdb_id: str = "empty", backend: str = "numpy") -> "Polymer":
+    def create_empty(cls, pdb_id: str | None = None, backend: str = "numpy") -> "Polymer":
         """
         Create an empty Polymer with 0 atoms and 0 chains.
 
@@ -540,33 +540,18 @@ class Polymer:
             >>> empty.size(Scale.CHAIN)
             0
         """
-        # Create empty arrays
-        coordinates = np.zeros((0, 3), dtype=np.float32)
-        sizes = {
-            Scale.RESIDUE: np.array([], dtype=np.int64),
-            Scale.CHAIN: np.array([], dtype=np.int64),
-            Scale.MOLECULE: np.array([0], dtype=np.int64),
-        }
-        lengths = np.array([], dtype=np.int64)
-
-        # Create hierarchy
+        ref = np.zeros((0, 3), dtype=np.float32)
         hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes=sizes,
-            lengths=lengths,
+            sizes={
+                Scale.RESIDUE: np.array([], dtype=np.int64),
+                Scale.CHAIN: np.array([], dtype=np.int64),
+                Scale.MOLECULE: np.array([0], dtype=np.int64),
+            },
+            lengths=np.array([], dtype=np.int64),
             polymer_count=0,
-            ref=coordinates,
+            ref=ref,
         )
-
-        polymer = cls(
-            hierarchy,
-            coordinates=coordinates,
-            atoms=np.array([], dtype=np.int64),
-            elements=np.array([], dtype=np.int64),
-            sequence=np.array([], dtype=np.int64),
-            pdb_id=pdb_id,
-            names=[],
-            strands=[],
-        )
+        polymer = cls(hierarchy, pdb_id=pdb_id)
         return polymer.torch() if backend == "torch" else polymer
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -639,19 +624,16 @@ class Polymer:
         """Check if the polymer has no atoms."""
         return self._hierarchy.empty()
 
-    def size(self: Polymer, scale: Scale | None = None) -> int:
+    def size(self: Polymer, scale: Scale = Scale.ATOM) -> int:
         """
         Get the count at a specific scale.
 
         Args:
             scale: Scale level (ATOM, RESIDUE, CHAIN, MOLECULE).
-                   If None, returns atom count.
 
         Returns:
             Number of units at the specified scale.
         """
-        if scale is None:
-            return arr_size(self.coordinates, 0)
         return self._hierarchy.size(scale)
 
     def __len__(self: Polymer) -> int:
@@ -1656,7 +1638,7 @@ class Polymer:
             'numpy' if arrays are NumPy, 'torch' if PyTorch tensors.
         """
         from ..backend import get_backend
-        return get_backend(self.coordinates).value
+        return get_backend(self._hierarchy._ref).value
 
     @property
     def device(self: Polymer) -> str | None:
@@ -1668,7 +1650,7 @@ class Polymer:
             None for NumPy arrays.
         """
         from ..backend import get_device
-        return get_device(self.coordinates)
+        return get_device(self._hierarchy._ref)
 
     def numpy(self: Polymer) -> Polymer:
         """

@@ -600,6 +600,55 @@ class PolymerFlowModel(nn.Module):
             polymers.append(p)
         return polymers
 
+    def generate(
+        self,
+        template: "Polymer",
+        n_samples: int = 1,
+        temperature: float = 1.0,
+        **kwargs,
+    ) -> list["Polymer"]:
+        """
+        Generate polymer conformations from a template.
+
+        This method satisfies the PolymerGenerativeModel protocol, enabling
+        this model to be used interchangeably with other generative models.
+
+        Args:
+            template: Template Polymer with sequence and topology information.
+            n_samples: Number of independent conformations to generate.
+            temperature: Sampling temperature. For flow models, this scales
+                the latent noise (higher = more diverse). Default 1.0.
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            List of n_samples Polymers with generated coordinates.
+
+        Example:
+            >>> model = PolymerFlowModel.load("path/to/model")
+            >>> template = ciffy.load("structure.cif").poly()
+            >>> samples = model.generate(template, n_samples=10)
+            >>> for i, p in enumerate(samples):
+            ...     p.write(f"sample_{i}.cif")
+        """
+        sequence = _to_numpy_int64(template.sequence)
+
+        if len(sequence) == 0:
+            return [template.with_coordinates(np.empty((0, 3)))]
+
+        # Get device from first model
+        device = next(iter(self.residue_models.values())).device
+
+        polymers = []
+        for _ in range(n_samples):
+            # Sample latents with temperature scaling
+            latents = torch.randn(len(sequence), self.latent_dim, device=device)
+            latents = latents * temperature
+            coords = self.decode(latents, sequence)
+            coords_np = coords.detach().cpu().numpy()
+            polymers.append(template.with_coordinates(coords_np))
+
+        return polymers
+
     @property
     def supported_residue_types(self) -> np.ndarray:
         """Array of supported residue type indices (int)."""

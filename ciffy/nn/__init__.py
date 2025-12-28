@@ -49,6 +49,8 @@ from .base_trainer import (
     OutputConfig,
     WandbConfig,
     MetricsLogger,
+    SchedulerConfig,
+    ValidationConfig,
 )
 from .loggers import (
     WandbLogger,
@@ -74,7 +76,9 @@ from .runners import (
     format_inference_results_table,
 )
 
-from .protocols import PolymerGenerativeModel, PolymerEncoder
+from .protocols import PolymerGenerativeModel, PolymerEncoder, PolymerPropertyPredictor
+from .schedulers import create_scheduler, get_current_lr
+from .early_stopping import EarlyStopper
 from .model_registry import register_model, get_model_class
 from .inference import load_model_from_checkpoint, generate_samples
 from .inference_config import InferenceConfig
@@ -137,6 +141,8 @@ __all__ = [
     "OutputConfig",
     "WandbConfig",
     "MetricsLogger",
+    "SchedulerConfig",
+    "ValidationConfig",
     # Loggers
     "WandbLogger",
     "NoOpLogger",
@@ -156,8 +162,13 @@ __all__ = [
     # Inference protocols and models
     "PolymerGenerativeModel",
     "PolymerEncoder",
+    "PolymerPropertyPredictor",
     "register_model",
     "get_model_class",
+    # Schedulers and early stopping
+    "create_scheduler",
+    "get_current_lr",
+    "EarlyStopper",
     # Inference utilities (from runners/)
     "load_model_from_checkpoint",
     "generate_samples",

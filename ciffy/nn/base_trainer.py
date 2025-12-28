@@ -57,6 +57,8 @@ if TYPE_CHECKING:
 
 from .training import get_device, load_checkpoint, save_checkpoint, set_seed, train_epoch
 from .diagnostics import DiagnosticsConfig, TrainingDiagnostics
+from .schedulers import create_scheduler, get_current_lr
+from .early_stopping import EarlyStopper
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,44 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Configuration Dataclasses
 # =============================================================================
+
+
+@dataclass
+class SchedulerConfig:
+    """Learning rate scheduler configuration.
+
+    Attributes:
+        scheduler_type: Type of scheduler ('cosine', 'linear', 'step', 'none').
+        warmup_epochs: Number of warmup epochs (linear ramp from 0 to lr).
+        min_lr: Minimum learning rate for cosine/linear decay.
+        step_size: Epochs between LR drops (for step scheduler).
+        gamma: Multiplicative factor for step scheduler.
+    """
+
+    scheduler_type: str = "none"
+    warmup_epochs: int = 0
+    min_lr: float = 1e-6
+    step_size: int = 30
+    gamma: float = 0.1
+
+
+@dataclass
+class ValidationConfig:
+    """Validation and early stopping configuration.
+
+    Attributes:
+        val_every: Validate every N epochs (0 to disable).
+        val_fraction: Fraction of training data for validation (if no val dataset).
+        early_stopping: Enable early stopping based on validation loss.
+        patience: Epochs to wait for improvement before stopping.
+        min_delta: Minimum improvement to reset patience counter.
+    """
+
+    val_every: int = 0
+    val_fraction: float = 0.1
+    early_stopping: bool = False
+    patience: int = 10
+    min_delta: float = 1e-4
 
 
 @dataclass
@@ -78,6 +118,8 @@ class TrainingConfig:
         device: Device string ('auto', 'cuda', 'cpu', 'mps', or 'cuda:N').
         seed: Random seed for reproducibility. None for no seeding.
         num_workers: Number of DataLoader workers.
+        scheduler: Learning rate scheduler configuration.
+        validation: Validation and early stopping configuration.
     """
 
     epochs: int = 100
@@ -87,6 +129,8 @@ class TrainingConfig:
     device: str = "auto"
     seed: int | None = None
     num_workers: int = 0
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    validation: ValidationConfig = field(default_factory=ValidationConfig)
 
 
 @dataclass
@@ -419,6 +463,27 @@ class BaseTrainer(ABC):
         else:
             self.diagnostics = None
 
+        # Create LR scheduler
+        self.scheduler = create_scheduler(
+            self.optimizer,
+            config.training.scheduler,
+            config.training.epochs,
+        )
+
+        # Create validation dataloader (if configured)
+        self.val_dataloader = self.create_val_dataloader()
+
+        # Create early stopper (if configured)
+        val_config = config.training.validation
+        if val_config.early_stopping and val_config.val_every > 0:
+            self.early_stopper = EarlyStopper(
+                patience=val_config.patience,
+                min_delta=val_config.min_delta,
+                mode="min",
+            )
+        else:
+            self.early_stopper = None
+
     @abstractmethod
     def create_optimizer(self) -> "optim.Optimizer":
         """Create and return the optimizer.
@@ -457,6 +522,46 @@ class BaseTrainer(ABC):
             return model.compute_loss(sample)
 
         return default_loss_fn
+
+    def create_val_dataloader(self) -> "DataLoader | None":
+        """Create and return the validation DataLoader.
+
+        Default: Returns None (no validation). Override to provide validation data.
+        If validation.val_fraction > 0, subclasses can split their training dataset.
+
+        Returns:
+            DataLoader for validation, or None to disable validation.
+        """
+        return None
+
+    def validate(self) -> dict[str, float]:
+        """Run validation loop.
+
+        Returns:
+            Dictionary of validation metrics (prefixed with 'val_').
+        """
+        if self.val_dataloader is None:
+            return {}
+
+        self.model.eval()
+        total_loss = 0.0
+        n_samples = 0
+
+        try:
+            with torch.no_grad():
+                for sample in self.val_dataloader:
+                    losses = self.loss_fn(self.model, sample)
+                    loss = losses.get("loss")
+                    if loss is not None:
+                        total_loss += loss.item()
+                        n_samples += 1
+        finally:
+            self.model.train()
+
+        if n_samples == 0:
+            return {}
+
+        return {"val_loss": total_loss / n_samples}
 
     def on_epoch_start(self, epoch: int) -> None:
         """Hook called at the start of each epoch.
@@ -547,6 +652,33 @@ class BaseTrainer(ABC):
                 # Post-epoch hook
                 self.on_epoch_end(epoch, metrics)
 
+                # Step LR scheduler and log learning rate
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                    current_lr = get_current_lr(self.scheduler)
+                    if current_lr is not None:
+                        metrics["learning_rate"] = current_lr
+
+                # Run validation
+                val_config = self.config.training.validation
+                if val_config.val_every > 0 and (epoch + 1) % val_config.val_every == 0:
+                    val_metrics = self.validate()
+                    metrics.update(val_metrics)
+
+                    # Log validation metrics
+                    if self.metrics_logger is not None and val_metrics:
+                        self.metrics_logger.log(val_metrics, step=epoch)
+
+                    # Early stopping check
+                    if self.early_stopper is not None and "val_loss" in val_metrics:
+                        if self.early_stopper.should_stop(val_metrics["val_loss"], epoch):
+                            if not self.quiet:
+                                logger.info(
+                                    f"Early stopping at epoch {epoch + 1}. "
+                                    f"Best val_loss: {self.early_stopper.best_value:.4f}"
+                                )
+                            break
+
                 # Save periodic checkpoint
                 if (epoch + 1) % self.config.output.save_every == 0:
                     self._save_checkpoint(epoch, metrics, is_best=False)
@@ -589,10 +721,14 @@ class BaseTrainer(ABC):
 
         if "loss" in metrics:
             parts.append(f"Loss: {metrics['loss']:.4f}")
+        if "val_loss" in metrics:
+            parts.append(f"Val: {metrics['val_loss']:.4f}")
         if "recon_loss" in metrics:
             parts.append(f"Recon: {metrics['recon_loss']:.4f}")
         if "kl_loss" in metrics:
             parts.append(f"KL: {metrics['kl_loss']:.4f}")
+        if "learning_rate" in metrics:
+            parts.append(f"LR: {metrics['learning_rate']:.2e}")
         if "n_samples" in metrics:
             parts.append(f"Samples: {int(metrics['n_samples'])}")
         if "n_skipped" in metrics and metrics["n_skipped"] > 0:
@@ -626,6 +762,8 @@ class BaseTrainer(ABC):
 
 
 __all__ = [
+    "SchedulerConfig",
+    "ValidationConfig",
     "TrainingConfig",
     "OutputConfig",
     "DataConfig",

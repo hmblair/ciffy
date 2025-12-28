@@ -135,7 +135,58 @@ class PolymerEncoder(Protocol):
         ...
 
 
+@runtime_checkable
+class PolymerPropertyPredictor(Protocol):
+    """
+    Protocol for models that predict properties from polymers.
+
+    Models implementing this protocol take a Polymer with coordinates and
+    predict one or more properties (scalars, vectors, or dictionaries).
+
+    Common use cases:
+        - Stability prediction (scalar)
+        - Binding affinity prediction (scalar)
+        - Secondary structure propensity (per-residue array)
+        - Contact prediction (residue x residue matrix)
+
+    Example:
+        >>> import ciffy
+        >>>
+        >>> # Load a trained predictor
+        >>> predictor = load_stability_predictor("checkpoint.pt")
+        >>>
+        >>> # Load structure
+        >>> polymer = ciffy.load("structure.cif", backend="torch").to("cuda")
+        >>>
+        >>> # Predict stability
+        >>> stability = predictor.predict(polymer)
+        >>> print(f"Predicted stability: {stability.item():.2f}")
+    """
+
+    def predict(
+        self,
+        polymer: "Polymer",
+        **kwargs,
+    ) -> "torch.Tensor | dict[str, torch.Tensor]":
+        """
+        Predict properties from a polymer.
+
+        Args:
+            polymer: Input Polymer with coordinates and sequence.
+            **kwargs: Model-specific prediction parameters.
+
+        Returns:
+            Predicted property as a tensor, or dictionary of tensors if
+            predicting multiple properties.
+
+        Raises:
+            ValueError: If polymer is incompatible with model.
+        """
+        ...
+
+
 __all__ = [
     "PolymerGenerativeModel",
     "PolymerEncoder",
+    "PolymerPropertyPredictor",
 ]

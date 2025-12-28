@@ -42,7 +42,7 @@ class _BaseDescriptor:
     def __init__(
         self,
         scale: Scale,
-        required: bool = True,
+        required: bool = False,
         is_list: bool = False,
     ):
         self.scale = scale
@@ -83,7 +83,7 @@ class Field(_BaseDescriptor):
 
     Example:
         >>> coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
-        >>> bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
+        >>> bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT)
     """
 
     __slots__ = ('dtype', 'validate')
@@ -92,7 +92,7 @@ class Field(_BaseDescriptor):
         self,
         scale: Scale,
         dtype: Dtype | None = None,
-        required: bool = True,
+        required: bool = False,
         validate: bool = True,
     ):
         super().__init__(scale, required, is_list=False)
@@ -126,7 +126,6 @@ class Metadata(_BaseDescriptor):
     Example:
         >>> pdb_id = Metadata(Scale.MOLECULE)
         >>> names = Metadata(Scale.CHAIN, is_list=True)
-        >>> descriptions = Metadata(Scale.CHAIN, is_list=True, required=False)
     """
 
     def __repr__(self):
@@ -162,29 +161,29 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
 
     # Per-atom arrays
-    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
-    atoms = Field(Scale.ATOM, dtype=Dtype.INT, required=False)
-    elements = Field(Scale.ATOM, dtype=Dtype.INT, required=False)
-    bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT, required=False)
+    coordinates = Field(Scale.ATOM, dtype=Dtype.FLOAT)
+    atoms = Field(Scale.ATOM, dtype=Dtype.INT)
+    elements = Field(Scale.ATOM, dtype=Dtype.INT)
+    bfactors = Field(Scale.ATOM, dtype=Dtype.FLOAT)
 
     # Per-residue arrays
-    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT, required=False)
+    sequence = Field(Scale.RESIDUE, dtype=Dtype.INT)
 
     # Per-chain arrays (lengths is handled by hierarchy, not a descriptor)
-    molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT, required=False, validate=False)
+    molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT, validate=False)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Metadata Descriptors - values passed through without conversion
     # ─────────────────────────────────────────────────────────────────────────
 
     # Molecule-level (polymer_count is a property delegated to hierarchy)
-    pdb_id = Metadata(Scale.MOLECULE, required=False)
-    resolution = Metadata(Scale.MOLECULE, required=False)
+    pdb_id = Metadata(Scale.MOLECULE)
+    resolution = Metadata(Scale.MOLECULE)
 
     # Per-chain lists
-    names = Metadata(Scale.CHAIN, is_list=True, required=False)
-    strands = Metadata(Scale.CHAIN, is_list=True, required=False)
-    descriptions = Metadata(Scale.CHAIN, is_list=True, required=False)
+    names = Metadata(Scale.CHAIN, is_list=True)
+    strands = Metadata(Scale.CHAIN, is_list=True)
+    descriptions = Metadata(Scale.CHAIN, is_list=True)
 
     def __init__(
         self: Polymer,

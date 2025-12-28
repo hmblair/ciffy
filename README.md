@@ -163,6 +163,9 @@ ciffy inference configs/inference.yaml
 
 # Cluster structures by sequence identity (requires mmseqs2)
 ciffy cluster data/*.cif --threshold 0.5
+
+# Cluster and create train/val/test directories (homology-aware splitting)
+ciffy cluster data/*.cif --threshold 0.5 --split 0.8,0.1,0.1 --output splits/
 ```
 
 Example output:

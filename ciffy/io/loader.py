@@ -141,6 +141,9 @@ def load(
     # Get B-factors and resolution
     bfactors = data.get("bfactors", None)
     resolution = data.get("resolution", None)
+    # C extension uses -1.0 as sentinel for unavailable; convert to None
+    if resolution is not None and resolution < 0:
+        resolution = None
 
     # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(

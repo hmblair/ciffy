@@ -542,6 +542,135 @@ class TestKabschAlignment:
         assert rmsd < tol.alignment_rmsd
 
 
+class TestScale:
+    """Test scale() method.
+
+    Note: scale() uses isotropic scaling - all axes scaled by the same factor.
+    This preserves molecular geometry (bond angles, relative distances).
+    The returned std is a single scalar per unit, not per-axis.
+    """
+
+    def test_scale_molecule_scale(self, backend):
+        """scale at molecule scale scales entire structure."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        scaled, stds = p.scale(Scale.MOLECULE)
+
+        # std should have shape (1, 1) - single scalar for isotropic scaling
+        assert stds.shape == (1, 1)
+
+        # Scaled structure should have overall std ≈ 1.0
+        # (isotropic: same factor applied to all axes)
+        scaled_coords = np.asarray(scaled.coordinates)
+        # Overall std = sqrt(mean(x^2 + y^2 + z^2))
+        overall_std = np.sqrt((scaled_coords ** 2).mean())
+        tol = get_tolerances()
+        assert abs(overall_std - 1.0) < tol.allclose_atol
+
+    def test_scale_chain_scale(self, backend):
+        """scale at chain scale scales each chain independently."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("9GCM"), backend=backend)
+        n_chains = p.size(Scale.CHAIN)
+        scaled, stds = p.scale(Scale.CHAIN)
+
+        # stds should have one scalar per chain (isotropic scaling)
+        assert stds.shape == (n_chains, 1)
+
+    def test_scale_residue_scale(self, backend):
+        """scale at residue scale scales each residue independently."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        n_res = p.size(Scale.RESIDUE)
+        scaled, stds = p.scale(Scale.RESIDUE)
+
+        # stds should have one scalar per residue (isotropic scaling)
+        assert stds.shape == (n_res, 1)
+
+    def test_scale_returns_std_before_scaling(self, backend):
+        """scale returns standard deviations BEFORE scaling."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        # Center first (scale() centers before computing std)
+        centered, _ = p.center(Scale.MOLECULE)
+        coords = np.asarray(centered.coordinates)
+        # Original overall std = sqrt(mean(x^2 + y^2 + z^2)) for centered coords
+        original_std = np.sqrt((coords ** 2).mean())
+
+        # Scale the structure
+        _, stds = p.scale(Scale.MOLECULE)
+
+        # Returned std should match original (before scaling)
+        std_val = float(np.asarray(stds).squeeze())
+        tol = get_tolerances()
+        assert abs(std_val - original_std) < tol.allclose_atol
+
+    def test_scale_custom_size(self, backend):
+        """scale with custom size parameter."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        target_size = 2.5
+
+        scaled, _ = p.scale(Scale.MOLECULE, size=target_size)
+
+        # Scaled structure should have overall std ≈ target_size
+        scaled_coords = np.asarray(scaled.coordinates)
+        overall_std = np.sqrt((scaled_coords ** 2).mean())
+        tol = get_tolerances()
+        assert abs(overall_std - target_size) < tol.allclose_atol
+
+    def test_scale_preserves_structure(self, backend):
+        """scale preserves polymer attributes other than coordinates."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        scaled, _ = p.scale(Scale.MOLECULE)
+
+        # Structure should be preserved
+        assert scaled.size() == p.size()
+        assert scaled.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
+        assert scaled.size(Scale.CHAIN) == p.size(Scale.CHAIN)
+        assert scaled.pdb_id == p.pdb_id
+
+    def test_scale_returns_new_polymer(self, backend):
+        """scale returns new polymer, doesn't modify original."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        original_coords = np.asarray(p.coordinates).copy()
+
+        scaled, _ = p.scale(Scale.MOLECULE)
+
+        # Original should be unchanged
+        assert np.allclose(np.asarray(p.coordinates), original_coords)
+
+    def test_scale_centered_result(self, backend):
+        """scale produces centered coordinates."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        scaled, _ = p.scale(Scale.MOLECULE)
+
+        # Scaled coordinates should be centered (mean ≈ 0)
+        mean = np.asarray(scaled.coordinates).mean(axis=0)
+        tol = get_tolerances()
+        assert np.allclose(mean, 0, atol=tol.center_origin)
+
+
 class TestAlignFunction:
     """Test ciffy.align() function."""
 

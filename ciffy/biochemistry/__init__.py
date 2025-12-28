@@ -63,6 +63,9 @@ from .constants import (
     PyrimidineBase,
 )
 
+# Canonical residue lists
+from .constants import CANONICAL_ALL
+
 from .linking import (
     LinkingDefinition,
     NUCLEIC_ACID_LINK,
@@ -112,6 +115,8 @@ __all__ = [
     "PurinePyrimidine",
     "PurineBase",
     "PyrimidineBase",
+    # Canonical residue lists
+    "CANONICAL_ALL",
     # Linking
     "LinkingDefinition",
     "NUCLEIC_ACID_LINK",

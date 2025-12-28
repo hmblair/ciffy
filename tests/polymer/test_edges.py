@@ -585,3 +585,265 @@ class TestMembershipMethod:
         for i, expected_size in enumerate(sizes_np):
             actual_count = (idx_np == i).sum()
             assert actual_count == expected_size
+
+
+class TestAtomNames:
+    """Test atom_names() method."""
+
+    def test_atom_names_returns_list(self, backend):
+        """atom_names() returns a list."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        names = p.atom_names()
+
+        assert isinstance(names, list)
+
+    def test_atom_names_length_matches_size(self, backend):
+        """atom_names() length equals number of atoms."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        names = p.atom_names()
+
+        assert len(names) == p.size()
+
+    def test_atom_names_are_strings(self, backend):
+        """atom_names() entries are strings."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        names = p.atom_names()
+
+        for name in names:
+            assert isinstance(name, str)
+
+    def test_atom_names_common_atoms(self, backend):
+        """atom_names() includes known atom names."""
+        import ciffy
+
+        p = ciffy.from_sequence("a", backend=backend)
+        names = p.atom_names()
+
+        # Adenine should have phosphate atoms
+        assert any("P" in name or "O" in name or "C" in name for name in names)
+
+    def test_atom_names_empty_polymer(self, backend):
+        """atom_names() on empty polymer returns empty list."""
+        import ciffy
+
+        template = ciffy.from_sequence("a", backend=backend)
+        empty = template[template.atoms < 0]
+        names = empty.atom_names()
+
+        assert names == []
+
+    def test_atom_names_unknown_returns_question_mark(self, backend):
+        """atom_names() returns '?' for unknown atom types."""
+        import ciffy
+
+        p = ciffy.from_sequence("a", backend=backend)
+
+        # Set invalid atom value
+        if backend == "torch":
+            import torch
+            p.atoms = torch.full((p.size(),), 99999, dtype=torch.int64)
+        else:
+            p.atoms = np.full(p.size(), 99999, dtype=np.int64)
+
+        names = p.atom_names()
+        assert all(name == "?" for name in names)
+
+
+class TestChainInfo:
+    """Test chain_info() method."""
+
+    def test_chain_info_returns_list(self, backend):
+        """chain_info() returns a list."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        info = p.chain_info()
+
+        assert isinstance(info, list)
+
+    def test_chain_info_length_matches_chains(self, backend):
+        """chain_info() has one entry per chain."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        info = p.chain_info()
+
+        assert len(info) == p.size(Scale.CHAIN)
+
+    def test_chain_info_has_required_keys(self, backend):
+        """chain_info() entries have required keys."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        info = p.chain_info()
+
+        required_keys = ['chain', 'type', 'res', 'atoms']
+        for entry in info:
+            for key in required_keys:
+                assert key in entry, f"Missing key: {key}"
+
+    def test_chain_info_values_types(self, backend):
+        """chain_info() values have correct types."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        info = p.chain_info()
+
+        for entry in info:
+            assert isinstance(entry['chain'], str)
+            assert isinstance(entry['type'], str)
+            assert isinstance(entry['res'], int)
+            assert isinstance(entry['atoms'], int)
+
+    def test_chain_info_atoms_sum(self, backend):
+        """chain_info() atom counts sum to total atoms."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        info = p.chain_info()
+
+        total = sum(entry['atoms'] for entry in info)
+        assert total == p.size()
+
+    def test_chain_info_template_polymer(self, backend):
+        """chain_info() works on template polymers."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        info = p.chain_info()
+
+        assert len(info) == 1
+        assert info[0]['chain'] is not None
+        assert info[0]['res'] == 4
+
+
+class TestDetach:
+    """Test detach() method."""
+
+    def test_detach_returns_self(self, backend):
+        """detach() returns self for method chaining."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        result = p.detach()
+
+        assert result is p
+
+    def test_detach_noop_numpy(self):
+        """detach() is a no-op on numpy backend."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend="numpy")
+        original_coords = p.coordinates.copy()
+
+        p.detach()
+
+        assert np.allclose(p.coordinates, original_coords)
+
+    def test_detach_removes_grad(self):
+        """detach() removes gradient tracking on torch tensors."""
+        import ciffy
+        import torch
+
+        p = ciffy.from_sequence("acgu", backend="torch")
+        p.coordinates = p.coordinates.clone().requires_grad_(True)
+
+        assert p.coordinates.requires_grad
+
+        p.detach()
+
+        assert not p.coordinates.requires_grad
+
+    def test_detach_preserves_values(self):
+        """detach() preserves coordinate values."""
+        import ciffy
+        import torch
+
+        p = ciffy.from_sequence("acgu", backend="torch")
+        original_coords = p.coordinates.clone()
+
+        p.coordinates = p.coordinates.requires_grad_(True)
+        p.detach()
+
+        assert torch.allclose(p.coordinates, original_coords)
+
+
+class TestCanonical:
+    """Test canonical() method."""
+
+    def test_canonical_returns_polymer(self, backend):
+        """canonical() returns a Polymer."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        result = p.canonical()
+
+        assert isinstance(result, ciffy.Polymer)
+
+    def test_canonical_preserves_standard_residues(self, backend):
+        """canonical() preserves standard RNA residues."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        canonical = p.canonical()
+
+        # All standard, should be preserved
+        assert canonical.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
+        assert canonical.size() == p.size()
+
+    def test_canonical_preserves_standard_protein(self, backend):
+        """canonical() preserves standard amino acids."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.from_sequence("MGKLF", backend=backend)
+        canonical = p.canonical()
+
+        # All standard amino acids, should be preserved
+        assert canonical.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
+
+    def test_canonical_filters_modified_residues(self, backend):
+        """canonical() filters out modified residues from real CIF."""
+        import ciffy
+        from ciffy import Scale
+
+        # Load a structure that may have modified residues
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        canonical = p.canonical()
+
+        # canonical should have same or fewer residues
+        assert canonical.size(Scale.RESIDUE) <= p.size(Scale.RESIDUE)
+
+    def test_canonical_empty_on_all_noncanonical(self, backend):
+        """canonical() on all non-canonical residues returns empty."""
+        import ciffy
+        from ciffy.biochemistry import Residue
+
+        p = ciffy.from_sequence("a", backend=backend)
+
+        # Set to a non-canonical (modified) residue type - H2U is dihydrouridine
+        if backend == "torch":
+            import torch
+            p.sequence = torch.tensor([Residue.H2U.value], dtype=torch.int64)
+        else:
+            p.sequence = np.array([Residue.H2U.value], dtype=np.int64)
+
+        canonical = p.canonical()
+        assert canonical.empty()
+
+    def test_canonical_sequence_preserved(self, backend):
+        """canonical() preserves sequence string for standard residues."""
+        import ciffy
+
+        p = ciffy.from_sequence("acgu", backend=backend)
+        canonical = p.canonical()
+
+        assert canonical.sequence_str() == p.sequence_str()

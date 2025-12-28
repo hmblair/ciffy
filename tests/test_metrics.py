@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 import ciffy
-from ciffy import Scale, Molecule, tm_score, lddt
+from ciffy import Scale, Molecule, tm_score, lddt, rmsd
 
 from tests.utils import (
     get_test_cif,
@@ -312,3 +312,132 @@ class TestLDDTEdgeCases:
         # Self comparison should be 1.0
         tol = get_tolerances()
         assert abs(global_score - 1.0) < tol.score_self
+
+
+# =============================================================================
+# Test RMSD Function
+# =============================================================================
+
+class TestRmsdFunction:
+    """Tests for the rmsd() function."""
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_self_is_zero(self, backend):
+        """RMSD of structure with itself should be 0."""
+        skip_if_no_torch(backend)
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rmsd_val = rmsd(p, p)
+
+        tol = get_tolerances()
+        rmsd_np = np.asarray(rmsd_val)
+        assert np.all(rmsd_np < tol.allclose_atol)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_symmetric(self, backend):
+        """RMSD(a, b) == RMSD(b, a)."""
+        skip_if_no_torch(backend)
+
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        # Create a perturbed copy
+        p2 = p1.with_coordinates(p1.coordinates + 0.1)
+
+        rmsd_ab = rmsd(p1, p2)
+        rmsd_ba = rmsd(p2, p1)
+
+        rmsd_ab_np = np.asarray(rmsd_ab)
+        rmsd_ba_np = np.asarray(rmsd_ba)
+
+        tol = get_tolerances()
+        assert np.allclose(rmsd_ab_np, rmsd_ba_np, atol=tol.allclose_atol)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_at_molecule_scale(self, backend):
+        """RMSD at molecule scale returns single value."""
+        skip_if_no_torch(backend)
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rmsd_val = rmsd(p, p, scale=Scale.MOLECULE)
+
+        # Should be shape (1,) for single molecule
+        rmsd_np = np.asarray(rmsd_val)
+        assert rmsd_np.shape == (1,)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_at_chain_scale(self, backend):
+        """RMSD at chain scale returns one value per chain."""
+        skip_if_no_torch(backend)
+
+        p = ciffy.load(get_test_cif("9GCM"), backend=backend)
+        n_chains = p.size(Scale.CHAIN)
+        rmsd_val = rmsd(p, p, scale=Scale.CHAIN)
+
+        rmsd_np = np.asarray(rmsd_val)
+        assert rmsd_np.shape == (n_chains,)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_at_residue_scale(self, backend):
+        """RMSD at residue scale returns one value per residue."""
+        skip_if_no_torch(backend)
+
+        # Use poly() to exclude hetero atoms (water, ions) that don't have residues
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        n_res = p.size(Scale.RESIDUE)
+        rmsd_val = rmsd(p, p, scale=Scale.RESIDUE)
+
+        rmsd_np = np.asarray(rmsd_val)
+        assert rmsd_np.shape == (n_res,)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_nonnegative(self, backend):
+        """RMSD values are always non-negative."""
+        skip_if_no_torch(backend)
+
+        # Use poly() to exclude hetero atoms
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+
+        np.random.seed(42)
+        noise = np.random.randn(p1.size(), 3).astype(np.float32) * 0.5
+        if backend == "torch":
+            import torch
+            noise = torch.from_numpy(noise)
+        p2 = p1.with_coordinates(p1.coordinates + noise)
+
+        rmsd_val = rmsd(p1, p2, scale=Scale.RESIDUE)
+
+        rmsd_np = np.asarray(rmsd_val)
+        assert np.all(rmsd_np >= 0)
+
+    def test_rmsd_size_mismatch_raises(self):
+        """RMSD raises ValueError for mismatched sizes."""
+        p1 = ciffy.from_sequence("acgu", backend="numpy")
+        p2 = ciffy.from_sequence("acguacgu", backend="numpy")
+
+        # Just check that it raises ValueError (message may vary)
+        with pytest.raises(ValueError):
+            rmsd(p1, p2)
+
+    @pytest.mark.parametrize("backend", ["numpy", "torch"])
+    def test_rmsd_array_input(self, backend):
+        """RMSD works with raw coordinate arrays."""
+        skip_if_no_torch(backend)
+
+        np.random.seed(42)
+        coords1 = np.random.randn(20, 3).astype(np.float32)
+        coords2 = coords1 + 0.1
+
+        if backend == "torch":
+            import torch
+            coords1 = torch.from_numpy(coords1)
+            coords2 = torch.from_numpy(coords2)
+
+        rmsd_val = rmsd(coords1, coords2)
+
+        # Should be a scalar or 0-d array
+        if hasattr(rmsd_val, 'item'):
+            rmsd_scalar = rmsd_val.item()
+        else:
+            rmsd_scalar = float(rmsd_val)
+
+        assert rmsd_scalar >= 0
+        assert rmsd_scalar < 1.0  # Should be small for small perturbation

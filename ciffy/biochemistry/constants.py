@@ -108,6 +108,9 @@ _AMINO_ACIDS = [
     ("HIS", Residue.HIS), ("TYR", Residue.TYR),
 ]
 
+# All canonical residue types (for filtering) - stores residue indices
+CANONICAL_ALL = [res.value for _, res in _RNA_NUCLEOTIDES + _DNA_NUCLEOTIDES + _AMINO_ACIDS]
+
 
 # =============================================================================
 # Predicates for flat groups

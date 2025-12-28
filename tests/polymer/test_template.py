@@ -636,24 +636,29 @@ class TestBondsAndLinking:
         assert Residue.A.bonds.shape[1] == 2  # Each bond has 2 atoms
 
     def test_chain_extends_linearly(self):
-        """Test that chain extends in one direction without overlapping."""
+        """Test that chain extends linearly without overlapping residues."""
+        import numpy as np
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("aaaa")
+        res_sizes = list(polymer.counts(Scale.RESIDUE))
 
-        # Chain should span a significant distance along Z (linear extension axis)
-        z_range = polymer.coordinates[:, 2].max() - polymer.coordinates[:, 2].min()
-        assert z_range > 15.0  # 4 residues should span >15 Angstroms along Z
+        # Compute centroids of each residue
+        centroids = []
+        offset = 0
+        for size in res_sizes:
+            centroids.append(polymer.coordinates[offset:offset + size].mean(axis=0))
+            offset += size
 
-        # X and Y should have minimal drift (chain extends along Z)
-        x_range = polymer.coordinates[:, 0].max() - polymer.coordinates[:, 0].min()
-        y_range = polymer.coordinates[:, 1].max() - polymer.coordinates[:, 1].min()
-        # X/Y range should be << Z range (residues extend linearly)
-        assert x_range < z_range / 2
-        assert y_range < z_range / 2
+        # Check that consecutive residues are properly spaced
+        for i in range(len(centroids) - 1):
+            dist = np.linalg.norm(centroids[i + 1] - centroids[i])
+            assert dist > 5.0, f"Residues {i} and {i+1} too close: {dist:.2f}Å"
+            assert dist < 15.0, f"Residues {i} and {i+1} too far: {dist:.2f}Å"
 
     def test_rna_residues_spaced(self):
         """Test that RNA residues are appropriately spaced (no overlapping)."""
+        import numpy as np
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("aa")
@@ -663,13 +668,14 @@ class TestBondsAndLinking:
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
         second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
 
-        # Z spacing should be positive and sufficient to avoid clashes
-        z_spacing = second_centroid[2] - first_centroid[2]
-        assert z_spacing > 5.0, f"Z spacing {z_spacing:.2f}Å too small"
+        # Distance should be sufficient to avoid clashes
+        distance = np.linalg.norm(second_centroid - first_centroid)
+        assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small"
 
     @pytest.mark.filterwarnings("ignore:Sequence 'AA' contains only nucleotide")
     def test_protein_residues_spaced(self):
         """Test that protein residues are appropriately spaced (no overlapping)."""
+        import numpy as np
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("AA")
@@ -679,12 +685,13 @@ class TestBondsAndLinking:
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
         second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
 
-        # Z spacing should be positive and sufficient (proteins are smaller than nucleotides)
-        z_spacing = second_centroid[2] - first_centroid[2]
-        assert z_spacing > 2.5, f"Z spacing {z_spacing:.2f}Å too small"
+        # Distance should be sufficient (proteins are smaller than nucleotides)
+        distance = np.linalg.norm(second_centroid - first_centroid)
+        assert distance > 2.5, f"Centroid distance {distance:.2f}Å too small"
 
     def test_dna_residues_spaced(self):
         """Test that DNA residues are appropriately spaced (no overlapping)."""
+        import numpy as np
         from ciffy import from_sequence, Scale
 
         polymer = from_sequence("at")  # DNA (has 't')
@@ -694,6 +701,6 @@ class TestBondsAndLinking:
         first_centroid = polymer.coordinates[:res_sizes[0]].mean(axis=0)
         second_centroid = polymer.coordinates[res_sizes[0]:].mean(axis=0)
 
-        # Z spacing should be positive and sufficient
-        z_spacing = second_centroid[2] - first_centroid[2]
-        assert z_spacing > 5.0, f"Z spacing {z_spacing:.2f}Å too small"
+        # Distance should be sufficient to avoid clashes
+        distance = np.linalg.norm(second_centroid - first_centroid)
+        assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small"

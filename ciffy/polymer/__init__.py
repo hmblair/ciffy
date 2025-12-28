@@ -16,7 +16,7 @@ Factory Functions:
 
 from .polymer import Polymer, Field, Metadata
 from .template import from_sequence, from_extract
-from .builder import ChainBuilder, ResidueData, expand_residue
+from .builder import ChainBuilder, ResidueData, expand_residue, linear_extend_transform
 
 __all__ = [
     "Polymer",
@@ -27,4 +27,5 @@ __all__ = [
     "ChainBuilder",
     "ResidueData",
     "expand_residue",
+    "linear_extend_transform",
 ]

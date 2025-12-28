@@ -261,7 +261,7 @@ class TestExtend:
         pass  # Skip this test as error is caught differently now
 
     def test_extend_residue_spacing(self):
-        """Extended residues are spaced correctly along Z-axis."""
+        """Extended residues are properly spaced (non-overlapping)."""
         p = from_sequence("a")
         extended = extend_with_linear(p, Residue.C)
 
@@ -273,14 +273,11 @@ class TestExtend:
         first_centroid = coords[:first_res_atoms].mean(axis=0)
         second_centroid = coords[first_res_atoms:].mean(axis=0)
 
-        # Residues should be spaced appropriately along Z-axis (not overlapping)
-        z_spacing = second_centroid[2] - first_centroid[2]
-        assert z_spacing > 5.0, f"Z spacing {z_spacing:.2f}Å too small (residues may clash)"
-
-        # X and Y should be roughly the same (extending along Z)
-        xy_drift = np.sqrt((second_centroid[0] - first_centroid[0])**2 +
-                          (second_centroid[1] - first_centroid[1])**2)
-        assert xy_drift < 1.0, f"XY drift {xy_drift:.2f}Å too large (not linear)"
+        # Residues should be spaced appropriately (non-overlapping)
+        # Frame-based positioning extends along backbone direction, not necessarily global Z
+        distance = np.linalg.norm(second_centroid - first_centroid)
+        assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small (residues may clash)"
+        assert distance < 15.0, f"Centroid distance {distance:.2f}Å too large (unusual spacing)"
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_extend_backend_preserved(self, backend):

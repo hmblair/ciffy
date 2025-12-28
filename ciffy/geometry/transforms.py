@@ -587,10 +587,11 @@ def position_residue(
     transform: Array | None = None,
 ) -> Array:
     """
-    Position a residue relative to the previous residue.
+    Position a residue relative to the previous residue using frame-based alignment.
 
     This function places next_coords so that the incoming link point of the
     next residue aligns with the outgoing link point of the previous residue.
+    Uses frame-based positioning for consistent backbone geometry.
 
     Works with both NumPy and PyTorch arrays (auto-detected from input).
 
@@ -602,7 +603,7 @@ def position_residue(
         prev_residue: Residue enum for previous residue.
         next_residue: Residue enum for next residue.
         transform: Optional (6,) SE(3) transform [axis-angle, translation].
-            If None, uses linear extension along the Z-axis with standard bond length.
+            If None, uses linear extension along the backbone axis.
             If provided, applies the learned transform from flow models.
 
     Returns:
@@ -613,7 +614,7 @@ def position_residue(
         ...     prev_coords, next_coords,
         ...     prev_atom_to_col, next_atom_to_col,
         ...     Residue.A, Residue.C,
-        ...     transform=None,  # Linear extension
+        ...     transform=None,  # Linear extension along backbone
         ... )
 
     Example (SE(3) transform for flow models):
@@ -626,52 +627,37 @@ def position_residue(
     """
     from ..biochemistry.linking import LINKING_BY_TYPE
 
-    # Compute outgoing frame from previous residue
-    prev_origin, prev_R = compute_prev_frame(
-        prev_coords, prev_atom_to_col, prev_residue
-    )
-
     if transform is None:
-        # Linear extension: translate along global Z-axis with appropriate spacing.
-        # This keeps all residues with the same orientation extending in a line.
-        from ..biochemistry.linking import LINKING_BY_TYPE
-
+        # Linear extension: compute spacing and create identity rotation + Z translation
         link_def = LINKING_BY_TYPE.get(prev_residue.molecule_type)
 
-        # Calculate spacing: use backbone length (P to O3') + bond length
-        # This ensures residues don't overlap while maintaining correct connectivity.
         if link_def is not None:
             prev_link_atom = getattr(prev_residue, link_def.prev_atom)
-            next_link_atom = getattr(next_residue, link_def.next_atom)
+            prev_p_atom = getattr(prev_residue, link_def.next_atom)
 
-            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
-            next_link_pos = next_coords[next_atom_to_col[next_link_atom.value]]
-
-            # Get P position of previous residue to calculate backbone span
-            prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom
-            if prev_p_atom.value in prev_atom_to_col:
+            if prev_link_atom.value in prev_atom_to_col and prev_p_atom.value in prev_atom_to_col:
+                prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
                 prev_p_pos = prev_coords[prev_atom_to_col[prev_p_atom.value]]
-                # Backbone span is distance from P to O3' plus bond length
-                backbone_span = norm(prev_link_pos - prev_p_pos)
+                backbone_span = float(norm(prev_link_pos - prev_p_pos))
                 spacing = backbone_span + link_def.bond_length
             else:
-                # First residue may not have P, use default spacing
                 spacing = 6.0
         else:
             spacing = 6.0
 
         if is_torch(prev_coords):
             import torch
-            offset = torch.zeros(3, dtype=prev_coords.dtype, device=prev_coords.device)
-            offset[2] = spacing
+            transform = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, spacing],
+                                     dtype=prev_coords.dtype, device=prev_coords.device)
         else:
-            offset = np.array([0.0, 0.0, spacing], dtype=prev_coords.dtype)
+            transform = np.array([0.0, 0.0, 0.0, 0.0, 0.0, spacing], dtype=np.float32)
 
-        prev_centroid = prev_coords.mean(axis=0)
-        next_centroid = next_coords.mean(axis=0)
-        return next_coords + (prev_centroid + offset - next_centroid)
+    # Compute outgoing frame from previous residue
+    prev_origin, prev_R = compute_prev_frame(
+        prev_coords, prev_atom_to_col, prev_residue
+    )
 
-    # Apply SE(3) transform (for learned/non-default transforms)
+    # Apply SE(3) transform to get target frame
     target_origin, target_R = apply_relative_transform(
         prev_origin, prev_R, transform
     )

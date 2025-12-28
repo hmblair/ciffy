@@ -144,19 +144,141 @@ def _expand_residue_cached(residue_idx: int) -> tuple[tuple[int, ...], tuple[int
     return tuple(atom_indices), tuple(element_indices), tuple(atom_names), residue.ideal
 
 
-def expand_residue(residue: Residue) -> tuple[tuple[int, ...], tuple[int, ...], tuple[str, ...], np.ndarray]:
+def expand_residue(
+    residue: Residue,
+    start_terminal: bool = True,
+    end_terminal: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Get atom data for a residue type.
+    Get atom data for a residue type with optional terminal filtering.
 
     Args:
         residue: Residue type.
+        start_terminal: If True, include 5'/N-terminal atoms (OP3, HOP3 for RNA).
+        end_terminal: If True, include 3'/C-terminal atoms (HO3' for RNA).
 
     Returns:
-        Tuple of (atom_indices, element_indices, atom_names, ideal_coords).
-        Coordinates are copied for safe mutation.
+        Tuple of (atoms, elements, coords) as numpy arrays.
+
+    Example:
+        >>> # Internal residue (no terminal atoms)
+        >>> atoms, elements, coords = expand_residue(Residue.A, start_terminal=False, end_terminal=False)
+        >>> # First residue (5' terminal only)
+        >>> atoms, elements, coords = expand_residue(Residue.A, start_terminal=True, end_terminal=False)
+        >>> # Last residue (3' terminal only)
+        >>> atoms, elements, coords = expand_residue(Residue.U, start_terminal=False, end_terminal=True)
     """
-    atoms, elements, names, coords = _expand_residue_cached(residue.value)
-    return atoms, elements, names, coords.copy()
+    atom_indices, element_indices, atom_names, coords = _expand_residue_cached(residue.value)
+
+    # Check if filtering is needed
+    if start_terminal and end_terminal:
+        # No filtering - return all atoms as arrays
+        return (
+            np.array(atom_indices, dtype=np.int64),
+            np.array(element_indices, dtype=np.int64),
+            coords.copy(),
+        )
+
+    # Get molecule config for terminal atoms
+    mol_type = residue.molecule_type
+    if mol_type not in _MOLECULE_CONFIGS:
+        # Unknown molecule type - return all atoms
+        return (
+            np.array(atom_indices, dtype=np.int64),
+            np.array(element_indices, dtype=np.int64),
+            coords.copy(),
+        )
+
+    config = _MOLECULE_CONFIGS[mol_type]
+
+    # Build set of atoms to exclude
+    exclude: set[str] = set()
+    if not start_terminal:
+        exclude.update(config.start_terminal_atoms)
+    if not end_terminal:
+        exclude.update(config.end_terminal_atoms)
+
+    if not exclude:
+        # Nothing to exclude
+        return (
+            np.array(atom_indices, dtype=np.int64),
+            np.array(element_indices, dtype=np.int64),
+            coords.copy(),
+        )
+
+    # Filter atoms
+    keep_indices = [i for i, name in enumerate(atom_names) if name not in exclude]
+
+    return (
+        np.array([atom_indices[i] for i in keep_indices], dtype=np.int64),
+        np.array([element_indices[i] for i in keep_indices], dtype=np.int64),
+        coords[keep_indices].copy(),
+    )
+
+
+def linear_extend_transform(
+    prev_coords: Array,
+    prev_atoms: Array,
+    prev_residue: Residue,
+    next_atoms: Array,
+    next_residue: Residue,
+) -> np.ndarray:
+    """
+    Calculate SE(3) transform for linear chain extension.
+
+    Computes the transform that positions the next residue along the backbone
+    axis with proper spacing, maintaining the same orientation as the previous
+    residue.
+
+    Args:
+        prev_coords: (n_atoms, 3) coordinates of previous residue.
+        prev_atoms: Atom type indices of previous residue.
+        prev_residue: Previous residue type.
+        next_atoms: Atom type indices of next residue.
+        next_residue: Next residue type.
+
+    Returns:
+        (6,) SE(3) transform [axis-angle (3), translation (3)] as numpy array.
+        The axis-angle is [0, 0, 0] (no rotation), and translation is
+        [0, 0, spacing] where spacing is the backbone span + bond length.
+
+    Example:
+        >>> atoms1, elements1, coords1 = expand_residue(Residue.A)
+        >>> atoms2, elements2, coords2 = expand_residue(Residue.C, start_terminal=False)
+        >>> transform = linear_extend_transform(coords1, atoms1, Residue.A, atoms2, Residue.C)
+        >>> # Use with Polymer.extend() or position_residue_fast()
+    """
+    from ..biochemistry.linking import LINKING_BY_TYPE
+
+    link_def = LINKING_BY_TYPE.get(prev_residue.molecule_type)
+
+    if link_def is None:
+        # No linking definition - use default spacing
+        spacing = 6.0
+    else:
+        # Build atom_to_col mappings
+        prev_atom_to_col = atoms_to_col_map(tuple(int(a) for a in prev_atoms))
+        next_atom_to_col = atoms_to_col_map(tuple(int(a) for a in next_atoms))
+
+        # Get linking atoms
+        prev_link_atom = getattr(prev_residue, link_def.prev_atom)  # e.g., O3' for RNA
+        next_link_atom = getattr(next_residue, link_def.next_atom)  # e.g., P for RNA
+
+        # Get P position of previous residue to calculate backbone span
+        prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom
+
+        if prev_link_atom.value in prev_atom_to_col and prev_p_atom.value in prev_atom_to_col:
+            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
+            prev_p_pos = prev_coords[prev_atom_to_col[prev_p_atom.value]]
+            # Backbone span is distance from P to O3' plus bond length
+            backbone_span = float(np.linalg.norm(prev_link_pos - prev_p_pos))
+            spacing = backbone_span + link_def.bond_length
+        else:
+            # Missing atoms - use default spacing
+            spacing = 6.0
+
+    # Return identity rotation + Z-axis translation
+    return np.array([0.0, 0.0, 0.0, 0.0, 0.0, spacing], dtype=np.float32)
 
 
 # =============================================================================
@@ -395,10 +517,23 @@ class ChainBuilder:
         Raises:
             ValueError: If required linking atoms are missing.
         """
-        from ..geometry import position_residue, position_residue_fast
+        from ..geometry import position_residue_fast
 
-        # Get atom data for this residue
-        atom_indices, element_indices, atom_names, ideal_coords = expand_residue(residue)
+        # Determine terminal filtering
+        is_first = len(self._residues) == 0 and self._prev_coords is None
+
+        # Get atom data with terminal filtering
+        # Note: end_terminal=False here; it's handled in build() for the last residue
+        if self.filter_terminal:
+            atom_arr, element_arr, ideal_coords = expand_residue(
+                residue, start_terminal=is_first, end_terminal=False
+            )
+        else:
+            atom_arr, element_arr, ideal_coords = expand_residue(residue)
+
+        # Convert to tuples for compatibility with existing code
+        atom_indices = tuple(int(a) for a in atom_arr)
+        element_indices = tuple(int(e) for e in element_arr)
 
         # Use provided coords or ideal
         if coords is None:
@@ -415,44 +550,38 @@ class ChainBuilder:
             # Validate linking atoms
             link_def = self.config.linking
             if link_def is not None:
+                # Get atom names for validation
+                residue_atoms = residue.atoms
+                atom_names = tuple(
+                    next((m.name for m in residue_atoms if m.value == a), '?')
+                    for a in atom_indices
+                )
                 self._validate_linking_atoms(
                     atom_indices, atom_names, residue, link_def, "next"
                 )
 
-            if transform is not None:
-                # Fast path with cached frame indices
-                prev_frame = _resolve_frame_indices(self._prev_residue.value, self._prev_atoms)
-                next_frame = _resolve_frame_indices(residue.value, atom_indices)
-                coords = position_residue_fast(
+            # Compute transform if not provided
+            if transform is None:
+                transform = linear_extend_transform(
                     self._prev_coords,
-                    coords,
-                    transform,
-                    prev_frame.prev_cols,
-                    prev_frame.prev_z_toward,
-                    next_frame.next_cols,
-                    next_frame.next_z_toward,
-                )
-            else:
-                # Slow path for linear extension (needs backbone span calculation)
-                coords = position_residue(
-                    prev_coords=self._prev_coords,
-                    next_coords=coords,
-                    prev_atom_to_col=atoms_to_col_map(self._prev_atoms),
-                    next_atom_to_col=atom_to_col,
-                    prev_residue=self._prev_residue,
-                    next_residue=residue,
-                    transform=None,
+                    np.array(self._prev_atoms, dtype=np.int64),
+                    self._prev_residue,
+                    np.array(atom_indices, dtype=np.int64),
+                    residue,
                 )
 
-        # Filter terminal atoms if enabled
-        if self.filter_terminal:
-            is_first = len(self._residues) == 0 and self._prev_coords is None
-            # Note: is_last is handled in finalize() by refiltering the last residue
-            atom_indices, element_indices, coords = self._filter_atoms(
-                atom_indices, element_indices, atom_names, coords,
-                is_first=is_first, is_last=False,
+            # Position using frame-based approach
+            prev_frame = _resolve_frame_indices(self._prev_residue.value, self._prev_atoms)
+            next_frame = _resolve_frame_indices(residue.value, atom_indices)
+            coords = position_residue_fast(
+                self._prev_coords,
+                coords,
+                transform,
+                prev_frame.prev_cols,
+                prev_frame.prev_z_toward,
+                next_frame.next_cols,
+                next_frame.next_z_toward,
             )
-            atom_to_col = atoms_to_col_map(atom_indices)
 
         # Create residue data
         residue_data = ResidueData(
@@ -478,44 +607,6 @@ class ChainBuilder:
             )
 
         return residue_data
-
-    def _filter_atoms(
-        self,
-        atoms: tuple[int, ...],
-        elements: tuple[int, ...],
-        names: tuple[str, ...],
-        coords: Array,
-        is_first: bool,
-        is_last: bool,
-    ) -> tuple[tuple[int, ...], tuple[int, ...], Array]:
-        """Filter atoms based on position in chain."""
-        filtered_atoms = []
-        filtered_elements = []
-        filtered_indices = []
-
-        for i, (atom, elem, name) in enumerate(zip(atoms, elements, names)):
-            is_start_terminal = name in self.config.start_terminal_atoms
-            is_end_terminal = name in self.config.end_terminal_atoms
-
-            include = True
-            if is_start_terminal and not is_first:
-                include = False
-            if is_end_terminal and not is_last:
-                include = False
-
-            if include:
-                filtered_atoms.append(atom)
-                filtered_elements.append(elem)
-                filtered_indices.append(i)
-
-        # Slice coordinates
-        if is_torch(coords):
-            import torch
-            filtered_coords = coords[torch.tensor(filtered_indices)]
-        else:
-            filtered_coords = coords[filtered_indices]
-
-        return tuple(filtered_atoms), tuple(filtered_elements), filtered_coords
 
     def _validate_linking_atoms(
         self,
@@ -573,23 +664,24 @@ class ChainBuilder:
         residues = list(self._residues)
         if self.filter_terminal and len(residues) > 0:
             last = residues[-1]
-            # Re-expand to get all atoms including terminal
-            all_atoms, all_elements, all_names, _ = expand_residue(last.residue)
-
             is_first = len(residues) == 1
-            filtered_atoms, filtered_elements, filtered_coords = self._filter_atoms(
-                all_atoms, all_elements, all_names,
-                # Need to get unfiltered coords - use the positioned coords from prev state
-                self._get_full_coords_for_last(),
-                is_first=is_first, is_last=True,
+
+            # Re-expand with end-terminal atoms included
+            atom_arr, element_arr, _ = expand_residue(
+                last.residue, start_terminal=is_first, end_terminal=True
             )
+            atom_indices = tuple(int(a) for a in atom_arr)
+            element_indices = tuple(int(e) for e in element_arr)
+
+            # Get positioned coordinates for the expanded atom set
+            positioned_coords = self._get_full_coords_for_last()
 
             residues[-1] = ResidueData(
-                coords=filtered_coords,
-                atoms=filtered_atoms,
-                elements=filtered_elements,
+                coords=positioned_coords,
+                atoms=atom_indices,
+                elements=element_indices,
                 residue=last.residue,
-                atom_to_col=atoms_to_col_map(filtered_atoms),
+                atom_to_col=atoms_to_col_map(atom_indices),
             )
 
         # Accumulate arrays
@@ -630,29 +722,46 @@ class ChainBuilder:
         }
 
     def _get_full_coords_for_last(self) -> Array:
-        """Get full (unfiltered) coordinates for the last residue."""
-        # The _prev_coords has the positioned but potentially filtered coords
-        # We need to reposition using full coords
+        """Get full coordinates (with end-terminal atoms) for the last residue."""
+        is_first = len(self._residues) == 1
+
+        # Get full atom set with end-terminal atoms
+        atom_arr, _, ideal = expand_residue(
+            self._residues[-1].residue,
+            start_terminal=is_first,
+            end_terminal=True,
+        )
+        atom_indices = tuple(int(a) for a in atom_arr)
+
         if len(self._residues) < 2:
             # First (and last) residue - use ideal coords
-            _, _, _, ideal = expand_residue(self._residues[-1].residue)
             return ideal
 
         # Re-position using second-to-last residue's state
-        from ..geometry import position_residue
+        from ..geometry import position_residue_fast
 
         last = self._residues[-1]
         second_last = self._residues[-2]
 
-        _, _, _, ideal = expand_residue(last.residue)
-        atom_to_col = atoms_to_col_map(tuple(a.value for a in last.residue.atoms))
+        # Compute linear extension transform
+        transform = linear_extend_transform(
+            second_last.coords,
+            np.array(second_last.atoms, dtype=np.int64),
+            second_last.residue,
+            atom_arr,
+            last.residue,
+        )
 
-        return position_residue(
-            prev_coords=second_last.coords,
-            next_coords=ideal,
-            prev_atom_to_col=second_last.atom_to_col,
-            next_atom_to_col=atom_to_col,
-            prev_residue=second_last.residue,
-            next_residue=last.residue,
-            transform=None,
+        # Position using frame-based approach
+        prev_frame = _resolve_frame_indices(second_last.residue.value, second_last.atoms)
+        next_frame = _resolve_frame_indices(last.residue.value, atom_indices)
+
+        return position_residue_fast(
+            second_last.coords,
+            ideal,
+            transform,
+            prev_frame.prev_cols,
+            prev_frame.prev_z_toward,
+            next_frame.next_cols,
+            next_frame.next_z_toward,
         )

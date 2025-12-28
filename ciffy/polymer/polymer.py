@@ -1370,8 +1370,10 @@ class Polymer:
     def extend(
         self: Polymer,
         residue: Residue,
-        coords: Array | None = None,
-        transform: Array | None = None,
+        coords: Array,
+        transform: Array,
+        atoms: Array | None = None,
+        elements: Array | None = None,
     ) -> Polymer:
         """
         Append a residue to the end of a single-chain polymer.
@@ -1381,40 +1383,40 @@ class Polymer:
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
-            coords: Optional (n_atoms, 3) coordinates of the residue to append.
-                If None (default), uses the residue's ideal coordinates.
-                For custom conformations (e.g., from a flow model), pass
-                explicit coordinates.
-            transform: Optional (6,) SE(3) transform [axis-angle, translation]
-                for positioning. If None, uses linear extension along the
-                Z-axis with appropriate spacing.
+            coords: (n_atoms, 3) coordinates of the residue in its local frame.
+            transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
+                Use linear_extend_transform() to compute this for ideal chains.
+            atoms: Atom type indices. Required if self.atoms is not None.
+            elements: Element indices. Required if self.elements is not None.
 
         Returns:
             New Polymer with the residue appended to the end.
 
         Raises:
             ValueError: If polymer has multiple chains, has HETATM atoms,
-                or lacks required linking atoms.
+                lacks required linking atoms, or atoms/elements missing when required.
 
         Example:
             >>> from ciffy import Residue
-            >>> from ciffy import from_sequence
+            >>> from ciffy.polymer import expand_residue, linear_extend_transform
             >>>
-            >>> # Create initial polymer and extend
-            >>> p = from_sequence("ac")
-            >>> p = p.extend(Residue.G)
-            >>> p = p.extend(Residue.U)
-            >>> p.sequence_str()
-            'acgu'
+            >>> # Get residue data
+            >>> atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
             >>>
-            >>> # With custom coordinates (e.g., from a flow model)
-            >>> custom_coords = model.predict_residue()
-            >>> p = p.extend(Residue.A, coords=custom_coords)
+            >>> # Compute transform for linear extension
+            >>> prev_atoms, _, prev_coords = expand_residue(Residue.C)
+            >>> transform = linear_extend_transform(prev_coords, prev_atoms, Residue.C, atoms, Residue.G)
+            >>>
+            >>> # Extend the polymer
+            >>> poly = poly.extend(Residue.G, coords, transform, atoms, elements)
+            >>>
+            >>> # With model predictions
+            >>> coords, transform = model.predict()
+            >>> poly = poly.extend(Residue.G, coords, transform, atoms, elements)
         """
-        from ..geometry import position_residue, position_residue_fast
+        from ..geometry import position_residue_fast
         from ..biochemistry.linking import LINKING_BY_TYPE
-        from ..utils import atoms_to_col_map
-        from .builder import expand_residue, _resolve_frame_indices
+        from .builder import _resolve_frame_indices
 
         # Validate single chain and poly-only
         if self.size(Scale.CHAIN) != 1:
@@ -1428,32 +1430,24 @@ class Polymer:
                 "Use polymer.poly() first."
             )
 
-        # Get atom data for the new residue (uses cached expansion)
-        new_res_atoms, new_elements, _, ideal_coords = expand_residue(residue)
-
-        # Use ideal coordinates if none provided
-        if coords is None:
-            coords = ideal_coords
-            # Convert to backend if needed
-            if self.backend == "torch":
-                import torch
-                coords = torch.from_numpy(coords).to(
-                    dtype=self.coordinates.dtype,
-                    device=self.coordinates.device
-                )
-
-        # Validate coordinate shape
-        if len(new_res_atoms) != coords.shape[0]:
+        # Validate atoms/elements are provided when required
+        if self.atoms is not None and atoms is None:
             raise ValueError(
-                f"Coordinate shape {coords.shape} doesn't match residue {residue.name} "
-                f"which has {len(new_res_atoms)} atoms."
+                "atoms parameter is required because this Polymer has atom data. "
+                "Use expand_residue() to get atom indices."
+            )
+        if self.elements is not None and elements is None:
+            raise ValueError(
+                "elements parameter is required because this Polymer has element data. "
+                "Use expand_residue() to get element indices."
             )
 
         # Validate backend compatibility
         check_compatible(self.coordinates, coords, "coords")
+        check_compatible(self.coordinates, transform, "transform")
 
         # Get last residue's state
-        last_res_coords, last_res_atoms_arr, last_res_atom_to_col, last_res_type = self._residue_slice(-1)
+        last_res_coords, last_res_atoms_arr, _, last_res_type = self._residue_slice(-1)
 
         # Get linking definition
         link_def = LINKING_BY_TYPE.get(last_res_type.molecule_type)
@@ -1463,13 +1457,15 @@ class Polymer:
                 f"Cannot extend chains of this type."
             )
 
-        # Position the new residue
-        if transform is not None:
-            # Fast path with cached frame indices
-            # Convert atoms arrays to tuples for frame resolution
-            last_res_atoms = tuple(int(a) for a in last_res_atoms_arr)
-            prev_frame = _resolve_frame_indices(last_res_type.value, last_res_atoms)
-            next_frame = _resolve_frame_indices(residue.value, new_res_atoms)
+        # Convert atoms to tuples for frame resolution
+        last_res_atoms = tuple(int(a) for a in last_res_atoms_arr)
+        new_res_atoms = tuple(int(a) for a in atoms) if atoms is not None else ()
+
+        # Position the new residue using fast path
+        prev_frame = _resolve_frame_indices(last_res_type.value, last_res_atoms)
+        next_frame = _resolve_frame_indices(residue.value, new_res_atoms) if new_res_atoms else None
+
+        if next_frame is not None:
             positioned_coords = position_residue_fast(
                 last_res_coords,
                 coords,
@@ -1480,35 +1476,45 @@ class Polymer:
                 next_frame.next_z_toward,
             )
         else:
-            # Slow path for linear extension (needs backbone span calculation)
-            new_res_atom_to_col = atoms_to_col_map(new_res_atoms)
-            positioned_coords = position_residue(
-                prev_coords=last_res_coords,
-                next_coords=coords,
-                prev_atom_to_col=last_res_atom_to_col,
-                next_atom_to_col=new_res_atom_to_col,
-                prev_residue=last_res_type,
-                next_residue=residue,
-                transform=None,
+            # No atoms provided - just apply transform without frame alignment
+            from ..geometry import apply_relative_transform, compute_frame_from_indices
+            prev_origin, prev_R = compute_frame_from_indices(
+                last_res_coords, prev_frame.prev_cols, prev_frame.prev_z_toward
             )
+            target_origin, target_R = apply_relative_transform(prev_origin, prev_R, transform)
+            # Simple translation to target origin
+            centroid = coords.mean(axis=0)
+            positioned_coords = coords + (target_origin - centroid)
 
         # Concatenate arrays
         new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)
-        new_atoms_arr = ops.cat([
-            self.atoms,
-            ops.to_backend(np.array(new_res_atoms, dtype=np.int64), self.atoms)
-        ], axis=0)
-        new_elements_arr = ops.cat([
-            self.elements,
-            ops.to_backend(np.array(new_elements, dtype=np.int64), self.elements)
-        ], axis=0)
+        n_new_atoms = coords.shape[0]
+
+        # Update atoms if present
+        if self.atoms is not None and atoms is not None:
+            new_atoms_arr = ops.cat([
+                self.atoms,
+                ops.to_backend(np.asarray(atoms, dtype=np.int64), self.atoms)
+            ], axis=0)
+        else:
+            new_atoms_arr = None
+
+        # Update elements if present
+        if self.elements is not None and elements is not None:
+            new_elements_arr = ops.cat([
+                self.elements,
+                ops.to_backend(np.asarray(elements, dtype=np.int64), self.elements)
+            ], axis=0)
+        else:
+            new_elements_arr = None
+
+        # Update sequence
         new_sequence = ops.cat([
             self.sequence,
             ops.to_backend(np.array([residue.value], dtype=np.int64), self.sequence)
         ], axis=0)
 
         # Update sizes
-        n_new_atoms = len(new_res_atoms)
         new_res_sizes = ops.cat([
             self._sizes[Scale.RESIDUE],
             ops.to_backend(np.array([n_new_atoms], dtype=np.int64), self._sizes[Scale.RESIDUE])

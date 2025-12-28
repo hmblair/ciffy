@@ -31,7 +31,6 @@ from ciffy.geometry import (
     apply_relative_transform as _apply_relative_transform_geometry,
     axis_angle_to_rotation as _axis_angle_to_rotation_geometry,
     rotation_to_axis_angle as _rotation_to_axis_angle_geometry,
-    position_residue as _position_residue_geometry,
     compute_frame_from_indices as _compute_frame_from_indices_geometry,
     # New unified functions
     compute_glycosidic_frame as _compute_glycosidic_frame_geometry,

@@ -12,7 +12,7 @@ from .alignment import (
     intersect,
 )
 from .extract import extract
-from .gnm import graph_laplacian, gnm_correlations, gnm_variances
+from .gnm import GNM
 from .metrics import tm_score, lddt, rmsd, coordinate_covariance
 
 # Legacy alias
@@ -29,9 +29,7 @@ __all__ = [
     "intersect",
     "extract",
     # GNM utilities
-    "graph_laplacian",
-    "gnm_correlations",
-    "gnm_variances",
+    "GNM",
     # Structure comparison metrics
     "tm_score",
     "lddt",

@@ -4,6 +4,7 @@ Tests cover:
 - graph_laplacian: Graph Laplacian computation
 - gnm_correlations: GNM correlations
 - gnm_variances: GNM position variances
+- GNM class: Cached computation wrapper
 
 All tests are parametrized to run on both numpy and torch backends.
 """
@@ -12,7 +13,10 @@ from __future__ import annotations
 import pytest
 import numpy as np
 
+# Import internal functions for testing (not publicly exported)
 from ciffy.operations.gnm import graph_laplacian, gnm_correlations, gnm_variances
+# Import the public API
+from ciffy.operations import GNM
 
 
 def make_symmetric_adj(n: int, backend: str, seed: int = 42):
@@ -322,3 +326,234 @@ class TestGNMIntegration:
         var_np = gnm_variances(adj_np)
         var_torch = gnm_variances(adj_torch)
         assert allclose(var_np, var_torch, atol=1e-4)
+
+
+# ============================================================================
+# GNM CLASS TESTS
+# ============================================================================
+
+
+class TestGNMClass:
+    """Tests for the GNM class."""
+
+    def test_initialization(self, backend):
+        """Test GNM class initialization."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+
+        assert gnm.adj is adj
+        assert gnm.laplacian.shape == (10, 10)
+        # Verify Laplacian is computed correctly
+        expected_L = graph_laplacian(adj)
+        assert allclose(gnm.laplacian, expected_L)
+
+    def test_correlations_property(self, backend):
+        """Test correlations property matches function output."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        expected = gnm_correlations(adj)
+
+        assert allclose(gnm.correlations, expected, atol=1e-4)
+
+    def test_variances_property(self, backend):
+        """Test variances property matches function output."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        expected = gnm_variances(adj)
+
+        assert allclose(gnm.variances, expected, atol=1e-4)
+
+    def test_cross_correlations_shape(self, backend):
+        """Test cross_correlations has correct shape."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        cross_corr = gnm.cross_correlations
+
+        assert cross_corr.shape == (10, 10)
+
+    def test_cross_correlations_diagonal_ones(self, backend):
+        """Test cross_correlations diagonal is all ones."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        cross_corr = gnm.cross_correlations
+        cross_corr_np = np.asarray(cross_corr)
+
+        assert allclose(np.diag(cross_corr_np), np.ones(10))
+
+    def test_cross_correlations_range(self, backend):
+        """Test cross_correlations values are in [-1, 1]."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        cross_corr = gnm.cross_correlations
+        cross_corr_np = np.asarray(cross_corr)
+
+        assert (cross_corr_np >= -1 - 1e-5).all()
+        assert (cross_corr_np <= 1 + 1e-5).all()
+
+    def test_cross_correlations_symmetric(self, backend):
+        """Test cross_correlations is symmetric."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        cross_corr = gnm.cross_correlations
+        cross_corr_np = np.asarray(cross_corr)
+
+        assert allclose(cross_corr_np, cross_corr_np.T, atol=1e-5)
+
+    def test_eigenvalues_property(self, backend):
+        """Test eigenvalues property."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        eigenvalues = gnm.eigenvalues
+        eigenvalues_np = np.asarray(eigenvalues)
+
+        assert eigenvalues.shape == (10,)
+        # Eigenvalues should be non-negative for positive semidefinite matrix
+        assert (eigenvalues_np >= -1e-5).all()
+        # First eigenvalue should be close to zero (connected graph)
+        assert abs(eigenvalues_np[0]) < 1e-5
+
+    def test_modes_all(self, backend):
+        """Test modes() returns all non-trivial modes when k=None."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        eigenvalues, modes = gnm.modes()
+
+        # Should skip first (zero) mode, return 9 modes
+        assert eigenvalues.shape == (9,)
+        assert modes.shape == (10, 9)
+
+    def test_modes_k(self, backend):
+        """Test modes() returns k slowest modes."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        eigenvalues, modes = gnm.modes(k=3)
+
+        assert eigenvalues.shape == (3,)
+        assert modes.shape == (10, 3)
+
+    def test_modes_eigenvalues_ascending(self, backend):
+        """Test modes() returns eigenvalues in ascending order."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        eigenvalues, _ = gnm.modes(k=5)
+        eigenvalues_np = np.asarray(eigenvalues)
+
+        # Should be sorted ascending
+        assert (np.diff(eigenvalues_np) >= -1e-5).all()
+
+    def test_modes_orthogonal(self, backend):
+        """Test that eigenvectors (modes) are orthogonal."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+        _, modes = gnm.modes()
+        modes_np = np.asarray(modes)
+
+        # Modes should be orthonormal
+        orthogonality = modes_np.T @ modes_np
+        assert allclose(orthogonality, np.eye(9), atol=1e-4)
+
+    def test_caching_pinv(self, backend):
+        """Test that pseudo-inverse is cached (computed once)."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+
+        # Access correlations to trigger computation
+        _ = gnm.correlations
+        first_pinv = gnm._pinv
+
+        # Access variances (should use cached pinv)
+        _ = gnm.variances
+        second_pinv = gnm._pinv
+
+        # Should be the same object (not recomputed)
+        assert first_pinv is second_pinv
+
+    def test_caching_eigen(self, backend):
+        """Test that eigendecomposition is cached (computed once)."""
+        adj = make_symmetric_adj(10, backend)
+
+        gnm = GNM(adj)
+
+        # Access eigenvalues to trigger computation
+        _ = gnm.eigenvalues
+        first_eigenvalues = gnm._eigenvalues
+
+        # Access modes (should use cached eigendecomposition)
+        _ = gnm.modes()
+        second_eigenvalues = gnm._eigenvalues
+
+        # Should be the same object (not recomputed)
+        assert first_eigenvalues is second_eigenvalues
+
+
+class TestGNMClassIntegration:
+    """Integration tests for GNM class."""
+
+    def test_class_vs_functions(self, backend):
+        """Test that GNM class produces same results as standalone functions."""
+        adj = make_symmetric_adj(15, backend)
+
+        gnm = GNM(adj)
+
+        # Correlations
+        assert allclose(gnm.correlations, gnm_correlations(adj), atol=1e-4)
+
+        # Variances
+        assert allclose(gnm.variances, gnm_variances(adj), atol=1e-4)
+
+        # Laplacian
+        assert allclose(gnm.laplacian, graph_laplacian(adj))
+
+    def test_backend_consistency_class(self):
+        """Test GNM class produces same results for numpy and torch."""
+        adj_np = make_symmetric_adj(10, "numpy")
+        adj_torch = make_symmetric_adj(10, "torch")
+
+        gnm_np = GNM(adj_np)
+        gnm_torch = GNM(adj_torch)
+
+        # Correlations
+        assert allclose(gnm_np.correlations, gnm_torch.correlations, atol=1e-4)
+
+        # Variances
+        assert allclose(gnm_np.variances, gnm_torch.variances, atol=1e-4)
+
+        # Cross-correlations
+        assert allclose(gnm_np.cross_correlations, gnm_torch.cross_correlations, atol=1e-4)
+
+        # Eigenvalues
+        assert allclose(gnm_np.eigenvalues, gnm_torch.eigenvalues, atol=1e-4)
+
+        # Modes
+        eig_np, modes_np = gnm_np.modes(k=5)
+        eig_torch, modes_torch = gnm_torch.modes(k=5)
+        assert allclose(eig_np, eig_torch, atol=1e-4)
+        # Note: eigenvectors may differ by sign, so compare absolute values
+        assert allclose(np.abs(modes_np), np.abs(np.asarray(modes_torch)), atol=1e-4)
+
+    def test_complete_graph(self, backend):
+        """Test GNM class with complete graph."""
+        n = 5
+        adj = make_array(np.ones((n, n)) - np.eye(n), backend)
+
+        gnm = GNM(adj)
+
+        assert gnm.correlations.shape == (n, n)
+        assert gnm.variances.shape == (n,)
+        assert gnm.cross_correlations.shape == (n, n)
+        eigenvalues, modes = gnm.modes()
+        assert eigenvalues.shape == (n - 1,)
+        assert modes.shape == (n, n - 1)

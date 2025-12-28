@@ -603,6 +603,24 @@ def sqrt(arr: Array) -> Array:
     return np.sqrt(arr)
 
 
+def outer(a: Array, b: Array) -> Array:
+    """
+    Outer product of two 1D arrays.
+
+    Args:
+        a: First 1D array of shape (M,).
+        b: Second 1D array of shape (N,).
+
+    Returns:
+        Outer product matrix of shape (M, N).
+    """
+    _check_backends(a, b)
+    if is_torch(a):
+        import torch
+        return torch.outer(a, b)
+    return np.outer(a, b)
+
+
 def clamp(arr: Array, min_val: float | None = None, max_val: float | None = None) -> Array:
     """
     Clamp array values to a range.

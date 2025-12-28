@@ -44,6 +44,7 @@ from .ops import (
     diagonal,
     multiply,
     sqrt,
+    outer,
     clamp,
     # Array operations
     scatter_sum,
@@ -90,6 +91,7 @@ __all__ = [
     "multiply",
     # Math
     "sqrt",
+    "outer",
     "clamp",
     # Array operations
     "scatter_sum",

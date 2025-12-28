@@ -218,73 +218,23 @@ def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
 
 ---
 
-### GNM (Gaussian Network Model) Extensions
+### ~~GNM (Gaussian Network Model) Extensions~~ ✅ DONE
 
-**Goal**: Extend `ciffy/operations/gnm.py` with commonly-used GNM operations for structural biology research.
+**Completed**: Added `GNM` class with cached pseudo-inverse and eigendecomposition.
 
-**Current state**: Basic functions exist (`graph_laplacian`, `gnm_correlations`, `gnm_variances`).
-
-**Missing high-priority functions**:
-
-| Function | Description |
-|----------|-------------|
-| `contact_map(polymer, cutoff=7.0)` | Build adjacency matrix from Polymer coordinates (Cα or centroid distances). Essential preprocessing step. |
-| `gnm_modes(adj, k=None)` | Extract eigenvectors (normal modes) of Kirchhoff matrix. Returns (eigenvalues, eigenvectors). |
-| `gnm_eigenvalues(adj)` | Get eigenvalues (squared frequencies) - cheaper than full mode decomposition. |
-| `cross_correlations(adj)` | Normalized correlation matrix (range [-1, 1]) for identifying coupled motions. |
-
-**Implementation notes**:
-
+**API**:
 ```python
-def contact_map(polymer: Polymer, cutoff: float = 7.0, scale: Scale = Scale.RESIDUE) -> Array:
-    """Build adjacency matrix from inter-residue distances."""
-    dists = polymer.pairwise_distances(scale=scale)
-    return (dists < cutoff).astype(float)
+from ciffy.operations import GNM
 
-def gnm_modes(adj: Array, k: int | None = None) -> tuple[Array, Array]:
-    """Compute GNM normal modes (eigenvectors of Kirchhoff matrix)."""
-    L = graph_laplacian(adj)
-    eigenvalues, eigenvectors = eigh(L)
-    # Skip trivial zero mode, return slowest k modes
-    return eigenvalues[1:k+1], eigenvectors[:, 1:k+1]
-
-def cross_correlations(adj: Array) -> Array:
-    """Normalized cross-correlation matrix."""
-    corr = gnm_correlations(adj)
-    std = sqrt(diagonal(corr))
-    return corr / outer(std, std)
+gnm = GNM(adj)              # From adjacency matrix
+gnm.correlations            # Correlation matrix (pseudo-inverse of Laplacian)
+gnm.variances               # Position variances (B-factor prediction)
+gnm.cross_correlations      # Normalized correlations [-1, 1]
+gnm.eigenvalues             # All eigenvalues
+eigenvalues, modes = gnm.modes(k=3)  # Slowest k non-trivial modes
 ```
 
-**Design consideration**: Consider wrapping in a `GNM` class to compute the pseudo-inverse once and reuse it across multiple queries (correlations, variances, cross-correlations all need the same pinv):
-
-```python
-class GNM:
-    def __init__(self, adj: Array, rtol: float = 1e-2):
-        self.adj = adj
-        self.laplacian = graph_laplacian(adj)
-        self._pinv = pinv(self.laplacian, rtol=rtol)  # Computed once
-
-    @property
-    def correlations(self) -> Array:
-        return self._pinv
-
-    @property
-    def variances(self) -> Array:
-        return diagonal(self._pinv)
-
-    @property
-    def cross_correlations(self) -> Array:
-        std = sqrt(self.variances)
-        return self._pinv / outer(std, std)
-
-    def modes(self, k: int | None = None) -> tuple[Array, Array]:
-        eigenvalues, eigenvectors = eigh(self.laplacian)
-        return eigenvalues[1:k+1], eigenvectors[:, 1:k+1]
-```
-
-**Files affected**:
-- `ciffy/operations/gnm.py`
-- `tests/test_gnm.py`
+**Remaining**: `contact_map(polymer, cutoff)` to build adjacency from Polymer coordinates.
 
 ---
 

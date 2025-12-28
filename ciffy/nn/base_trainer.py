@@ -368,6 +368,11 @@ class MetricsLogger(Protocol):
 class BaseTrainer(ABC):
     """Abstract base trainer for any model type.
 
+    .. deprecated::
+        BaseTrainer is deprecated. New trainers should use PyTorch Lightning
+        Fabric directly for device handling and mixed precision support.
+        See ResidueFlowTrainer and LatentDiffusionTrainer for examples.
+
     Subclasses must implement:
         - create_optimizer(): Return optimizer for training
         - create_dataloader(): Return DataLoader for training data

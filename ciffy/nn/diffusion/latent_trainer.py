@@ -6,6 +6,8 @@ This module provides the LatentDiffusionTrainer, which handles:
 - EMA weight tracking for the denoiser
 - RMSD-based validation via sample generation
 
+Uses PyTorch Lightning Fabric for device handling and mixed precision.
+
 Example:
     >>> from ciffy.nn.diffusion import LatentDiffusionTrainer, LatentDiffusionTrainingConfig
     >>>
@@ -19,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
 
 import numpy as np
 
@@ -43,13 +45,12 @@ if TYPE_CHECKING:
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import DataLoader, Dataset
+    from lightning.fabric import Fabric
 
 from ciffy import Scale
 
 from ..base_trainer import (
     BaseConfig,
-    BaseTrainer,
-    MetricsLogger,
     OutputConfig,
     TrainingConfig,
     WandbConfig,
@@ -58,10 +59,32 @@ from ..data_validation import validate_flow_model_compatibility
 from ..dataset import PolymerDataset
 from ..filtered_dataset import FilterConfig, FilteredPolymerDataset
 from ..trainer_registry import register_trainer
+from ..fabric_utils import create_fabric
 from .ema import EMA
 from .latent_diffusion import LatentDiffusionConfig, LatentDiffusionModel
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class MetricsLogger(Protocol):
+    """Protocol for metrics logging (wandb, tensorboard, etc.)."""
+
+    def log(self, metrics: dict[str, float], step: int) -> None:
+        """Log metrics for a given step."""
+        ...
+
+    def info(self, message: str) -> None:
+        """Log an info message."""
+        ...
+
+    def warning(self, message: str) -> None:
+        """Log a warning message."""
+        ...
+
+    def finish(self) -> None:
+        """Finalize logging."""
+        ...
 
 
 @dataclass
@@ -211,10 +234,11 @@ def latent_collate_fn(
 
 
 @register_trainer("latent_diffusion", LatentDiffusionTrainingConfig)
-class LatentDiffusionTrainer(BaseTrainer):
+class LatentDiffusionTrainer:
     """Trainer for latent diffusion models on polymer structures.
 
-    Extends BaseTrainer with:
+    Uses PyTorch Lightning Fabric for device handling and mixed precision.
+    Provides:
         - On-the-fly encoding of coordinates to latent space
         - Custom loss function for diffusion
         - EMA weight tracking for denoiser
@@ -233,8 +257,7 @@ class LatentDiffusionTrainer(BaseTrainer):
         config: LatentDiffusionTrainingConfig,
         model: LatentDiffusionModel | None = None,
         dataset: PolymerDataset | None = None,
-        device: Optional["torch.device"] = None,
-        logger: MetricsLogger | None = None,
+        metrics_logger: MetricsLogger | None = None,
         quiet: bool = False,
     ) -> None:
         """Initialize the latent diffusion trainer.
@@ -243,23 +266,23 @@ class LatentDiffusionTrainer(BaseTrainer):
             config: Training configuration.
             model: Optional pre-initialized model.
             dataset: Optional pre-created dataset.
-            device: Device to train on. If None, uses config.training.device.
-            logger: Optional metrics logger (e.g., WandbLogger).
+            metrics_logger: Optional metrics logger (e.g., WandbLogger).
             quiet: If True, suppress progress bars and reduce logging.
         """
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for LatentDiffusionTrainer")
 
-        # Determine device early (needed for encoding dataset)
-        if device is None:
-            device = torch.device(config.training.device)
-            if device.type == "auto":
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.config = config
+        self.quiet = quiet
+        self.metrics_logger = metrics_logger
+        self._fabric: "Fabric | None" = None
+
+        # Create Fabric for device handling
+        fabric = self._get_fabric()
 
         # Create model if not provided
         if model is None:
             model = LatentDiffusionModel(config.model)
-        model = model.to(device)
 
         # Create base dataset if not provided
         if dataset is None:
@@ -285,7 +308,7 @@ class LatentDiffusionTrainer(BaseTrainer):
                 f"that don't match the structures in your dataset."
             )
 
-        if compat_report.valid_fraction < 0.5:
+        if compat_report.valid_fraction < 0.5 and not quiet:
             logger.warning(
                 f"Low data compatibility ({compat_report.valid_fraction * 100:.1f}%):\n"
                 f"{compat_report.format_summary()}"
@@ -302,25 +325,46 @@ class LatentDiffusionTrainer(BaseTrainer):
 
         self._filtered_dataset = FilteredPolymerDataset(dataset, filter_config)
 
-        # Create encoding dataset BEFORE super().__init__ (which calls create_dataloader)
+        # Create encoding dataset
         self._encoding_dataset = LatentEncodingDataset(
             filtered_dataset=self._filtered_dataset,
             flow_model=model.flow_model,
-            device=str(device),
+            device=str(fabric.device),
         )
 
         if not quiet:
             logger.info(f"Found {len(self._encoding_dataset)} valid samples")
 
-        # Initialize base trainer
-        super().__init__(
-            config=config,
-            model=model,
-            dataset=dataset,
-            device=device,
-            logger=logger,
-            quiet=quiet,
+        # Setup model and optimizer with Fabric
+        self.model = model
+        self.optimizer = optim.AdamW(
+            model.denoiser.parameters(),
+            lr=config.training.lr,
+            weight_decay=config.training.weight_decay,
         )
+
+        # Wrap with Fabric for device placement
+        self.model, self.optimizer = fabric.setup(self.model, self.optimizer)
+
+        # Create dataloader
+        self.dataloader = DataLoader(
+            self._encoding_dataset,
+            batch_size=config.data.batch_size,
+            shuffle=True,
+            num_workers=0,  # Encoding uses GPU, can't use multiple workers
+            collate_fn=latent_collate_fn,
+        )
+
+        # Setup output directories
+        self.checkpoint_dir = Path(config.output.checkpoint_dir)
+        self.sample_dir = Path(config.output.sample_dir)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.sample_dir.mkdir(parents=True, exist_ok=True)
+
+        # Training state
+        self.current_epoch = 0
+        self.best_loss = float("inf")
+        self.best_checkpoint_path = self.checkpoint_dir / "checkpoint_best.pt"
 
         # Setup EMA for denoiser only (flow model is frozen)
         self.ema = EMA(
@@ -329,10 +373,25 @@ class LatentDiffusionTrainer(BaseTrainer):
             warmup_steps=config.ema_warmup_steps,
         )
 
+    def _get_fabric(self) -> "Fabric":
+        """Get or create Fabric instance for training."""
+        if self._fabric is None:
+            self._fabric = create_fabric(
+                device=self.config.training.device,
+                precision=self.config.training.precision,
+            )
+            self._fabric.launch()
+        return self._fabric
+
     @property
     def train_dataset_size(self) -> int:
         """Return total training dataset size for progress reporting."""
         return len(self._encoding_dataset)
+
+    @property
+    def device(self) -> "torch.device":
+        """Return the device used for training."""
+        return self._get_fabric().device
 
     def _create_polymer_dataset(
         self,
@@ -340,7 +399,6 @@ class LatentDiffusionTrainer(BaseTrainer):
     ) -> PolymerDataset:
         """Create the polymer dataset from config."""
         from ciffy import Molecule
-        from pathlib import Path
 
         data_dir = Path(config.data.data_dir)
         if not data_dir.exists():
@@ -371,57 +429,188 @@ class LatentDiffusionTrainer(BaseTrainer):
         logger.info(f"PolymerDataset: {len(dataset)} chains from {data_dir}")
         return dataset
 
-    def create_optimizer(self) -> "optim.Optimizer":
-        """Create optimizer for denoiser only (flow model is frozen)."""
-        return optim.AdamW(
-            self.model.denoiser.parameters(),
-            lr=self.config.training.lr,
-            weight_decay=self.config.training.weight_decay,
-        )
-
-    def create_dataloader(self) -> "DataLoader":
-        """Create DataLoader for training."""
-        return DataLoader(
-            self._encoding_dataset,
-            batch_size=self.config.data.batch_size,
-            shuffle=True,
-            num_workers=0,  # Encoding uses GPU, can't use multiple workers
-            collate_fn=latent_collate_fn,
-        )
-
-    def create_loss_fn(
+    def train(
         self,
-    ) -> Callable[["nn.Module", Any], dict[str, "torch.Tensor"]]:
-        """Create the diffusion loss function."""
-        device = self.device
+        resume_path: str | Path | None = None,
+        progress_callback: Callable[[int, int, dict], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run the full training loop.
 
-        def diffusion_loss_fn(
-            model: LatentDiffusionModel,
-            batch: tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"],
-        ) -> dict[str, "torch.Tensor"]:
-            latents, sequences, mask = batch
-            latents = latents.to(device)
-            sequences = sequences.to(device)
-            mask = mask.to(device)
+        Args:
+            resume_path: Optional checkpoint path to resume from.
+            progress_callback: Optional callback called after each epoch with
+                signature: callback(epoch, total_epochs, metrics).
 
-            loss, metrics = model.training_step_batch(latents, sequences, mask)
+        Returns:
+            Dictionary containing:
+                - final_loss: Loss from the final epoch
+                - best_loss: Best loss achieved during training
+                - epochs_trained: Number of epochs completed
+                - checkpoint_path: Path to best checkpoint
+        """
+        from ..training import load_checkpoint, save_checkpoint
 
-            return {"loss": loss, **{k: torch.tensor(v) for k, v in metrics.items()}}
+        fabric = self._get_fabric()
+        total_epochs = self.config.training.epochs
+        start_epoch = 0
 
-        return diffusion_loss_fn
+        # Resume from checkpoint if specified
+        if resume_path is not None:
+            ckpt = load_checkpoint(Path(resume_path), self.model, self.optimizer)
+            start_epoch = ckpt.get("epoch", 0) + 1
+            self.best_loss = ckpt.get("metrics", {}).get("loss", float("inf"))
+            if not self.quiet:
+                logger.info(f"Resumed from epoch {start_epoch}")
 
-    def on_epoch_end(self, epoch: int, metrics: dict[str, float]) -> None:
-        """Hook for EMA update and periodic validation."""
-        # Update EMA after each epoch
-        self.ema.update(self.model.denoiser)
+        metrics: dict[str, float] = {}
+        total_samples = 0
 
-        # Periodic validation
-        if (epoch + 1) % self.config.val_every == 0:
-            val_metrics = self._validate()
-            metrics.update(val_metrics)
+        if not self.quiet:
+            precision_plugin = getattr(fabric, "_precision", None)
+            precision_str = getattr(precision_plugin, "precision", "32-true") if precision_plugin else "32-true"
+            logger.info(f"Training with Fabric ({fabric.device}, precision={precision_str})")
 
-            # Generate and save samples
-            self._generate_samples(epoch)
+        try:
+            for epoch in range(start_epoch, total_epochs):
+                self.current_epoch = epoch
+                self.model.train()
+
+                # Train one epoch
+                epoch_loss = 0.0
+                epoch_metrics: dict[str, float] = {}
+                n_batches = 0
+
+                for batch in self.dataloader:
+                    latents, sequences, mask = batch
+                    latents = fabric.to_device(latents)
+                    sequences = fabric.to_device(sequences)
+                    mask = fabric.to_device(mask)
+
+                    self.optimizer.zero_grad()
+
+                    # Compute loss
+                    loss, batch_metrics = self.model.training_step_batch(
+                        latents, sequences, mask
+                    )
+
+                    # Backward with Fabric (handles mixed precision)
+                    fabric.backward(loss)
+
+                    # Gradient clipping
+                    if self.config.training.grad_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config.training.grad_clip,
+                        )
+
+                    self.optimizer.step()
+
+                    epoch_loss += loss.item()
+                    for k, v in batch_metrics.items():
+                        epoch_metrics[k] = epoch_metrics.get(k, 0.0) + v
+                    n_batches += 1
+
+                # Average metrics
+                metrics = {"loss": epoch_loss / n_batches}
+                for k, v in epoch_metrics.items():
+                    metrics[k] = v / n_batches
+                metrics["n_samples"] = len(self._encoding_dataset)
+                total_samples += int(metrics["n_samples"])
+
+                # Log metrics
+                if not self.quiet:
+                    self._log_epoch(epoch, total_epochs, metrics)
+
+                # Log to external logger
+                if self.metrics_logger is not None:
+                    self.metrics_logger.log(metrics, step=epoch)
+
+                # Progress callback
+                if progress_callback is not None:
+                    progress_callback(epoch + 1, total_epochs, metrics)
+
+                # Update EMA
+                self.ema.update(self.model.denoiser)
+
+                # Periodic validation
+                if (epoch + 1) % self.config.val_every == 0:
+                    val_metrics = self._validate()
+                    metrics.update(val_metrics)
+
+                    if self.metrics_logger is not None and val_metrics:
+                        self.metrics_logger.log(val_metrics, step=epoch)
+
+                    # Generate samples
+                    self._generate_samples(epoch)
+
+                # Save periodic checkpoint
+                if (epoch + 1) % self.config.output.save_every == 0:
+                    self._save_checkpoint(epoch, metrics, is_best=False)
+
+                # Save best checkpoint
+                current_loss = metrics.get("loss", float("inf"))
+                if current_loss < self.best_loss:
+                    self.best_loss = current_loss
+                    self._save_checkpoint(epoch, metrics, is_best=True)
+
+            # Save final checkpoint
+            self._save_checkpoint(total_epochs - 1, metrics, is_best=False, is_final=True)
+
+            if not self.quiet:
+                logger.info("Training complete!")
+
+        finally:
+            if self.metrics_logger is not None:
+                self.metrics_logger.finish()
+
+        return {
+            "status": "success",
+            "final_loss": metrics.get("loss"),
+            "best_loss": self.best_loss,
+            "epochs_trained": total_epochs - start_epoch,
+            "total_epochs": total_epochs,
+            "n_samples": total_samples,
+            "checkpoint_path": str(self.best_checkpoint_path),
+        }
+
+    def _log_epoch(self, epoch: int, total_epochs: int, metrics: dict[str, float]) -> None:
+        """Log epoch metrics to console."""
+        parts = [f"Epoch {epoch + 1}/{total_epochs}"]
+
+        if "loss" in metrics:
+            parts.append(f"Loss: {metrics['loss']:.4f}")
+        if "mse_loss" in metrics:
+            parts.append(f"MSE: {metrics['mse_loss']:.4f}")
+        if "val_rmsd_mean" in metrics:
+            parts.append(f"Val RMSD: {metrics['val_rmsd_mean']:.2f}Å")
+
+        logger.info(" | ".join(parts))
+
+    def _save_checkpoint(
+        self,
+        epoch: int,
+        metrics: dict[str, float],
+        is_best: bool = False,
+        is_final: bool = False,
+    ) -> None:
+        """Save a training checkpoint."""
+        from ..training import save_checkpoint
+
+        if is_best:
+            path = self.best_checkpoint_path
+        elif is_final:
+            path = self.checkpoint_dir / "checkpoint_final.pt"
+        else:
+            path = self.checkpoint_dir / f"checkpoint_epoch{epoch + 1:04d}.pt"
+
+        save_checkpoint(
+            path=path,
+            model=self.model,
+            optimizer=self.optimizer,
+            epoch=epoch + 1,
+            metrics=metrics,
+            config=self.config,
+        )
 
     def _validate(self) -> dict[str, float]:
         """Compute validation metrics via sample generation."""

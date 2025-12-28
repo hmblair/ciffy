@@ -308,6 +308,56 @@ def svdvals(arr: Array) -> Array:
     return np.linalg.svd(arr, compute_uv=False)
 
 
+def pinv(arr: Array, rtol: float = 1e-15) -> Array:
+    """
+    Moore-Penrose pseudo-inverse of a matrix.
+
+    Args:
+        arr: Input matrix.
+        rtol: Relative tolerance for singular values.
+
+    Returns:
+        Pseudo-inverse matrix in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.linalg.pinv(arr, rtol=rtol)
+    return np.linalg.pinv(arr, rcond=rtol)
+
+
+def diag(arr: Array) -> Array:
+    """
+    Create a diagonal matrix from a 1D array, or extract diagonal from 2D.
+
+    Args:
+        arr: 1D array to place on diagonal, or 2D matrix to extract from.
+
+    Returns:
+        If 1D input: 2D diagonal matrix.
+        If 2D input: 1D diagonal vector.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.diag(arr)
+    return np.diag(arr)
+
+
+def diagonal(arr: Array) -> Array:
+    """
+    Extract the diagonal of a 2D matrix.
+
+    Args:
+        arr: 2D matrix.
+
+    Returns:
+        1D array containing the diagonal elements.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.diagonal(arr)
+    return np.diagonal(arr)
+
+
 # =============================================================================
 # Array Creation (backend-aware)
 # =============================================================================

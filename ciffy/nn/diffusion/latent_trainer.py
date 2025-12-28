@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import numpy as np
 
@@ -51,6 +51,7 @@ from ciffy import Scale
 
 from ..base_trainer import (
     BaseConfig,
+    MetricsLogger,
     OutputConfig,
     TrainingConfig,
     WandbConfig,
@@ -64,27 +65,6 @@ from .ema import EMA
 from .latent_diffusion import LatentDiffusionConfig, LatentDiffusionModel
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class MetricsLogger(Protocol):
-    """Protocol for metrics logging (wandb, tensorboard, etc.)."""
-
-    def log(self, metrics: dict[str, float], step: int) -> None:
-        """Log metrics for a given step."""
-        ...
-
-    def info(self, message: str) -> None:
-        """Log an info message."""
-        ...
-
-    def warning(self, message: str) -> None:
-        """Log a warning message."""
-        ...
-
-    def finish(self) -> None:
-        """Finalize logging."""
-        ...
 
 
 @dataclass

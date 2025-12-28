@@ -17,7 +17,6 @@ Example:
 from __future__ import annotations
 
 import json
-from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 

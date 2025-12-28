@@ -15,17 +15,6 @@ Example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-
-@dataclass
-class EarlyStopperState:
-    """Serializable state for checkpointing."""
-
-    best_value: float
-    counter: int
-    stopped_epoch: int | None
-
 
 class EarlyStopper:
     """Early stopping based on validation metrics.
@@ -127,5 +116,4 @@ class EarlyStopper:
 
 __all__ = [
     "EarlyStopper",
-    "EarlyStopperState",
 ]

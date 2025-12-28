@@ -17,11 +17,6 @@ try:
 except ImportError:
     torch = None
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
-
 from .training import get_device
 from .protocols import PolymerGenerativeModel
 from .model_registry import get_model_class, create_model_from_config

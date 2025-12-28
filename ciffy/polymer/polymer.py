@@ -267,6 +267,9 @@ class Polymer:
         self._hierarchy = hierarchy
         self._bonds: np.ndarray | None = None
 
+        # Validate field sizes match hierarchy
+        self._validate_sizes()
+
     @property
     def lengths(self) -> Array:
         """Residues per chain (C,) array. Delegated to hierarchy."""
@@ -304,6 +307,37 @@ class Polymer:
             name: attr for name, attr in vars(cls).items()
             if isinstance(attr, _BaseDescriptor)
         }
+
+    def _validate_sizes(self) -> None:
+        """Validate that field sizes match hierarchy sizes.
+
+        Raises:
+            ValueError: If any field size doesn't match the hierarchy.
+        """
+        for name, desc in self._get_descriptors().items():
+            value = getattr(self, desc.private_name, None)
+            if value is None:
+                continue
+
+            # Skip molecule-scale (no size constraint)
+            if desc.scale == Scale.MOLECULE:
+                continue
+
+            expected = self._hierarchy.size(desc.scale)
+
+            # Get actual size
+            if desc.is_list:
+                actual = len(value)
+            elif hasattr(value, '__len__'):
+                actual = len(value)
+            else:
+                continue  # Scalar metadata
+
+            if actual != expected:
+                raise ValueError(
+                    f"Size mismatch for '{name}': got {actual}, "
+                    f"expected {expected} ({desc.scale.name} scale)"
+                )
 
     def _slice_all(
         self,

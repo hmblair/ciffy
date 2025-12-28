@@ -48,13 +48,20 @@ class _Hierarchy:
         _per[(RESIDUE, MOLECULE)] = total residues (1 element)
         _per[(CHAIN, MOLECULE)] = total chains (1 element)
 
+    Some arrays may be None if fields were skipped during loading. The scalar
+    counts (_n_atoms, _n_residues, _n_chains) are always available as they're
+    computed from whichever arrays are present.
+
     Attributes:
-        _per: Dict mapping (inner_scale, outer_scale) to count arrays.
+        _per: Dict mapping (inner_scale, outer_scale) to count arrays (may be None).
         _polymer_count: Number of polymer atoms (first _polymer_count atoms).
         _ref: Reference array for backend/device detection.
+        _n_atoms: Total atom count (cached).
+        _n_residues: Total residue count (cached).
+        _n_chains: Total chain count (cached).
     """
 
-    __slots__ = ('_per', '_polymer_count', '_ref')
+    __slots__ = ('_per', '_polymer_count', '_ref', '_n_atoms', '_n_residues', '_n_chains')
 
     def __init__(
         self,
@@ -83,6 +90,47 @@ class _Hierarchy:
         self._per = per
         self._polymer_count = polymer_count
         self._ref = ref
+
+        # Precompute scalar counts from available arrays
+        self._n_atoms, self._n_residues, self._n_chains = self._compute_counts()
+
+    def _compute_counts(self) -> tuple[int, int, int]:
+        """Compute scalar counts from available arrays.
+
+        Uses a priority order of data sources for each count:
+        - atoms: mol_sizes[0] > sum(atoms_per_chain) > 0
+        - residues: len(atoms_per_res) > sum(res_per_chain) > 0
+        - chains: len(atoms_per_chain) > len(res_per_chain) > 0
+        """
+        # Atoms: prefer mol_sizes, fallback to sum of atoms_per_chain
+        mol_sizes = self._per.get((Scale.ATOM, Scale.MOLECULE))
+        atoms_per_chain = self._per.get((Scale.ATOM, Scale.CHAIN))
+        if mol_sizes is not None:
+            n_atoms = int(mol_sizes[0])
+        elif atoms_per_chain is not None:
+            n_atoms = int(atoms_per_chain.sum())
+        else:
+            n_atoms = 0
+
+        # Residues: prefer len(atoms_per_res), fallback to sum of res_per_chain
+        atoms_per_res = self._per.get((Scale.ATOM, Scale.RESIDUE))
+        res_per_chain = self._per.get((Scale.RESIDUE, Scale.CHAIN))
+        if atoms_per_res is not None:
+            n_residues = arr_size(atoms_per_res, 0)
+        elif res_per_chain is not None:
+            n_residues = int(res_per_chain.sum())
+        else:
+            n_residues = 0
+
+        # Chains: prefer len(atoms_per_chain), fallback to len(res_per_chain)
+        if atoms_per_chain is not None:
+            n_chains = arr_size(atoms_per_chain, 0)
+        elif res_per_chain is not None:
+            n_chains = arr_size(res_per_chain, 0)
+        else:
+            n_chains = 0
+
+        return n_atoms, n_residues, n_chains
 
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
@@ -140,8 +188,7 @@ class _Hierarchy:
     @property
     def nonpoly(self) -> int:
         """Number of non-polymer atoms."""
-        total = self._per[(Scale.ATOM, Scale.MOLECULE)][0].item()
-        return total - self._polymer_count
+        return self._n_atoms - self._polymer_count
 
     @property
     def lengths(self) -> Array:
@@ -163,24 +210,11 @@ class _Hierarchy:
             Number of units at the specified scale.
         """
         if scale == Scale.ATOM:
-            arr = self._per[(Scale.ATOM, Scale.MOLECULE)]
-            if arr is None:
-                # Fallback: sum of atoms_per_chain
-                chain_arr = self._per[(Scale.ATOM, Scale.CHAIN)]
-                return int(chain_arr.sum()) if chain_arr is not None else 0
-            return arr[0].item()
+            return self._n_atoms
         if scale == Scale.RESIDUE:
-            arr = self._per[(Scale.ATOM, Scale.RESIDUE)]
-            if arr is None:
-                # Fallback: sum of res_per_chain
-                return int(self._per[(Scale.RESIDUE, Scale.CHAIN)].sum())
-            return arr_size(arr, 0)
+            return self._n_residues
         if scale == Scale.CHAIN:
-            arr = self._per[(Scale.ATOM, Scale.CHAIN)]
-            if arr is None:
-                # Fallback: length of res_per_chain
-                return arr_size(self._per[(Scale.RESIDUE, Scale.CHAIN)], 0)
-            return arr_size(arr, 0)
+            return self._n_chains
         if scale == Scale.MOLECULE:
             return 1
         raise ValueError(f"Unknown scale: {scale}")
@@ -194,8 +228,17 @@ class _Hierarchy:
 
         Returns:
             Tensor of atom counts per unit at this scale.
+
+        Raises:
+            ValueError: If the sizes array is not available (field was skipped).
         """
-        return self._per[(Scale.ATOM, scale)]
+        arr = self._per.get((Scale.ATOM, scale))
+        if arr is None:
+            raise ValueError(
+                f"Sizes at {scale.name} scale not available. "
+                f"This field may have been skipped during loading."
+            )
+        return arr
 
     def per(self, inner: Scale, outer: Scale) -> Array:
         """
@@ -208,6 +251,9 @@ class _Hierarchy:
         Returns:
             Array with count of inner units per outer unit.
 
+        Raises:
+            ValueError: If the requested array is not available (field was skipped).
+
         Example:
             >>> hierarchy.per(Scale.RESIDUE, Scale.CHAIN)
             array([150, 200, 175])  # residues per chain
@@ -217,14 +263,22 @@ class _Hierarchy:
 
         # Direct lookup in _per dict
         key = (inner, outer)
+        arr = self._per.get(key)
+        if arr is not None:
+            return arr
+
+        # Check if key exists but value is None (skipped field)
         if key in self._per:
-            return self._per[key]
+            raise ValueError(
+                f"{inner.name} per {outer.name} not available. "
+                f"This field may have been skipped during loading."
+            )
 
         raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
 
     def empty(self) -> bool:
         """Check if the hierarchy has no atoms."""
-        return self._per[(Scale.ATOM, Scale.MOLECULE)][0].item() == 0
+        return self._n_atoms == 0
 
     # ─────────────────────────────────────────────────────────────────────────
     # Reduction Operations

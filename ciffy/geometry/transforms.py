@@ -255,7 +255,7 @@ def _arbitrary_perpendicular(z_axis: Array) -> Array:
 
 def compute_frame_from_indices(
     coords: Array,
-    frame_cols: tuple[int, int, int | None],
+    frame_cols: Array | tuple[int, int, int | None],
     z_toward_origin: bool,
 ) -> tuple[Array, Array]:
     """
@@ -266,8 +266,11 @@ def compute_frame_from_indices(
 
     Args:
         coords: (n_atoms, 3) or (batch, n_atoms, 3) coordinates.
-        frame_cols: Tuple of (origin_col, z_ref_col, perp_ref_col) where
-            perp_ref_col may be None for frames without a perpendicular reference.
+        frame_cols: Column indices for frame computation. Can be either:
+            - np.ndarray shape (3,): [origin_col, z_ref_col, perp_ref_col]
+              with -1 indicating missing perp_ref (preferred API)
+            - tuple: (origin_col, z_ref_col, perp_ref_col) with None for
+              missing perp_ref (backward compatibility)
         z_toward_origin: If True, Z points from z_ref toward origin.
             If False, Z points from origin toward z_ref.
 
@@ -276,14 +279,21 @@ def compute_frame_from_indices(
         R: (3, 3) or (batch, 3, 3) rotation matrix with [x, y, z] as columns.
 
     Example:
-        >>> # Pre-resolve indices once at model init
-        >>> frame_cols = link_def.prev_frame.resolve(residue, atom_to_col)
-        >>> z_toward_origin = link_def.prev_frame.z_toward_origin
+        >>> # Array API (preferred)
+        >>> frame_cols = np.array([0, 1, 2], dtype=np.int32)  # or -1 for no perp
+        >>> origin, R = compute_frame_from_indices(coords, frame_cols, True)
         >>>
-        >>> # Fast frame computation at runtime
+        >>> # Tuple API (backward compatible)
+        >>> frame_cols = link_def.prev_frame.resolve(residue, atom_to_col)
         >>> origin, R = compute_frame_from_indices(coords, frame_cols, z_toward_origin)
     """
-    origin_col, z_ref_col, perp_ref_col = frame_cols
+    # Handle both array (new API) and tuple (backward compat)
+    if isinstance(frame_cols, np.ndarray):
+        origin_col = int(frame_cols[0])
+        z_ref_col = int(frame_cols[1])
+        perp_ref_col = int(frame_cols[2]) if frame_cols[2] >= 0 else None
+    else:
+        origin_col, z_ref_col, perp_ref_col = frame_cols
 
     # Direct indexing - works for (..., n_atoms, 3)
     origin_pos = coords[..., origin_col, :]
@@ -767,9 +777,9 @@ def position_residue_fast(
     prev_coords: Array,
     next_coords: Array,
     transform: Array,
-    prev_frame_cols: tuple[int, int, int | None],
+    prev_frame_cols: Array | tuple[int, int, int | None],
     prev_z_toward_origin: bool,
-    next_frame_cols: tuple[int, int, int | None],
+    next_frame_cols: Array | tuple[int, int, int | None],
     next_z_toward_origin: bool,
 ) -> Array:
     """
@@ -785,27 +795,23 @@ def position_residue_fast(
         prev_coords: (n_atoms, 3) coordinates of previous residue.
         next_coords: (n_atoms, 3) coordinates of next residue (in canonical frame).
         transform: (6,) SE(3) transform [axis-angle, translation].
-        prev_frame_cols: Pre-resolved (origin, z_ref, perp_ref) column indices for
-            outgoing frame of prev_coords (e.g., O3' frame for RNA).
+        prev_frame_cols: Column indices for outgoing frame. Can be either:
+            - np.ndarray shape (3,): [origin, z_ref, perp_ref] with -1 for missing
+            - tuple: (origin, z_ref, perp_ref) with None for missing
         prev_z_toward_origin: Z-axis direction for prev frame.
-        next_frame_cols: Pre-resolved column indices for incoming frame of next_coords
-            (e.g., P frame for RNA).
+        next_frame_cols: Column indices for incoming frame (same format as prev).
         next_z_toward_origin: Z-axis direction for next frame.
 
     Returns:
         (n_atoms, 3) positioned coordinates of next residue.
 
     Example:
-        >>> # Pre-resolve indices at model init
-        >>> link_def = LINKING_BY_TYPE[residue.molecule_type]
-        >>> prev_cols = link_def.prev_frame.resolve(residue, atom_to_col)
-        >>> next_cols = link_def.next_frame.resolve(residue, atom_to_col)
-        >>>
-        >>> # Fast positioning at runtime
+        >>> # Array API (preferred) - using FrameIndices from builder
+        >>> frame_indices = _resolve_frame_indices(residue_idx, atom_indices)
         >>> positioned = position_residue_fast(
         ...     prev_coords, next_coords, transform,
-        ...     prev_cols, link_def.prev_frame.z_toward_origin,
-        ...     next_cols, link_def.next_frame.z_toward_origin,
+        ...     frame_indices.prev_cols, frame_indices.prev_z_toward,
+        ...     frame_indices.next_cols, frame_indices.next_z_toward,
         ... )
     """
     # Compute outgoing frame from prev_coords using pre-resolved indices

@@ -53,9 +53,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Import geometry functions directly (data.py wrappers still available for backward compat)
-from ciffy.geometry import position_residue_fast
-
 # Keep imports from data.py for functions that accept atoms array (ML-friendly signature)
 from ciffy.nn.flow.residue.data import (
     position_next_residue,
@@ -480,6 +477,8 @@ class PolymerFlowModel(nn.Module):
         Returns:
             (N, 3) flat coordinate tensor with all residues positioned.
         """
+        from ciffy.polymer.builder import assemble_chain
+
         sequence = _to_numpy_int64(sequence)
 
         if latents.shape[0] != len(sequence):
@@ -490,10 +489,11 @@ class PolymerFlowModel(nn.Module):
         if len(sequence) == 0:
             return torch.empty(0, 3, device=latents.device, dtype=latents.dtype)
 
-        all_coords = []
-        prev_coords = None
-        prev_transform = None
-        prev_model = None
+        # Collect decoded residues
+        residue_coords = []
+        transforms = []
+        residues = []
+        atom_subsets = []
 
         for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
@@ -503,34 +503,14 @@ class PolymerFlowModel(nn.Module):
                 coords_i, transform_i = model.decode(latents[i:i + 1])
 
             # coords_i is (1, n_atoms, 3), squeeze to (n_atoms, 3)
-            coords_i = coords_i.squeeze(0)
             # transform_i is (1, 6), squeeze to (6,)
-            transform_i = transform_i.squeeze(0)
+            residue_coords.append(coords_i.squeeze(0))
+            transforms.append(transform_i.squeeze(0))
+            residues.append(model.residue)
+            atom_subsets.append(tuple(model._atom_indices))
 
-            if i == 0:
-                # First residue: place at origin (already in canonical frame)
-                positioned = coords_i
-            else:
-                # Position relative to previous residue using its transform
-                # Use fast path with pre-resolved frame indices
-                positioned = position_residue_fast(
-                    prev_coords,
-                    coords_i,
-                    prev_transform,
-                    prev_model.prev_frame_cols,
-                    prev_model.prev_z_toward_origin,
-                    model.next_frame_cols,
-                    model.next_z_toward_origin,
-                )
-
-            all_coords.append(positioned)
-
-            # Store for next iteration
-            prev_coords = positioned
-            prev_transform = transform_i
-            prev_model = model
-
-        return torch.cat(all_coords, dim=0)  # (N, 3)
+        # Delegate assembly to ChainBuilder's unified function
+        return assemble_chain(residue_coords, transforms, residues, atom_subsets)
 
     def sample(
         self,

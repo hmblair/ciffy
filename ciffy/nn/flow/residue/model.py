@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from ciffy.utils import atoms_to_col_map
-
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
 
@@ -545,43 +543,8 @@ class ResidueFlowModel(nn.Module):
         self._geometry_projector: callable | None = None
         self._geometry_projector_device: torch.device | None = None
 
-        # Pre-resolve frame column indices for fast frame computation
-        self._init_frame_indices()
-
         if jit:
             self._compile_jit()
-
-    def _init_frame_indices(self) -> None:
-        """
-        Pre-resolve frame column indices from atom names.
-
-        This converts the string-based FrameDefinition to integer indices
-        once at model initialization, enabling fast vectorized frame
-        computation at runtime without Python attribute lookups.
-        """
-        from ciffy.biochemistry.linking import LINKING_BY_TYPE
-
-        atom_to_col = atoms_to_col_map(self._atom_indices)
-        link_def = LINKING_BY_TYPE.get(self.residue.molecule_type)
-
-        if link_def is not None:
-            # Pre-resolve prev frame (outgoing) indices
-            self._prev_frame_cols = link_def.prev_frame.resolve(
-                self.residue, atom_to_col
-            )
-            self._prev_z_toward_origin = link_def.prev_frame.z_toward_origin
-
-            # Pre-resolve next frame (incoming) indices
-            self._next_frame_cols = link_def.next_frame.resolve(
-                self.residue, atom_to_col
-            )
-            self._next_z_toward_origin = link_def.next_frame.z_toward_origin
-        else:
-            # Non-polymer residue types (ligands, etc.) - no linking
-            self._prev_frame_cols = None
-            self._next_frame_cols = None
-            self._prev_z_toward_origin = True
-            self._next_z_toward_origin = True
 
     def _compile_jit(self) -> None:
         """Compile the decoder to TorchScript for faster inference."""
@@ -601,43 +564,6 @@ class ResidueFlowModel(nn.Module):
         if self._atoms_group is None:
             self._atoms_group = self.residue.subset(set(self._atom_indices))
         return self._atoms_group
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Frame Properties (for inter-residue positioning)
-    # ─────────────────────────────────────────────────────────────────────────
-    # These expose pre-resolved frame column indices for use by PolymerFlowModel.
-    # TODO: Consider extracting frame computation to a geometry helper module
-    # rather than coupling it with flow models.
-
-    @property
-    def prev_frame_cols(self) -> tuple[int, int, int | None] | None:
-        """
-        Pre-resolved column indices for the outgoing (prev) frame.
-
-        Returns (origin_col, z_ref_col, perp_ref_col) or None if not a polymer.
-        Used to compute the coordinate frame at the linking atom (e.g., O3' or C).
-        """
-        return self._prev_frame_cols
-
-    @property
-    def next_frame_cols(self) -> tuple[int, int, int | None] | None:
-        """
-        Pre-resolved column indices for the incoming (next) frame.
-
-        Returns (origin_col, z_ref_col, perp_ref_col) or None if not a polymer.
-        Used to compute the coordinate frame at the linking atom (e.g., P or N).
-        """
-        return self._next_frame_cols
-
-    @property
-    def prev_z_toward_origin(self) -> bool:
-        """Whether the Z-axis points toward the origin for the outgoing frame."""
-        return self._prev_z_toward_origin
-
-    @property
-    def next_z_toward_origin(self) -> bool:
-        """Whether the Z-axis points toward the origin for the incoming frame."""
-        return self._next_z_toward_origin
 
     @classmethod
     def from_structures(

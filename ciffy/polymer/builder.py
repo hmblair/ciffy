@@ -59,6 +59,29 @@ class MoleculeConfig:
     end_terminal_atoms: frozenset[str]    # 3'/C-terminal only
 
 
+@dataclass
+class FrameIndices:
+    """
+    Pre-resolved frame column indices for a residue type.
+
+    Uses arrays with -1 sentinel for missing perp_ref, following ciffy's
+    philosophy of arrays over Python data types. This enables efficient
+    frame computation without Python attribute lookups.
+
+    Attributes:
+        prev_cols: shape (3,) int32 array [origin, z_ref, perp_ref] for outgoing frame.
+            -1 indicates missing perp_ref.
+        prev_z_toward: If True, Z points from z_ref toward origin.
+        next_cols: shape (3,) int32 array [origin, z_ref, perp_ref] for incoming frame.
+            -1 indicates missing perp_ref.
+        next_z_toward: If True, Z points from z_ref toward origin.
+    """
+    prev_cols: np.ndarray   # shape (3,), dtype=int32, -1 = no perp_ref
+    prev_z_toward: bool
+    next_cols: np.ndarray   # shape (3,), dtype=int32, -1 = no perp_ref
+    next_z_toward: bool
+
+
 # =============================================================================
 # MOLECULE CONFIGURATIONS
 # =============================================================================
@@ -137,6 +160,149 @@ def expand_residue(residue: Residue) -> tuple[tuple[int, ...], tuple[int, ...], 
 
 
 # =============================================================================
+# FRAME RESOLUTION (cached for fast positioning)
+# =============================================================================
+
+@lru_cache(maxsize=256)
+def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> FrameIndices:
+    """
+    Resolve frame column indices for a (residue_type, atom_subset) pair.
+
+    This is cached so that repeated positioning of the same residue type
+    with the same atom subset doesn't require repeated lookups.
+
+    Args:
+        residue_idx: Residue enum value (int).
+        atom_indices: Tuple of atom type values in the residue's coordinate array.
+
+    Returns:
+        FrameIndices with pre-resolved column indices for both incoming and
+        outgoing frames.
+
+    Raises:
+        ValueError: If required linking atoms are missing from atom_indices.
+    """
+    residue = Residue.from_index(residue_idx)
+    atom_to_col = atoms_to_col_map(atom_indices)
+    link_def = LINKING_BY_TYPE.get(residue.molecule_type)
+
+    if link_def is None:
+        # Non-polymer residue (ligand, etc.) - no linking frames
+        return FrameIndices(
+            prev_cols=np.array([-1, -1, -1], dtype=np.int32),
+            prev_z_toward=True,
+            next_cols=np.array([-1, -1, -1], dtype=np.int32),
+            next_z_toward=True,
+        )
+
+    # Resolve outgoing (prev) frame
+    prev_tuple = link_def.prev_frame.resolve(residue, atom_to_col)
+    prev_cols = np.array([
+        prev_tuple[0],
+        prev_tuple[1],
+        prev_tuple[2] if prev_tuple[2] is not None else -1,
+    ], dtype=np.int32)
+
+    # Resolve incoming (next) frame
+    next_tuple = link_def.next_frame.resolve(residue, atom_to_col)
+    next_cols = np.array([
+        next_tuple[0],
+        next_tuple[1],
+        next_tuple[2] if next_tuple[2] is not None else -1,
+    ], dtype=np.int32)
+
+    return FrameIndices(
+        prev_cols=prev_cols,
+        prev_z_toward=link_def.prev_frame.z_toward_origin,
+        next_cols=next_cols,
+        next_z_toward=link_def.next_frame.z_toward_origin,
+    )
+
+
+# =============================================================================
+# CHAIN ASSEMBLY (standalone function for generative models)
+# =============================================================================
+
+def assemble_chain(
+    residue_coords: list[Array],
+    transforms: list[Array],
+    residues: list[Residue],
+    atom_subsets: list[tuple[int, ...]],
+) -> Array:
+    """
+    Assemble a chain from pre-decoded residue coordinates and transforms.
+
+    This is the unified assembly function for all generative models (flow models,
+    autoregressive models, etc.). It handles frame resolution with caching and
+    uses the fast positioning path.
+
+    Args:
+        residue_coords: List of (n_atoms, 3) coordinate arrays per residue.
+            These are the decoded/predicted coordinates in canonical frame.
+        transforms: List of (6,) SE(3) transforms per residue [axis-angle, translation].
+            The transform for residue i positions it relative to residue i-1.
+        residues: List of Residue enum values.
+        atom_subsets: List of atom index tuples for each residue's coordinate array.
+            Must match the atom ordering in residue_coords.
+
+    Returns:
+        (N, 3) concatenated positioned coordinates for the entire chain.
+
+    Example:
+        >>> # In PolymerFlowModel.decode()
+        >>> residue_coords, transforms = [], []
+        >>> for i, res_type in enumerate(sequence):
+        ...     coords, transform = model.decode(latents[i])
+        ...     residue_coords.append(coords)
+        ...     transforms.append(transform)
+        >>> positioned = assemble_chain(residue_coords, transforms, residues, atom_subsets)
+    """
+    from ..geometry import position_residue_fast
+
+    if len(residue_coords) == 0:
+        return np.empty((0, 3), dtype=np.float32)
+
+    all_coords = []
+    prev_coords = None
+    prev_frame: FrameIndices | None = None
+    prev_transform = None
+
+    for i, (coords, transform, residue, atoms) in enumerate(
+        zip(residue_coords, transforms, residues, atom_subsets)
+    ):
+        # Get cached frame indices for this residue type + atom subset
+        frame = _resolve_frame_indices(residue.value, atoms)
+
+        if i == 0:
+            # First residue - no positioning needed, place at origin
+            positioned = coords
+        else:
+            # Position relative to previous residue
+            positioned = position_residue_fast(
+                prev_coords,
+                coords,
+                prev_transform,
+                prev_frame.prev_cols,
+                prev_frame.prev_z_toward,
+                frame.next_cols,
+                frame.next_z_toward,
+            )
+
+        all_coords.append(positioned)
+
+        # Store for next iteration
+        prev_coords = positioned
+        prev_frame = frame
+        prev_transform = transform
+
+    # Concatenate all positioned coordinates
+    if is_torch(all_coords[0]):
+        import torch
+        return torch.cat(all_coords, dim=0)
+    return np.concatenate(all_coords, axis=0)
+
+
+# =============================================================================
 # CHAIN BUILDER
 # =============================================================================
 
@@ -161,7 +327,7 @@ class ChainBuilder:
 
     __slots__ = (
         'mol_type', 'config', 'filter_terminal',
-        '_residues', '_prev_coords', '_prev_atom_to_col', '_prev_residue',
+        '_residues', '_prev_coords', '_prev_atoms', '_prev_residue',
     )
 
     def __init__(
@@ -184,13 +350,13 @@ class ChainBuilder:
 
         self._residues: list[ResidueData] = []
         self._prev_coords: Array | None = None
-        self._prev_atom_to_col: dict[int, int] | None = None
+        self._prev_atoms: tuple[int, ...] | None = None
         self._prev_residue: Residue | None = None
 
     def set_previous(
         self,
         coords: Array,
-        atom_to_col: dict[int, int],
+        atoms: tuple[int, ...] | list[int],
         residue: Residue,
     ) -> None:
         """
@@ -201,11 +367,11 @@ class ChainBuilder:
 
         Args:
             coords: (n_atoms, 3) coordinates of previous residue.
-            atom_to_col: Atom value -> column index mapping.
+            atoms: Tuple of atom type values in the coordinate array.
             residue: Previous residue type.
         """
         self._prev_coords = coords
-        self._prev_atom_to_col = atom_to_col
+        self._prev_atoms = tuple(atoms) if not isinstance(atoms, tuple) else atoms
         self._prev_residue = residue
 
     def append(
@@ -229,7 +395,7 @@ class ChainBuilder:
         Raises:
             ValueError: If required linking atoms are missing.
         """
-        from ..geometry import position_residue
+        from ..geometry import position_residue, position_residue_fast
 
         # Get atom data for this residue
         atom_indices, element_indices, atom_names, ideal_coords = expand_residue(residue)
@@ -253,15 +419,30 @@ class ChainBuilder:
                     atom_indices, atom_names, residue, link_def, "next"
                 )
 
-            coords = position_residue(
-                prev_coords=self._prev_coords,
-                next_coords=coords,
-                prev_atom_to_col=self._prev_atom_to_col,
-                next_atom_to_col=atom_to_col,
-                prev_residue=self._prev_residue,
-                next_residue=residue,
-                transform=transform,
-            )
+            if transform is not None:
+                # Fast path with cached frame indices
+                prev_frame = _resolve_frame_indices(self._prev_residue.value, self._prev_atoms)
+                next_frame = _resolve_frame_indices(residue.value, atom_indices)
+                coords = position_residue_fast(
+                    self._prev_coords,
+                    coords,
+                    transform,
+                    prev_frame.prev_cols,
+                    prev_frame.prev_z_toward,
+                    next_frame.next_cols,
+                    next_frame.next_z_toward,
+                )
+            else:
+                # Slow path for linear extension (needs backbone span calculation)
+                coords = position_residue(
+                    prev_coords=self._prev_coords,
+                    next_coords=coords,
+                    prev_atom_to_col=atoms_to_col_map(self._prev_atoms),
+                    next_atom_to_col=atom_to_col,
+                    prev_residue=self._prev_residue,
+                    next_residue=residue,
+                    transform=None,
+                )
 
         # Filter terminal atoms if enabled
         if self.filter_terminal:
@@ -285,7 +466,7 @@ class ChainBuilder:
         # Update state for next residue
         self._residues.append(residue_data)
         self._prev_coords = coords
-        self._prev_atom_to_col = atom_to_col
+        self._prev_atoms = atom_indices
         self._prev_residue = residue
 
         # Validate outgoing frame atoms for next positioning

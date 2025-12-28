@@ -41,12 +41,12 @@ class Colors:
     UNDERLINE = "\033[4m"
 
 
-def format_chain_table(pdb_id: str, backend: str, rows: list[dict]) -> str:
+def format_chain_table(pdb_id: str | None, backend: str, rows: list[dict]) -> str:
     """
     Format chain info as a table string.
 
     Args:
-        pdb_id: PDB identifier.
+        pdb_id: PDB identifier, or None if not available.
         backend: Backend name ('numpy' or 'torch').
         rows: List of dicts with keys: 'chain', 'type', 'res', 'atoms'.
 
@@ -65,13 +65,18 @@ def format_chain_table(pdb_id: str, backend: str, rows: list[dict]) -> str:
 
     # Build header and ensure separator is wide enough for title
     header = f"{'':>{chain_w}}  {'Type':<{type_w}}  {'Res':>{res_w}}  {'Atoms':>{atoms_w}}"
-    title = f"Polymer {pdb_id} ({backend})"
+    id_display = pdb_id if pdb_id is not None else ""
+    title = f"Polymer {id_display} ({backend})".strip()
     sep_width = max(len(header), len(title))
     sep = "─" * sep_width
 
     # Build rows
+    if pdb_id is not None:
+        title_line = f"Polymer {Colors.GREEN}{pdb_id}{Colors.RESET} {Colors.GREY}({backend}){Colors.RESET}"
+    else:
+        title_line = f"Polymer {Colors.GREY}({backend}){Colors.RESET}"
     lines = [
-        f"Polymer {Colors.GREEN}{pdb_id}{Colors.RESET} {Colors.GREY}({backend}){Colors.RESET}",
+        title_line,
         sep,
         header,
         sep,

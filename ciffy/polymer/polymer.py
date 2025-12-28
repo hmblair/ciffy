@@ -170,17 +170,15 @@ class Polymer:
     # Per-residue arrays
     sequence = Field(Scale.RESIDUE, dtype=Dtype.INT)
 
-    # Per-chain arrays
-    lengths = Field(Scale.CHAIN, dtype=Dtype.INT)
+    # Per-chain arrays (lengths is handled by hierarchy, not a descriptor)
     molecule_types = Field(Scale.CHAIN, dtype=Dtype.INT, required=False, validate=False)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Metadata Descriptors - values passed through without conversion
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Molecule-level
-    pdb_id = Metadata(Scale.MOLECULE)
-    polymer_count = Metadata(Scale.MOLECULE, required=False)  # Defaults to all atoms
+    # Molecule-level (polymer_count is a property delegated to hierarchy)
+    pdb_id = Metadata(Scale.MOLECULE, required=False)
     resolution = Metadata(Scale.MOLECULE, required=False)
 
     # Per-chain lists
@@ -190,7 +188,7 @@ class Polymer:
 
     def __init__(
         self: Polymer,
-        sizes: dict[Scale, Array],
+        hierarchy: _Hierarchy,
         **fields,
     ) -> None:
         """
@@ -198,20 +196,18 @@ class Polymer:
 
         All Field and Metadata descriptors defined on the class can be passed
         as keyword arguments. Required fields (coordinates, atoms, elements,
-        sequence, pdb_id, names, strands, lengths) must be provided.
+        sequence, names, strands) must be provided.
 
         Args:
-            sizes: Dict mapping Scale to atom counts per unit at each level.
+            hierarchy: _Hierarchy object containing scale bookkeeping.
             **fields: Field and Metadata values matching class descriptors:
                 - coordinates: (N, 3) array of atom positions.
                 - atoms: (N,) array of atom type indices.
                 - elements: (N,) array of element indices.
                 - sequence: (R,) array of residue type indices.
-                - lengths: (C,) array of residues per chain.
-                - pdb_id: PDB identifier string.
+                - pdb_id: PDB identifier string (optional).
                 - names: List of chain names.
                 - strands: List of strand identifiers.
-                - polymer_count: Number of polymer atoms (default: all atoms).
                 - molecule_types: (C,) array of molecule types per chain.
                 - descriptions: List of entity descriptions per chain.
                 - bfactors: (N,) array of B-factors per atom.
@@ -220,19 +216,6 @@ class Polymer:
         Raises:
             TypeError: If required fields are missing or unknown fields provided.
             ValueError: If field sizes are inconsistent.
-
-        Example:
-            >>> polymer = Polymer(
-            ...     sizes={Scale.RESIDUE: sizes_r, Scale.CHAIN: sizes_c, ...},
-            ...     coordinates=coords,
-            ...     atoms=atoms,
-            ...     elements=elements,
-            ...     sequence=seq,
-            ...     lengths=lengths,
-            ...     pdb_id="1ABC",
-            ...     names=["A", "B"],
-            ...     strands=["1", "2"],
-            ... )
         """
         # Assign all descriptor fields from kwargs
         missing = []
@@ -254,25 +237,18 @@ class Polymer:
                 f"__init__() got unexpected keyword arguments: {list(fields.keys())}"
             )
 
-        # Apply defaults for special cases
-        if not self._pdb_id:
-            self._pdb_id = UNKNOWN
-
-        # polymer_count defaults to total atom count (backward compat)
-        if self._polymer_count is None:
-            self._polymer_count = arr_size(self._coordinates, 0)
-
-        self._validate_consistency(sizes)
-
-        # Create hierarchy for scale operations
-        self._hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes=sizes,
-            lengths=self._lengths,
-            polymer_count=self._polymer_count,
-            ref=self._coordinates,
-        )
-
+        self._hierarchy = hierarchy
         self._bonds: np.ndarray | None = None
+
+    @property
+    def lengths(self) -> Array:
+        """Residues per chain (C,) array. Delegated to hierarchy."""
+        return self._hierarchy.lengths
+
+    @property
+    def polymer_count(self) -> int:
+        """Number of polymer atoms. Delegated to hierarchy."""
+        return self._hierarchy.polymer_count
 
     # ─────────────────────────────────────────────────────────────────────────
     # Descriptor Helpers - for automatic slicing and backend conversion
@@ -480,9 +456,10 @@ class Polymer:
                         field_sizes.append(arr_size(value, 0))
                         field_names.append(name)
             if field_sizes and not all_equal(*field_sizes):
+                id_str = f" for PDB {self.pdb_id}" if self.pdb_id else ""
                 raise ValueError(
                     f"Fields at {scale.name} scale have inconsistent sizes: "
-                    f"{dict(zip(field_names, field_sizes))} for PDB {self.pdb_id}."
+                    f"{dict(zip(field_names, field_sizes))}{id_str}."
                 )
 
         # Validate hierarchy consistency (atom counts must match across scales)
@@ -493,9 +470,10 @@ class Polymer:
         nonpoly = mol_count - self.polymer_count
 
         if not all_equal(res_count + nonpoly, chn_count, mol_count):
+            id_str = f" for PDB {self.pdb_id}" if self.pdb_id else ""
             raise ValueError(
                 f"Atom counts do not match: residues ({res_count} + {nonpoly}), "
-                f"chains ({chn_count}), molecule ({mol_count}) for PDB {self.pdb_id}."
+                f"chains ({chn_count}), molecule ({mol_count}){id_str}."
             )
 
     def _clone(self, **overrides) -> Polymer:
@@ -529,17 +507,13 @@ class Polymer:
                 value = list(value)
             data[name] = value
 
-        # Add sizes from hierarchy (not a descriptor)
-        data['sizes'] = {
-            Scale.RESIDUE: self._hierarchy.sizes(Scale.RESIDUE),
-            Scale.CHAIN: self._hierarchy.sizes(Scale.CHAIN),
-            Scale.MOLECULE: self._hierarchy.sizes(Scale.MOLECULE),
-        }
-
-        # Apply overrides
+        # Apply overrides to field data
         data.update(overrides)
 
-        return Polymer(**data)
+        # Extract hierarchy (passed positionally, not in kwargs)
+        hierarchy = data.pop('hierarchy', self._hierarchy)
+
+        return Polymer(hierarchy, **data)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
@@ -567,21 +541,32 @@ class Polymer:
             >>> empty.size(Scale.CHAIN)
             0
         """
+        # Create empty arrays
+        coordinates = np.zeros((0, 3), dtype=np.float32)
+        sizes = {
+            Scale.RESIDUE: np.array([], dtype=np.int64),
+            Scale.CHAIN: np.array([], dtype=np.int64),
+            Scale.MOLECULE: np.array([0], dtype=np.int64),
+        }
+        lengths = np.array([], dtype=np.int64)
+
+        # Create hierarchy
+        hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=lengths,
+            polymer_count=0,
+            ref=coordinates,
+        )
+
         polymer = cls(
-            coordinates=np.zeros((0, 3), dtype=np.float32),
+            hierarchy,
+            coordinates=coordinates,
             atoms=np.array([], dtype=np.int64),
             elements=np.array([], dtype=np.int64),
             sequence=np.array([], dtype=np.int64),
-            sizes={
-                Scale.RESIDUE: np.array([], dtype=np.int64),
-                Scale.CHAIN: np.array([], dtype=np.int64),
-                Scale.MOLECULE: np.array([0], dtype=np.int64),
-            },
             pdb_id=pdb_id,
             names=[],
             strands=[],
-            lengths=np.array([], dtype=np.int64),
-            polymer_count=0,
         )
         return polymer.torch() if backend == "torch" else polymer
 
@@ -626,9 +611,12 @@ class Polymer:
             ix: Chain index.
 
         Returns:
-            String combining PDB ID and chain name (e.g., "1ABC_A").
+            String combining PDB ID and chain name (e.g., "1ABC_A"),
+            or just the chain name if no PDB ID is set.
         """
-        return f"{self.pdb_id}_{self.names[ix]}"
+        if self.pdb_id is not None:
+            return f"{self.pdb_id}_{self.names[ix]}"
+        return self.names[ix]
 
     def strand_id(self: Polymer, ix: int) -> str:
         """
@@ -638,9 +626,12 @@ class Polymer:
             ix: Chain index.
 
         Returns:
-            String combining PDB ID and strand name.
+            String combining PDB ID and strand name,
+            or just the strand name if no PDB ID is set.
         """
-        return f"{self.pdb_id}_{self.strands[ix]}"
+        if self.pdb_id is not None:
+            return f"{self.pdb_id}_{self.strands[ix]}"
+        return self.strands[ix]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Size and Structure
@@ -1112,18 +1103,13 @@ class Polymer:
         # Step 2: Slice all fields using existing _slice_all
         sliced = self._slice_all(atom_mask, res_mask, chn_mask)
 
-        # Step 3: Use hierarchy to compute new sizes and metadata
+        # Step 3: Use hierarchy to compute new hierarchy for selection
         new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
         new_polymer_count = self._hierarchy.compute_polymer_count(atom_mask, res_mask, scale)
 
-        # Extract sizes dict and lengths for Polymer constructor
-        sliced['sizes'] = {
-            Scale.RESIDUE: new_per[(Scale.ATOM, Scale.RESIDUE)],
-            Scale.CHAIN: new_per[(Scale.ATOM, Scale.CHAIN)],
-            Scale.MOLECULE: new_per[(Scale.ATOM, Scale.MOLECULE)],
-        }
-        sliced['lengths'] = new_per[(Scale.RESIDUE, Scale.CHAIN)]
-        sliced['polymer_count'] = new_polymer_count
+        # Create new hierarchy for the selection
+        new_hierarchy = _Hierarchy(new_per, new_polymer_count, self._hierarchy._ref)
+        sliced['hierarchy'] = new_hierarchy
 
         return self._clone(**sliced)
 
@@ -1522,22 +1508,30 @@ class Polymer:
             np.array([self.size() + n_new_atoms], dtype=np.int64),
             self._sizes[Scale.MOLECULE]
         )
+        new_lengths = ops.to_backend(
+            np.array([self.lengths[0].item() + 1], dtype=np.int64),
+            self.lengths
+        )
+
+        # Create new hierarchy
+        sizes = {
+            Scale.RESIDUE: new_res_sizes,
+            Scale.CHAIN: new_chn_sizes,
+            Scale.MOLECULE: new_mol_sizes,
+        }
+        new_hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=new_lengths,
+            polymer_count=self.polymer_count + n_new_atoms,
+            ref=new_coords,
+        )
 
         return self._clone(
             coordinates=new_coords,
             atoms=new_atoms_arr,
             elements=new_elements_arr,
             sequence=new_sequence,
-            sizes={
-                Scale.RESIDUE: new_res_sizes,
-                Scale.CHAIN: new_chn_sizes,
-                Scale.MOLECULE: new_mol_sizes,
-            },
-            lengths=ops.to_backend(
-                np.array([self.lengths[0].item() + 1], dtype=np.int64),
-                self.lengths
-            ),
-            polymer_count=self.polymer_count + n_new_atoms,
+            hierarchy=new_hierarchy,
             # bfactors not preserved - new atoms don't have experimental B-factors
             bfactors=None,
         )
@@ -1656,7 +1650,7 @@ class Polymer:
             return self
 
         converted = self._convert_backend(to_numpy)
-        converted['sizes'] = {k: to_numpy(v) for k, v in self._sizes.items()}
+        converted['hierarchy'] = self._hierarchy.numpy()
         return self._clone(**converted)
 
     def torch(self: Polymer) -> Polymer:
@@ -1674,7 +1668,7 @@ class Polymer:
             return self
 
         converted = self._convert_backend(to_torch)
-        converted['sizes'] = {k: to_torch(v, dtype=Dtype.INT64) for k, v in self._sizes.items()}
+        converted['hierarchy'] = self._hierarchy.torch()
         return self._clone(**converted)
 
     def to(self: Polymer, device=None, dtype=None) -> Polymer:
@@ -1725,10 +1719,9 @@ class Polymer:
                 # Int tensors: apply device only
                 converted[name] = value.to(device) if device is not None else value
 
-        # Handle sizes dict (all int)
-        def move_int(t):
-            return t.to(device) if device is not None else t
-        converted['sizes'] = {k: move_int(v) for k, v in self._sizes.items()}
+        # Move hierarchy to device (int tensors only, no dtype change)
+        if device is not None:
+            converted['hierarchy'] = self._hierarchy.to(device)
 
         return self._clone(**converted)
 

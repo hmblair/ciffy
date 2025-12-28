@@ -106,24 +106,16 @@ def join(*polymers: "Polymer") -> "Polymer":
     for p in non_empty:
         _validate_poly_only(p, "join()")
 
-    # Single polymer case - return a copy
+    # Single polymer case - return a copy using _clone
     if len(non_empty) == 1:
         p = non_empty[0]
-        return Polymer(
-            sizes={
-                Scale.RESIDUE: ops.clone(p._sizes[Scale.RESIDUE]),
-                Scale.CHAIN: ops.clone(p._sizes[Scale.CHAIN]),
-                Scale.MOLECULE: ops.clone(p._sizes[Scale.MOLECULE]),
-            },
+        return p._clone(
             coordinates=ops.clone(p.coordinates),
             atoms=ops.clone(p.atoms),
             elements=ops.clone(p.elements),
             sequence=ops.clone(p.sequence),
-            pdb_id=p.pdb_id,
             names=list(p.names),
             strands=list(p.strands),
-            lengths=ops.clone(p.lengths),
-            polymer_count=p.polymer_count,
             molecule_types=ops.clone(p._molecule_types) if p._molecule_types is not None else None,
             descriptions=list(p.descriptions) if p.descriptions else None,
         )
@@ -177,8 +169,17 @@ def join(*polymers: "Polymer") -> "Polymer":
     else:
         pdb_id = "joined"
 
-    return Polymer(
+    # Create hierarchy
+    from ..polymer.hierarchy import _Hierarchy
+    hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
+        lengths=lengths,
+        polymer_count=polymer_count,
+        ref=coordinates,
+    )
+
+    return Polymer(
+        hierarchy,
         coordinates=coordinates,
         atoms=atoms,
         elements=elements,
@@ -186,8 +187,6 @@ def join(*polymers: "Polymer") -> "Polymer":
         pdb_id=pdb_id,
         names=names,
         strands=strands,
-        lengths=lengths,
-        polymer_count=polymer_count,
         molecule_types=molecule_types,
         descriptions=descriptions,
     )

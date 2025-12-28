@@ -635,6 +635,7 @@ class TestRMSDEdgeCases:
             Polymer with random coordinates.
         """
         from ciffy import Polymer, Scale
+        from ciffy.polymer.hierarchy import _Hierarchy
 
         # Random coordinates with fixed seed for reproducibility
         rng = np.random.RandomState(seed)
@@ -650,17 +651,24 @@ class TestRMSDEdgeCases:
             Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
             Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
         }
+        lengths = np.array([1], dtype=np.int64)
+
+        hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=lengths,
+            polymer_count=n_atoms,
+            ref=coords,
+        )
 
         polymer = Polymer(
+            hierarchy,
             coordinates=coords,
             atoms=atoms,
             elements=elements,
             sequence=sequence,
-            sizes=sizes,
             pdb_id="test",
             names=["A"],
             strands=["A"],
-            lengths=np.array([1], dtype=np.int64),
         )
 
         if backend == "torch":

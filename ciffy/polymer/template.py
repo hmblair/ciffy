@@ -342,12 +342,25 @@ def from_sequence(
 
     n_atoms = len(atoms_arr)
 
+    # Create sizes and lengths arrays
+    sizes = {
+        Scale.RESIDUE: np.array(all_atoms_per_res, dtype=np.int64),
+        Scale.CHAIN: np.array(atoms_per_chain, dtype=np.int64),
+        Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+    }
+    lengths = np.array(residues_per_chain, dtype=np.int64)
+
+    # Create hierarchy
+    from .hierarchy import _Hierarchy
+    hierarchy = _Hierarchy.from_sizes_and_lengths(
+        sizes=sizes,
+        lengths=lengths,
+        polymer_count=n_atoms,
+        ref=coords,
+    )
+
     polymer = Polymer(
-        sizes={
-            Scale.RESIDUE: np.array(all_atoms_per_res, dtype=np.int64),
-            Scale.CHAIN: np.array(atoms_per_chain, dtype=np.int64),
-            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
-        },
+        hierarchy,
         coordinates=coords,
         atoms=atoms_arr,
         elements=elements_arr,
@@ -355,8 +368,6 @@ def from_sequence(
         pdb_id=id,
         names=chain_names,
         strands=chain_names,
-        lengths=np.array(residues_per_chain, dtype=np.int64),
-        polymer_count=n_atoms,
     )
 
     return polymer.torch() if backend == "torch" else polymer
@@ -430,12 +441,25 @@ def from_extract(
 
     total_atoms = n_residues * n_atoms
 
+    # Create sizes and lengths arrays
+    sizes = {
+        Scale.RESIDUE: atoms_per_res,
+        Scale.CHAIN: np.array([total_atoms], dtype=np.int64),
+        Scale.MOLECULE: np.array([total_atoms], dtype=np.int64),
+    }
+    lengths = np.array([n_residues], dtype=np.int64)
+
+    # Create hierarchy
+    from .hierarchy import _Hierarchy
+    hierarchy = _Hierarchy.from_sizes_and_lengths(
+        sizes=sizes,
+        lengths=lengths,
+        polymer_count=total_atoms,
+        ref=flat_coords,
+    )
+
     polymer = Polymer(
-        sizes={
-            Scale.RESIDUE: atoms_per_res,
-            Scale.CHAIN: np.array([total_atoms], dtype=np.int64),
-            Scale.MOLECULE: np.array([total_atoms], dtype=np.int64),
-        },
+        hierarchy,
         coordinates=flat_coords,
         atoms=all_atoms,
         elements=all_elements,
@@ -443,8 +467,6 @@ def from_extract(
         pdb_id=id,
         names=["A"],
         strands=["A"],
-        lengths=np.array([n_residues], dtype=np.int64),
-        polymer_count=total_atoms,
     )
 
     return polymer.torch() if backend == "torch" else polymer

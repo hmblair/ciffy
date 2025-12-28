@@ -145,9 +145,18 @@ def load(
     if resolution is not None and resolution < 0:
         resolution = None
 
+    # Create hierarchy from sizes and lengths
+    from ..polymer.hierarchy import _Hierarchy
+    hierarchy = _Hierarchy.from_sizes_and_lengths(
+        sizes=sizes,
+        lengths=res_per_chain,
+        polymer_count=polymer_count,
+        ref=coordinates,
+    )
+
     # Create Polymer with NumPy arrays (C extension returns int64 directly)
     polymer = Polymer(
-        sizes=sizes,
+        hierarchy,
         coordinates=coordinates,
         atoms=atoms,
         elements=elements,
@@ -155,8 +164,6 @@ def load(
         pdb_id=id,
         names=chain_names,
         strands=strand_names,
-        lengths=res_per_chain,
-        polymer_count=polymer_count,
         molecule_types=molecule_types,
         descriptions=descriptions,
         bfactors=bfactors,

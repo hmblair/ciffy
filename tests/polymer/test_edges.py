@@ -421,17 +421,14 @@ class TestArraySetterValidation:
         with pytest.raises(TypeError, match="Cannot assign torch"):
             p_numpy.sequence = torch_seq
 
-    def test_lengths_rejects_wrong_backend(self):
-        """Setting lengths with wrong backend raises TypeError."""
+    def test_lengths_is_readonly(self):
+        """lengths is a read-only property delegating to hierarchy."""
         import ciffy
-        import torch
-        from ciffy import Scale
 
-        p_numpy = ciffy.from_sequence("acgu", backend="numpy")
-        torch_lengths = torch.zeros(p_numpy.size(Scale.CHAIN), dtype=torch.long)
+        p = ciffy.from_sequence("acgu", backend="numpy")
 
-        with pytest.raises(TypeError, match="Cannot assign torch"):
-            p_numpy.lengths = torch_lengths
+        with pytest.raises(AttributeError, match="can't set attribute"):
+            p.lengths = p.lengths
 
     def test_coordinates_accepts_same_backend(self):
         """Setting coordinates with same backend works."""

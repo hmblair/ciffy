@@ -478,3 +478,55 @@ class _Hierarchy:
         new_polymer_count = self.compute_polymer_count(atom_mask, res_mask, scale)
 
         return _Hierarchy(new_per, new_polymer_count, self._ref)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Backend Conversion
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def torch(self) -> _Hierarchy:
+        """
+        Convert all arrays to PyTorch tensors.
+
+        Returns:
+            New _Hierarchy with PyTorch tensors.
+        """
+        from ..backend import to_torch, is_torch, Dtype
+        if is_torch(self._ref):
+            return self
+
+        new_per = {k: to_torch(v, dtype=Dtype.INT64) for k, v in self._per.items()}
+        new_ref = to_torch(self._ref)
+        return _Hierarchy(new_per, self._polymer_count, new_ref)
+
+    def numpy(self) -> _Hierarchy:
+        """
+        Convert all arrays to NumPy arrays.
+
+        Returns:
+            New _Hierarchy with NumPy arrays.
+        """
+        from ..backend import to_numpy, is_torch
+        if not is_torch(self._ref):
+            return self
+
+        new_per = {k: to_numpy(v) for k, v in self._per.items()}
+        new_ref = to_numpy(self._ref)
+        return _Hierarchy(new_per, self._polymer_count, new_ref)
+
+    def to(self, device) -> _Hierarchy:
+        """
+        Move tensors to specified device (torch backend only).
+
+        Args:
+            device: Target device (e.g., 'cuda', 'cpu', torch.device).
+
+        Returns:
+            New _Hierarchy with tensors on the specified device.
+        """
+        from ..backend import is_torch
+        if not is_torch(self._ref):
+            return self  # NumPy arrays don't have devices
+
+        new_per = {k: v.to(device) for k, v in self._per.items()}
+        new_ref = self._ref.to(device) if hasattr(self._ref, 'to') else self._ref
+        return _Hierarchy(new_per, self._polymer_count, new_ref)

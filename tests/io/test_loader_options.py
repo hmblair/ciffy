@@ -5,7 +5,7 @@ Tests:
 - load_metadata() for fast metadata extraction
 - load() with molecule_types filter
 - load() with chains filter
-- load() with load_descriptions=True
+- load() with skip=None to load descriptions
 """
 
 import glob
@@ -244,10 +244,10 @@ class TestLoadCombinedFilters:
 
 
 class TestLoadDescriptions:
-    """Test load() with load_descriptions parameter."""
+    """Test load() with skip parameter for descriptions."""
 
-    def test_load_descriptions_false_by_default(self, backend):
-        """load with default load_descriptions=False has None descriptions."""
+    def test_descriptions_skipped_by_default(self, backend):
+        """load with default skip='descriptions' has None descriptions."""
         from ciffy import load
 
         cif = get_test_cif("9GCM")
@@ -255,12 +255,12 @@ class TestLoadDescriptions:
 
         assert polymer.descriptions is None
 
-    def test_load_descriptions_true_populates(self, backend):
-        """load with load_descriptions=True populates descriptions."""
+    def test_skip_none_loads_descriptions(self, backend):
+        """load with skip=None loads descriptions."""
         from ciffy import load, Scale
 
         cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend, load_descriptions=True)
+        polymer = load(cif, backend=backend, skip=None)
 
         assert polymer.descriptions is not None
         assert isinstance(polymer.descriptions, list)
@@ -270,7 +270,7 @@ class TestLoadDescriptions:
         from ciffy import load, Scale
 
         cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend, load_descriptions=True)
+        polymer = load(cif, backend=backend, skip=None)
 
         assert len(polymer.descriptions) == polymer.size(Scale.CHAIN)
 
@@ -279,7 +279,7 @@ class TestLoadDescriptions:
         from ciffy import load
 
         cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend, load_descriptions=True)
+        polymer = load(cif, backend=backend, skip=None)
 
         for desc in polymer.descriptions:
             assert isinstance(desc, str)
@@ -289,7 +289,7 @@ class TestLoadDescriptions:
         """descriptions are preserved after selecting a chain."""
         from ciffy import load, Scale
 
-        polymer = load(cif_file, backend=backend, load_descriptions=True)
+        polymer = load(cif_file, backend=backend, skip=None)
 
         if polymer.size(Scale.CHAIN) > 0:
             chain = polymer.by_index(0)

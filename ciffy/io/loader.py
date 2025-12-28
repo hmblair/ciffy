@@ -16,11 +16,10 @@ if TYPE_CHECKING:
 def load(
     file: str | Path,
     backend: str | None = None,
-    load_descriptions: bool = False,
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = None,
+    skip: Union[str, List[str], None] = "descriptions",
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -31,8 +30,6 @@ def load(
     Args:
         file: Path to the CIF file.
         backend: Array backend, either "numpy" or "torch". Default is "numpy".
-        load_descriptions: If True, parse entity descriptions from CIF file.
-            Default is False for performance (descriptions not needed for DL).
         molecule_types: Filter to load only specific molecule types.
             Can be a single Molecule enum (e.g., Molecule.RNA) or a list
             of Molecule enums. If None, all molecules are loaded.
@@ -43,14 +40,15 @@ def load(
         model: Model number to load for multi-model structures (e.g., NMR
             ensembles). Currently only model 1 is supported. Default is 1.
         skip: Fields to skip loading. Can be:
-            - None: Load all fields (default)
+            - "descriptions": Skip entity descriptions (default)
             - "metadata": Skip heavy atom-level fields (coordinates, bfactors,
               atoms, elements, atoms_per_res). Useful for fast indexing.
             - A single field name: Skip that field (e.g., "bfactors")
             - A list of field names: Skip multiple fields
+            - None or []: Load all fields including descriptions
             Skippable fields: coordinates, bfactors, atoms (types), elements,
-            sequence (residues), res_per_chain, atoms_per_res, resolution.
-            Core fields (chains, names, etc.) cannot be skipped.
+            sequence (residues), res_per_chain, atoms_per_res, resolution,
+            descriptions. Core fields (chains, names, etc.) cannot be skipped.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -67,7 +65,8 @@ def load(
         >>> print(polymer)
         PDB 1ABC with 1234 atoms (numpy).
 
-        >>> polymer = load("1abc.cif", load_descriptions=True)
+        >>> # Load with entity descriptions
+        >>> polymer = load("1abc.cif", skip=None)
         >>> print(polymer.descriptions)
         ['RNA (66-MER)', 'CESIUM ION', ...]
 
@@ -133,7 +132,7 @@ def load(
             chain_filter = list(chains)
 
     # Load returns a dict with all parsed data
-    data = _load(file, load_descriptions=load_descriptions, skip=skip, molecule_types=mol_type_filter, chains=chain_filter)
+    data = _load(file, skip=skip, molecule_types=mol_type_filter, chains=chain_filter)
 
     # Extract fields from dict
     id = data["id"]

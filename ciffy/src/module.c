@@ -486,7 +486,7 @@ static CifError _parse_descriptions(mmCIF *cif, mmBlockList *blocks, CifErrorCon
  * @param self Module reference (unused)
  * @param args Python positional arguments (filename string)
  * @param kwargs Python keyword arguments:
- *        - load_descriptions (bool): If true, parse entity descriptions (default: false)
+ *        - skip (str|list): Fields to skip loading (e.g., "descriptions", "bfactors")
  * @return Dict of parsed data or NULL on error
  */
 static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -497,16 +497,14 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifErrorContext ctx = CIF_ERROR_INIT;
 
     /* Parse arguments: filename (required) + optional keywords */
-    static char *kwlist[] = {"filename", "load_descriptions", "skip",
-                             "molecule_types", "chains", NULL};
+    static char *kwlist[] = {"filename", "skip", "molecule_types", "chains", NULL};
     const char *file = NULL;
-    int load_descriptions = 0;  /* Default: false */
     PyObject *py_skip = NULL;   /* Default: None - load all fields */
     PyObject *py_mol_types = NULL;  /* Optional list of molecule type ints */
     PyObject *py_chains = NULL;     /* Optional list of chain name strings */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|pOOO", kwlist,
-                                      &file, &load_descriptions, &py_skip,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|OOO", kwlist,
+                                      &file, &py_skip,
                                       &py_mol_types, &py_chains)) {
         return NULL;
     }
@@ -638,6 +636,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     /* Optionally parse descriptions (after _fill_cif so chains is populated) */
     /* Skip if coordinates are skipped (metadata-only mode) since we don't need descriptions for indexing */
     bool skip_batch = _is_field_skipped(FIELD_COORDS, skip_mask);
+    bool load_descriptions = !_is_field_skipped(FIELD_DESCRIPTIONS, skip_mask);
     if (load_descriptions && !skip_batch) {
         err = _parse_descriptions(&cif, &blocks, &ctx);
         if (err != CIF_OK) {
@@ -818,7 +817,7 @@ static PyMethodDef methods[] = {
      "Load an mmCIF file and return molecular structure data.\n\n"
      "Args:\n"
      "    filename (str): Path to the mmCIF file\n"
-     "    load_descriptions (bool): If True, parse entity descriptions (default: False)\n\n"
+     "    skip (str|list): Fields to skip (e.g., 'descriptions', 'bfactors')\n\n"
      "Returns:\n"
      "    dict: {\n"
      "        'id': str,                    # PDB identifier\n"
@@ -833,7 +832,7 @@ static PyMethodDef methods[] = {
      "        'strand_names': list[str],    # strand names\n"
      "        'polymer_count': int,         # polymer atoms\n"
      "        'molecule_types': ndarray,    # (C,) int32\n"
-     "        'descriptions': list[str],    # entity descriptions (if load_descriptions=True)\n"
+     "        'descriptions': list[str],    # entity descriptions (if not skipped)\n"
      "    }\n\n"
      "Raises:\n"
      "    IOError: If file cannot be read\n"

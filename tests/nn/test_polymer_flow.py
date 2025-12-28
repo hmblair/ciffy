@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+from ciffy import from_sequence
 from ciffy.nn.flow import PolymerFlowModel, PCAFlow, ResidueFlowModel
 from ciffy.nn.flow.residue.data import compute_pca
 from ciffy.biochemistry import Residue
@@ -152,36 +153,46 @@ class TestPolymerFlowModel:
         coords = polymer_model.decode(latents, np.array([], dtype=np.int64))
         assert coords.shape == (0, 3)
 
-    def test_sample_shape(self, polymer_model):
-        """Test sample output shape."""
+    def test_sample_coords_internal(self, polymer_model):
+        """Test internal _sample_coords method returns coordinate tensors."""
         sequence = np.array([Residue.A.value, Residue.G.value])
-        n_atoms = 10 + 12
+        # Get expected atoms from internal method
+        n_atoms = sum(polymer_model._get_atom_counts(sequence))
 
-        coords = polymer_model.sample(sequence)
+        samples = polymer_model._sample_coords(sequence, n_samples=1)
+        assert len(samples) == 1
+        assert samples[0].shape == (n_atoms, 3)
 
-        assert coords.shape == (n_atoms, 3)
-
-    def test_sample_multiple(self, polymer_model):
-        """Test sampling multiple conformations."""
-        sequence = np.array([Residue.A.value, Residue.G.value])
-        n_atoms = 10 + 12
-
-        samples = polymer_model.sample(sequence, n_samples=5)
-
-        assert len(samples) == 5
+        samples = polymer_model._sample_coords(sequence, n_samples=3)
+        assert len(samples) == 3
         for s in samples:
             assert s.shape == (n_atoms, 3)
 
-    def test_sample_empty_sequence(self, polymer_model):
-        """Test sample with empty sequence."""
-        empty_seq = np.array([], dtype=np.int64)
-        coords = polymer_model.sample(empty_seq)
-        assert coords.shape == (0, 3)
+    def test_sample_protocol(self, polymer_model):
+        """Test sample() protocol requires numpy backend."""
+        # Create a template with torch backend
+        template = from_sequence("ag", atoms=polymer_model.atom_filter)
+        template_torch = template.torch()
 
-        samples = polymer_model.sample(empty_seq, n_samples=3)
+        # Should raise for non-numpy backend
+        with pytest.raises(ValueError, match="numpy backend"):
+            polymer_model.sample(template_torch)
+
+    def test_sample_protocol_returns_polymers(self, polymer_model):
+        """Test sample() returns list of Polymers."""
+        # Create template - use full atoms
+        template = from_sequence("ag")
+        n_atoms_model = sum(polymer_model._get_atom_counts(template.sequence))
+
+        samples = polymer_model.sample(template, n_samples=3)
+
         assert len(samples) == 3
         for s in samples:
-            assert s.shape == (0, 3)
+            # Sample should have valid 3D coordinates matching model's atom count
+            assert s.coordinates is not None
+            assert s.coordinates.shape == (n_atoms_model, 3)
+            # Same sequence as template
+            assert len(s.sequence) == len(template.sequence)
 
     def test_repr(self, polymer_model):
         """Test string representation."""

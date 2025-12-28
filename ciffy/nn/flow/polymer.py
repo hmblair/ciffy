@@ -512,49 +512,44 @@ class PolymerFlowModel(nn.Module):
         # Assemble positioned coordinates
         return assemble_chain(residue_coords, transforms, residues, atom_subsets)
 
-    def sample(
+    def _sample_coords(
         self,
         sequence: SequenceArray,
         n_samples: int = 1,
-    ) -> torch.Tensor | list[torch.Tensor]:
+        temperature: float = 1.0,
+    ) -> list[torch.Tensor]:
         """
-        Sample new polymer conformations.
+        Sample coordinate tensors from sequence (internal method).
 
         Args:
-            sequence: Int array of residue types (e.g., polymer.sequence).
+            sequence: Int array of residue types.
             n_samples: Number of samples to generate.
+            temperature: Scales latent noise (higher = more diverse).
 
         Returns:
-            If n_samples=1: (N, 3) coordinate array.
-            If n_samples>1: List of (N, 3) coordinate arrays.
+            List of (N, 3) coordinate tensors.
         """
         sequence = _to_numpy_int64(sequence)
 
         if len(sequence) == 0:
-            if n_samples == 1:
-                return torch.empty(0, 3)
-            return [torch.empty(0, 3) for _ in range(n_samples)]
-
-        # Get device from first model
-        device = next(iter(self.residue_models.values())).device
+            return [torch.empty(0, 3, device=self.device) for _ in range(n_samples)]
 
         samples = []
         for _ in range(n_samples):
-            # Sample random latents from standard normal
-            latents = torch.randn(len(sequence), self.latent_dim, device=device)
+            latents = torch.randn(len(sequence), self.latent_dim, device=self.device)
+            latents = latents * temperature
             coords = self.decode(latents, sequence)
             samples.append(coords)
 
-        if n_samples == 1:
-            return samples[0]
         return samples
 
     def sample_from_sequence(
         self,
         sequence: str,
         n_samples: int = 1,
+        temperature: float = 1.0,
         id: str = "sampled",
-    ) -> "Polymer" | list["Polymer"]:
+    ) -> "Polymer | list[Polymer]":
         """
         Sample polymer conformations directly from a sequence string.
 
@@ -565,6 +560,7 @@ class PolymerFlowModel(nn.Module):
         Args:
             sequence: Sequence string (e.g., "acgu" for RNA, "MGKLF" for protein).
             n_samples: Number of conformations to generate.
+            temperature: Sampling temperature (higher = more diverse).
             id: PDB ID for the generated polymers.
 
         Returns:
@@ -586,21 +582,14 @@ class PolymerFlowModel(nn.Module):
         # Create template with correct atoms for this model
         template = from_sequence(sequence, atoms=self.atom_filter, id=id)
 
-        # Sample coordinates
-        coords_list = self.sample(template.sequence, n_samples=n_samples)
+        # Use protocol-compliant sample method
+        samples = self.sample(template, n_samples=n_samples, temperature=temperature)
 
-        # Convert to Polymers
         if n_samples == 1:
-            coords = coords_list if not isinstance(coords_list, list) else coords_list[0]
-            return template.with_coordinates(coords.detach().cpu().numpy())
+            return samples[0]
+        return samples
 
-        polymers = []
-        for i, coords in enumerate(coords_list):
-            p = template.with_coordinates(coords.detach().cpu().numpy())
-            polymers.append(p)
-        return polymers
-
-    def generate(
+    def sample(
         self,
         template: "Polymer",
         n_samples: int = 1,
@@ -610,11 +599,12 @@ class PolymerFlowModel(nn.Module):
         """
         Generate polymer conformations from a template.
 
-        This method satisfies the PolymerGenerativeModel protocol, enabling
+        This method implements the PolymerGenerativeModel protocol, enabling
         this model to be used interchangeably with other generative models.
 
         Args:
             template: Template Polymer with sequence and topology information.
+                Must have numpy backend (will be validated).
             n_samples: Number of independent conformations to generate.
             temperature: Sampling temperature. For flow models, this scales
                 the latent noise (higher = more diverse). Default 1.0.
@@ -623,31 +613,38 @@ class PolymerFlowModel(nn.Module):
         Returns:
             List of n_samples Polymers with generated coordinates.
 
+        Raises:
+            ValueError: If template has incompatible backend or unsupported residues.
+
         Example:
             >>> model = PolymerFlowModel.load("path/to/model")
             >>> template = ciffy.load("structure.cif").poly()
-            >>> samples = model.generate(template, n_samples=10)
+            >>> samples = model.sample(template, n_samples=10)
             >>> for i, p in enumerate(samples):
             ...     p.write(f"sample_{i}.cif")
         """
+        # Validate template backend - output will be numpy
+        if template.backend != "numpy":
+            raise ValueError(
+                f"Template must have numpy backend, got '{template.backend}'. "
+                f"Call template.numpy() first."
+            )
+
+        # Validate sequence contains only supported residue types
         sequence = _to_numpy_int64(template.sequence)
+        self._validate_sequence(sequence)
 
         if len(sequence) == 0:
             return [template.with_coordinates(np.empty((0, 3)))]
 
-        # Get device from first model
-        device = next(iter(self.residue_models.values())).device
+        # Sample coordinates
+        coords_list = self._sample_coords(sequence, n_samples, temperature)
 
-        polymers = []
-        for _ in range(n_samples):
-            # Sample latents with temperature scaling
-            latents = torch.randn(len(sequence), self.latent_dim, device=device)
-            latents = latents * temperature
-            coords = self.decode(latents, sequence)
-            coords_np = coords.detach().cpu().numpy()
-            polymers.append(template.with_coordinates(coords_np))
-
-        return polymers
+        # Convert to Polymers with template metadata
+        return [
+            template.with_coordinates(coords.detach().cpu().numpy())
+            for coords in coords_list
+        ]
 
     @property
     def supported_residue_types(self) -> np.ndarray:

@@ -11,6 +11,7 @@ Similar to Stable Diffusion, this approach:
 - Trains a transformer denoiser conditioned on residue sequence
 
 Example:
+    >>> import ciffy
     >>> from ciffy.nn.diffusion import LatentDiffusionModel, LatentDiffusionConfig
     >>>
     >>> config = LatentDiffusionConfig()
@@ -19,8 +20,9 @@ Example:
     >>> # Training step
     >>> loss, metrics = model.training_step(coords, sequence)
     >>>
-    >>> # Generate structure
-    >>> coords = model.sample(sequence, n_samples=1, num_steps=50)
+    >>> # Generate from template (PolymerGenerativeModel protocol)
+    >>> template = ciffy.load("structure.cif").poly()
+    >>> samples = model.sample(template, n_samples=5, num_steps=50)
 """
 
 from __future__ import annotations
@@ -75,6 +77,8 @@ class LatentDiffusionConfig:
 class LatentDiffusionModel(nn.Module):
     """Latent diffusion model for polymer structure generation.
 
+    Implements the PolymerGenerativeModel protocol for interoperability.
+
     Combines:
         - Pre-trained PolymerFlowModel for encoding/decoding coordinates
         - DiffusionProcess for forward/reverse diffusion
@@ -83,10 +87,11 @@ class LatentDiffusionModel(nn.Module):
     Training:
         model.training_step(coords, sequence) -> loss, metrics
 
-    Sampling:
-        model.sample(sequence, n_samples=1) -> coords
+    Sampling (protocol-compliant):
+        model.sample(template, n_samples=5) -> list[Polymer]
 
     Example:
+        >>> import ciffy
         >>> config = LatentDiffusionConfig()
         >>> model = LatentDiffusionModel(config)
         >>>
@@ -95,8 +100,9 @@ class LatentDiffusionModel(nn.Module):
         >>> sequence = polymer.sequence   # (n_residues,)
         >>> loss, metrics = model.training_step(coords, sequence)
         >>>
-        >>> # Sampling
-        >>> sampled_coords = model.sample(sequence, n_samples=5)
+        >>> # Sampling (returns list of Polymers)
+        >>> template = ciffy.load("structure.cif").poly()
+        >>> samples = model.sample(template, n_samples=5, num_steps=50)
     """
 
     def __init__(
@@ -285,15 +291,15 @@ class LatentDiffusionModel(nn.Module):
         return loss, metrics
 
     @torch.no_grad()
-    def sample(
+    def _sample_coords(
         self,
         sequence: "torch.Tensor | np.ndarray",
         n_samples: int = 1,
         num_steps: Optional[int] = None,
         eta: float = 0.0,
         progress: bool = False,
-    ) -> Union["torch.Tensor", list["torch.Tensor"]]:
-        """Generate polymer structures via reverse diffusion.
+    ) -> list["torch.Tensor"]:
+        """Generate coordinate tensors via reverse diffusion (internal method).
 
         Args:
             sequence: (n_residues,) residue type indices.
@@ -303,8 +309,7 @@ class LatentDiffusionModel(nn.Module):
             progress: Show progress bar.
 
         Returns:
-            If n_samples=1: (N, 3) coordinates.
-            Otherwise: List of (N, 3) coordinate tensors.
+            List of (N, 3) coordinate tensors.
         """
         # Convert sequence to tensor if needed
         if isinstance(sequence, np.ndarray):
@@ -353,40 +358,58 @@ class LatentDiffusionModel(nn.Module):
             coords = self.decode(x[i], sequence.cpu().numpy())
             samples.append(coords)
 
-        if n_samples == 1:
-            return samples[0]
         return samples
 
-    def sample_to_polymer(
+    def sample(
         self,
         template: "Polymer",
         n_samples: int = 1,
+        temperature: float = 1.0,
         **kwargs,
-    ) -> Union["Polymer", list["Polymer"]]:
-        """Generate polymers with same metadata as template.
+    ) -> list["Polymer"]:
+        """
+        Generate polymer conformations from a template.
+
+        This method implements the PolymerGenerativeModel protocol, enabling
+        this model to be used interchangeably with other generative models.
 
         Args:
-            template: Polymer to use as metadata template.
-            n_samples: Number of samples.
-            **kwargs: Passed to sample().
+            template: Template Polymer with sequence and topology information.
+                Must have numpy backend (will be validated).
+            n_samples: Number of independent conformations to generate.
+            temperature: Sampling temperature. For diffusion models, this is
+                currently ignored (reserved for future use). Default 1.0.
+            **kwargs: Passed to internal sampling (e.g., num_steps, eta, progress).
 
         Returns:
-            New Polymer(s) with generated coordinates.
+            List of n_samples Polymers with generated coordinates.
+
+        Raises:
+            ValueError: If template has incompatible backend or unsupported residues.
+
+        Example:
+            >>> model = LatentDiffusionModel(config)
+            >>> template = ciffy.load("structure.cif").poly()
+            >>> samples = model.sample(template, n_samples=10)
         """
-        sequence = torch.tensor(template.sequence, device=self.device)
-        coords_list = self.sample(sequence, n_samples, **kwargs)
+        # Validate template backend
+        if template.backend != "numpy":
+            raise ValueError(
+                f"Template must have numpy backend, got '{template.backend}'. "
+                f"Call template.numpy() first."
+            )
 
-        if n_samples == 1:
-            coords_list = [coords_list]
+        # Get sequence and validate against flow model
+        sequence = template.sequence
 
-        polymers = []
-        for coords in coords_list:
-            coords_np = coords.cpu().numpy()
-            polymers.append(template.with_coordinates(coords_np))
+        # Sample coordinates
+        coords_list = self._sample_coords(sequence, n_samples, **kwargs)
 
-        if n_samples == 1:
-            return polymers[0]
-        return polymers
+        # Convert to Polymers with template metadata
+        return [
+            template.with_coordinates(coords.cpu().numpy())
+            for coords in coords_list
+        ]
 
     def sample_from_sequence(
         self,
@@ -394,27 +417,26 @@ class LatentDiffusionModel(nn.Module):
         n_samples: int = 1,
         id: str = "sampled",
         **kwargs,
-    ) -> Union["Polymer", list["Polymer"]]:
+    ) -> list["Polymer"]:
         """
         Sample polymer conformations directly from a sequence string.
 
-        Generates a template Polymer from the sequence string and samples
-        new conformations via the diffusion process.
+        Convenience method that creates a template from a sequence string
+        and calls sample().
 
         Args:
             sequence: Sequence string (e.g., "acgu" for RNA, "MGKLF" for protein).
             n_samples: Number of conformations to generate.
             id: PDB ID for the generated polymers.
-            **kwargs: Passed to sample() (e.g., num_steps, temperature).
+            **kwargs: Passed to sample() (e.g., num_steps, eta, progress).
 
         Returns:
-            If n_samples=1: Single Polymer with generated coordinates.
-            If n_samples>1: List of Polymers.
+            List of Polymers with generated coordinates.
 
         Example:
             >>> model = LatentDiffusionModel(config)
-            >>> polymer = model.sample_from_sequence("acgu", num_steps=50)
-            >>> polymer.write("sampled.cif")
+            >>> polymers = model.sample_from_sequence("acgu", num_steps=50)
+            >>> polymers[0].write("sampled.cif")
         """
         from ciffy.polymer import from_sequence
 
@@ -425,7 +447,7 @@ class LatentDiffusionModel(nn.Module):
             id=id,
         )
 
-        return self.sample_to_polymer(template, n_samples, **kwargs)
+        return self.sample(template, n_samples, **kwargs)
 
     def reconstruct(
         self,

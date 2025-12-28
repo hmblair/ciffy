@@ -235,6 +235,7 @@ class TestPolymerFlowModelSaveLoad:
 
     def test_save_load_roundtrip(self, single_residue_model, tmp_path):
         """Test save and load produces equivalent model."""
+        pytest.importorskip("safetensors")
         polymer = single_residue_model
 
         # Save

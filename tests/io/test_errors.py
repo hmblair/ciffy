@@ -123,7 +123,7 @@ class TestWriteErrors:
         """write raises error for non-existent directory."""
         import ciffy
 
-        p = ciffy.load("tests/data/1ZEW.cif")
+        p = ciffy.load(get_test_cif("1ZEW"))
 
         with pytest.raises((OSError, IOError)):
             p.write("/nonexistent/directory/test.cif")

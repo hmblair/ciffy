@@ -159,6 +159,7 @@ class TestPCAFlow:
 
     def test_safetensors_roundtrip(self, sample_coords):
         """Test save/load with safetensors format."""
+        pytest.importorskip("safetensors")
         from ciffy.nn.flow.residue import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
@@ -431,6 +432,7 @@ class TestResidueFlowModel:
 
     def test_save_load_model(self, sample_extended_data):
         """Test save/load for ResidueFlowModel."""
+        pytest.importorskip("safetensors")
         from ciffy.nn.flow.residue.model import ResidueFlowModel
         from ciffy.biochemistry import Residue
 

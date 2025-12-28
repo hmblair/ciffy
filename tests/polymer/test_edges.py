@@ -417,7 +417,8 @@ class TestArraySetterValidation:
 
         p = ciffy.from_sequence("acgu", backend="numpy")
 
-        with pytest.raises(AttributeError, match="can't set attribute"):
+        # Python 3.10: "can't set attribute", Python 3.11+: "has no setter"
+        with pytest.raises(AttributeError, match="can't set attribute|has no setter"):
             p.lengths = p.lengths
 
     def test_coordinates_accepts_same_backend(self):

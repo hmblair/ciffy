@@ -77,13 +77,61 @@ class InferenceResult:
     log_file: Optional[str] = None
 
 
+def _load_sequences(config) -> list[tuple[str, str]]:
+    """Load sequences from config, returning list of (id, sequence) tuples."""
+    if config.input.sequences:
+        sequences = config.input.sequences
+        if config.input.sequence_ids:
+            ids = config.input.sequence_ids
+        else:
+            ids = [f"seq_{i}" for i in range(len(sequences))]
+        return list(zip(ids, sequences))
+
+    # Load from file
+    path = Path(config.input.sequence_file)
+    sequences = []
+
+    with open(path) as f:
+        content = f.read()
+
+    if content.startswith(">"):
+        # FASTA format
+        current_id = None
+        current_seq = []
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith(">"):
+                if current_id is not None:
+                    sequences.append((current_id, "".join(current_seq)))
+                current_id = line[1:].split()[0]  # First word after >
+                current_seq = []
+            elif line:
+                current_seq.append(line)
+        if current_id is not None:
+            sequences.append((current_id, "".join(current_seq)))
+    else:
+        # Plain text, one sequence per line
+        for i, line in enumerate(content.splitlines()):
+            line = line.strip()
+            if line:
+                sequences.append((f"seq_{i}", line))
+
+    return sequences
+
+
 def _run_inference_job(
     config_path: Path,
     device: str,
     progress_queue: "Queue",
-    scripts_dir: str,
+    _scripts_dir: str = "",  # Unused, kept for signature compatibility
 ) -> InferenceResult:
     """Run a single inference job. Module-level function for pickling."""
+    import torch
+
+    from ciffy import from_sequence
+    from ciffy.nn import load_model
+    from ciffy.nn.inference_config import InferenceConfig
+
     job_name = config_path.stem
     start_time = time.time()
 
@@ -115,51 +163,70 @@ def _run_inference_job(
         sys.stdout = log_buffer
         sys.stderr = log_buffer
 
-        # Add scripts directory to path
-        if scripts_dir and scripts_dir not in sys.path:
-            sys.path.insert(0, scripts_dir)
-
-        from run_inference import run_inference
-
         send_progress("running", 0, 0)
 
-        # Run inference
-        result = run_inference(
-            config_path=str(config_path),
-            device_override=device,
-            job_name=job_name,
-            quiet=True,
-        )
+        # Load config
+        config = InferenceConfig.from_yaml(config_path)
+        config.validate()
+
+        # Load model
+        model_device = device or config.model.device or "cpu"
+        model = load_model(config.model.model_path, device=model_device)
+        model.eval()
+
+        # Get atom filter from model
+        atom_filter = getattr(model, "atom_filter", None)
+        if atom_filter is None and hasattr(model, "flow_model"):
+            atom_filter = model.flow_model.atom_filter
+
+        # Load sequences
+        sequences = _load_sequences(config)
+        n_sequences = len(sequences)
+        n_samples = config.sampling.n_samples
+
+        # Set seed if specified
+        if config.sampling.seed is not None:
+            torch.manual_seed(config.sampling.seed)
+
+        # Create output directory
+        output_dir = Path(config.output.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate structures
+        n_structures = 0
+        for seq_idx, (seq_id, sequence) in enumerate(sequences):
+            # Create template
+            template = from_sequence(sequence, atoms=atom_filter)
+
+            # Generate samples
+            with torch.no_grad():
+                samples = model.sample(
+                    template,
+                    n_samples=n_samples,
+                    temperature=config.sampling.temperature,
+                )
+
+            # Write outputs
+            for sample_idx, sample in enumerate(samples):
+                filename = f"{config.output.id_prefix}{seq_id}_{sample_idx:03d}.cif"
+                out_path = output_dir / filename
+                sample.write(str(out_path))
+                n_structures += 1
+
+            send_progress("running", seq_idx + 1, n_sequences)
 
         duration = time.time() - start_time
-
-        if result.get("error"):
-            send_progress("failed", 0, 0)
-            return InferenceResult(
-                name=job_name,
-                config_path=str(config_path),
-                status="failed",
-                device=device or "unknown",
-                duration_seconds=duration,
-                error=result["error"],
-                log_file=log_file,
-            )
-
-        send_progress(
-            "complete",
-            result["n_structures"],
-            result["n_structures"],
-        )
+        send_progress("complete", n_structures, n_structures)
 
         return InferenceResult(
             name=job_name,
             config_path=str(config_path),
             status="success",
-            n_structures=result["n_structures"],
-            n_sequences=result["n_sequences"],
-            device=device or result.get("device", "unknown"),
+            n_structures=n_structures,
+            n_sequences=n_sequences,
+            device=model_device,
             duration_seconds=duration,
-            output_dir=result.get("output_dir"),
+            output_dir=str(output_dir),
             log_file=log_file,
         )
 
@@ -220,15 +287,6 @@ class InferenceRunner(ParallelRunner[Path, InferenceResult]):
         >>> results = runner.run([Path("config1.yaml"), Path("config2.yaml")])
     """
 
-    def __init__(
-        self,
-        parallel: bool = True,
-        max_workers: int | None = None,
-        device: str = "auto",
-    ):
-        super().__init__(parallel=parallel, max_workers=max_workers, device=device)
-        self.scripts_dir = str(Path(__file__).parent.parent.parent / "scripts")
-
     def run_job(
         self,
         config: Path,
@@ -236,7 +294,7 @@ class InferenceRunner(ParallelRunner[Path, InferenceResult]):
         progress_queue: "Queue",
     ) -> InferenceResult:
         """Run a single inference job."""
-        return _run_inference_job(config, device, progress_queue, self.scripts_dir)
+        return _run_inference_job(config, device, progress_queue, "")
 
     def get_job_name(self, config: Path) -> str:
         """Get job name from config path."""

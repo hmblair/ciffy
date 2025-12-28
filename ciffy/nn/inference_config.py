@@ -24,13 +24,12 @@ class InferenceModelConfig:
     """Model configuration for inference.
 
     Attributes:
-        checkpoint_path: Path to trained model checkpoint (.pt file).
-        model_type: Type of model ('vae' for now, extensible to 'diffusion' later).
+        model_path: Path to trained model (.safetensors file).
+            Model type is auto-detected from embedded metadata.
         device: Device override (e.g., 'cuda:0', 'cpu', 'mps'). None uses auto-detection.
     """
 
-    checkpoint_path: str
-    model_type: str = "vae"
+    model_path: str
     device: Optional[str] = None
 
 
@@ -122,8 +121,7 @@ class InferenceConfig:
 
     Example YAML:
         model:
-          checkpoint_path: ./checkpoints/vae/checkpoint_best.pt
-          model_type: vae
+          model_path: ./models/polymer_flow.safetensors
           device: cuda:0
 
         input:
@@ -246,10 +244,10 @@ class InferenceConfig:
         Raises:
             ValueError: If configuration is invalid.
         """
-        # Check checkpoint exists
-        if not Path(self.model.checkpoint_path).exists():
+        # Check model file exists
+        if not Path(self.model.model_path).exists():
             raise ValueError(
-                f"Checkpoint not found: {self.model.checkpoint_path}"
+                f"Model not found: {self.model.model_path}"
             )
 
         # Check sequence file exists if specified

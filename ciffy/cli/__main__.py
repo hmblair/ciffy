@@ -12,6 +12,8 @@ Usage:
     ciffy cluster data/*.cif         # Cluster structures by similarity, return representatives
     ciffy train configs/*.yaml       # Run training from config files
     ciffy experiment configs/*.yaml  # Run multiple training experiments
+    ciffy predict model.safetensors --sequence ACGU -o out.cif  # Generate structure
+    ciffy predict --config inference.yaml  # Batch prediction from config
     ciffy download --max_count 100   # Download RNA structures from RCSB PDB
 """
 
@@ -343,87 +345,6 @@ def _download_command(args):
     )
 
 
-def _inference_command(args):
-    """Handle the inference subcommand."""
-    try:
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch is required for inference runner.\n"
-            "Install with: pip install torch",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    from glob import glob
-
-    try:
-        from ciffy.nn.runners import format_inference_results_table, run_inference_jobs
-    except ImportError:
-        print(
-            "Error: Neural network modules not available.\n"
-            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Expand glob patterns in config paths
-    config_paths = []
-    for pattern in args.configs:
-        expanded = glob(pattern)
-        if not expanded:
-            print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
-        config_paths.extend(sorted(expanded))
-
-    if not config_paths:
-        print("Error: No config files found.", file=sys.stderr)
-        sys.exit(1)
-
-    # Display inference plan
-    print()
-    print("=" * 60)
-    print("Ciffy Inference Runner")
-    print("=" * 60)
-    print(f"Configs: {len(config_paths)}")
-    print(f"Parallel: {not args.sequential}")
-    print(f"Device: {args.device}")
-    print()
-
-    for i, path in enumerate(config_paths, 1):
-        print(f"  {i}. {path}")
-    print()
-
-    # Run inference jobs
-    print("Running inference...")
-    print("-" * 60)
-
-    try:
-        results = run_inference_jobs(
-            config_paths=config_paths,
-            parallel=not args.sequential,
-            device=args.device,
-        )
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error running inference: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Print results table
-    print()
-    print("=" * 60)
-    print("Results")
-    print("=" * 60)
-    print(format_inference_results_table(results))
-    print()
-
-    # Exit with error code if any jobs failed
-    failed = sum(1 for r in results if r.status != "success")
-    if failed > 0:
-        sys.exit(1)
-
-
 def _cluster_command(args):
     """Handle the cluster subcommand."""
     from glob import glob
@@ -495,6 +416,245 @@ def _cluster_command(args):
             # Just print representative paths
             for rep in result.representatives:
                 print(rep)
+
+
+def _predict_command(args):
+    """Handle the predict subcommand (unified inference)."""
+    from glob import glob
+    from pathlib import Path
+
+    try:
+        import torch
+    except ImportError:
+        print(
+            "Error: PyTorch is required for prediction.\n"
+            "Install with: pip install torch",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        from ciffy.nn import load_model, get_model_info
+    except ImportError:
+        print(
+            "Error: Neural network modules not available.\n"
+            "Install with: pip install ciffy[nn]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Config file mode - use batch runner
+    if args.config:
+        from ciffy.nn.runners import run_inference_jobs, format_inference_results_table
+
+        # Expand glob patterns
+        config_paths = []
+        for pattern in args.config:
+            expanded = glob(pattern)
+            if not expanded:
+                print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
+            config_paths.extend(sorted(expanded))
+
+        if not config_paths:
+            print("Error: No config files found.", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.quiet:
+            print()
+            print("=" * 60)
+            print("Ciffy Predict (Batch Mode)")
+            print("=" * 60)
+            print(f"Configs: {len(config_paths)}")
+            print(f"Parallel: {not args.sequential}")
+            print(f"Device: {args.device}")
+            print()
+            for i, path in enumerate(config_paths, 1):
+                print(f"  {i}. {path}")
+            print()
+            print("Running predictions...")
+            print("-" * 60)
+
+        try:
+            results = run_inference_jobs(
+                config_paths=config_paths,
+                parallel=not args.sequential,
+                device=args.device,
+            )
+        except FileNotFoundError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error running predictions: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.quiet:
+            print()
+            print("=" * 60)
+            print("Results")
+            print("=" * 60)
+            print(format_inference_results_table(results))
+            print()
+
+        failed = sum(1 for r in results if r.status != "success")
+        if failed > 0:
+            sys.exit(1)
+        return
+
+    # Direct CLI mode - model is required
+    if not args.model:
+        print("Error: Model path required for direct mode.", file=sys.stderr)
+        print("Usage: ciffy predict model.safetensors --sequence ACGU", file=sys.stderr)
+        sys.exit(1)
+
+    from ciffy import from_sequence
+
+    # Determine device
+    device = args.device
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Collect sequences
+    sequences = []  # List of (id, sequence) tuples
+
+    if args.sequence:
+        for i, seq in enumerate(args.sequence):
+            sequences.append((f"seq_{i}", seq))
+    elif args.fasta:
+        # Read sequences from FASTA
+        try:
+            with open(args.fasta) as f:
+                content = f.read()
+
+            if content.startswith(">"):
+                # FASTA format
+                current_id = None
+                current_seq = []
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.startswith(">"):
+                        if current_id is not None:
+                            sequences.append((current_id, "".join(current_seq)))
+                        current_id = line[1:].split()[0]
+                        current_seq = []
+                    elif line:
+                        current_seq.append(line)
+                if current_id is not None:
+                    sequences.append((current_id, "".join(current_seq)))
+            else:
+                # Plain text, one per line
+                for i, line in enumerate(content.splitlines()):
+                    line = line.strip()
+                    if line:
+                        sequences.append((f"seq_{i}", line))
+
+            if not sequences:
+                print(f"Error: No sequences found in {args.fasta}", file=sys.stderr)
+                sys.exit(1)
+        except FileNotFoundError:
+            print(f"Error: FASTA file not found: {args.fasta}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("Error: Must provide --sequence, --fasta, or --config", file=sys.stderr)
+        sys.exit(1)
+
+    # Check model file exists
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Show model info
+    if not args.quiet:
+        info = get_model_info(model_path)
+        print(f"Loading {info['model_type']} model...")
+
+    # Load model
+    try:
+        model = load_model(model_path, device=device)
+        model.eval()
+    except Exception as e:
+        print(f"Error loading model: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Get atom filter from model
+    atom_filter = getattr(model, "atom_filter", None)
+    if atom_filter is None and hasattr(model, "flow_model"):
+        atom_filter = model.flow_model.atom_filter
+
+    # Set seed if specified
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    # Determine output handling
+    output = Path(args.output)
+    single_sequence = len(sequences) == 1
+    single_sample = args.n_samples == 1
+
+    # Generate structures for each sequence
+    total_structures = 0
+    for seq_id, sequence in sequences:
+        if not args.quiet:
+            seq_display = sequence[:50] + ('...' if len(sequence) > 50 else '')
+            print(f"Generating {args.n_samples} sample(s) for {seq_id}: {seq_display} ({len(sequence)} residues)")
+
+        # Create template
+        try:
+            template = from_sequence(sequence, atoms=atom_filter)
+        except Exception as e:
+            print(f"Error creating template for {seq_id}: {e}", file=sys.stderr)
+            continue
+
+        # Generate samples
+        try:
+            with torch.no_grad():
+                samples = model.sample(
+                    template,
+                    n_samples=args.n_samples,
+                    temperature=args.temperature,
+                )
+        except Exception as e:
+            print(f"Error generating samples for {seq_id}: {e}", file=sys.stderr)
+            continue
+
+        # Write outputs
+        if single_sequence and single_sample:
+            # Single file output
+            out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+            samples[0].write(str(out_path))
+            if not args.quiet:
+                print(f"Wrote {out_path} ({samples[0].size()} atoms)")
+        elif single_sequence:
+            # Multiple samples, single sequence -> numbered files
+            if output.suffix == ".cif":
+                base = output.stem
+                parent = output.parent
+            else:
+                base = "sample"
+                parent = output
+            parent.mkdir(parents=True, exist_ok=True)
+            for i, sample in enumerate(samples):
+                out_path = parent / f"{base}_{i:03d}.cif"
+                sample.write(str(out_path))
+                if not args.quiet:
+                    print(f"Wrote {out_path}")
+        else:
+            # Multiple sequences -> directory structure
+            output.mkdir(parents=True, exist_ok=True)
+            for i, sample in enumerate(samples):
+                out_path = output / f"{seq_id}_{i:03d}.cif"
+                sample.write(str(out_path))
+                if not args.quiet:
+                    print(f"Wrote {out_path}")
+
+        total_structures += len(samples)
+
+    if not args.quiet:
+        print(f"Generated {total_structures} structure(s)")
 
 
 def _train_command(args):
@@ -581,7 +741,7 @@ def _train_command(args):
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "experiment", "inference", "download", "cluster"}
+    subcommands = {"map", "info", "split", "template", "train", "experiment", "predict", "download", "cluster"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command (deprecated)
@@ -776,30 +936,74 @@ def main():
         help="Device strategy (default: auto)",
     )
 
-    # Inference subcommand
-    inference_parser = subparsers.add_parser(
-        "inference",
-        help="Run inference to generate structures",
+    # Predict subcommand (unified inference)
+    predict_parser = subparsers.add_parser(
+        "predict",
+        help="Generate structures from a trained model",
         description=(
-            "Generate polymer structures from sequences using trained VAE models.\n"
-            "Supports parallel execution across GPUs."
+            "Generate polymer structures from sequences using trained models.\n\n"
+            "Two modes:\n"
+            "  Direct:  ciffy predict model.safetensors --sequence ACGU -o out.cif\n"
+            "  Batch:   ciffy predict --config configs/*.yaml"
         ),
     )
-    inference_parser.add_argument(
-        "configs",
+    predict_parser.add_argument(
+        "model",
+        nargs="?",
+        help="Path to model file (.safetensors). Required for direct mode.",
+    )
+    predict_parser.add_argument(
+        "--sequence", "-s",
         nargs="+",
-        help="Config file paths or glob patterns (e.g., configs/*.yaml)",
+        help="Sequence(s) to generate structures for (e.g., ACGU or MGKLF)",
     )
-    inference_parser.add_argument(
-        "--sequential", "-s",
-        action="store_true",
-        help="Run inference jobs sequentially (default: parallel)",
+    predict_parser.add_argument(
+        "--fasta", "-f",
+        help="Path to FASTA or plain text file with sequences",
     )
-    inference_parser.add_argument(
+    predict_parser.add_argument(
+        "--config", "-c",
+        nargs="+",
+        help="Config file(s) for batch mode (glob patterns supported)",
+    )
+    predict_parser.add_argument(
+        "--output", "-o",
+        default="output.cif",
+        help="Output path: file.cif for single, directory for multiple (default: output.cif)",
+    )
+    predict_parser.add_argument(
+        "--n-samples", "-n",
+        type=int,
+        default=1,
+        help="Number of samples per sequence (default: 1)",
+    )
+    predict_parser.add_argument(
+        "--temperature", "-t",
+        type=float,
+        default=1.0,
+        help="Sampling temperature (default: 1.0)",
+    )
+    predict_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility",
+    )
+    predict_parser.add_argument(
         "--device", "-d",
         default="auto",
         choices=["auto", "cuda", "mps", "cpu"],
-        help="Device strategy (default: auto)",
+        help="Device to use (default: auto)",
+    )
+    predict_parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Run batch jobs sequentially (default: parallel)",
+    )
+    predict_parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress progress output",
     )
 
     # Download subcommand
@@ -964,8 +1168,8 @@ def main():
         _experiment_command(args)
     elif args.command == "template":
         _template_command(args)
-    elif args.command == "inference":
-        _inference_command(args)
+    elif args.command == "predict":
+        _predict_command(args)
     elif args.command == "download":
         _download_command(args)
     elif args.command == "map":

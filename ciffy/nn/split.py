@@ -1,25 +1,26 @@
 """
 Reusable train/validation/test splitting for molecular structure data.
 
-Provides utilities for splitting datasets by structure (file) to avoid data
-leakage. Residues from the same structure are correlated and should not appear
-in both training and test sets.
+Provides utilities for splitting datasets to avoid data leakage:
 
-Example:
+- `split_by_structure`: Simple random split by file (fast, no dependencies)
+- `split_by_sequence`: Cluster by sequence identity, then split clusters
+  (prevents homologous sequences in different splits, requires MMseqs2)
+
+Example - Simple split:
+    >>> from ciffy.nn.split import split_by_structure
+    >>> split = split_by_structure(cif_files, train=0.8, val=0.1, test=0.1)
+
+Example - Sequence-identity split (recommended for ML):
+    >>> from ciffy.nn.split import split_by_sequence
+    >>> split = split_by_sequence(cif_files, threshold=0.5)
+    >>> # Homologous structures guaranteed to be in same split
+
+Example - Using DataSplit class directly:
     >>> from ciffy.nn.split import DataSplit
-    >>> from pathlib import Path
-    >>>
-    >>> # Get all CIF files
-    >>> cif_files = list(Path("data/").glob("*.cif"))
-    >>>
-    >>> # Create 80/10/10 split
-    >>> split = DataSplit.from_paths(cif_files, train=0.8, val=0.1, test=0.1, seed=42)
-    >>> print(f"Train: {len(split.train)}, Val: {len(split.val)}, Test: {len(split.test)}")
-    >>>
-    >>> # Use in training
-    >>> train_data = load_data(split.train)
-    >>> val_data = load_data(split.val)
-    >>> test_data = load_data(split.test)
+    >>> split = DataSplit.by_sequence_identity(paths, threshold=0.5)
+    >>> # Or with pre-computed clusters:
+    >>> split = DataSplit.from_clusters(paths, labels, train=0.8)
 """
 
 from __future__ import annotations
@@ -195,6 +196,172 @@ class DataSplit(Generic[T]):
         """
         return cls.from_items(items, train=train, val=0.0, test=1.0 - train, seed=seed)
 
+    @classmethod
+    def from_clusters(
+        cls,
+        items: Sequence[T],
+        labels: Sequence[int],
+        train: float = 0.8,
+        val: float = 0.1,
+        test: float = 0.1,
+        seed: int | None = 42,
+    ) -> "DataSplit[T]":
+        """
+        Create a split where items in the same cluster stay together.
+
+        Clusters are shuffled and assigned to splits. All items within
+        a cluster go to the same split, preventing data leakage between
+        similar items.
+
+        Args:
+            items: Sequence of items to split.
+            labels: Cluster label for each item (same length as items).
+            train: Fraction for training set (default: 0.8).
+            val: Fraction for validation set (default: 0.1).
+            test: Fraction for test set (default: 0.1).
+            seed: Random seed for reproducibility (default: 42).
+
+        Returns:
+            DataSplit with train, val, test lists.
+
+        Example:
+            >>> from ciffy.operations import cluster
+            >>> result = cluster(paths, threshold=0.5)
+            >>> split = DataSplit.from_clusters(
+            ...     result.paths, result.labels,
+            ...     train=0.8, val=0.1, test=0.1
+            ... )
+        """
+        if len(items) != len(labels):
+            raise ValueError(
+                f"items and labels must have same length: {len(items)} vs {len(labels)}"
+            )
+
+        # Validate ratios
+        if any(r < 0 for r in [train, val, test]):
+            raise ValueError("Split ratios must be non-negative")
+
+        total = train + val + test
+        if not (0.99 <= total <= 1.01):
+            raise ValueError(f"Split ratios must sum to 1.0, got {total}")
+
+        items_list = list(items)
+        labels_list = list(labels)
+
+        if len(items_list) == 0:
+            return cls(train=[], val=[], test=[], seed=seed)
+
+        # Group items by cluster
+        cluster_to_items: dict[int, list[T]] = {}
+        for item, label in zip(items_list, labels_list):
+            if label not in cluster_to_items:
+                cluster_to_items[label] = []
+            cluster_to_items[label].append(item)
+
+        # Shuffle cluster IDs
+        cluster_ids = list(cluster_to_items.keys())
+        if seed is not None:
+            rng = random.Random(seed)
+            rng.shuffle(cluster_ids)
+        else:
+            random.shuffle(cluster_ids)
+
+        # Split clusters (not items) according to ratios
+        n_clusters = len(cluster_ids)
+        n_train = int(n_clusters * train)
+        n_val = int(n_clusters * val)
+
+        # Warn if not enough clusters for meaningful split
+        min_clusters_needed = (1 if train > 0 else 0) + (1 if val > 0 else 0) + (1 if test > 0 else 0)
+        if n_clusters < min_clusters_needed:
+            import warnings
+            warnings.warn(
+                f"Only {n_clusters} cluster(s) found, but {min_clusters_needed} needed for "
+                f"train/val/test split. Consider lowering the similarity threshold. "
+                f"All items will go to {'test' if n_train == 0 else 'train'}."
+            )
+
+        train_clusters = cluster_ids[:n_train]
+        val_clusters = cluster_ids[n_train : n_train + n_val]
+        test_clusters = cluster_ids[n_train + n_val :]
+
+        # Expand clusters to items
+        train_items = [
+            item for cid in train_clusters for item in cluster_to_items[cid]
+        ]
+        val_items = [
+            item for cid in val_clusters for item in cluster_to_items[cid]
+        ]
+        test_items = [
+            item for cid in test_clusters for item in cluster_to_items[cid]
+        ]
+
+        return cls(train=train_items, val=val_items, test=test_items, seed=seed)
+
+    @classmethod
+    def by_sequence_identity(
+        cls,
+        paths: Sequence[str | Path],
+        threshold: float = 0.5,
+        train: float = 0.8,
+        val: float = 0.1,
+        test: float = 0.1,
+        seed: int | None = 42,
+        coverage: float = 0.8,
+        threads: int = 4,
+    ) -> "DataSplit[Path]":
+        """
+        Create a split based on sequence identity clustering.
+
+        Structures are first clustered by sequence identity using MMseqs2.
+        Then clusters (not individual structures) are split into train/val/test.
+        This ensures no homologous sequences appear in different splits.
+
+        Args:
+            paths: Sequence of CIF/PDB file paths.
+            threshold: Sequence identity threshold (default: 0.5).
+                0.3 = remote homologs, 0.5 = same family, 0.9 = near-identical.
+            train: Fraction for training set (default: 0.8).
+            val: Fraction for validation set (default: 0.1).
+            test: Fraction for test set (default: 0.1).
+            seed: Random seed for reproducibility (default: 42).
+            coverage: Minimum alignment coverage for clustering (default: 0.8).
+            threads: Number of threads for MMseqs2 (default: 4).
+
+        Returns:
+            DataSplit with Path objects, clustered to prevent homolog leakage.
+
+        Raises:
+            RuntimeError: If MMseqs2 is not installed.
+
+        Example:
+            >>> from ciffy.nn.split import DataSplit
+            >>> split = DataSplit.by_sequence_identity(
+            ...     paths, threshold=0.5, train=0.8, val=0.1, test=0.1
+            ... )
+            >>> # No homologous structures in different splits
+            >>> print(f"Train: {len(split.train)}, Test: {len(split.test)}")
+        """
+        from ciffy.operations.cluster import cluster
+
+        # Run clustering
+        result = cluster(
+            paths,
+            threshold=threshold,
+            threads=threads,
+            coverage=coverage,
+        )
+
+        # Split by clusters
+        return cls.from_clusters(
+            result.paths,
+            result.labels.tolist(),
+            train=train,
+            val=val,
+            test=test,
+            seed=seed,
+        )
+
     def __len__(self) -> int:
         """Total number of items across all splits."""
         return len(self.train) + len(self.val) + len(self.test)
@@ -225,10 +392,10 @@ def split_by_structure(
     """
     Split CIF files into train/val/test sets by structure.
 
-    This is the recommended way to split molecular structure data to avoid
-    data leakage. Residues from the same structure are correlated (same
-    crystallographic conditions, similar conformations) and should not
-    appear in both training and test sets.
+    This is the simplest way to split molecular structure data. Each
+    structure is treated independently. For stricter separation that
+    prevents homologous sequences from appearing in different splits,
+    use split_by_sequence instead.
 
     Args:
         paths: Sequence of CIF file paths.
@@ -254,6 +421,64 @@ def split_by_structure(
         >>> metrics = trainer.evaluate(split.test)
     """
     return DataSplit.from_paths(paths, train=train, val=val, test=test, seed=seed)
+
+
+def split_by_sequence(
+    paths: Sequence[str | Path],
+    threshold: float = 0.5,
+    train: float = 0.8,
+    val: float = 0.1,
+    test: float = 0.1,
+    seed: int | None = 42,
+    coverage: float = 0.8,
+    threads: int = 4,
+) -> DataSplit[Path]:
+    """
+    Split CIF files by sequence identity to prevent homolog leakage.
+
+    Structures are first clustered by sequence identity using MMseqs2.
+    Clusters (not individual structures) are then split, ensuring that
+    homologous sequences never appear in different splits. This is the
+    recommended approach for ML train/test splitting.
+
+    Args:
+        paths: Sequence of CIF file paths.
+        threshold: Sequence identity threshold (default: 0.5).
+            0.3 = remote homologs, 0.5 = same family, 0.9 = near-identical.
+        train: Fraction for training set (default: 0.8).
+        val: Fraction for validation set (default: 0.1).
+        test: Fraction for test set (default: 0.1).
+        seed: Random seed for reproducibility (default: 42).
+        coverage: Minimum alignment coverage for clustering (default: 0.8).
+        threads: Number of threads for MMseqs2 (default: 4).
+
+    Returns:
+        DataSplit containing Path objects for each split.
+
+    Raises:
+        RuntimeError: If MMseqs2 is not installed.
+
+    Example:
+        >>> from ciffy.nn.split import split_by_sequence
+        >>> from glob import glob
+        >>>
+        >>> cif_files = glob("data/*.cif")
+        >>> split = split_by_sequence(cif_files, threshold=0.5)
+        >>>
+        >>> # No homologous structures in different splits
+        >>> trainer.train(split.train)
+        >>> metrics = trainer.evaluate(split.test)
+    """
+    return DataSplit.by_sequence_identity(
+        paths,
+        threshold=threshold,
+        train=train,
+        val=val,
+        test=test,
+        seed=seed,
+        coverage=coverage,
+        threads=threads,
+    )
 
 
 @dataclass
@@ -442,5 +667,6 @@ __all__ = [
     "DataSplit",
     "DataScalingSplit",
     "split_by_structure",
+    "split_by_sequence",
     "create_scaling_split",
 ]

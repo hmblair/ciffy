@@ -14,6 +14,7 @@ from .alignment import (
 from .extract import extract
 from .gnm import GNM
 from .metrics import tm_score, lddt, rmsd, coordinate_covariance
+from .cluster import cluster, cluster_representatives, ClusterResult
 
 # Legacy alias
 kabsch_distance = rmsd
@@ -34,4 +35,8 @@ __all__ = [
     "tm_score",
     "lddt",
     "rmsd",
+    # Structural clustering
+    "cluster",
+    "cluster_representatives",
+    "ClusterResult",
 ]

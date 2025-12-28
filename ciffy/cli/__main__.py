@@ -9,6 +9,7 @@ Usage:
     ciffy map <file.cif>             # Display contact map
     ciffy split <file.cif>           # Split into per-chain files
     ciffy template <sequence>        # Create template from sequence with sampled dihedrals
+    ciffy cluster data/*.cif         # Cluster structures by similarity, return representatives
     ciffy train configs/*.yaml       # Run training from config files
     ciffy experiment configs/*.yaml  # Run multiple training experiments
     ciffy download --max_count 100   # Download RNA structures from RCSB PDB
@@ -423,6 +424,79 @@ def _inference_command(args):
         sys.exit(1)
 
 
+def _cluster_command(args):
+    """Handle the cluster subcommand."""
+    from glob import glob
+    from pathlib import Path
+
+    from ciffy.operations.cluster import cluster
+
+    # Expand glob patterns
+    paths = []
+    for pattern in args.files:
+        expanded = glob(pattern)
+        if not expanded:
+            # Try as literal path
+            if Path(pattern).exists():
+                paths.append(Path(pattern))
+            else:
+                print(f"Warning: No files match: {pattern}", file=sys.stderr)
+        else:
+            paths.extend(Path(p) for p in sorted(expanded))
+
+    if not paths:
+        print("Error: No structure files found.", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Clustering {len(paths)} structures at {args.threshold:.0%} sequence identity...")
+
+    try:
+        result = cluster(
+            paths,
+            threshold=args.threshold,
+            threads=args.threads,
+            coverage=args.coverage,
+        )
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Found {result.n_clusters} clusters from {result.n_structures} structures")
+        print()
+
+    # Output representatives
+    if args.output:
+        # Write representative paths to file
+        with open(args.output, "w") as f:
+            for rep in result.representatives:
+                f.write(f"{rep}\n")
+        if not args.quiet:
+            print(f"Wrote {len(result.representatives)} representatives to {args.output}")
+    else:
+        # Print to stdout
+        if args.verbose:
+            # Show all clusters with members
+            for label in range(result.n_clusters):
+                members = result.get_cluster(label)
+                rep = result.representatives[label]
+                print(f"Cluster {label} ({len(members)} members):")
+                print(f"  Representative: {rep.name}")
+                if len(members) > 1:
+                    for m in members:
+                        marker = " *" if m == rep else ""
+                        print(f"    - {m.name}{marker}")
+                print()
+        else:
+            # Just print representative paths
+            for rep in result.representatives:
+                print(rep)
+
+
 def _train_command(args):
     """Handle the train subcommand."""
     try:
@@ -507,7 +581,7 @@ def _train_command(args):
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "experiment", "inference", "download"}
+    subcommands = {"map", "info", "split", "template", "train", "experiment", "inference", "download", "cluster"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command (deprecated)
@@ -832,6 +906,55 @@ def main():
         help="Suppress progress output",
     )
 
+    # Cluster subcommand
+    cluster_parser = subparsers.add_parser(
+        "cluster",
+        help="Cluster structures by sequence identity",
+        description=(
+            "Cluster structures using MMseqs2 sequence identity.\n"
+            "Returns one representative structure per cluster.\n"
+            "Requires mmseqs2: mamba install -c bioconda mmseqs2"
+        ),
+    )
+    cluster_parser.add_argument(
+        "files",
+        nargs="+",
+        help="Structure files or glob patterns (e.g., data/*.cif)",
+    )
+    cluster_parser.add_argument(
+        "--threshold", "-t",
+        type=float,
+        default=0.5,
+        help="Sequence identity threshold for clustering (default: 0.5). "
+             "0.3 = remote homologs, 0.5 = same family, 0.9 = near-identical",
+    )
+    cluster_parser.add_argument(
+        "--coverage", "-c",
+        type=float,
+        default=0.8,
+        help="Minimum alignment coverage (default: 0.8)",
+    )
+    cluster_parser.add_argument(
+        "--output", "-o",
+        help="Write representative paths to file (default: stdout)",
+    )
+    cluster_parser.add_argument(
+        "--threads", "-j",
+        type=int,
+        default=4,
+        help="Number of threads for mmseqs (default: 4)",
+    )
+    cluster_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show all clusters with their members",
+    )
+    cluster_parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress progress messages",
+    )
+
     args = parser.parse_args()
 
     # Route to appropriate handler
@@ -851,6 +974,8 @@ def main():
         _split_command(args)
     elif args.command == "info":
         _info_command(args)
+    elif args.command == "cluster":
+        _cluster_command(args)
     else:
         parser.print_help()
 

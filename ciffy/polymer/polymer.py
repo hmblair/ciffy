@@ -99,11 +99,19 @@ class Field(_BaseDescriptor):
         self.validate = validate
 
     def __set__(self, obj, value):
-        # Validate backend/device compatibility if enabled and hierarchy exists
+        # Validate backend/device compatibility and shape if enabled
         if self.validate and value is not None:
             hierarchy = getattr(obj, '_hierarchy', None)
             if hierarchy is not None:
                 check_compatible(hierarchy._ref, value, self.name)
+                # Validate shape: first dimension must match hierarchy size
+                expected = hierarchy.size(self.scale)
+                actual = value.shape[0] if hasattr(value, 'shape') else len(value)
+                if actual != expected:
+                    raise ValueError(
+                        f"Shape mismatch for '{self.name}': got {actual} elements, "
+                        f"expected {expected} ({self.scale.name} scale)"
+                    )
         setattr(obj, self.private_name, value)
 
     def __repr__(self):
@@ -127,6 +135,20 @@ class Metadata(_BaseDescriptor):
         >>> pdb_id = Metadata(Scale.MOLECULE)
         >>> names = Metadata(Scale.CHAIN, is_list=True)
     """
+
+    def __set__(self, obj, value):
+        # Validate size for list metadata at non-molecule scales
+        if value is not None and self.scale != Scale.MOLECULE:
+            hierarchy = getattr(obj, '_hierarchy', None)
+            if hierarchy is not None and hasattr(value, '__len__'):
+                expected = hierarchy.size(self.scale)
+                actual = len(value)
+                if actual != expected:
+                    raise ValueError(
+                        f"Size mismatch for '{self.name}': got {actual} elements, "
+                        f"expected {expected} ({self.scale.name} scale)"
+                    )
+        setattr(obj, self.private_name, value)
 
     def __get__(self, obj, objtype=None):
         if obj is None:
@@ -1932,6 +1954,14 @@ class Polymer:
         # Use atoms as reference if coordinates is None (template case)
         ref = self._coordinates if self._coordinates is not None else self.atoms
         check_compatible(ref, coordinates, "coordinates")
+
+        # Validate shape
+        expected = self.size()
+        actual = coordinates.shape[0] if hasattr(coordinates, 'shape') else len(coordinates)
+        if actual != expected:
+            raise ValueError(
+                f"Shape mismatch for coordinates: got {actual} atoms, expected {expected}"
+            )
 
         result = copy(self)
         result._coordinates = coordinates

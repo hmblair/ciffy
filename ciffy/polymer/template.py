@@ -13,9 +13,7 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 
 from .polymer import Polymer
-from .builder import ChainBuilder, expand_residue
 from ..biochemistry import Scale, Molecule, Residue, atom_to_element
-from ..utils import atoms_to_col_map
 
 if TYPE_CHECKING:
     from ..biochemistry.atom import AtomGroup
@@ -164,6 +162,8 @@ def _build_chain(
     Returns:
         Dict with coordinates, atoms, elements, sequence, sizes.
     """
+    from .builder import expand_residue, linear_extend_transform
+
     residue_indices, mol_type = _parse_sequence(sequence)
 
     if not residue_indices:
@@ -176,89 +176,49 @@ def _build_chain(
             'residue_indices': [],
         }
 
-    # Use ChainBuilder for positioning and terminal filtering
-    builder = ChainBuilder(mol_type, filter_terminal=True)
+    # Build chain by extending from empty polymer
+    poly = Polymer.create_empty()
+    n_residues = len(residue_indices)
 
-    for res_idx in residue_indices:
+    for i, res_idx in enumerate(residue_indices):
         residue = Residue.from_index(res_idx)
-        builder.append(residue)
+        is_first = (i == 0)
+        is_last = (i == n_residues - 1)
 
-    # Build arrays
-    result = builder.build()
+        # Get atom data with appropriate terminal filtering
+        atoms, elements, coords = expand_residue(
+            residue, start_terminal=is_first, end_terminal=is_last
+        )
 
-    # Apply custom atom filter if provided
-    if atom_filter is not None:
-        result = _apply_atom_filter(result, builder, atom_filter)
-
-    # Add residue_indices for multi-chain aggregation
-    result['residue_indices'] = residue_indices
-    result['atoms_per_residue'] = result['sizes'][Scale.RESIDUE].tolist()
-
-    return result
-
-
-def _apply_atom_filter(
-    arrays: dict,
-    builder: ChainBuilder,
-    atom_filter: dict[int, Sequence[int]],
-) -> dict:
-    """Apply custom atom filter to built arrays."""
-    # Rebuild from residue data with filtering
-    all_coords = []
-    all_atoms = []
-    all_elements = []
-    atoms_per_residue = []
-
-    coord_offset = 0
-    for res_data in builder._residues:
-        res_idx = res_data.residue.value
-        n_atoms = res_data.n_atoms
-
-        if res_idx in atom_filter:
+        # Apply atom filter if provided
+        if atom_filter is not None and res_idx in atom_filter:
             allowed = set(atom_filter[res_idx])
-            # Filter this residue's atoms
-            filtered_atoms = []
-            filtered_elements = []
-            filtered_indices = []
+            keep = [j for j, a in enumerate(atoms) if a in allowed]
+            atoms = atoms[keep]
+            elements = elements[keep]
+            coords = coords[keep]
 
-            for i, (atom, elem) in enumerate(zip(res_data.atoms, res_data.elements)):
-                if atom in allowed:
-                    filtered_atoms.append(atom)
-                    filtered_elements.append(elem)
-                    filtered_indices.append(i)
-
-            if filtered_indices:
-                coords_slice = arrays['coordinates'][coord_offset:coord_offset + n_atoms]
-                all_coords.append(coords_slice[filtered_indices])
-                all_atoms.extend(filtered_atoms)
-                all_elements.extend(filtered_elements)
-                atoms_per_residue.append(len(filtered_atoms))
+        if poly.empty():
+            poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
         else:
-            # Keep all atoms for this residue
-            all_coords.append(arrays['coordinates'][coord_offset:coord_offset + n_atoms])
-            all_atoms.extend(res_data.atoms)
-            all_elements.extend(res_data.elements)
-            atoms_per_residue.append(n_atoms)
+            # Compute transform for positioning
+            prev_coords, prev_atoms, _, prev_res = poly._residue_slice(-1)
+            transform = linear_extend_transform(prev_coords, prev_atoms, prev_res, atoms, residue)
+            poly = poly.extend(residue, coords, transform, atoms, elements)
 
-        coord_offset += n_atoms
-
-    if all_coords:
-        coords = np.concatenate(all_coords, axis=0)
-    else:
-        coords = np.empty((0, 3), dtype=np.float32)
-
-    n_atoms = len(all_atoms)
-
+    # Extract arrays for return dict
     return {
-        'coordinates': coords,
-        'atoms': np.array(all_atoms, dtype=np.int64),
-        'elements': np.array(all_elements, dtype=np.int64),
-        'sequence': arrays['sequence'],
+        'coordinates': np.asarray(poly.coordinates),
+        'atoms': np.asarray(poly.atoms),
+        'elements': np.asarray(poly.elements),
+        'sequence': np.asarray(poly.sequence),
         'sizes': {
-            Scale.RESIDUE: np.array(atoms_per_residue, dtype=np.int64),
-            Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
-            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+            Scale.RESIDUE: np.asarray(poly._sizes[Scale.RESIDUE]),
+            Scale.CHAIN: np.asarray(poly._sizes[Scale.CHAIN]),
+            Scale.MOLECULE: np.asarray(poly._sizes[Scale.MOLECULE]),
         },
+        'residue_indices': residue_indices,
+        'atoms_per_residue': list(poly.counts(Scale.RESIDUE)),
     }
 
 

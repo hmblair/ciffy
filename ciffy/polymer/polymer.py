@@ -1367,58 +1367,106 @@ class Polymer:
     # Chain Operations
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _extend_from_empty(
+        self: Polymer,
+        residue: Residue,
+        coords: Array,
+        atoms: Array | None,
+        elements: Array | None,
+        name: str,
+    ) -> Polymer:
+        """Create first residue when extending from empty polymer."""
+        # Ensure numpy arrays
+        coords = np.asarray(coords, dtype=np.float32)
+        if atoms is not None:
+            atoms = np.asarray(atoms, dtype=np.int64)
+        if elements is not None:
+            elements = np.asarray(elements, dtype=np.int64)
+
+        n_atoms = coords.shape[0]
+
+        hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes={
+                Scale.RESIDUE: np.array([n_atoms], dtype=np.int64),
+                Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
+                Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+            },
+            lengths=np.array([1], dtype=np.int64),
+            polymer_count=n_atoms,
+            ref=coords,
+        )
+
+        polymer = Polymer(
+            hierarchy,
+            coordinates=coords,
+            atoms=atoms,
+            elements=elements,
+            sequence=np.array([residue.value], dtype=np.int64),
+            names=[name],
+            strands=[""],
+            molecule_types=np.array([residue.molecule_type], dtype=np.int64),
+            descriptions=[""],
+            pdb_id=self.pdb_id,
+        )
+
+        return polymer.torch() if self.backend == "torch" else polymer
+
     def extend(
         self: Polymer,
         residue: Residue,
         coords: Array,
-        transform: Array,
+        transform: Array | None = None,
         atoms: Array | None = None,
         elements: Array | None = None,
+        name: str = "A",
     ) -> Polymer:
         """
-        Append a residue to the end of a single-chain polymer.
+        Append a residue to the end of a polymer.
 
-        Creates a new Polymer with an additional residue positioned at the
-        C-terminus (proteins) or 3' end (nucleic acids).
+        Creates a new Polymer with an additional residue. If the polymer is empty,
+        creates the first residue. Otherwise, positions the residue relative to
+        the last residue using the provided transform.
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
             coords: (n_atoms, 3) coordinates of the residue in its local frame.
             transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
                 Use linear_extend_transform() to compute this for ideal chains.
-            atoms: Atom type indices. Required if self.atoms is not None.
-            elements: Element indices. Required if self.elements is not None.
+                Required when extending a non-empty polymer, ignored for empty.
+            atoms: Atom type indices. Required for non-empty polymers with atom data.
+            elements: Element indices. Required for non-empty polymers with element data.
+            name: Chain name (only used when extending from empty polymer).
 
         Returns:
-            New Polymer with the residue appended to the end.
+            New Polymer with the residue appended.
 
         Raises:
             ValueError: If polymer has multiple chains, has HETATM atoms,
-                lacks required linking atoms, or atoms/elements missing when required.
+                or required parameters are missing.
 
         Example:
-            >>> from ciffy import Residue
+            >>> from ciffy import Residue, Polymer
             >>> from ciffy.polymer import expand_residue, linear_extend_transform
             >>>
-            >>> # Get residue data
-            >>> atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+            >>> # Start from empty polymer
+            >>> poly = Polymer.create_empty()
+            >>> atoms, elements, coords = expand_residue(Residue.A)
+            >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
             >>>
-            >>> # Compute transform for linear extension
-            >>> prev_atoms, _, prev_coords = expand_residue(Residue.C)
-            >>> transform = linear_extend_transform(prev_coords, prev_atoms, Residue.C, atoms, Residue.G)
-            >>>
-            >>> # Extend the polymer
-            >>> poly = poly.extend(Residue.G, coords, transform, atoms, elements)
-            >>>
-            >>> # With model predictions
-            >>> coords, transform = model.predict()
-            >>> poly = poly.extend(Residue.G, coords, transform, atoms, elements)
+            >>> # Extend with more residues
+            >>> atoms2, elements2, coords2 = expand_residue(Residue.C, start_terminal=False)
+            >>> transform = linear_extend_transform(...)
+            >>> poly = poly.extend(Residue.C, coords2, transform, atoms2, elements2)
         """
         from ..geometry import position_residue_fast
         from ..biochemistry.linking import LINKING_BY_TYPE
         from .builder import _resolve_frame_indices
 
-        # Validate single chain and poly-only
+        # Handle empty polymer case - create first residue
+        if self.empty():
+            return self._extend_from_empty(residue, coords, atoms, elements, name)
+
+        # Validate single chain and poly-only for non-empty
         if self.size(Scale.CHAIN) != 1:
             raise ValueError(
                 f"extend() requires a single-chain polymer. "
@@ -1428,6 +1476,13 @@ class Polymer:
             raise ValueError(
                 "extend() requires a poly-only polymer (no HETATM atoms). "
                 "Use polymer.poly() first."
+            )
+
+        # Transform is required for non-empty polymers
+        if transform is None:
+            raise ValueError(
+                "transform is required when extending a non-empty polymer. "
+                "Use linear_extend_transform() to compute it."
             )
 
         # Validate atoms/elements are provided when required

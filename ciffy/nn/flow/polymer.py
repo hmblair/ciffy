@@ -509,7 +509,7 @@ class PolymerFlowModel(nn.Module):
             residues.append(model.residue)
             atom_subsets.append(tuple(model._atom_indices))
 
-        # Delegate assembly to ChainBuilder's unified function
+        # Assemble positioned coordinates
         return assemble_chain(residue_coords, transforms, residues, atom_subsets)
 
     def sample(

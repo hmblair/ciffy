@@ -1,6 +1,7 @@
 """Tests for GNM (Gaussian Network Model) utilities.
 
 Tests cover:
+- contact_map: Build adjacency matrix from Polymer
 - graph_laplacian: Graph Laplacian computation
 - gnm_correlations: GNM correlations
 - gnm_variances: GNM position variances
@@ -13,10 +14,12 @@ from __future__ import annotations
 import pytest
 import numpy as np
 
+import ciffy
+from ciffy import Scale
 # Import internal functions for testing (not publicly exported)
 from ciffy.operations.gnm import graph_laplacian, gnm_correlations, gnm_variances
 # Import the public API
-from ciffy.operations import GNM
+from ciffy.operations import GNM, contact_map
 
 
 def make_symmetric_adj(n: int, backend: str, seed: int = 42):
@@ -557,3 +560,127 @@ class TestGNMClassIntegration:
         eigenvalues, modes = gnm.modes()
         assert eigenvalues.shape == (n - 1,)
         assert modes.shape == (n, n - 1)
+
+
+# ============================================================================
+# CONTACT MAP TESTS
+# ============================================================================
+
+
+class TestContactMap:
+    """Tests for contact_map function."""
+
+    @pytest.fixture
+    def polymer(self, backend):
+        """Load a test polymer with the specified backend."""
+        return ciffy.load("tests/data/9MDS.cif", backend=backend).poly().by_index(0)
+
+    def test_output_shape_residue(self, backend, polymer):
+        """Test contact map shape at residue scale."""
+        adj = contact_map(polymer, cutoff=7.0, scale=Scale.RESIDUE)
+
+        n_residues = polymer.size(Scale.RESIDUE)
+        assert adj.shape == (n_residues, n_residues)
+
+    def test_output_shape_atom(self, backend, polymer):
+        """Test contact map shape at atom scale."""
+        adj = contact_map(polymer, cutoff=4.0, scale=Scale.ATOM)
+
+        n_atoms = polymer.size(Scale.ATOM)
+        assert adj.shape == (n_atoms, n_atoms)
+
+    def test_binary_values(self, backend, polymer):
+        """Test contact map contains only 0 and 1."""
+        adj = contact_map(polymer, cutoff=7.0)
+        adj_np = np.asarray(adj)
+
+        unique_values = np.unique(adj_np)
+        assert len(unique_values) <= 2
+        assert all(v in [0.0, 1.0] for v in unique_values)
+
+    def test_zero_diagonal(self, backend, polymer):
+        """Test contact map has zero diagonal (no self-contacts)."""
+        adj = contact_map(polymer, cutoff=7.0)
+        adj_np = np.asarray(adj)
+
+        assert allclose(np.diag(adj_np), np.zeros(adj_np.shape[0]))
+
+    def test_symmetric(self, backend, polymer):
+        """Test contact map is symmetric."""
+        adj = contact_map(polymer, cutoff=7.0)
+        adj_np = np.asarray(adj)
+
+        assert allclose(adj_np, adj_np.T)
+
+    def test_larger_cutoff_more_contacts(self, backend, polymer):
+        """Test that larger cutoff produces more contacts."""
+        adj_small = contact_map(polymer, cutoff=5.0)
+        adj_large = contact_map(polymer, cutoff=10.0)
+
+        n_contacts_small = np.asarray(adj_small).sum()
+        n_contacts_large = np.asarray(adj_large).sum()
+
+        assert n_contacts_large >= n_contacts_small
+
+    def test_very_small_cutoff_few_contacts(self, backend, polymer):
+        """Test that very small cutoff produces few/no contacts."""
+        adj = contact_map(polymer, cutoff=0.1)
+        adj_np = np.asarray(adj)
+
+        # With 0.1A cutoff, should have very few contacts
+        assert adj_np.sum() < adj_np.size * 0.01  # Less than 1% contacts
+
+    def test_very_large_cutoff_many_contacts(self, backend, polymer):
+        """Test that very large cutoff produces many contacts."""
+        adj = contact_map(polymer, cutoff=1000.0)
+        adj_np = np.asarray(adj)
+
+        n = adj_np.shape[0]
+        # With huge cutoff, all pairs should be in contact (except diagonal)
+        expected_contacts = n * (n - 1)  # All pairs
+        assert adj_np.sum() == expected_contacts
+
+    def test_backend_consistency(self):
+        """Test numpy and torch backends produce similar contact counts.
+
+        Note: Due to floating-point differences in distance calculations,
+        contacts at exactly the cutoff boundary may differ. We check that
+        the total number of contacts is very close.
+        """
+        polymer_np = ciffy.load("tests/data/9MDS.cif", backend="numpy").poly().by_index(0)
+        polymer_torch = ciffy.load("tests/data/9MDS.cif", backend="torch").poly().by_index(0)
+
+        adj_np = contact_map(polymer_np, cutoff=7.0)
+        adj_torch = contact_map(polymer_torch, cutoff=7.0)
+
+        # Contact counts should be very close (allowing for edge cases at cutoff)
+        n_contacts_np = np.asarray(adj_np).sum()
+        n_contacts_torch = np.asarray(adj_torch).sum()
+
+        # Allow up to 1% difference in contact count
+        assert abs(n_contacts_np - n_contacts_torch) / max(n_contacts_np, 1) < 0.01
+
+    def test_works_with_gnm(self, backend, polymer):
+        """Test contact map integrates with GNM class."""
+        adj = contact_map(polymer, cutoff=7.0)
+
+        gnm = GNM(adj)
+
+        # Should produce valid GNM outputs
+        assert gnm.variances.shape == (polymer.size(Scale.RESIDUE),)
+        assert not isnan_any(gnm.variances)
+        assert (np.asarray(gnm.variances) >= -1e-5).all()
+
+    def test_default_scale_is_residue(self, backend, polymer):
+        """Test default scale is RESIDUE."""
+        adj_default = contact_map(polymer, cutoff=7.0)
+        adj_residue = contact_map(polymer, cutoff=7.0, scale=Scale.RESIDUE)
+
+        assert allclose(adj_default, adj_residue)
+
+    def test_default_cutoff_is_7(self, backend, polymer):
+        """Test default cutoff is 7.0 Angstroms."""
+        adj_default = contact_map(polymer)
+        adj_7 = contact_map(polymer, cutoff=7.0)
+
+        assert allclose(adj_default, adj_7)

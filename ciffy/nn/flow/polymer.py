@@ -466,6 +466,7 @@ class PolymerFlowModel(nn.Module, HubMixin):
         self,
         latents: torch.Tensor,
         sequence: SequenceArray,
+        latent_bound: float | None = 5.0,
     ) -> torch.Tensor:
         """
         Decode latent vectors to positioned polymer coordinates.
@@ -475,6 +476,10 @@ class PolymerFlowModel(nn.Module, HubMixin):
         Args:
             latents: (n_residues, latent_dim) latent vectors.
             sequence: Int array of residue types (e.g., polymer.sequence).
+            latent_bound: Soft bound for latent values using tanh. Values are
+                bounded to [-bound, bound] range. Set to None to disable.
+                Default 5.0 prevents gradient explosion from out-of-distribution
+                latents during optimization.
 
         Returns:
             (N, 3) flat coordinate tensor with all residues positioned.
@@ -490,6 +495,10 @@ class PolymerFlowModel(nn.Module, HubMixin):
 
         if len(sequence) == 0:
             return torch.empty(0, 3, device=latents.device, dtype=latents.dtype)
+
+        # Apply soft bound to prevent gradient explosion from out-of-distribution latents
+        if latent_bound is not None:
+            latents = latent_bound * torch.tanh(latents / latent_bound)
 
         # Collect decoded residues
         residue_coords = []

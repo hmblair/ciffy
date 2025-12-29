@@ -395,13 +395,19 @@ def _cumulative_matmul(matrices: Array) -> Array:
         (n, 4, 4) cumulative products.
     """
     n = len(matrices)
-    result = zeros_like(matrices)
 
-    result[0] = matrices[0]
+    # Use list accumulation to avoid in-place ops (preserves autograd)
+    results = [matrices[0]]
     for i in range(1, n):
-        result[i] = result[i - 1] @ matrices[i]
+        results.append(results[i - 1] @ matrices[i])
 
-    return result
+    # Stack into tensor
+    if is_torch(matrices):
+        import torch
+        return torch.stack(results, dim=0)
+    else:
+        import numpy as np
+        return np.stack(results, axis=0)
 
 
 # Lazy-initialized compiled version for GPU acceleration
@@ -418,6 +424,45 @@ def _get_cumulative_matmul_compiled():
             mode="reduce-overhead",
         )
     return _cumulative_matmul_compiled
+
+
+def _normalize_axis_angles(axis_angles: Array) -> Array:
+    """
+    Normalize axis-angles to keep rotation angles in [-π, π].
+
+    Large rotation angles (near 180° or beyond) cause numerical instability
+    in the Rodrigues formula and gradient explosion. This function wraps
+    angles to the principal range while preserving the rotation direction.
+
+    Args:
+        axis_angles: (n, 3) axis-angle vectors.
+
+    Returns:
+        (n, 3) normalized axis-angle vectors with angles in [-π, π].
+    """
+    import math
+
+    if is_torch(axis_angles):
+        import torch
+        # Compute angle magnitudes
+        angles = torch.norm(axis_angles, dim=1, keepdim=True)  # (n, 1)
+
+        # Avoid division by zero
+        safe_angles = torch.where(angles < 1e-8, torch.ones_like(angles), angles)
+        axes = axis_angles / safe_angles  # Unit axes
+
+        # Wrap angles to [-π, π]
+        angles_wrapped = torch.remainder(angles + math.pi, 2 * math.pi) - math.pi
+
+        # Reconstruct axis-angles
+        return axes * angles_wrapped
+    else:
+        # NumPy path
+        angles = np.linalg.norm(axis_angles, axis=1, keepdims=True)
+        safe_angles = np.where(angles < 1e-8, np.ones_like(angles), angles)
+        axes = axis_angles / safe_angles
+        angles_wrapped = np.remainder(angles + math.pi, 2 * math.pi) - math.pi
+        return axes * angles_wrapped
 
 
 def _apply_cumulative_transforms(
@@ -439,8 +484,11 @@ def _apply_cumulative_transforms(
     n_residues = len(transforms)
     n_atoms = coords.shape[1]
 
+    # Normalize axis-angles to avoid rodrigues singularities
+    axis_angles = _normalize_axis_angles(transforms[:, :3])
+
     # Build SE(3) matrices: rotation from Rodrigues, translation direct
-    Rs = rodrigues(transforms[:, :3])
+    Rs = rodrigues(axis_angles)
 
     # Create (n, 4, 4) homogeneous transform matrices
     T = empty((n_residues, 4, 4), like=coords)

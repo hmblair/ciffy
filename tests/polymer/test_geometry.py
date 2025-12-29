@@ -671,6 +671,97 @@ class TestScale:
         assert np.allclose(mean, 0, atol=tol.center_origin)
 
 
+class TestBondedDistances:
+    """Test bonded_distances() method."""
+
+    def test_bonded_distances_o3p_p(self, backend):
+        """bonded_distances finds O3'-P phosphodiester bonds."""
+        import ciffy
+        from ciffy.biochemistry import Residue
+
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend)
+
+        distances = p.bonded_distances(Residue.A.O3p, Residue.A.P)
+
+        # Should find many O3'-P bonds
+        assert len(distances) > 0
+        # Typical O3'-P distance is ~1.6 Å
+        mean_dist = float(np.mean(np.asarray(distances)))
+        assert 1.5 < mean_dist < 1.7
+
+    def test_bonded_distances_no_matches(self, backend):
+        """bonded_distances returns empty array when no matching bonds."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend)
+
+        # Use invalid atom type values that don't exist
+        distances = p.bonded_distances(99999, 99998)
+
+        assert len(distances) == 0
+
+    def test_bonded_distances_c3p_o3p(self, backend):
+        """bonded_distances finds C3'-O3' intra-residue bonds."""
+        import ciffy
+        from ciffy.biochemistry import Residue
+
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend)
+
+        distances = p.bonded_distances(Residue.A.C3p, Residue.A.O3p)
+
+        assert len(distances) > 0
+        # Typical C-O bond is ~1.4 Å
+        mean_dist = float(np.mean(np.asarray(distances)))
+        assert 1.3 < mean_dist < 1.5
+
+    def test_bonded_distances_gradient_flow(self):
+        """bonded_distances allows gradient flow to coordinates."""
+        import torch
+        import ciffy
+        from ciffy.biochemistry import Residue
+
+        p = ciffy.load(get_test_cif("9MDS"), backend="torch")
+
+        # Enable gradients on coordinates
+        coords = p.coordinates.clone().requires_grad_(True)
+        p.coordinates = coords
+
+        # Compute bond distances (O3'-P)
+        distances = p.bonded_distances(Residue.A.O3p, Residue.A.P)
+
+        assert distances.requires_grad
+
+        # Compute loss and backprop
+        ideal = 1.6
+        loss = ((distances - ideal) ** 2).mean()
+        loss.backward()
+
+        # Gradients should flow to coordinates
+        assert coords.grad is not None
+        assert coords.grad.shape == coords.shape
+        # At least some gradients should be non-zero
+        assert coords.grad.abs().max() > 0
+
+    def test_bonded_distances_backend_consistency(self):
+        """bonded_distances gives same results for numpy and torch."""
+        import ciffy
+        from ciffy.biochemistry import Residue
+
+        p_np = ciffy.load(get_test_cif("9MDS"), backend="numpy")
+        p_torch = ciffy.load(get_test_cif("9MDS"), backend="torch")
+
+        dist_np = p_np.bonded_distances(Residue.A.O3p, Residue.A.P)
+        dist_torch = p_torch.bonded_distances(Residue.A.O3p, Residue.A.P)
+
+        assert len(dist_np) == len(dist_torch)
+        tol = get_tolerances()
+        assert np.allclose(
+            np.asarray(dist_np),
+            np.asarray(dist_torch),
+            atol=tol.allclose_atol
+        )
+
+
 class TestAlignFunction:
     """Test ciffy.align() function."""
 

@@ -113,6 +113,62 @@ def rotation_to_axis_angle(R: Array) -> Array:
     return axis * angle
 
 
+def rodrigues(axis_angles: Array) -> Array:
+    """
+    Convert axis-angle vectors to rotation matrices (Rodrigues' formula).
+
+    R = I + sin(θ)K + (1-cos(θ))K²
+
+    where K is the skew-symmetric matrix of the unit axis.
+
+    Backend-agnostic implementation that handles both single and batched inputs.
+
+    Args:
+        axis_angles: Either (3,) single axis-angle vector or (n, 3) batch of vectors.
+            Direction is the rotation axis, magnitude is the rotation angle.
+
+    Returns:
+        (3, 3) rotation matrix for single input, or (n, 3, 3) for batched input.
+    """
+    from ..backend import (
+        norm as backend_norm, sin, cos, eye, zeros_nd, ones_like, where,
+        unsqueeze, expand,
+    )
+
+    # Handle single vs batched input
+    single_input = axis_angles.ndim == 1
+    if single_input:
+        axis_angles = unsqueeze(axis_angles, 0)  # (1, 3)
+
+    n = len(axis_angles)
+
+    # Compute angle magnitudes
+    angles = backend_norm(axis_angles, axis=1, keepdims=True)  # (n, 1)
+    safe_angles = where(angles < 1e-8, ones_like(angles), angles)
+    axes = axis_angles / safe_angles
+
+    # Build skew-symmetric matrices K
+    K = zeros_nd((n, 3, 3), like=axis_angles)
+    K[:, 0, 1] = -axes[:, 2]
+    K[:, 0, 2] = axes[:, 1]
+    K[:, 1, 0] = axes[:, 2]
+    K[:, 1, 2] = -axes[:, 0]
+    K[:, 2, 0] = -axes[:, 1]
+    K[:, 2, 1] = axes[:, 0]
+
+    # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
+    I = expand(unsqueeze(eye(3, like=axis_angles), 0), (n, -1, -1))
+    sin_a = unsqueeze(sin(angles), -1)  # (n, 1, 1)
+    cos_a = unsqueeze(cos(angles), -1)
+
+    result = I + sin_a * K + (1 - cos_a) * (K @ K)
+
+    # Return single matrix if input was single
+    if single_input:
+        return result[0]
+    return result
+
+
 def axis_angle_to_rotation(axis_angle: Array) -> Array:
     """
     Convert axis-angle to rotation matrix (Rodrigues' formula).
@@ -126,31 +182,12 @@ def axis_angle_to_rotation(axis_angle: Array) -> Array:
 
     Returns:
         (3, 3) rotation matrix.
+
+    Note:
+        This is a convenience wrapper around :func:`rodrigues` for single vectors.
+        For batched inputs, use :func:`rodrigues` directly.
     """
-    angle = norm(axis_angle)
-    angle_scalar = to_scalar(angle)
-
-    if angle_scalar < 1e-8:
-        return _eye3(axis_angle)
-
-    axis = axis_angle / angle
-
-    if is_torch(axis_angle):
-        import torch
-        K = torch.tensor([
-            [0, -axis[2], axis[1]],
-            [axis[2], 0, -axis[0]],
-            [-axis[1], axis[0], 0]
-        ], dtype=axis_angle.dtype, device=axis_angle.device)
-        I = torch.eye(3, dtype=axis_angle.dtype, device=axis_angle.device)
-        return I + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
-    else:
-        K = np.array([
-            [0, -axis[2], axis[1]],
-            [axis[2], 0, -axis[0]],
-            [-axis[1], axis[0], 0]
-        ], dtype=np.float32)
-        return np.eye(3, dtype=np.float32) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+    return rodrigues(axis_angle)
 
 
 def compute_relative_transform(

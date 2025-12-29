@@ -48,6 +48,7 @@ from .primitives import (
 
 # SE(3) transforms
 from .transforms import (
+    rodrigues,
     rotation_to_axis_angle,
     axis_angle_to_rotation,
     compute_relative_transform,
@@ -102,6 +103,7 @@ __all__ = [
     "circle_sphere_intersect",
     "verify_closure_distance",
     # SE(3) transforms
+    "rodrigues",
     "rotation_to_axis_angle",
     "axis_angle_to_rotation",
     "compute_relative_transform",

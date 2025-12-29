@@ -382,46 +382,8 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
 # CHAIN ASSEMBLY - OPTIMIZED WITH CUMULATIVE TRANSFORMS
 # =============================================================================
 
-from ..backend import (
-    norm, sin, cos, eye, zeros_nd, zeros_like, ones_like, where, bmm, cat, stack,
-    unsqueeze, expand, transpose,
-)
-
-
-def _rodrigues(axis_angles: Array) -> Array:
-    """
-    Convert axis-angle vectors to rotation matrices using Rodrigues formula.
-
-    Backend-agnostic implementation using ciffy.backend ops.
-
-    Args:
-        axis_angles: (n, 3) axis-angle rotation vectors.
-
-    Returns:
-        (n, 3, 3) rotation matrices.
-    """
-    n = len(axis_angles)
-
-    # Compute angle magnitudes
-    angles = norm(axis_angles, axis=1, keepdims=True)
-    safe_angles = where(angles < 1e-8, ones_like(angles), angles)
-    axes = axis_angles / safe_angles
-
-    # Build skew-symmetric matrices K
-    K = zeros_nd((n, 3, 3), like=axis_angles)
-    K[:, 0, 1] = -axes[:, 2]
-    K[:, 0, 2] = axes[:, 1]
-    K[:, 1, 0] = axes[:, 2]
-    K[:, 1, 2] = -axes[:, 0]
-    K[:, 2, 0] = -axes[:, 1]
-    K[:, 2, 1] = axes[:, 0]
-
-    # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
-    I = expand(unsqueeze(eye(3, like=axis_angles), 0), (n, -1, -1))
-    sin_a = unsqueeze(sin(angles), -1)
-    cos_a = unsqueeze(cos(angles), -1)
-
-    return I + sin_a * K + (1 - cos_a) * (K @ K)
+from ..backend import zeros_like, bmm, cat, stack, transpose
+from ..geometry import rodrigues
 
 
 def _cumulative_matmul(matrices: Array) -> Array:
@@ -491,7 +453,7 @@ def _apply_cumulative_transforms(
     n_atoms = coords.shape[1]
 
     # Build SE(3) matrices: rotation from Rodrigues, translation direct
-    Rs = _rodrigues(transforms[:, :3])
+    Rs = rodrigues(transforms[:, :3])
 
     # Create (n, 4, 4) homogeneous transform matrices
     T = empty((n_residues, 4, 4), like=coords)

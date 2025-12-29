@@ -35,6 +35,7 @@ from .presets import (
     PRESETS,
     CASP15,
     CASP16,
+    RNA_PUZZLES,
     get_preset,
     list_presets,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "PRESETS",
     "CASP15",
     "CASP16",
+    "RNA_PUZZLES",
     "get_preset",
     "list_presets",
 ]

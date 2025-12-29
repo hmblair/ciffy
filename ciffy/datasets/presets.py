@@ -65,10 +65,60 @@ CASP16 = DatasetPreset(
     ],
 )
 
+# RNA-Puzzles (Puzzles 1-39)
+# Source: https://www.rnapuzzles.org/puzzles/list/
+RNA_PUZZLES = DatasetPreset(
+    name="rna-puzzles",
+    description="RNA-Puzzles benchmark (39 RNA structures)",
+    url="https://www.rnapuzzles.org/puzzles/list/",
+    pdb_ids=[
+        "3MEI",  # PZ1
+        "3P59",  # PZ2
+        "3OWZ",  # PZ3
+        "3V7E",  # PZ4
+        "4P9R",  # PZ5
+        "4GXY",  # PZ6
+        "4R4V",  # PZ7
+        "4L81",  # PZ8
+        "5KPY",  # PZ9
+        "4LCK",  # PZ10
+        "5LYS",  # PZ11
+        "4QLM",  # PZ12
+        "4XW7",  # PZ13
+        "5DDO",  # PZ14
+        "5DI4",  # PZ15
+        "6Y0Y",  # PZ16
+        "5K7C",  # PZ17
+        "5TPY",  # PZ18
+        "5T5A",  # PZ19
+        "5Y85",  # PZ20
+        "5NWQ",  # PZ21
+        "6JQ5",  # PZ22
+        "6E8U",  # PZ23
+        "6OL3",  # PZ24
+        "6P2H",  # PZ25
+        "6PMO",  # PZ26
+        "6POM",  # PZ27
+        "6UFM",  # PZ28
+        "6TB7",  # PZ29
+        "7BG9",  # PZ30
+        "7MLX",  # PZ31
+        "7EOJ",  # PZ32
+        "7ELP",  # PZ33
+        "7V9E",  # PZ34
+        "7QR4",  # PZ35
+        "7QR3",  # PZ36
+        "8GXC",  # PZ37
+        "8HB8",  # PZ38
+        "8DP3",  # PZ39
+    ],
+)
+
 # Registry of all available presets
 PRESETS: dict[str, DatasetPreset] = {
     "casp15": CASP15,
     "casp16": CASP16,
+    "rna-puzzles": RNA_PUZZLES,
 }
 
 
@@ -101,6 +151,7 @@ __all__ = [
     "PRESETS",
     "CASP15",
     "CASP16",
+    "RNA_PUZZLES",
     "get_preset",
     "list_presets",
 ]

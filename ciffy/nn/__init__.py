@@ -103,6 +103,9 @@ from .diffusion import (
 # Flow models (triggers @register_model decorators)
 from .flow import PolymerFlowModel
 
+# Hub integration for model distribution
+from .hub import HubMixin, get_cache_dir, set_cache_dir
+
 __all__ = [
     # Data validation and filtering
     "DataCompatibilityReport",
@@ -200,6 +203,10 @@ __all__ = [
     "LatentDiffusionTrainer",
     # Flow models
     "PolymerFlowModel",
+    # Hub integration
+    "HubMixin",
+    "get_cache_dir",
+    "set_cache_dir",
 ]
 
 # Optional geometric deep learning module

@@ -65,6 +65,8 @@ def train_pca_flow(
     progress_tracker: "TrainingProgress | None" = None,
     progress_callback: Callable[[int, int, dict], None] | None = None,
     fabric: "Fabric | None" = None,
+    use_rotation: bool = False,
+    noise_std: float = 0.0,
 ) -> tuple[PCAFlow, dict]:
     """
     Train a PCA + Flow model on data with proper train/test evaluation.
@@ -91,6 +93,10 @@ def train_pca_flow(
         fabric: Optional Lightning Fabric instance for device handling.
             If provided, handles device placement and enables mixed precision.
             If None, falls back to manual device management.
+        use_rotation: If True, add learnable orthogonal rotations between
+            spline layers. Improves expressivity with minimal parameter cost.
+        noise_std: Standard deviation of Gaussian noise added during training.
+            Acts as regularization to prevent overfitting. Recommended: 0.05.
 
     Returns:
         flow: Trained PCAFlow model.
@@ -146,7 +152,17 @@ def train_pca_flow(
         n_layers=n_layers,
         hidden_dim=hidden_dim,
         bound=bound,
+        use_rotation=use_rotation,
     )
+
+    if verbose:
+        extras = []
+        if use_rotation:
+            extras.append("rotation")
+        if noise_std > 0:
+            extras.append(f"noise={noise_std}")
+        if extras:
+            print(f"Flow options: {', '.join(extras)}")
 
     # Keep reference to original for saving (compiled wrapper has different state_dict keys)
     flow_original = flow
@@ -216,6 +232,10 @@ def train_pca_flow(
 
         for i in range(0, n_train, batch_size):
             batch = X_train[perm[i:i + batch_size]]
+
+            # Add noise regularization during training
+            if noise_std > 0:
+                batch = batch + noise_std * torch.randn_like(batch)
 
             optimizer.zero_grad()
             z, log_det = flow(batch)

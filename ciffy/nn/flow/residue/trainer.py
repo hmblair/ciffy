@@ -35,13 +35,14 @@ class ResidueFlowModelConfig:
         latent_dim: Number of latent dimensions (PCA components).
         n_layers: Number of normalizing flow layers.
         hidden_dim: Hidden dimension in coupling networks.
-        bound: Tanh bound for decode (in std devs). None for unbounded.
+        bound: Tanh bound for decode (in std devs). Prevents extreme outputs
+            when sampling from latent space. Default 3.0 clamps to [-3, 3].
     """
 
     latent_dim: int = 12
     n_layers: int = 4
     hidden_dim: int = 56
-    bound: float | None = None
+    bound: float | None = 3.0  # Prevent extreme outputs during decode
 
 
 @dataclass

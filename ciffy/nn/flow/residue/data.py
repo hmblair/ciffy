@@ -216,8 +216,12 @@ def extract_residues(
     """
     Extract all instances of a residue type from multiple structures.
 
+    This function automatically filters to the molecule type of the
+    requested residue (e.g., RNA for Residue.A) and to canonical residues.
+    Mixed protein/RNA structures are handled correctly.
+
     Args:
-        cif_paths: List of paths to CIF files.
+        cif_paths: List of paths to CIF files (can contain mixed molecule types).
         residue_type: Residue enum (e.g., Residue.A for adenosine).
         min_coverage: Minimum fraction of instances an atom must appear in
             to be included. Default 0.9 excludes rare terminal atoms.
@@ -240,6 +244,17 @@ def extract_residues(
 
         try:
             poly = ciffy.load(str(path)).poly()
+
+            # Filter by molecule type (e.g., RNA for adenosine)
+            mol_type = residue_type.molecule_type
+            if mol_type is not None:
+                from ciffy.biochemistry import Molecule
+                poly = poly.by_type(Molecule(mol_type)).canonical()
+                if poly.size() == 0:
+                    if verbose:
+                        print("no matching molecule type")
+                    continue
+
             seq = to_numpy(poly.sequence)
             indices = [i for i in range(len(seq)) if seq[i] == residue_type.value]
 
@@ -259,9 +274,12 @@ def extract_residues(
             if verbose:
                 print(f"{len(indices)} residues")
 
+        except AttributeError as e:
+            if verbose:
+                print(f"skipped: incompatible residue type ({e})")
         except Exception as e:
             if verbose:
-                print(f"error: {e}")
+                print(f"skipped: {type(e).__name__}: {e}")
 
     if not all_instances:
         raise ValueError(f"No {residue_type.name} residues found")
@@ -442,15 +460,20 @@ def extract_residues_with_links(
     """
     Extract residues with SE(3) transforms to next residue.
 
+    This function automatically filters to the molecule type of the
+    requested residue (e.g., RNA for Residue.A) and to canonical residues.
+    Mixed protein/RNA structures are handled correctly.
+
     Data flow:
-    1. Extract adjacent residue pairs from structures
-    2. Filter by O3'-P bond length to ensure true connectivity
-    3. Find common atoms across all instances
-    4. Build FrameIndices once for the common atom ordering
-    5. For each pair: align, compute link transform
+    1. Filter structure to matching molecule type
+    2. Extract adjacent residue pairs from structures
+    3. Filter by O3'-P bond length to ensure true connectivity
+    4. Find common atoms across all instances
+    5. Build FrameIndices once for the common atom ordering
+    6. For each pair: align, compute link transform
 
     Args:
-        cif_paths: List of paths to CIF files.
+        cif_paths: List of paths to CIF files (can contain mixed molecule types).
         residue_type: Residue enum (e.g., Residue.A for adenosine).
         min_coverage: Minimum fraction of instances an atom must appear in.
         max_bond_length: Maximum O3'-P distance to accept (filters chain breaks).
@@ -469,62 +492,116 @@ def extract_residues_with_links(
     if link_def is None:
         raise ValueError(f"No linking definition for {residue_type.molecule_type}")
 
-    # Required atoms for linking (from both frames)
-    def get_required_atoms(res_type: "Residue") -> set[int]:
-        return link_def.required_atoms(res_type)
+    # Pre-compute required atoms as numpy arrays for fast checking
+    required_atoms_1 = np.array(sorted(link_def.required_atoms(residue_type)), dtype=np.int64)
+    o3p_value = residue_type.O3p.value
 
-    required_atoms_1 = get_required_atoms(residue_type)
+    # Cache required atoms for each residue type we encounter
+    required_atoms_cache: dict[int, np.ndarray] = {}
+    p_value_cache: dict[int, int] = {}
+
+    def get_required_atoms_array(res_type: "Residue") -> np.ndarray:
+        key = res_type.value
+        if key not in required_atoms_cache:
+            required_atoms_cache[key] = np.array(
+                sorted(link_def.required_atoms(res_type)), dtype=np.int64
+            )
+            p_value_cache[key] = res_type.P.value
+        return required_atoms_cache[key]
 
     # Phase 1: Extract raw pairs with bond length filtering
     all_pairs = []
 
     for path in cif_paths:
         if verbose:
-            print(f"Processing {path.name}...", end=" ")
+            print(f"Processing {path.name}...", end=" ", flush=True)
 
         try:
             poly = ciffy.load(str(path)).poly()
+
+            # Filter by molecule type (e.g., RNA for adenosine)
+            mol_type = residue_type.molecule_type
+            if mol_type is not None:
+                from ciffy.biochemistry import Molecule
+                poly = poly.by_type(Molecule(mol_type)).canonical()
+                if poly.size() == 0:
+                    if verbose:
+                        print("no matching molecule type")
+                    continue
+
             seq = to_numpy(poly.sequence)
             n_residues = len(seq)
 
-            per_res_atoms = poly.reduce(poly.atoms, Scale.RESIDUE, Reduction.COLLATE)
-            per_res_coords = poly.reduce(poly.coordinates, Scale.RESIDUE, Reduction.COLLATE)
+            if n_residues < 2:
+                if verbose:
+                    print("0 pairs")
+                continue
+
+            # Use flat arrays with offsets instead of COLLATE
+            atoms_flat = to_numpy(poly.atoms)
+            coords_flat = to_numpy(poly.coordinates)
+            counts = to_numpy(poly.counts(Scale.RESIDUE))
+            offsets = np.zeros(n_residues + 1, dtype=np.int64)
+            offsets[1:] = np.cumsum(counts)
+
+            # Find all positions where residue matches target type (excluding last)
+            target_mask = seq[:-1] == residue_type.value
+            target_indices = np.where(target_mask)[0]
 
             count = 0
-            for idx1 in range(n_residues - 1):
-                if seq[idx1] != residue_type.value:
-                    continue
-
+            for idx1 in target_indices:
                 idx2 = idx1 + 1
+
+                # Get atom slices (views, not copies)
+                start1, end1 = offsets[idx1], offsets[idx1 + 1]
+                start2, end2 = offsets[idx2], offsets[idx2 + 1]
+                atoms1 = atoms_flat[start1:end1]
+                atoms2 = atoms_flat[start2:end2]
+
+                # Check required atoms using numpy set operations
+                if not np.all(np.isin(required_atoms_1, atoms1)):
+                    continue
+
                 res_type_2 = Residue.from_index(int(seq[idx2]))
-
-                atoms1 = to_numpy(per_res_atoms[idx1]).tolist()
-                atoms2 = to_numpy(per_res_atoms[idx2]).tolist()
-
-                # Check required atoms
-                if not required_atoms_1.issubset(set(atoms1)):
-                    continue
-                if not get_required_atoms(res_type_2).issubset(set(atoms2)):
+                required_atoms_2 = get_required_atoms_array(res_type_2)
+                if not np.all(np.isin(required_atoms_2, atoms2)):
                     continue
 
-                coords1 = to_numpy(per_res_coords[idx1])
-                coords2 = to_numpy(per_res_coords[idx2])
+                coords1 = coords_flat[start1:end1]
+                coords2 = coords_flat[start2:end2]
 
-                # Check bond length
-                o3p_idx = atoms1.index(residue_type.O3p.value)
-                p_idx = atoms2.index(res_type_2.P.value)
+                # Check bond length using numpy searchsorted for O(log n) lookup
+                o3p_mask = atoms1 == o3p_value
+                p_value = p_value_cache[res_type_2.value]
+                p_mask = atoms2 == p_value
+
+                if not np.any(o3p_mask) or not np.any(p_mask):
+                    continue
+
+                o3p_idx = np.argmax(o3p_mask)
+                p_idx = np.argmax(p_mask)
+
                 if np.linalg.norm(coords2[p_idx] - coords1[o3p_idx]) > max_bond_length:
                     continue
 
-                all_pairs.append((coords1, atoms1, coords2, atoms2))
+                # Store copies since we're using views
+                all_pairs.append((
+                    coords1.copy(),
+                    atoms1.tolist(),
+                    coords2.copy(),
+                    atoms2.tolist(),
+                ))
                 count += 1
 
             if verbose:
                 print(f"{count} pairs")
 
+        except AttributeError as e:
+            if verbose:
+                print(f"skipped: incompatible residue type ({e})")
         except Exception as e:
             if verbose:
-                print(f"error: {e}")
+                print(f"skipped: {type(e).__name__}: {e}")
 
     if not all_pairs:
         raise ValueError(f"No {residue_type.name} residue pairs found")

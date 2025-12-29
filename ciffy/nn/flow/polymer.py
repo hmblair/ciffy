@@ -55,6 +55,7 @@ import torch.nn as nn
 
 # Import frame indices and positioning (for potential future use)
 from ciffy.nn.flow.residue.data import FrameIndices, position_next_residue
+from ciffy.nn.hub import HubMixin
 from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:
@@ -81,7 +82,7 @@ def _normalize_key(key) -> int:
 
 
 @register_model("polymer_flow")
-class PolymerFlowModel(nn.Module):
+class PolymerFlowModel(nn.Module, HubMixin):
     """
     Orchestrates per-residue flow models for full polymer encoding/decoding.
 
@@ -121,6 +122,8 @@ class PolymerFlowModel(nn.Module):
         >>> polymer_flow.coordinates = coords
         >>> z = polymer_flow.latents  # Lazily computed
     """
+
+    _hub_model_type = "polymer-flow"
 
     def __init__(self, residue_models: dict["int | Residue", "ResidueFlowModel"]):
         """
@@ -497,9 +500,8 @@ class PolymerFlowModel(nn.Module):
         for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
 
-            # Decode this residue
-            with torch.no_grad():
-                coords_i, transform_i = model.decode(latents[i:i + 1])
+            # Decode this residue (keep gradients for optimization)
+            coords_i, transform_i = model.decode(latents[i:i + 1])
 
             # coords_i is (1, n_atoms, 3), squeeze to (n_atoms, 3)
             # transform_i is (1, 6), squeeze to (6,)
@@ -870,7 +872,8 @@ class PolymerFlowModel(nn.Module):
         Encode a Polymer object directly to latent vectors.
 
         This is the recommended way to encode polymers, as it uses the
-        polymer's sequence directly without conversion.
+        polymer's sequence directly without conversion. Automatically filters
+        to only include the atoms the model was trained on.
 
         Args:
             polymer: Polymer object to encode.
@@ -885,16 +888,50 @@ class PolymerFlowModel(nn.Module):
             >>> polymer = ciffy.load("structure.cif").poly()
             >>> latents = model.encode_polymer(polymer)
         """
-        # Convert coordinates to tensor
-        coords = polymer.coordinates
-        if not isinstance(coords, torch.Tensor):
-            if isinstance(coords, np.ndarray):
-                coords = torch.from_numpy(coords).float()
-            else:
-                coords = torch.tensor(coords, dtype=torch.float32)
+        from ciffy.biochemistry import Scale
+        from ciffy.operations.reduction import Reduction
+        from ciffy.backend import to_numpy
 
-        # Use polymer.sequence directly (already int array)
-        return self.encode(coords, polymer.sequence)
+        # Get per-residue data
+        sequence = polymer.sequence
+        seq_np = to_numpy(sequence)
+        n_residues = len(seq_np)
+
+        per_res_atoms = polymer.reduce(polymer.atoms, Scale.RESIDUE, Reduction.COLLATE)
+        per_res_coords = polymer.reduce(polymer.coordinates, Scale.RESIDUE, Reduction.COLLATE)
+
+        # Extract and filter coordinates per residue
+        filtered_coords = []
+        for i in range(n_residues):
+            res_type = int(seq_np[i])
+            if res_type not in self._supported_types_set:
+                from ciffy.biochemistry import Residue
+                res_name = Residue.from_index(res_type).name
+                raise ValueError(f"Unsupported residue type: {res_name}")
+
+            # Get expected atoms for this residue type
+            expected_atoms = self.atom_filter[res_type]
+            atoms_i = to_numpy(per_res_atoms[i])
+            coords_i = to_numpy(per_res_coords[i])
+
+            # Build mapping from atom value to coordinate
+            atom_to_coord = {int(a): c for a, c in zip(atoms_i, coords_i)}
+
+            # Extract coordinates in expected order
+            res_coords = []
+            for atom_val in expected_atoms:
+                if atom_val not in atom_to_coord:
+                    from ciffy.biochemistry import Residue
+                    res = Residue.from_index(res_type)
+                    raise ValueError(f"Missing atom {atom_val} in residue {i} ({res.name})")
+                res_coords.append(atom_to_coord[atom_val])
+
+            filtered_coords.extend(res_coords)
+
+        # Convert to tensor
+        coords = torch.tensor(filtered_coords, dtype=torch.float32)
+
+        return self.encode(coords, sequence)
 
     def decode_to_polymer(
         self,
@@ -991,6 +1028,69 @@ class PolymerFlowModel(nn.Module):
             results.append(polymer_interp)
 
         return results
+
+    def project_geometry(
+        self,
+        coords: torch.Tensor,
+        sequence: "SequenceArray",
+        n_steps: int = 2,
+        implicit: bool = True,
+    ) -> torch.Tensor:
+        """
+        Project coordinates onto ideal bond length constraints.
+
+        Applies geometry projection to each residue using its corresponding
+        ResidueFlowModel. This fixes local geometry errors while preserving
+        overall conformation.
+
+        Args:
+            coords: (N, 3) flat coordinates for entire polymer.
+            sequence: Int array of residue types.
+            n_steps: Number of Newton steps per residue (default 2).
+            implicit: If True, use implicit differentiation for clean gradients
+                that stay on the constraint manifold. Recommended for optimization.
+
+        Returns:
+            Projected coordinates with same shape as input.
+
+        Example:
+            >>> coords = model.decode(latents, sequence)
+            >>> coords_fixed = model.project_geometry(coords, sequence)
+        """
+        sequence = _to_numpy_int64(sequence)
+
+        if len(sequence) == 0:
+            return coords
+
+        # Get atom counts per residue to split coordinates
+        atom_counts = self._get_atom_counts(sequence)
+        total_atoms = sum(atom_counts)
+
+        if coords.shape[0] != total_atoms:
+            raise ValueError(
+                f"Coordinate count {coords.shape[0]} doesn't match "
+                f"sequence atom count {total_atoms}"
+            )
+
+        # Split into per-residue coordinates
+        coords_split = torch.split(coords, atom_counts, dim=0)
+
+        # Project each residue
+        projected = []
+        for i, res_type in enumerate(sequence):
+            model = self._get_model(int(res_type))
+            coords_i = coords_split[i]  # (n_atoms_i, 3)
+
+            # Project geometry for this residue
+            coords_proj = model.project_geometry(
+                coords_i.unsqueeze(0),  # (1, n_atoms, 3)
+                n_steps=n_steps,
+                implicit=implicit,
+            ).squeeze(0)  # Back to (n_atoms, 3)
+
+            projected.append(coords_proj)
+
+        return torch.cat(projected, dim=0)
 
     def __repr__(self) -> str:
         from ciffy.biochemistry import Residue

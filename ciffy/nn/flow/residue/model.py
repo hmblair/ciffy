@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
+from ciffy.nn.hub import HubMixin
+
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
 
@@ -62,6 +64,76 @@ class ActNorm(nn.Module):
 
     def inverse(self, y: torch.Tensor) -> torch.Tensor:
         return y * torch.exp(-self.log_scale) - self.bias
+
+
+class OrthogonalLinear(nn.Module):
+    """
+    Learnable orthogonal transformation using Cayley parametrization.
+
+    Maps a skew-symmetric matrix A to an orthogonal matrix Q via:
+        Q = (I - A)(I + A)^{-1}
+
+    This guarantees Q is orthogonal for any A, with det(Q) = +1 (proper rotation).
+    Since orthogonal matrices preserve volume, log_det = 0.
+
+    Orthogonal layers between spline coupling layers allow the flow to learn
+    optimal coordinate alignments, improving expressivity without adding
+    Jacobian complexity.
+
+    Args:
+        dim: Dimensionality of the input/output.
+
+    Example:
+        >>> layer = OrthogonalLinear(12)
+        >>> x = torch.randn(100, 12)
+        >>> y, log_det = layer(x)  # log_det is always 0
+        >>> x_recon = layer.inverse(y)  # exact inverse
+    """
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.dim = dim
+        # Skew-symmetric matrix has n(n-1)/2 free parameters
+        n_params = dim * (dim - 1) // 2
+        self.A_upper = nn.Parameter(torch.zeros(n_params))
+
+    def _get_skew_symmetric(self) -> torch.Tensor:
+        """Build skew-symmetric matrix from upper triangular parameters."""
+        A = torch.zeros(self.dim, self.dim, device=self.A_upper.device, dtype=self.A_upper.dtype)
+        idx = torch.triu_indices(self.dim, self.dim, offset=1, device=self.A_upper.device)
+        A[idx[0], idx[1]] = self.A_upper
+        A = A - A.T  # Make skew-symmetric: A = -A^T
+        return A
+
+    def _get_orthogonal(self) -> torch.Tensor:
+        """Compute orthogonal matrix via Cayley transform."""
+        A = self._get_skew_symmetric()
+        I = torch.eye(self.dim, device=A.device, dtype=A.dtype)
+        # Q = (I - A)(I + A)^{-1}
+        Q = torch.linalg.solve(I + A, I - A)
+        return Q
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply orthogonal transformation.
+
+        Args:
+            x: Input tensor (N, dim).
+
+        Returns:
+            y: Transformed tensor (N, dim).
+            log_det: Log determinant, always zeros (N,).
+        """
+        Q = self._get_orthogonal()
+        y = x @ Q.T
+        # Orthogonal matrices have |det| = 1, so log|det| = 0
+        log_det = torch.zeros(x.shape[0], device=x.device, dtype=x.dtype)
+        return y, log_det
+
+    def inverse(self, y: torch.Tensor) -> torch.Tensor:
+        """Apply inverse (transpose) of orthogonal matrix."""
+        Q = self._get_orthogonal()
+        return y @ Q  # Q^{-1} = Q^T for orthogonal Q
 
 
 class CouplingNetwork(nn.Module):
@@ -318,6 +390,10 @@ class PCAFlow(nn.Module):
                bounding, preserving exact invertibility.
         n_bins: Number of spline bins (default 8).
         spline_bound: Spline domain bound (default 3.0).
+        use_rotation: If True, add learnable orthogonal rotations after each
+            spline layer. This allows the flow to learn optimal coordinate
+            alignments, improving expressivity. Adds n*(n-1)/2 parameters
+            per rotation (e.g., 66 for 12D). Default False.
     """
 
     def __init__(
@@ -329,17 +405,19 @@ class PCAFlow(nn.Module):
         bound: float | None = None,
         n_bins: int = 8,
         spline_bound: float = 3.0,
+        use_rotation: bool = False,
     ):
         super().__init__()
         self.k = V.shape[0]  # Latent dimension
         self.d = V.shape[1]  # Coordinate dimension (n_atoms * 3 + 6)
         self.bound = bound
+        self.use_rotation = use_rotation
 
         # PCA parameters (fixed, not learned)
         self.register_buffer("V", V)
         self.register_buffer("mean", mean)
 
-        # Flow layers: alternating ActNorm + SplineCoupling
+        # Flow layers: alternating ActNorm + SplineCoupling (+ optional rotation)
         self.layers = nn.ModuleList()
         for i in range(n_layers):
             self.layers.append(ActNorm(self.k))
@@ -347,6 +425,8 @@ class PCAFlow(nn.Module):
                 self.k, hidden_dim, even_mask=(i % 2 == 0),
                 n_bins=n_bins, bound=spline_bound
             ))
+            if use_rotation:
+                self.layers.append(OrthogonalLinear(self.k))
 
     def coords_to_pca(self, x: torch.Tensor) -> torch.Tensor:
         """Project coordinates to PCA space."""
@@ -480,9 +560,11 @@ class ResidueFlowConfig:
     hidden_dim: int = 64
     bound: float | None = None
     min_coverage: float = 0.9
+    use_rotation: bool = True
+    noise_std: float = 0.05
 
 
-class ResidueFlowModel(nn.Module):
+class ResidueFlowModel(nn.Module, HubMixin):
     """
     Residue flow model that captures conformation and backbone link geometry.
 
@@ -519,6 +601,8 @@ class ResidueFlowModel(nn.Module):
         >>> # Parameters from residue_flow are automatically included
         >>> optimizer = Adam(molecular_model.parameters())
     """
+
+    _hub_model_type = "residue-flow"
 
     def __init__(
         self,
@@ -587,7 +671,7 @@ class ResidueFlowModel(nn.Module):
             verbose: Print progress.
 
         Returns:
-            Trained ResidueFlowModel.
+            Tuple of (model, info) where info contains training metrics.
         """
         from .data import extract_residues_with_links
         from .train import train_pca_flow
@@ -625,14 +709,21 @@ class ResidueFlowModel(nn.Module):
             n_epochs=n_epochs,
             device=device,
             verbose=verbose,
+            use_rotation=config.use_rotation,
+            noise_std=config.noise_std,
         )
 
-        return cls(
+        model = cls(
             flow=flow,
             residue=residue,
             atom_indices=atoms,
             n_atoms=n_atoms,
         )
+
+        # Add sample count to info
+        info["n_samples"] = n_instances
+
+        return model, info
 
     def encode(
         self,
@@ -709,15 +800,23 @@ class ResidueFlowModel(nn.Module):
         tensors = {k: v.cpu().contiguous() for k, v in self.flow.state_dict().items()}
         save_file(tensors, path / "tensors.safetensors")
 
+        # Calculate n_layers accounting for rotation layers
+        # With rotation: 3 modules per layer (ActNorm + SplineCoupling + Orthogonal)
+        # Without rotation: 2 modules per layer (ActNorm + SplineCoupling)
+        use_rotation = self.flow.use_rotation
+        modules_per_layer = 3 if use_rotation else 2
+        n_layers = len(self.flow.layers) // modules_per_layer
+
         import ciffy
         config = {
             "version": ciffy.__version__,
             "residue_name": self.residue.name,
             "atom_indices": [int(x) for x in self._atom_indices],
             "n_atoms": self.n_atoms,
-            "n_layers": len(self.flow.layers) // 2,
+            "n_layers": n_layers,
             "hidden_dim": self.flow.layers[1].net.net[0].out_features,
             "bound": float(self.flow.bound) if self.flow.bound is not None else None,
+            "use_rotation": use_rotation,
         }
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=2)
@@ -758,6 +857,7 @@ class ResidueFlowModel(nn.Module):
             n_layers=config["n_layers"],
             hidden_dim=config["hidden_dim"],
             bound=config["bound"],
+            use_rotation=config.get("use_rotation", False),
         ).to(device)
         flow.load_state_dict(tensors)
 
@@ -818,7 +918,7 @@ class ResidueFlowModel(nn.Module):
             self._geometry_projector_device = device
         return self._geometry_projector
 
-    def _build_geometry_projector(self, device: torch.device) -> callable:
+    def _build_geometry_projector(self, device: torch.device) -> dict:
         """
         Build a Newton projector for bond length constraints.
 
@@ -826,9 +926,11 @@ class ResidueFlowModel(nn.Module):
         target bond lengths. Only includes bonds where both atoms are present
         in the model's atom subset.
 
-        Returns a function that projects coordinates onto ideal bond lengths
-        using Gauss-Newton optimization. This preserves conformational diversity
-        while fixing local geometry errors.
+        Returns a dict with:
+            - newton_step: Function that projects coordinates using Gauss-Newton
+            - compute_jacobian: Function that computes constraint Jacobian
+            - n_atoms: Number of atoms in the model's subset
+            - n_constraints: Number of bond constraints
         """
         residue = self.residue
         atom_indices = self._atom_indices
@@ -871,10 +973,19 @@ class ResidueFlowModel(nn.Module):
         n_bonds = len(bond_targets)
 
         if n_bonds == 0:
-            # No bonds to project - return identity function
+            # No bonds to project - return identity functions
             def identity(coords: torch.Tensor) -> torch.Tensor:
                 return coords
-            return identity
+
+            def empty_jacobian(coords: torch.Tensor) -> torch.Tensor:
+                return torch.zeros(0, n_atoms * 3, device=coords.device)
+
+            return {
+                "newton_step": identity,
+                "compute_jacobian": empty_jacobian,
+                "n_atoms": n_atoms,
+                "n_constraints": 0,
+            }
 
         # Pre-move constraint tensors to target device (cached for reuse)
         bond_pairs_d = torch.tensor(bond_pairs, device=device, dtype=torch.long)
@@ -884,25 +995,35 @@ class ResidueFlowModel(nn.Module):
         bond_idx = torch.arange(n_bonds, device=device)
         dims = torch.arange(3, device=device)
 
-        def newton_step(coords: torch.Tensor) -> torch.Tensor:
-            """Single vectorized Newton step. coords: (n_atoms, 3)"""
-            residuals = torch.zeros(n_bonds, device=device)
-            J = torch.zeros(n_bonds, n_atoms * 3, device=device)
+        def compute_jacobian(coords: torch.Tensor) -> torch.Tensor:
+            """Compute constraint Jacobian at coords. Returns (n_bonds, n_atoms*3)."""
+            J = torch.zeros(n_bonds, n_atoms * 3, device=coords.device)
 
-            # Vectorized bond length constraints
-            a1_idx = bond_pairs_d[:, 0]  # (n_bonds,)
-            a2_idx = bond_pairs_d[:, 1]  # (n_bonds,)
-            diff = coords[a2_idx] - coords[a1_idx]  # (n_bonds, 3)
-            lengths = torch.norm(diff, dim=1)  # (n_bonds,)
-            residuals = lengths - bond_targets_d
-            units = diff / (lengths.unsqueeze(1) + 1e-8)  # (n_bonds, 3)
+            a1_idx = bond_pairs_d[:, 0]
+            a2_idx = bond_pairs_d[:, 1]
+            diff = coords[a2_idx] - coords[a1_idx]
+            lengths = torch.norm(diff, dim=1)
+            units = diff / (lengths.unsqueeze(1) + 1e-8)
 
-            # Build Jacobian for bonds (fully vectorized)
             row_idx = bond_idx.unsqueeze(1).expand(-1, 3).reshape(-1)
             col_a1 = (a1_idx.unsqueeze(1) * 3 + dims).reshape(-1)
             col_a2 = (a2_idx.unsqueeze(1) * 3 + dims).reshape(-1)
             J[row_idx, col_a1] = -units.reshape(-1)
             J[row_idx, col_a2] = units.reshape(-1)
+
+            return J
+
+        def newton_step(coords: torch.Tensor) -> torch.Tensor:
+            """Single vectorized Newton step. coords: (n_atoms, 3)"""
+            # Compute residuals
+            a1_idx = bond_pairs_d[:, 0]
+            a2_idx = bond_pairs_d[:, 1]
+            diff = coords[a2_idx] - coords[a1_idx]
+            lengths = torch.norm(diff, dim=1)
+            residuals = lengths - bond_targets_d
+
+            # Get Jacobian
+            J = compute_jacobian(coords)
 
             # Gauss-Newton: dx = -J^T @ (J @ J^T)^{-1} @ residuals
             JJT = J @ J.T
@@ -911,12 +1032,18 @@ class ResidueFlowModel(nn.Module):
 
             return coords + dx.reshape(n_atoms, 3)
 
-        return newton_step
+        return {
+            "newton_step": newton_step,
+            "compute_jacobian": compute_jacobian,
+            "n_atoms": n_atoms,
+            "n_constraints": n_bonds,
+        }
 
     def project_geometry(
         self,
         coords: "torch.Tensor",
         n_steps: int = 2,
+        implicit: bool = True,
     ) -> "torch.Tensor":
         """
         Project coordinates onto ideal bond length and angle constraints.
@@ -930,29 +1057,142 @@ class ResidueFlowModel(nn.Module):
         Args:
             coords: (N, n_atoms, 3) or (n_atoms, 3) coordinates.
             n_steps: Number of Newton steps (default 2).
+            implicit: If True, use implicit differentiation for the backward
+                pass. This makes gradients independent of iteration count -
+                at convergence, the gradient projects onto the constraint
+                manifold's tangent space. Useful for latent space optimization.
 
         Returns:
             Projected coordinates with same shape as input.
         """
-        newton_step = self._get_geometry_projector(coords.device)
+        projector = self._get_geometry_projector(coords.device)
+        newton_step = projector["newton_step"]
+        compute_jacobian = projector["compute_jacobian"]
 
         single = coords.dim() == 2
         if single:
             coords = coords.unsqueeze(0)
 
-        projected = []
-        for i in range(coords.shape[0]):
-            c = coords[i]
-            for _ in range(n_steps):
-                c = newton_step(c)
-            projected.append(c)
+        if implicit:
+            # Use implicit differentiation
+            projected = _ImplicitGeometryProjection.apply(
+                coords, newton_step, compute_jacobian, n_steps
+            )
+        else:
+            # Explicit backprop through Newton steps
+            projected = []
+            for i in range(coords.shape[0]):
+                c = coords[i]
+                for _ in range(n_steps):
+                    c = newton_step(c)
+                projected.append(c)
+            projected = torch.stack(projected)
 
-        result = torch.stack(projected)
-        return result[0] if single else result
+        return projected[0] if single else projected
 
-    def __repr__(self) -> str:
-        return (
-            f"ResidueFlowModel({self.residue.name}, "
-            f"atoms={self.n_atoms}, "
-            f"latent_dim={self.flow.k})"
-        )
+
+class _ImplicitGeometryProjection(torch.autograd.Function):
+    """
+    Implicit differentiation for geometry projection.
+
+    At convergence of the Newton solver, the gradient is computed by projecting
+    the incoming gradient onto the tangent space of the constraint manifold:
+
+        grad_input = P_tangent @ grad_output
+
+    where P_tangent = I - J^T @ (J @ J^T)^{-1} @ J is the projection onto the
+    null space of the constraint Jacobian J.
+
+    This makes the gradient independent of the number of Newton steps taken,
+    which is desirable for latent space optimization where we want gradients
+    to reflect the geometry of the converged solution rather than the
+    optimization path.
+    """
+
+    @staticmethod
+    def forward(ctx, coords, newton_step, compute_jacobian, n_steps):
+        """
+        Forward: run Newton projection to convergence.
+
+        Args:
+            coords: (N, n_atoms, 3) coordinates
+            newton_step: Function that applies one Newton step
+            compute_jacobian: Function that computes constraint Jacobian
+            n_steps: Number of Newton iterations
+        """
+        # Run Newton steps without tracking gradients through iterations
+        with torch.no_grad():
+            projected = []
+            for i in range(coords.shape[0]):
+                c = coords[i].clone()
+                for _ in range(n_steps):
+                    c = newton_step(c)
+                projected.append(c)
+            result = torch.stack(projected)
+
+        # Save for backward - need converged coordinates and jacobian function
+        ctx.compute_jacobian = compute_jacobian
+        ctx.save_for_backward(result)
+
+        # Return with gradient tracking enabled
+        return result.requires_grad_(coords.requires_grad)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """
+        Backward: project gradient onto constraint manifold tangent space.
+
+        At the converged point x*, the constraints are satisfied: c(x*) = 0.
+        The tangent space is the null space of the Jacobian J = dc/dx.
+
+        The projection onto the tangent space is:
+            P_tangent = I - J^T @ (J @ J^T)^{-1} @ J
+
+        So: grad_input = grad_output - J^T @ (J @ J^T)^{-1} @ (J @ grad_output)
+        """
+        (converged_coords,) = ctx.saved_tensors
+        compute_jacobian = ctx.compute_jacobian
+
+        # Process each sample in the batch
+        grad_input = []
+        for i in range(converged_coords.shape[0]):
+            coords_i = converged_coords[i]  # (n_atoms, 3)
+            grad_i = grad_output[i]  # (n_atoms, 3)
+
+            # Compute Jacobian at converged point
+            J = compute_jacobian(coords_i)  # (n_constraints, n_atoms*3)
+
+            if J.shape[0] == 0:
+                # No constraints - gradient passes through unchanged
+                grad_input.append(grad_i)
+                continue
+
+            # Flatten gradient for matrix operations
+            g_flat = grad_i.reshape(-1)  # (n_atoms*3,)
+
+            # Project onto tangent space:
+            # g_proj = g - J^T @ (J @ J^T)^{-1} @ (J @ g)
+            Jg = J @ g_flat  # (n_constraints,)
+            JJT = J @ J.T  # (n_constraints, n_constraints)
+            v = torch.linalg.solve(JJT, Jg)  # (n_constraints,)
+            correction = J.T @ v  # (n_atoms*3,)
+
+            g_proj = g_flat - correction
+            grad_input.append(g_proj.reshape_as(grad_i))
+
+        grad_input = torch.stack(grad_input)
+
+        # Return gradients for (coords, newton_step, compute_jacobian, n_steps)
+        return grad_input, None, None, None
+
+
+# Add __repr__ back to ResidueFlowModel (was displaced by class insertion)
+def _residue_flow_model_repr(self) -> str:
+    return (
+        f"ResidueFlowModel({self.residue.name}, "
+        f"atoms={self.n_atoms}, "
+        f"latent_dim={self.flow.k})"
+    )
+
+
+ResidueFlowModel.__repr__ = _residue_flow_model_repr

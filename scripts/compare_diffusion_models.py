@@ -88,7 +88,7 @@ class ComparisonConfig:
     batch_size: int = 16  # Larger batch with smaller model
 
     # Flow model settings (for latent diffusion)
-    flow_epochs: int = 50  # Epochs to train flow model
+    flow_epochs: int = 200  # Epochs to train flow model (needs 150-200 to converge)
     flow_latent_dim: int = 12  # Latent dimensions per residue
     flow_n_layers: int = 4  # Flow layers
 
@@ -348,6 +348,7 @@ def train_flow_model(
     model_config = ResidueFlowModelConfig(
         latent_dim=config.flow_latent_dim,
         n_layers=config.flow_n_layers,
+        bound=3.0,  # Clamp latent values to [-3, 3] during decode to prevent extremes
     )
     data_config = ResidueFlowDataConfig(
         data_dir=str(train_files[0].parent) if train_files else "",
@@ -355,6 +356,7 @@ def train_flow_model(
     training_config = FlowTrainingConfig(
         epochs=config.flow_epochs,
         device=config.device,
+        precision=config.precision,
     )
 
     flow_config = ResidueFlowTrainingConfig(

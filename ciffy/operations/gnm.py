@@ -5,11 +5,12 @@ nearby atoms/residues. This module provides the GNM class which computes and
 caches GNM properties efficiently.
 
 Example:
-    >>> import numpy as np
-    >>> from ciffy.operations import GNM
+    >>> import ciffy
+    >>> from ciffy import Scale
+    >>> from ciffy.operations import contact_map, GNM
     >>>
-    >>> # Create adjacency matrix (e.g., from contact map with 7Å cutoff)
-    >>> adj = np.array([[0., 1., 1.], [1., 0., 1.], [1., 1., 0.]])
+    >>> polymer = ciffy.load("structure.cif").poly()
+    >>> adj = contact_map(polymer, cutoff=7.0)  # 7Å cutoff at residue level
     >>> gnm = GNM(adj)
     >>>
     >>> gnm.variances           # Position variances (B-factor prediction)
@@ -19,9 +20,74 @@ Example:
 """
 from __future__ import annotations
 
-from ..backend import Array, diag, pinv, diagonal, eigh, sqrt, outer
+from typing import TYPE_CHECKING
 
-__all__ = ["GNM"]
+from ..backend import Array, diag, pinv, diagonal, eigh, sqrt, outer
+from ..biochemistry import Scale
+
+if TYPE_CHECKING:
+    from ..polymer import Polymer
+
+__all__ = ["GNM", "contact_map"]
+
+
+def contact_map(
+    polymer: "Polymer",
+    cutoff: float = 7.0,
+    scale: Scale = Scale.RESIDUE,
+) -> Array:
+    """Build a contact/adjacency matrix from a Polymer.
+
+    Computes pairwise distances at the specified scale and returns a binary
+    adjacency matrix where entry (i, j) is 1 if the distance between units
+    i and j is less than the cutoff.
+
+    This is the standard way to create an adjacency matrix for GNM analysis.
+
+    Args:
+        polymer: Polymer structure to analyze.
+        cutoff: Distance cutoff in Angstroms. Pairs closer than this are
+            considered in contact. Default 7.0Å is typical for C-alpha GNM.
+        scale: Scale at which to compute contacts. Default is RESIDUE,
+            which uses residue centroids. Use Scale.ATOM for all-atom contacts.
+
+    Returns:
+        Binary adjacency matrix of shape (N, N) where N is the number of
+        units at the specified scale. Uses the same backend (numpy/torch)
+        as the input polymer.
+
+    Example:
+        >>> import ciffy
+        >>> from ciffy import Scale
+        >>> from ciffy.operations import contact_map, GNM
+        >>>
+        >>> polymer = ciffy.load("structure.cif").poly()
+        >>>
+        >>> # Residue-level contact map (default, for coarse-grained GNM)
+        >>> adj = contact_map(polymer, cutoff=7.0)
+        >>> gnm = GNM(adj)
+        >>>
+        >>> # Atom-level contact map (for all-atom analysis)
+        >>> adj_atom = contact_map(polymer, cutoff=4.0, scale=Scale.ATOM)
+    """
+    # Compute pairwise distances at the specified scale
+    dists = polymer.pairwise_distances(scale)
+
+    # Create binary adjacency: 1 if distance < cutoff, 0 otherwise
+    mask = dists < cutoff
+
+    # Convert boolean to float, handling both numpy and torch
+    if hasattr(mask, 'astype'):
+        # NumPy
+        import numpy as np
+        adj = mask.astype(dists.dtype)
+        np.fill_diagonal(adj, 0)
+    else:
+        # PyTorch
+        adj = mask.to(dists.dtype)
+        adj.fill_diagonal_(0)
+
+    return adj
 
 
 def graph_laplacian(adj: Array) -> Array:

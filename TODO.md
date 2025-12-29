@@ -198,28 +198,6 @@ def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
 
 ---
 
-### Add `contact_map(polymer, cutoff)` for GNM
-
-**Goal**: Build adjacency matrix from Polymer coordinates for use with GNM.
-
-**Context**: GNM class exists and works with adjacency matrices, but there's no helper to create an adjacency matrix from a Polymer using a distance cutoff.
-
-**Proposed API**:
-```python
-from ciffy.operations import contact_map, GNM
-
-adj = contact_map(polymer, cutoff=7.0)  # Returns (N, N) binary adjacency
-gnm = GNM(adj)
-```
-
-**Files affected**:
-- `ciffy/operations/gnm.py` or new `ciffy/operations/contact.py`
-
-**Effort**: 1-2 hours
-**Impact**: Complete GNM workflow from Polymer to normal modes
-
----
-
 ## LOW Priority
 
 ### Extract Frame Computation to Geometry Helper

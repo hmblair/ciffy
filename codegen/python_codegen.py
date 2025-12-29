@@ -445,13 +445,21 @@ def generate_python_atoms(
             lines.append('')
 
     # Reverse lookup
+    # Note: With unified backbone atoms, multiple (res, atom) pairs map to the same idx.
+    # We deduplicate by building a dict first - all backbone atoms with the same idx
+    # have the same name anyway.
     lines.append(f"# {'=' * 77}")
     lines.append("# REVERSE LOOKUP")
     lines.append(f"# {'=' * 77}")
     lines.append('')
+    lines.append("# Maps atom index -> atom name (backbone atoms are shared across residues)")
+    atom_names_dedup: dict[int, str] = {}
+    for (res, atom), idx in atom_index.items():
+        if idx not in atom_names_dedup:
+            atom_names_dedup[idx] = atom
     lines.append("ATOM_NAMES: dict[int, str] = {")
-    for (res, atom), idx in sorted(atom_index.items(), key=lambda x: x[1]):
-        lines.append(f'    {idx}: "{atom}",')
+    for idx in sorted(atom_names_dedup.keys()):
+        lines.append(f'    {idx}: "{atom_names_dedup[idx]}",')
     lines.append("}")
     lines.append('')
 

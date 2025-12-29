@@ -494,8 +494,6 @@ class PolymerFlowModel(nn.Module, HubMixin):
         # Collect decoded residues
         residue_coords = []
         transforms = []
-        residues = []
-        atom_subsets = []
 
         for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
@@ -507,11 +505,9 @@ class PolymerFlowModel(nn.Module, HubMixin):
             # transform_i is (1, 6), squeeze to (6,)
             residue_coords.append(coords_i.squeeze(0))
             transforms.append(transform_i.squeeze(0))
-            residues.append(model.residue)
-            atom_subsets.append(tuple(model._atom_indices))
 
         # Assemble positioned coordinates
-        return assemble_chain(residue_coords, transforms, residues, atom_subsets)
+        return assemble_chain(residue_coords, transforms)
 
     def _sample_coords(
         self,

@@ -13,6 +13,10 @@ Example:
     >>> # Or search and download any polymer type
     >>> pdb_ids = search_structures(polymer_types=["RNA", "DNA"], max_resolution=2.5)
     >>> result = download_structures(pdb_ids[:50], "data/nucleic_acids/")
+    >>>
+    >>> # Use preset datasets (CASP15, CASP16)
+    >>> from ciffy.datasets import CASP15, CASP16
+    >>> result = download_structures(CASP15.pdb_ids, "data/casp15/")
 """
 
 from .pdb import (
@@ -26,8 +30,17 @@ from .pdb import (
     download_rna_dataset,
     download_cli,
 )
+from .presets import (
+    DatasetPreset,
+    PRESETS,
+    CASP15,
+    CASP16,
+    get_preset,
+    list_presets,
+)
 
 __all__ = [
+    # Download functions
     "DownloadResult",
     "EXPERIMENTAL_METHODS",
     "POLYMER_TYPES",
@@ -37,4 +50,11 @@ __all__ = [
     "download_structures",
     "download_rna_dataset",
     "download_cli",
+    # Presets
+    "DatasetPreset",
+    "PRESETS",
+    "CASP15",
+    "CASP16",
+    "get_preset",
+    "list_presets",
 ]

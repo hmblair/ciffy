@@ -610,6 +610,7 @@ def download_rna_dataset(
 
 def download_cli(
     pdb_ids: list[str] | None = None,
+    preset: str | None = None,
     polymer_types: list[str] | None = None,
     output_dir: Path | str = ".",
     max_count: int | None = None,
@@ -624,6 +625,7 @@ def download_cli(
     max_workers: int = 4,
     search_only: bool = False,
     list_ids: bool = False,
+    list_presets: bool = False,
     quiet: bool = False,
 ) -> DownloadResult | None:
     """
@@ -633,6 +635,7 @@ def download_cli(
 
     Args:
         pdb_ids: Specific PDB IDs to download. If None, searches for structures.
+        preset: Name of a premade dataset (e.g., "casp15", "casp16-rna").
         polymer_types: Polymer type(s) to search for (e.g., ["rna", "dna"]).
             Valid types: rna, dna, protein, hybrid, other.
             If None, defaults to ["rna"] for backwards compatibility.
@@ -649,11 +652,31 @@ def download_cli(
         max_workers: Maximum concurrent downloads.
         search_only: Only search, don't download.
         list_ids: Print PDB IDs (with search_only).
+        list_presets: List available preset datasets.
         quiet: Suppress progress output.
 
     Returns:
         DownloadResult if download occurred, None if search_only.
     """
+    from .presets import PRESETS, get_preset
+
+    # List presets mode
+    if list_presets:
+        print("Available dataset presets:")
+        for name, ds in PRESETS.items():
+            print(f"  {name:<15} {ds.description} ({len(ds.pdb_ids)} structures)")
+        return None
+
+    # If preset specified, use those PDB IDs
+    if preset is not None:
+        ds = get_preset(preset)
+        pdb_ids = ds.pdb_ids
+        print(f"Using preset: {ds.name}")
+        print(f"  {ds.description}")
+        print(f"  {len(pdb_ids)} structures")
+        print(f"  Source: {ds.url}")
+        print()
+
     # If specific PDB IDs provided, skip search
     if pdb_ids is not None:
         pdb_ids = [pid.upper() for pid in pdb_ids]

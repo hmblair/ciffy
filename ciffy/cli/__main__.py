@@ -14,7 +14,8 @@ Usage:
     ciffy experiment configs/*.yaml  # Run multiple training experiments
     ciffy predict model.safetensors --sequence ACGU -o out.cif  # Generate structure
     ciffy predict --config inference.yaml  # Batch prediction from config
-    ciffy download --max_count 100   # Download RNA structures from RCSB PDB
+    ciffy download --max_count 100   # Download structures from RCSB PDB
+    ciffy download --preset casp15   # Download CASP15 benchmark targets
 """
 
 import argparse
@@ -327,6 +328,7 @@ def _download_command(args):
 
     download_cli(
         pdb_ids=args.id,
+        preset=args.preset,
         polymer_types=args.type,
         output_dir=args.output_dir,
         max_count=args.max_count,
@@ -341,6 +343,7 @@ def _download_command(args):
         max_workers=args.max_workers,
         search_only=args.search_only,
         list_ids=args.list_ids,
+        list_presets=args.list_presets,
         quiet=args.quiet,
     )
 
@@ -1076,6 +1079,18 @@ def main():
             "Supports filtering by polymer type, resolution, length, and method."
         ),
     )
+    download_parser.add_argument(
+        "--preset",
+        type=str,
+        default=None,
+        help="Download a preset dataset (e.g., casp15, casp16). Use --list-presets to see all.",
+    )
+    download_parser.add_argument(
+        "--list-presets",
+        action="store_true",
+        help="List available preset datasets and exit",
+    )
+
     download_parser.add_argument(
         "--id",
         type=str,

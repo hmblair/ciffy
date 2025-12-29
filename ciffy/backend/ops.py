@@ -762,6 +762,61 @@ def where(condition: Array, x: Array, y: Array) -> Array:
     return np.where(condition, x, y)
 
 
+def unsqueeze(arr: Array, axis: int) -> Array:
+    """
+    Add a dimension of size 1 at the specified axis.
+
+    Args:
+        arr: Input array.
+        axis: Position where the new axis should be inserted.
+
+    Returns:
+        Array with an additional dimension.
+    """
+    if is_torch(arr):
+        return arr.unsqueeze(axis)
+    return np.expand_dims(arr, axis=axis)
+
+
+def expand(arr: Array, shape: tuple) -> Array:
+    """
+    Broadcast array to a larger shape.
+
+    Uses -1 in shape to keep existing dimension size.
+
+    Args:
+        arr: Input array.
+        shape: Target shape with -1 for unchanged dimensions.
+
+    Returns:
+        Broadcasted array (may be a view).
+    """
+    if is_torch(arr):
+        return arr.expand(*shape)
+    # NumPy: convert -1 to actual sizes, then broadcast
+    actual_shape = tuple(
+        arr.shape[i] if s == -1 else s
+        for i, s in enumerate(shape)
+    )
+    return np.broadcast_to(arr, actual_shape)
+
+
+def transpose(arr: Array, axes: tuple) -> Array:
+    """
+    Permute array dimensions.
+
+    Args:
+        arr: Input array.
+        axes: Tuple specifying the new order of dimensions.
+
+    Returns:
+        Array with permuted dimensions.
+    """
+    if is_torch(arr):
+        return arr.permute(*axes)
+    return np.transpose(arr, axes)
+
+
 def outer(a: Array, b: Array) -> Array:
     """
     Outer product of two 1D arrays.

@@ -384,6 +384,7 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
 
 from ..backend import (
     norm, sin, cos, eye, zeros_nd, zeros_like, ones_like, where, bmm, cat, stack,
+    unsqueeze, expand, transpose,
 )
 
 
@@ -416,21 +417,9 @@ def _rodrigues(axis_angles: Array) -> Array:
     K[:, 2, 1] = axes[:, 0]
 
     # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
-    I = eye(3, like=axis_angles)
-    if is_torch(axis_angles):
-        I = I.unsqueeze(0).expand(n, -1, -1)
-    else:
-        I = I[None, :, :].repeat(n, axis=0)
-
-    sin_a = sin(angles)
-    cos_a = cos(angles)
-
-    if is_torch(axis_angles):
-        sin_a = sin_a.unsqueeze(-1)
-        cos_a = cos_a.unsqueeze(-1)
-    else:
-        sin_a = sin_a[:, :, None]
-        cos_a = cos_a[:, :, None]
+    I = expand(unsqueeze(eye(3, like=axis_angles), 0), (n, -1, -1))
+    sin_a = unsqueeze(sin(angles), -1)
+    cos_a = unsqueeze(cos(angles), -1)
 
     return I + sin_a * K + (1 - cos_a) * (K @ K)
 
@@ -500,7 +489,6 @@ def _apply_cumulative_transforms(
 
     n_residues = len(transforms)
     n_atoms = coords.shape[1]
-    use_torch = is_torch(coords)
 
     # Build SE(3) matrices: rotation from Rodrigues, translation direct
     Rs = _rodrigues(transforms[:, :3])
@@ -512,8 +500,9 @@ def _apply_cumulative_transforms(
     T[:, :3, 3] = transforms[:, 3:]
     T[:, 3, 3] = 1.0
 
-    # Cumulative product of transforms
-    if compile and use_torch and coords.is_cuda:
+    # Cumulative product of transforms (use compiled version on CUDA)
+    use_compiled = compile and is_torch(coords) and coords.is_cuda
+    if use_compiled:
         _ensure_compiled()
         T_cumul = _cumulative_matmul_compiled(T)
     else:
@@ -525,10 +514,9 @@ def _apply_cumulative_transforms(
     coords_h = cat([coords, ones], axis=2)
 
     # Apply batched transform: (n, 4, 4) @ (n, 4, n_atoms) -> (n, 4, n_atoms)
-    if use_torch:
-        result_h = bmm(T_cumul, coords_h.transpose(1, 2)).transpose(1, 2)
-    else:
-        result_h = bmm(T_cumul, coords_h.transpose(0, 2, 1)).transpose(0, 2, 1)
+    coords_h_t = transpose(coords_h, (0, 2, 1))  # (n, n_atoms, 4) -> (n, 4, n_atoms)
+    result_h_t = bmm(T_cumul, coords_h_t)        # (n, 4, n_atoms)
+    result_h = transpose(result_h_t, (0, 2, 1))  # (n, n_atoms, 4)
 
     return result_h[:, :, :3]
 

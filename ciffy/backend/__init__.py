@@ -51,6 +51,9 @@ from .ops import (
     clamp,
     where,
     bmm,
+    unsqueeze,
+    expand,
+    transpose,
     # Array operations
     scatter_sum,
     scatter_mean,
@@ -107,6 +110,9 @@ __all__ = [
     "outer",
     "clamp",
     "where",
+    "unsqueeze",
+    "expand",
+    "transpose",
     # Array operations
     "scatter_sum",
     "scatter_mean",

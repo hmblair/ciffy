@@ -172,11 +172,10 @@ def cat(arrays: list, axis: int = 0) -> Array:
         raise ValueError("Cannot concatenate empty list")
 
     _check_backends(*arrays)
-    ops = _get_ops(arrays[0])
-    # Handle axis/dim naming difference
-    if get_backend(arrays[0]) == Backend.TORCH:
-        return ops.cat(arrays, dim=axis)
-    return ops.cat(arrays, axis=axis)
+    if is_torch(arrays[0]):
+        import torch
+        return torch.cat(arrays, dim=axis)
+    return np.concatenate(arrays, axis=axis)
 
 
 def stack(arrays: list, axis: int = 0) -> Array:
@@ -194,11 +193,10 @@ def stack(arrays: list, axis: int = 0) -> Array:
         raise ValueError("Cannot stack empty list")
 
     _check_backends(*arrays)
-    ops = _get_ops(arrays[0])
-    # Handle axis/dim naming difference
-    if get_backend(arrays[0]) == Backend.TORCH:
-        return ops.stack(arrays, dim=axis)
-    return ops.stack(arrays, axis=axis)
+    if is_torch(arrays[0]):
+        import torch
+        return torch.stack(arrays, dim=axis)
+    return np.stack(arrays, axis=axis)
 
 
 def multiply(a: Array, b: Array) -> Array:
@@ -608,6 +606,160 @@ def sqrt(arr: Array) -> Array:
         import torch
         return torch.sqrt(arr)
     return np.sqrt(arr)
+
+
+def sin(arr: Array) -> Array:
+    """
+    Element-wise sine.
+
+    Args:
+        arr: Input array (angles in radians).
+
+    Returns:
+        Sine values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.sin(arr)
+    return np.sin(arr)
+
+
+def cos(arr: Array) -> Array:
+    """
+    Element-wise cosine.
+
+    Args:
+        arr: Input array (angles in radians).
+
+    Returns:
+        Cosine values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.cos(arr)
+    return np.cos(arr)
+
+
+def norm(arr: Array, axis: int | None = None, keepdims: bool = False) -> Array:
+    """
+    Compute vector norm along an axis.
+
+    Args:
+        arr: Input array.
+        axis: Axis along which to compute norm (None for full array).
+        keepdims: If True, keep the reduced dimension.
+
+    Returns:
+        Norm values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        if axis is None:
+            return torch.norm(arr)
+        return torch.norm(arr, dim=axis, keepdim=keepdims)
+    return np.linalg.norm(arr, axis=axis, keepdims=keepdims)
+
+
+def eye(n: int, *, like: Array) -> Array:
+    """
+    Create an identity matrix matching the backend/device of 'like'.
+
+    Args:
+        n: Size of the identity matrix (n x n).
+        like: Template array for backend and device.
+
+    Returns:
+        Identity matrix in the same backend/dtype/device as 'like'.
+    """
+    if is_torch(like):
+        import torch
+        return torch.eye(n, device=like.device, dtype=like.dtype)
+    return np.eye(n, dtype=like.dtype)
+
+
+def zeros_like(arr: Array) -> Array:
+    """
+    Create a zeros array with same shape/dtype/device as input.
+
+    Args:
+        arr: Template array.
+
+    Returns:
+        Zeros array with same properties as input.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.zeros_like(arr)
+    return np.zeros_like(arr)
+
+
+def zeros_nd(shape: tuple, *, like: Array) -> Array:
+    """
+    Create a zeros array with specified shape, matching dtype/device of 'like'.
+
+    Args:
+        shape: Shape of the output array.
+        like: Template array for dtype and device.
+
+    Returns:
+        Zeros array with specified shape.
+    """
+    if is_torch(like):
+        import torch
+        return torch.zeros(shape, dtype=like.dtype, device=like.device)
+    return np.zeros(shape, dtype=like.dtype)
+
+
+def ones_like(arr: Array) -> Array:
+    """
+    Create a ones array with same shape/dtype/device as input.
+
+    Args:
+        arr: Template array.
+
+    Returns:
+        Ones array with same properties as input.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.ones_like(arr)
+    return np.ones_like(arr)
+
+
+def bmm(a: Array, b: Array) -> Array:
+    """
+    Batched matrix multiplication.
+
+    Args:
+        a: First batch of matrices, shape (batch, n, m).
+        b: Second batch of matrices, shape (batch, m, p).
+
+    Returns:
+        Batched product, shape (batch, n, p).
+    """
+    _check_backends(a, b)
+    if is_torch(a):
+        import torch
+        return torch.bmm(a, b)
+    return np.einsum('bij,bjk->bik', a, b)
+
+
+def where(condition: Array, x: Array, y: Array) -> Array:
+    """
+    Select elements from x or y based on condition.
+
+    Args:
+        condition: Boolean array.
+        x: Values where condition is True.
+        y: Values where condition is False.
+
+    Returns:
+        Array with selected values.
+    """
+    if is_torch(condition):
+        import torch
+        return torch.where(condition, x, y)
+    return np.where(condition, x, y)
 
 
 def outer(a: Array, b: Array) -> Array:

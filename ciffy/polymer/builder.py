@@ -382,46 +382,16 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
 # CHAIN ASSEMBLY - OPTIMIZED WITH CUMULATIVE TRANSFORMS
 # =============================================================================
 
+from ..backend import (
+    norm, sin, cos, eye, zeros_nd, zeros_like, ones_like, where, bmm, cat, stack,
+)
 
-def _rodrigues_torch(axis_angles: "torch.Tensor") -> "torch.Tensor":
+
+def _rodrigues(axis_angles: Array) -> Array:
     """
     Convert axis-angle vectors to rotation matrices using Rodrigues formula.
 
-    Args:
-        axis_angles: (n, 3) axis-angle rotation vectors.
-
-    Returns:
-        (n, 3, 3) rotation matrices.
-    """
-    import torch
-
-    n = len(axis_angles)
-    device = axis_angles.device
-    dtype = axis_angles.dtype
-
-    angles = torch.norm(axis_angles, dim=1, keepdim=True)
-    safe_angles = torch.where(angles < 1e-8, torch.ones_like(angles), angles)
-    axes = axis_angles / safe_angles
-
-    # Skew-symmetric matrices K
-    K = torch.zeros(n, 3, 3, device=device, dtype=dtype)
-    K[:, 0, 1] = -axes[:, 2]
-    K[:, 0, 2] = axes[:, 1]
-    K[:, 1, 0] = axes[:, 2]
-    K[:, 1, 2] = -axes[:, 0]
-    K[:, 2, 0] = -axes[:, 1]
-    K[:, 2, 1] = axes[:, 0]
-
-    eye = torch.eye(3, device=device, dtype=dtype).unsqueeze(0).expand(n, -1, -1)
-    sin_a = torch.sin(angles).unsqueeze(-1)
-    cos_a = torch.cos(angles).unsqueeze(-1)
-
-    return eye + sin_a * K + (1 - cos_a) * (K @ K)
-
-
-def _rodrigues_numpy(axis_angles: np.ndarray) -> np.ndarray:
-    """
-    Convert axis-angle vectors to rotation matrices using Rodrigues formula.
+    Backend-agnostic implementation using ciffy.backend ops.
 
     Args:
         axis_angles: (n, 3) axis-angle rotation vectors.
@@ -431,12 +401,13 @@ def _rodrigues_numpy(axis_angles: np.ndarray) -> np.ndarray:
     """
     n = len(axis_angles)
 
-    angles = np.linalg.norm(axis_angles, axis=1, keepdims=True)
-    safe_angles = np.where(angles < 1e-8, 1.0, angles)
+    # Compute angle magnitudes
+    angles = norm(axis_angles, axis=1, keepdims=True)
+    safe_angles = where(angles < 1e-8, ones_like(angles), angles)
     axes = axis_angles / safe_angles
 
-    # Skew-symmetric matrices K
-    K = np.zeros((n, 3, 3), dtype=axis_angles.dtype)
+    # Build skew-symmetric matrices K
+    K = zeros_nd((n, 3, 3), like=axis_angles)
     K[:, 0, 1] = -axes[:, 2]
     K[:, 0, 2] = axes[:, 1]
     K[:, 1, 0] = axes[:, 2]
@@ -444,11 +415,24 @@ def _rodrigues_numpy(axis_angles: np.ndarray) -> np.ndarray:
     K[:, 2, 0] = -axes[:, 1]
     K[:, 2, 1] = axes[:, 0]
 
-    eye = np.eye(3, dtype=axis_angles.dtype)[None, :, :].repeat(n, axis=0)
-    sin_a = np.sin(angles)[:, :, None]
-    cos_a = np.cos(angles)[:, :, None]
+    # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
+    I = eye(3, like=axis_angles)
+    if is_torch(axis_angles):
+        I = I.unsqueeze(0).expand(n, -1, -1)
+    else:
+        I = I[None, :, :].repeat(n, axis=0)
 
-    return eye + sin_a * K + (1 - cos_a) * (K @ K)
+    sin_a = sin(angles)
+    cos_a = cos(angles)
+
+    if is_torch(axis_angles):
+        sin_a = sin_a.unsqueeze(-1)
+        cos_a = cos_a.unsqueeze(-1)
+    else:
+        sin_a = sin_a[:, :, None]
+        cos_a = cos_a[:, :, None]
+
+    return I + sin_a * K + (1 - cos_a) * (K @ K)
 
 
 def _cumulative_matmul(matrices: Array) -> Array:
@@ -462,12 +446,7 @@ def _cumulative_matmul(matrices: Array) -> Array:
         (n, 4, 4) cumulative products.
     """
     n = len(matrices)
-
-    if is_torch(matrices):
-        import torch
-        result = torch.zeros_like(matrices)
-    else:
-        result = np.zeros_like(matrices)
+    result = zeros_like(matrices)
 
     result[0] = matrices[0]
     for i in range(1, n):
@@ -499,64 +478,58 @@ def _ensure_compiled():
         _cumulative_matmul_compiled = _get_compiled_cumulative_matmul()
 
 
-def _apply_cumulative_transforms_torch(
-    coords: "torch.Tensor",
-    transforms: "torch.Tensor",
+def _apply_cumulative_transforms(
+    coords: Array,
+    transforms: Array,
     compile: bool = False,
-) -> "torch.Tensor":
-    """Apply cumulative SE(3) transforms to batched coordinates (torch path)."""
-    import torch
+) -> Array:
+    """
+    Apply cumulative SE(3) transforms to batched coordinates.
+
+    Backend-agnostic implementation using ciffy.backend ops.
+
+    Args:
+        coords: (n_residues, n_atoms, 3) coordinate arrays.
+        transforms: (n_residues, 6) SE(3) transforms [axis-angle, translation].
+        compile: If True and using CUDA, use torch.compile for speedup.
+
+    Returns:
+        (n_residues, n_atoms, 3) transformed coordinates.
+    """
+    from ..backend import empty
 
     n_residues = len(transforms)
+    n_atoms = coords.shape[1]
+    use_torch = is_torch(coords)
 
-    # Build SE(3) matrices
-    Rs = _rodrigues_torch(transforms[:, :3])
-    T = torch.zeros(n_residues, 4, 4, device=coords.device, dtype=coords.dtype)
+    # Build SE(3) matrices: rotation from Rodrigues, translation direct
+    Rs = _rodrigues(transforms[:, :3])
+
+    # Create (n, 4, 4) homogeneous transform matrices
+    T = empty((n_residues, 4, 4), like=coords)
+    T[:] = 0
     T[:, :3, :3] = Rs
     T[:, :3, 3] = transforms[:, 3:]
     T[:, 3, 3] = 1.0
 
-    # Cumulative product
-    if compile and coords.is_cuda:
+    # Cumulative product of transforms
+    if compile and use_torch and coords.is_cuda:
         _ensure_compiled()
         T_cumul = _cumulative_matmul_compiled(T)
     else:
         T_cumul = _cumulative_matmul(T)
 
-    # Apply to all coordinates: (n, 4, 4) @ (n, n_atoms, 4).T
-    n_atoms = coords.shape[1]
-    ones = torch.ones(n_residues, n_atoms, 1, device=coords.device, dtype=coords.dtype)
-    coords_h = torch.cat([coords, ones], dim=2)
+    # Build homogeneous coordinates (n, n_atoms, 4)
+    ones = empty((n_residues, n_atoms, 1), like=coords)
+    ones[:] = 1.0
+    coords_h = cat([coords, ones], axis=2)
 
-    # Batch transform
-    result_h = torch.bmm(T_cumul, coords_h.transpose(1, 2)).transpose(1, 2)
-    return result_h[:, :, :3]
+    # Apply batched transform: (n, 4, 4) @ (n, 4, n_atoms) -> (n, 4, n_atoms)
+    if use_torch:
+        result_h = bmm(T_cumul, coords_h.transpose(1, 2)).transpose(1, 2)
+    else:
+        result_h = bmm(T_cumul, coords_h.transpose(0, 2, 1)).transpose(0, 2, 1)
 
-
-def _apply_cumulative_transforms_numpy(
-    coords: np.ndarray,
-    transforms: np.ndarray,
-) -> np.ndarray:
-    """Apply cumulative SE(3) transforms to batched coordinates (numpy path)."""
-    n_residues = len(transforms)
-
-    # Build SE(3) matrices
-    Rs = _rodrigues_numpy(transforms[:, :3])
-    T = np.zeros((n_residues, 4, 4), dtype=coords.dtype)
-    T[:, :3, :3] = Rs
-    T[:, :3, 3] = transforms[:, 3:]
-    T[:, 3, 3] = 1.0
-
-    # Cumulative product
-    T_cumul = _cumulative_matmul(T)
-
-    # Apply to all coordinates
-    n_atoms = coords.shape[1]
-    ones = np.ones((n_residues, n_atoms, 1), dtype=coords.dtype)
-    coords_h = np.concatenate([coords, ones], axis=2)
-
-    # Batch transform using einsum
-    result_h = np.einsum('nij,nmj->nmi', T_cumul, coords_h)
     return result_h[:, :, :3]
 
 
@@ -640,67 +613,33 @@ def assemble_chain(
             )
 
     # Get atom counts per residue
+    from ..backend import empty
+
     atom_counts = [c.shape[0] for c in residue_coords]
     max_atoms = max(atom_counts)
-    use_torch = first_is_torch
+    uniform_size = all(c == max_atoms for c in atom_counts)
 
-    if use_torch:
-        import torch
-
-        device = residue_coords[0].device
-        dtype = residue_coords[0].dtype
-
-        # Pad and stack coordinates
-        if all(c == max_atoms for c in atom_counts):
-            # Uniform size - no padding needed
-            coords_padded = torch.stack(residue_coords)
-            needs_unpad = False
-        else:
-            # Variable sizes - pad to max
-            coords_padded = torch.zeros(n_residues, max_atoms, 3, device=device, dtype=dtype)
-            for i, (coords, n) in enumerate(zip(residue_coords, atom_counts)):
-                coords_padded[i, :n] = coords
-            needs_unpad = True
-
-        # Stack transforms
-        transforms_stacked = torch.stack(transforms)
-
-        # Apply cumulative transforms
-        result_padded = _apply_cumulative_transforms_torch(
-            coords_padded, transforms_stacked, compile=compile
-        )
-
-        # Unpad and concatenate
-        if needs_unpad:
-            result_list = [result_padded[i, :n] for i, n in enumerate(atom_counts)]
-            return torch.cat(result_list, dim=0)
-        else:
-            return result_padded.reshape(-1, 3)
-
+    # Pad (if needed) and stack coordinates
+    if uniform_size:
+        coords_padded = stack(residue_coords)
     else:
-        # NumPy path
-        dtype = residue_coords[0].dtype
+        coords_padded = empty((n_residues, max_atoms, 3), like=residue_coords[0])
+        coords_padded[:] = 0
+        for i, (coords, n) in enumerate(zip(residue_coords, atom_counts)):
+            coords_padded[i, :n] = coords
 
-        # Pad and stack coordinates
-        if all(c == max_atoms for c in atom_counts):
-            coords_padded = np.stack(residue_coords)
-            needs_unpad = False
-        else:
-            coords_padded = np.zeros((n_residues, max_atoms, 3), dtype=dtype)
-            for i, (coords, n) in enumerate(zip(residue_coords, atom_counts)):
-                coords_padded[i, :n] = coords
-            needs_unpad = True
+    # Stack transforms
+    transforms_stacked = stack(transforms)
 
-        # Stack transforms
-        transforms_stacked = np.stack(transforms)
+    # Apply cumulative transforms (backend-agnostic)
+    result_padded = _apply_cumulative_transforms(
+        coords_padded, transforms_stacked, compile=compile
+    )
 
-        # Apply cumulative transforms
-        result_padded = _apply_cumulative_transforms_numpy(coords_padded, transforms_stacked)
-
-        # Unpad and concatenate
-        if needs_unpad:
-            result_list = [result_padded[i, :n] for i, n in enumerate(atom_counts)]
-            return np.concatenate(result_list, axis=0)
-        else:
-            return result_padded.reshape(-1, 3)
+    # Unpad (if needed) and concatenate
+    if uniform_size:
+        return result_padded.reshape(-1, 3)
+    else:
+        result_list = [result_padded[i, :n] for i, n in enumerate(atom_counts)]
+        return cat(result_list, axis=0)
 

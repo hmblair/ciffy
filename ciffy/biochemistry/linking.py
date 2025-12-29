@@ -25,6 +25,19 @@ if TYPE_CHECKING:
     from . import Residue
 
 
+# Unified backbone atom values (from codegen/config.py)
+# These are shared across all residue types, enabling robust frame resolution
+# for modified residues with standard backbones.
+BACKBONE_ATOM_VALUES: dict[str, int] = {
+    # Nucleic acid backbone (Python names with p for apostrophe)
+    "P": 1, "OP1": 2, "OP2": 3, "OP3": 4,
+    "O5p": 5, "C5p": 6, "C4p": 7, "O4p": 8,
+    "C3p": 9, "O3p": 10, "C2p": 11, "O2p": 12, "C1p": 13,
+    # Protein backbone
+    "N": 14, "CA": 15, "C": 16, "O": 17,
+}
+
+
 @dataclass
 class FrameDefinition:
     """
@@ -81,6 +94,53 @@ class FrameDefinition:
             if self.perp_ref else None
         )
         return origin_col, z_ref_col, perp_ref_col
+
+    def resolve_by_value(
+        self,
+        atom_to_col: dict[int, int],
+    ) -> tuple[int, int, int | None]:
+        """
+        Resolve frame using unified backbone atom values.
+
+        This method uses the fixed backbone atom values (BACKBONE_ATOM_VALUES)
+        instead of looking up atoms via a Residue enum. This enables robust
+        frame resolution for modified residues with standard backbones.
+
+        Args:
+            atom_to_col: Dict mapping atom type values to column indices.
+
+        Returns:
+            Tuple of (origin_col, z_ref_col, perp_ref_col) where perp_ref_col
+            may be None if perp_ref is None.
+
+        Raises:
+            KeyError: If required backbone atoms are not in atom_to_col,
+                or if atom names are not in BACKBONE_ATOM_VALUES.
+        """
+        origin_val = BACKBONE_ATOM_VALUES[self.origin]
+        z_ref_val = BACKBONE_ATOM_VALUES[self.z_ref]
+
+        origin_col = atom_to_col[origin_val]
+        z_ref_col = atom_to_col[z_ref_val]
+        perp_ref_col = None
+        if self.perp_ref:
+            perp_ref_val = BACKBONE_ATOM_VALUES[self.perp_ref]
+            perp_ref_col = atom_to_col[perp_ref_val]
+
+        return origin_col, z_ref_col, perp_ref_col
+
+    def required_backbone_values(self) -> set[int]:
+        """
+        Get the set of backbone atom values required for this frame.
+
+        Returns:
+            Set of unified backbone atom values needed to compute this frame.
+        """
+        required = {BACKBONE_ATOM_VALUES[self.origin]}
+        required.add(BACKBONE_ATOM_VALUES[self.z_ref])
+        if self.perp_ref:
+            required.add(BACKBONE_ATOM_VALUES[self.perp_ref])
+        return required
 
     def required_atoms(self, residue: "Residue") -> set[int]:
         """

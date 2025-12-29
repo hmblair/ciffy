@@ -266,16 +266,54 @@ def linear_extend_transform(
 # FRAME RESOLUTION (cached for fast positioning)
 # =============================================================================
 
+def _infer_link_definition(atom_set: set[int]) -> LinkingDefinition | None:
+    """
+    Infer the linking definition from present backbone atoms.
+
+    This enables robust frame resolution for modified residues by detecting
+    the polymer type from which backbone atoms are present.
+
+    Args:
+        atom_set: Set of atom type values present in the residue.
+
+    Returns:
+        LinkingDefinition for nucleic acid or peptide, or None if neither.
+    """
+    from ..biochemistry.linking import BACKBONE_ATOM_VALUES
+
+    # Check for nucleic acid backbone (P, O3', C3', etc.)
+    nucleic_required = {
+        BACKBONE_ATOM_VALUES["P"],
+        BACKBONE_ATOM_VALUES["O3p"],
+        BACKBONE_ATOM_VALUES["C3p"],
+    }
+    if nucleic_required.issubset(atom_set):
+        return NUCLEIC_ACID_LINK
+
+    # Check for protein backbone (N, CA, C)
+    protein_required = {
+        BACKBONE_ATOM_VALUES["N"],
+        BACKBONE_ATOM_VALUES["CA"],
+        BACKBONE_ATOM_VALUES["C"],
+    }
+    if protein_required.issubset(atom_set):
+        return PEPTIDE_LINK
+
+    return None
+
+
 @lru_cache(maxsize=256)
 def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> FrameIndices:
     """
     Resolve frame column indices for a (residue_type, atom_subset) pair.
 
-    This is cached so that repeated positioning of the same residue type
-    with the same atom subset doesn't require repeated lookups.
+    This function uses unified backbone atom values to resolve frames,
+    making it robust to modified residues with standard backbones.
+    The residue_idx is used as a cache key and for fallback lookup,
+    but frame resolution uses the fixed backbone values directly.
 
     Args:
-        residue_idx: Residue enum value (int).
+        residue_idx: Residue enum value (int), used for caching and fallback.
         atom_indices: Tuple of atom type values in the residue's coordinate array.
 
     Returns:
@@ -285,9 +323,20 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
     Raises:
         ValueError: If required linking atoms are missing from atom_indices.
     """
-    residue = Residue.from_index(residue_idx)
     atom_to_col = atoms_to_col_map(atom_indices)
-    link_def = LINKING_BY_TYPE.get(residue.molecule_type)
+    atom_set = set(atom_indices)
+
+    # First, try to infer linking type from backbone atoms present
+    # This works for modified residues not in the whitelist
+    link_def = _infer_link_definition(atom_set)
+
+    # Fallback: use residue enum if inference failed
+    if link_def is None:
+        try:
+            residue = Residue.from_index(residue_idx)
+            link_def = LINKING_BY_TYPE.get(residue.molecule_type)
+        except (ValueError, KeyError):
+            pass  # Modified residue not in whitelist
 
     if link_def is None:
         # Non-polymer residue (ligand, etc.) - no linking frames
@@ -298,16 +347,19 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
             next_z_toward=True,
         )
 
-    # Resolve outgoing (prev) frame
-    prev_tuple = link_def.prev_frame.resolve(residue, atom_to_col)
+    # Use value-based resolution (works for any residue with standard backbone)
+    try:
+        prev_tuple = link_def.prev_frame.resolve_by_value(atom_to_col)
+        next_tuple = link_def.next_frame.resolve_by_value(atom_to_col)
+    except KeyError as e:
+        raise ValueError(f"Missing backbone atom for frame resolution: {e}")
+
     prev_cols = np.array([
         prev_tuple[0],
         prev_tuple[1],
         prev_tuple[2] if prev_tuple[2] is not None else -1,
     ], dtype=np.int32)
 
-    # Resolve incoming (next) frame
-    next_tuple = link_def.next_frame.resolve(residue, atom_to_col)
     next_cols = np.array([
         next_tuple[0],
         next_tuple[1],

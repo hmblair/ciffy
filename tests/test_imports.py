@@ -35,7 +35,7 @@ class TestBiochemistryConstants:
     """Test biochemistry constants are correctly defined."""
 
     def test_nucleotide_consistency(self):
-        from ciffy.biochemistry import Residue
+        from ciffy.biochemistry import Residue, Backbone
 
         # All nucleotides should have P atom (accessed via Residue)
         assert hasattr(Residue.A, 'P')
@@ -43,12 +43,17 @@ class TestBiochemistryConstants:
         assert hasattr(Residue.G, 'P')
         assert hasattr(Residue.U, 'P')
 
-        # Values should be unique across nucleotides
-        all_values = set()
+        # Backbone atoms share values across residue types (unified backbone)
+        assert Residue.A.P.value == Residue.C.P.value == Residue.G.P.value == Residue.U.P.value
+
+        # Sidechain/base atoms should be unique within each residue
+        backbone_values = set(b.value for b in Backbone)
         for nuc in [Residue.A, Residue.C, Residue.G, Residue.U]:
+            sidechain_values = set()
             for member in nuc.atoms:
-                assert member.value not in all_values, f"Duplicate value {member.value}"
-                all_values.add(member.value)
+                if member.value not in backbone_values:
+                    assert member.value not in sidechain_values, f"Duplicate sidechain value {member.value}"
+                    sidechain_values.add(member.value)
 
     def test_backbone_contains_phosphate(self):
         from ciffy.biochemistry import Backbone, Phosphate

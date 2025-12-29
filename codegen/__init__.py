@@ -151,7 +151,19 @@ def _build_indices(data: LoadedData) -> IndexedData:
 
     Creates lookup tables for residues and atoms, and computes
     dihedral ownership and backbone atom arrays.
+
+    Atom indexing uses a two-phase algorithm:
+    1. Backbone atoms get unified values (1-17) shared across all residue types
+    2. Sidechain/base atoms get unique values (18+) per residue type
+
+    This enables robustness to modified residues with standard backbones.
     """
+    from .config import (
+        UNIFIED_BACKBONE_VALUES,
+        NUM_UNIFIED_BACKBONE,
+        is_backbone_atom,
+    )
+
     residues = data.residues
 
     # Build residue mappings
@@ -161,18 +173,33 @@ def _build_indices(data: LoadedData) -> IndexedData:
     }
     residue_to_cif = {idx: res.cif_names[0] for idx, res in enumerate(residues)}
 
-    # Build atom index (1-indexed, 0 reserved for unknown)
+    # Build atom index using two-phase algorithm
+    # Phase A: Backbone atoms get unified values (shared across residues)
+    # Phase B: Sidechain/base atoms get unique values (per residue)
     atom_index: dict[tuple[str, str], int] = {}
-    current_idx = 1
 
-    # Assign indices to primary CIF names first
+    # Phase A: Assign backbone atoms their unified values
+    backbone_count = 0
+    for res in residues:
+        primary_cif = res.cif_names[0]
+        for atom in res.atoms:
+            if is_backbone_atom(atom, res.molecule_type):
+                key = (primary_cif, atom)
+                if key not in atom_index:
+                    atom_index[key] = UNIFIED_BACKBONE_VALUES[atom]
+                    backbone_count += 1
+
+    # Phase B: Assign sidechain/base atoms unique values starting after backbone
+    current_idx = NUM_UNIFIED_BACKBONE + 1
+    sidechain_count = 0
     for res in residues:
         primary_cif = res.cif_names[0]
         for atom in res.atoms:
             key = (primary_cif, atom)
-            if key not in atom_index:
+            if key not in atom_index:  # Not a backbone atom
                 atom_index[key] = current_idx
                 current_idx += 1
+                sidechain_count += 1
 
     # Add aliases pointing to same indices
     for res in residues:
@@ -184,7 +211,8 @@ def _build_indices(data: LoadedData) -> IndexedData:
                 if alias_key not in atom_index:
                     atom_index[alias_key] = atom_index[primary_key]
 
-    print(f"Assigned {current_idx - 1} unique atoms, {len(atom_index)} total entries")
+    print(f"Assigned {NUM_UNIFIED_BACKBONE} unified backbone + {sidechain_count} sidechain atoms")
+    print(f"Total: {len(atom_index)} entries (backbone atoms shared across residues)")
 
     # Compute derived arrays
     atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(

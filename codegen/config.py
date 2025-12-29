@@ -379,6 +379,78 @@ NUM_BACKBONE_NAMES: int = len(BACKBONE_NAMES)
 
 
 # =============================================================================
+# UNIFIED BACKBONE ATOM VALUES
+# =============================================================================
+# Backbone atoms share the same integer value across all residue types.
+# This enables:
+# 1. Robustness to modified residues with standard backbones
+# 2. Simpler mental model - a backbone P is the same regardless of residue
+#
+# Values are 1-indexed (0 reserved for unknown). Sidechain/base atoms
+# start at NUM_UNIFIED_BACKBONE + 1.
+
+# Which atoms are considered "backbone" for each molecule type
+BACKBONE_ATOMS_NUCLEIC: frozenset[str] = frozenset({
+    "P", "OP1", "OP2", "OP3",  # Phosphate group (OP3 is 5' terminal)
+    "O5'", "C5'", "C4'", "O4'", "C3'", "O3'", "C2'", "O2'", "C1'",  # Sugar
+})
+
+BACKBONE_ATOMS_PROTEIN: frozenset[str] = frozenset({
+    "N", "CA", "C", "O",  # Peptide backbone
+})
+
+# All backbone atoms (union of nucleic and protein)
+ALL_BACKBONE_ATOMS: frozenset[str] = BACKBONE_ATOMS_NUCLEIC | BACKBONE_ATOMS_PROTEIN
+
+# Unified backbone atom values (1-indexed, 0 = unknown)
+# Order: nucleic acid backbone first, then protein backbone
+UNIFIED_BACKBONE_VALUES: dict[str, int] = {
+    # Nucleic acid backbone (1-13)
+    "P": 1,
+    "OP1": 2,
+    "OP2": 3,
+    "OP3": 4,
+    "O5'": 5,
+    "C5'": 6,
+    "C4'": 7,
+    "O4'": 8,
+    "C3'": 9,
+    "O3'": 10,
+    "C2'": 11,
+    "O2'": 12,
+    "C1'": 13,
+    # Protein backbone (14-17)
+    "N": 14,
+    "CA": 15,
+    "C": 16,
+    "O": 17,
+}
+
+NUM_UNIFIED_BACKBONE: int = len(UNIFIED_BACKBONE_VALUES)
+
+# Reverse mapping: value -> name
+UNIFIED_BACKBONE_NAMES: dict[int, str] = {v: k for k, v in UNIFIED_BACKBONE_VALUES.items()}
+
+
+def is_backbone_atom(atom_name: str, molecule_type: int) -> bool:
+    """
+    Check if an atom is a backbone atom for the given molecule type.
+
+    Args:
+        atom_name: Atom name in CIF format (e.g., "P", "O3'", "CA").
+        molecule_type: Molecule type index (e.g., Molecule.RNA, Molecule.PROTEIN).
+
+    Returns:
+        True if the atom is a backbone atom for this molecule type.
+    """
+    if molecule_type in NUCLEIC_MOLECULE_TYPES:
+        return atom_name in BACKBONE_ATOMS_NUCLEIC
+    elif molecule_type in PROTEIN_MOLECULE_TYPES:
+        return atom_name in BACKBONE_ATOMS_PROTEIN
+    return False
+
+
+# =============================================================================
 # NUCLEOTIDE CLASSIFICATION (Purine vs Pyrimidine)
 # =============================================================================
 # Used to determine which chi angle (CHI_PURINE vs CHI_PYRIMIDINE) applies.

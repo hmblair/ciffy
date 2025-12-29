@@ -209,8 +209,11 @@ def generate_reverse_header(
     elements: dict[str, int],
 ) -> None:
     """Generate reverse.h for CIF writing."""
+    from .config import UNIFIED_BACKBONE_NAMES, NUM_UNIFIED_BACKBONE
 
     # Build reverse mappings
+    # Note: For backbone atoms (1-17), multiple (res, atom) pairs map to the same index.
+    # We use UNIFIED_BACKBONE_NAMES for those, with NULL residue.
     atoms = {idx: (res, atom) for (res, atom), idx in atom_index.items()}
     elements_reverse = {v: k for k, v in elements.items()}
     molecule_types = {i: mt.entity_poly_type for i, mt in enumerate(MOLECULE_TYPES)
@@ -295,7 +298,12 @@ def generate_reverse_header(
     ])
 
     for i in range(atom_max):
-        if i in atoms:
+        if i in UNIFIED_BACKBONE_NAMES:
+            # Backbone atoms have no residue context (shared across residues)
+            atom_name = UNIFIED_BACKBONE_NAMES[i]
+            lines.append(f'    [{i}] = {{NULL, "{atom_name}"}},')
+        elif i in atoms:
+            # Sidechain atoms have residue context
             res, atom = atoms[i]
             lines.append(f'    [{i}] = {{"{res}", "{atom}"}},')
         else:

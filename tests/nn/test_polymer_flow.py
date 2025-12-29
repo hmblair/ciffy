@@ -95,8 +95,8 @@ class TestPolymerFlowModel:
     def test_supported_residues(self, polymer_model):
         """Test supported_residues property."""
         supported = polymer_model.supported_residues
-        assert Residue.A in supported
-        assert Residue.G in supported
+        assert Residue.A.value in supported
+        assert Residue.G.value in supported
         assert len(supported) == 2
 
     def test_get_atom_counts(self, polymer_model):

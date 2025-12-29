@@ -928,6 +928,74 @@ class Polymer:
 
         return ops.cdist(coords, coords)
 
+    def bonded_distances(
+        self: Polymer,
+        atom1: int | Array,
+        atom2: int | Array,
+    ) -> Array:
+        """
+        Get distances between bonded atoms of specified types.
+
+        Finds all covalent bonds where one atom matches `atom1` and the other
+        matches `atom2`, then computes the Euclidean distance for each pair.
+
+        Args:
+            atom1: First atom type(s) as integer value(s). Can be a single
+                int or an array of ints to match multiple atom types.
+            atom2: Second atom type(s) as integer value(s).
+
+        Returns:
+            1D array of distances between matching bonded pairs.
+            Empty array if no matching bonds found.
+
+        Example:
+            >>> from ciffy.biochemistry import Residue
+            >>> # Get all phosphodiester bond lengths (O3'-P) for adenosine
+            >>> polymer.bonded_distances(Residue.A.O3p, Residue.A.P)
+            array([1.59, 1.61, 1.58, ...])
+            >>> # Match multiple residue types using arrays
+            >>> o3p_values = np.array([Residue.A.O3p, Residue.G.O3p])
+            >>> p_values = np.array([Residue.A.P, Residue.G.P])
+            >>> polymer.bonded_distances(o3p_values, p_values)
+        """
+        # Get bonds and atom types
+        bonds = self.bonds  # (B, 2) array of atom indices
+        atoms = self.atoms  # (N,) array of atom type values
+
+        # Convert atom type arguments to arrays in the same backend
+        def to_values(atom: int | Array) -> Array:
+            if isinstance(atom, int):
+                return ops.array([atom], like=atoms)
+            return ops.convert_backend(atom, like=atoms)
+
+        v1 = to_values(atom1)
+        v2 = to_values(atom2)
+
+        # Get atom types at bond endpoints
+        atom_i = atoms[bonds[:, 0]]
+        atom_j = atoms[bonds[:, 1]]
+
+        # Match: (i in v1 AND j in v2) OR (i in v2 AND j in v1)
+        mask1 = ops.isin(atom_i, v1) & ops.isin(atom_j, v2)
+        mask2 = ops.isin(atom_i, v2) & ops.isin(atom_j, v1)
+        mask = mask1 | mask2
+
+        # Get matching bond indices
+        matching_indices = ops.nonzero_1d(mask)
+
+        if arr_size(matching_indices) == 0:
+            return ops.empty(0, like=self.coordinates)
+
+        matching_bonds = bonds[matching_indices]
+
+        # Compute distances
+        coords = self.coordinates
+        p1 = coords[matching_bonds[:, 0]]
+        p2 = coords[matching_bonds[:, 1]]
+        diff = p1 - p2
+
+        return ops.norm(diff, axis=1)
+
     def knn(self: Polymer, k: int, scale: Scale = Scale.ATOM) -> Array:
         """
         Find k-nearest neighbors at the specified scale.

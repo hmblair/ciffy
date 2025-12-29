@@ -1294,9 +1294,6 @@ class Polymer:
         """
         return self.select(ix, Scale.CHAIN)
 
-    # Deprecated alias for backwards compatibility
-    by_index = chain
-
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """
         Select atoms by atom type index.

@@ -1,10 +1,14 @@
 """
-Utilities for chain building.
+Chain building utilities for polymer construction and generative models.
 
-Provides:
-- expand_residue(): Get atom arrays with terminal filtering
-- linear_extend_transform(): Compute SE(3) transform for ideal chain extension
-- assemble_chain(): Position coordinates for ML models (returns coords only)
+This module provides functions for:
+
+- **Residue expansion**: Get atom data with terminal filtering (expand_residue)
+- **Frame resolution**: Resolve linking frames for positioning (_resolve_frame_indices)
+- **Chain assembly**: Batch-assemble chains from coordinates and transforms (assemble_chain)
+
+The chain assembly uses cumulative SE(3) transforms for 10-20x speedup over
+sequential positioning, with optional torch.compile for additional GPU acceleration.
 """
 
 from __future__ import annotations
@@ -15,13 +19,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..biochemistry import Scale, Molecule, Residue, atom_to_element
+from ..biochemistry import Molecule, Residue, atom_to_element
 from ..biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
-from ..backend import Array, is_torch
+from ..backend import Array, is_torch, zeros_like, bmm, cat, stack, transpose, empty
+from ..geometry import rodrigues
 from ..utils import atoms_to_col_map
 
 if TYPE_CHECKING:
-    from ..biochemistry.atom import AtomGroup
+    pass
 
 
 # =============================================================================
@@ -375,15 +380,8 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
 
 
 # =============================================================================
-# CHAIN ASSEMBLY (standalone function for generative models)
+# CHAIN ASSEMBLY
 # =============================================================================
-
-# =============================================================================
-# CHAIN ASSEMBLY - OPTIMIZED WITH CUMULATIVE TRANSFORMS
-# =============================================================================
-
-from ..backend import zeros_like, bmm, cat, stack, transpose
-from ..geometry import rodrigues
 
 
 def _cumulative_matmul(matrices: Array) -> Array:
@@ -406,12 +404,12 @@ def _cumulative_matmul(matrices: Array) -> Array:
     return result
 
 
-# Compiled version for GPU (lazy initialization)
+# Lazy-initialized compiled version for GPU acceleration
 _cumulative_matmul_compiled = None
 
 
-def _get_compiled_cumulative_matmul():
-    """Get or create the compiled cumulative matmul function."""
+def _get_cumulative_matmul_compiled():
+    """Get the torch.compiled version of cumulative matmul (lazy init)."""
     global _cumulative_matmul_compiled
     if _cumulative_matmul_compiled is None:
         import torch
@@ -422,13 +420,6 @@ def _get_compiled_cumulative_matmul():
     return _cumulative_matmul_compiled
 
 
-def _ensure_compiled():
-    """Ensure the compiled cumulative matmul is initialized."""
-    global _cumulative_matmul_compiled
-    if _cumulative_matmul_compiled is None:
-        _cumulative_matmul_compiled = _get_compiled_cumulative_matmul()
-
-
 def _apply_cumulative_transforms(
     coords: Array,
     transforms: Array,
@@ -436,8 +427,6 @@ def _apply_cumulative_transforms(
 ) -> Array:
     """
     Apply cumulative SE(3) transforms to batched coordinates.
-
-    Backend-agnostic implementation using ciffy.backend ops.
 
     Args:
         coords: (n_residues, n_atoms, 3) coordinate arrays.
@@ -447,8 +436,6 @@ def _apply_cumulative_transforms(
     Returns:
         (n_residues, n_atoms, 3) transformed coordinates.
     """
-    from ..backend import empty
-
     n_residues = len(transforms)
     n_atoms = coords.shape[1]
 
@@ -462,11 +449,9 @@ def _apply_cumulative_transforms(
     T[:, :3, 3] = transforms[:, 3:]
     T[:, 3, 3] = 1.0
 
-    # Cumulative product of transforms (use compiled version on CUDA)
-    use_compiled = compile and is_torch(coords) and coords.is_cuda
-    if use_compiled:
-        _ensure_compiled()
-        T_cumul = _cumulative_matmul_compiled(T)
+    # Cumulative product of transforms
+    if compile and is_torch(coords) and coords.is_cuda:
+        T_cumul = _get_cumulative_matmul_compiled()(T)
     else:
         T_cumul = _cumulative_matmul(T)
 
@@ -483,91 +468,84 @@ def _apply_cumulative_transforms(
     return result_h[:, :, :3]
 
 
-def assemble_chain(
+def _validate_assembly_inputs(
     residue_coords: list[Array],
     transforms: list[Array],
-    residues: list[Residue] | None = None,
-    atom_subsets: list[tuple[int, ...]] | None = None,
-    *,
-    compile: bool = False,
-) -> Array:
+) -> None:
     """
-    Assemble a chain from per-residue coordinates and transforms.
+    Validate inputs to assemble_chain.
 
-    Uses optimized cumulative transform computation (10-20x faster than
-    sequential positioning). Coordinates are padded to uniform size if needed,
-    then transformed in batch, then unpadded.
-
-    For GPU tensors, set compile=True for additional 5-7x speedup via
-    kernel fusion (only effective on CUDA).
-
-    Args:
-        residue_coords: List of (n_atoms, 3) coordinate arrays per residue.
-            These are the decoded/predicted coordinates in canonical frame.
-        transforms: List of (6,) SE(3) transforms per residue [axis-angle, translation].
-            Transform[i] positions residue i relative to residue i-1.
-        residues: (Unused, kept for API compatibility) List of Residue enum values.
-        atom_subsets: (Unused, kept for API compatibility) List of atom index tuples.
-        compile: If True and using CUDA tensors, use torch.compile for speedup.
-
-    Returns:
-        (N, 3) concatenated positioned coordinates for the entire chain.
-
-    Example:
-        >>> residue_coords = [model.decode(latent)[0] for latent in latents]
-        >>> transforms = [model.decode(latent)[1] for latent in latents]
-        >>> positioned = assemble_chain(residue_coords, transforms, compile=True)
+    Raises:
+        ValueError: If inputs have invalid shapes or mismatched backends.
     """
-    if len(residue_coords) == 0:
-        if is_torch(residue_coords):
-            import torch
-            return torch.empty(0, 3)
-        return np.empty((0, 3), dtype=np.float32)
-
-    # Input validation
     n_residues = len(residue_coords)
+
     if len(transforms) != n_residues:
         raise ValueError(
             f"Length mismatch: got {n_residues} coordinate arrays "
             f"but {len(transforms)} transforms"
         )
 
-    # Validate coordinate shapes
     for i, coords in enumerate(residue_coords):
-        if coords.ndim != 2:
+        if coords.ndim != 2 or coords.shape[1] != 3:
             raise ValueError(
-                f"residue_coords[{i}] has shape {coords.shape}, "
-                f"expected (n_atoms, 3)"
-            )
-        if coords.shape[1] != 3:
-            raise ValueError(
-                f"residue_coords[{i}] has shape {coords.shape}, "
-                f"expected (n_atoms, 3)"
+                f"residue_coords[{i}] has shape {coords.shape}, expected (n_atoms, 3)"
             )
 
-    # Validate transform shapes
     for i, t in enumerate(transforms):
         if t.shape != (6,):
             raise ValueError(
                 f"transforms[{i}] has shape {t.shape}, expected (6,)"
             )
 
-    # Check consistent backend
     first_is_torch = is_torch(residue_coords[0])
     for i, coords in enumerate(residue_coords[1:], 1):
         if is_torch(coords) != first_is_torch:
+            backend_0 = "torch" if first_is_torch else "numpy"
+            backend_i = "torch" if is_torch(coords) else "numpy"
             raise ValueError(
-                f"Mixed backends: residue_coords[0] is "
-                f"{'torch' if first_is_torch else 'numpy'} but "
-                f"residue_coords[{i}] is {'torch' if is_torch(coords) else 'numpy'}"
+                f"Mixed backends: residue_coords[0] is {backend_0} "
+                f"but residue_coords[{i}] is {backend_i}"
             )
 
-    # Get atom counts per residue
-    from ..backend import empty
+
+def assemble_chain(
+    residue_coords: list[Array],
+    transforms: list[Array],
+    *,
+    compile: bool = False,
+) -> Array:
+    """
+    Assemble a chain from per-residue coordinates and transforms.
+
+    Uses cumulative SE(3) transforms for 10-20x speedup over sequential positioning.
+    Coordinates are padded to uniform size, transformed in batch, then unpadded.
+
+    Args:
+        residue_coords: List of (n_atoms, 3) coordinate arrays per residue,
+            in their canonical/local frame.
+        transforms: List of (6,) SE(3) transforms [axis-angle, translation].
+            Transform[i] positions residue i relative to residue i-1.
+        compile: If True and using CUDA, use torch.compile for ~5x additional speedup.
+
+    Returns:
+        (N, 3) concatenated positioned coordinates for the entire chain.
+
+    Example:
+        >>> coords = [model.decode(z)[0] for z in latents]
+        >>> transforms = [model.decode(z)[1] for z in latents]
+        >>> positioned = assemble_chain(coords, transforms, compile=True)
+    """
+    if len(residue_coords) == 0:
+        return np.empty((0, 3), dtype=np.float32)
+
+    _validate_assembly_inputs(residue_coords, transforms)
 
     atom_counts = [c.shape[0] for c in residue_coords]
     max_atoms = max(atom_counts)
     uniform_size = all(c == max_atoms for c in atom_counts)
+
+    n_residues = len(residue_coords)
 
     # Pad (if needed) and stack coordinates
     if uniform_size:

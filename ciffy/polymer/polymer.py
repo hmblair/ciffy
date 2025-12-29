@@ -1294,6 +1294,44 @@ class Polymer:
         """
         return self.select(ix, Scale.CHAIN)
 
+    def residue(self: Polymer, ix: Array | int) -> Polymer:
+        """
+        Select residues by index.
+
+        Args:
+            ix: Residue index or indices to select.
+
+        Returns:
+            New Polymer with selected residues.
+
+        Raises:
+            IndexError: If any index is out of range.
+
+        Example:
+            >>> polymer.residue(0)           # First residue
+            >>> polymer.residue([0, 5, 10])  # Multiple residues
+        """
+        return self.select(ix, Scale.RESIDUE)
+
+    def atom(self: Polymer, ix: Array | int) -> Polymer:
+        """
+        Select atoms by index.
+
+        Args:
+            ix: Atom index or indices to select.
+
+        Returns:
+            New Polymer with selected atoms.
+
+        Raises:
+            IndexError: If any index is out of range.
+
+        Example:
+            >>> polymer.atom(0)              # First atom
+            >>> polymer.atom([0, 1, 2])      # Multiple atoms
+        """
+        return self.select(ix, Scale.ATOM)
+
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """
         Select atoms by atom type index.

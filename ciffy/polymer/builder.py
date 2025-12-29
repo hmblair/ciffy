@@ -601,11 +601,48 @@ def assemble_chain(
             return torch.empty(0, 3)
         return np.empty((0, 3), dtype=np.float32)
 
+    # Input validation
+    n_residues = len(residue_coords)
+    if len(transforms) != n_residues:
+        raise ValueError(
+            f"Length mismatch: got {n_residues} coordinate arrays "
+            f"but {len(transforms)} transforms"
+        )
+
+    # Validate coordinate shapes
+    for i, coords in enumerate(residue_coords):
+        if coords.ndim != 2:
+            raise ValueError(
+                f"residue_coords[{i}] has shape {coords.shape}, "
+                f"expected (n_atoms, 3)"
+            )
+        if coords.shape[1] != 3:
+            raise ValueError(
+                f"residue_coords[{i}] has shape {coords.shape}, "
+                f"expected (n_atoms, 3)"
+            )
+
+    # Validate transform shapes
+    for i, t in enumerate(transforms):
+        if t.shape != (6,):
+            raise ValueError(
+                f"transforms[{i}] has shape {t.shape}, expected (6,)"
+            )
+
+    # Check consistent backend
+    first_is_torch = is_torch(residue_coords[0])
+    for i, coords in enumerate(residue_coords[1:], 1):
+        if is_torch(coords) != first_is_torch:
+            raise ValueError(
+                f"Mixed backends: residue_coords[0] is "
+                f"{'torch' if first_is_torch else 'numpy'} but "
+                f"residue_coords[{i}] is {'torch' if is_torch(coords) else 'numpy'}"
+            )
+
     # Get atom counts per residue
     atom_counts = [c.shape[0] for c in residue_coords]
     max_atoms = max(atom_counts)
-    n_residues = len(residue_coords)
-    use_torch = is_torch(residue_coords[0])
+    use_torch = first_is_torch
 
     if use_torch:
         import torch

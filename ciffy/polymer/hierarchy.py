@@ -624,3 +624,120 @@ class _Hierarchy:
         new_per = {k: v.to(device) for k, v in self._per.items()}
         new_ref = self._ref.to(device) if hasattr(self._ref, 'to') else self._ref
         return _Hierarchy(new_per, self._polymer_count, new_ref)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Contiguous Selection Support
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def bounds(self, ix: int, scale: Scale) -> tuple[slice, slice, slice]:
+        """
+        Get slice bounds for a contiguous selection at a given scale.
+
+        For chain/residue selections, units are stored contiguously, so we can
+        use slice indexing (much faster than boolean masking).
+
+        Args:
+            ix: Index of the unit to select.
+            scale: Scale of the selection (CHAIN or RESIDUE).
+
+        Returns:
+            Tuple of (atom_slice, res_slice, chain_slice).
+
+        Raises:
+            IndexError: If index is out of range.
+        """
+        if scale == Scale.CHAIN:
+            if ix < 0 or ix >= self._n_chains:
+                raise IndexError(f"Chain index {ix} out of range [0, {self._n_chains})")
+
+            # Chain slice
+            chain_slice = slice(ix, ix + 1)
+
+            # Residue slice: cumsum of residues_per_chain
+            res_per_chain = self._per[(Scale.RESIDUE, Scale.CHAIN)]
+            res_cumsum = np.cumsum(np.asarray(res_per_chain))
+            res_start = 0 if ix == 0 else int(res_cumsum[ix - 1])
+            res_end = int(res_cumsum[ix])
+            res_slice = slice(res_start, res_end)
+
+            # Atom slice: cumsum of atoms_per_chain
+            atoms_per_chain = self._per[(Scale.ATOM, Scale.CHAIN)]
+            atom_cumsum = np.cumsum(np.asarray(atoms_per_chain))
+            atom_start = 0 if ix == 0 else int(atom_cumsum[ix - 1])
+            atom_end = int(atom_cumsum[ix])
+            atom_slice = slice(atom_start, atom_end)
+
+            return atom_slice, res_slice, chain_slice
+
+        elif scale == Scale.RESIDUE:
+            if ix < 0 or ix >= self._n_residues:
+                raise IndexError(f"Residue index {ix} out of range [0, {self._n_residues})")
+
+            # Residue slice
+            res_slice = slice(ix, ix + 1)
+
+            # Atom slice: cumsum of atoms_per_residue
+            atoms_per_res = self._per[(Scale.ATOM, Scale.RESIDUE)]
+            atom_cumsum = np.cumsum(np.asarray(atoms_per_res))
+            atom_start = 0 if ix == 0 else int(atom_cumsum[ix - 1])
+            atom_end = int(atom_cumsum[ix])
+            atom_slice = slice(atom_start, atom_end)
+
+            # Chain slice: find which chain this residue belongs to
+            res_per_chain = self._per[(Scale.RESIDUE, Scale.CHAIN)]
+            res_cumsum = np.cumsum(np.asarray(res_per_chain))
+            chain_ix = int(np.searchsorted(res_cumsum, ix + 1))
+            chain_slice = slice(chain_ix, chain_ix + 1)
+
+            return atom_slice, res_slice, chain_slice
+
+        else:
+            raise ValueError(f"bounds() not supported for {scale.name} scale")
+
+    def select_contiguous(self, ix: int, scale: Scale) -> _Hierarchy:
+        """
+        Create a new Hierarchy for a contiguous single-unit selection.
+
+        Faster than the general select() method because it avoids
+        boolean mask operations.
+
+        Args:
+            ix: Index of the unit to select.
+            scale: Scale of the selection (CHAIN or RESIDUE).
+
+        Returns:
+            New _Hierarchy for the selected unit.
+        """
+        atom_slice, res_slice, chain_slice = self.bounds(ix, scale)
+
+        # Extract sizes using slices
+        atoms_per_res = self._per[(Scale.ATOM, Scale.RESIDUE)][res_slice]
+        atoms_per_chain = self._per[(Scale.ATOM, Scale.CHAIN)][chain_slice]
+        res_per_chain = self._per[(Scale.RESIDUE, Scale.CHAIN)][chain_slice]
+
+        # For numpy, slicing returns a view - we need copies for independence
+        if hasattr(atoms_per_res, 'copy'):
+            atoms_per_res = atoms_per_res.copy()
+            atoms_per_chain = atoms_per_chain.copy()
+            res_per_chain = res_per_chain.copy()
+        else:
+            atoms_per_res = atoms_per_res.clone()
+            atoms_per_chain = atoms_per_chain.clone()
+            res_per_chain = res_per_chain.clone()
+
+        n_atoms = atom_slice.stop - atom_slice.start
+        n_res = res_slice.stop - res_slice.start
+
+        new_per = {
+            (Scale.ATOM, Scale.RESIDUE): atoms_per_res,
+            (Scale.ATOM, Scale.CHAIN): atoms_per_chain,
+            (Scale.ATOM, Scale.MOLECULE): ops.array([n_atoms], like=self._ref),
+            (Scale.RESIDUE, Scale.CHAIN): res_per_chain,
+            (Scale.RESIDUE, Scale.MOLECULE): ops.array([n_res], like=self._ref),
+            (Scale.CHAIN, Scale.MOLECULE): ops.array([1], like=self._ref),
+        }
+
+        # Polymer count: all selected atoms are polymer atoms for chain/residue selection
+        new_polymer_count = n_atoms
+
+        return _Hierarchy(new_per, new_polymer_count, self._ref)

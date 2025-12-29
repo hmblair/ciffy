@@ -350,19 +350,32 @@ class Polymer:
                     f"expected {expected} ({desc.scale.name} scale)"
                 )
 
+    @staticmethod
+    def _index_copy(arr: Array, selector) -> Array:
+        """Index array with selector, ensuring a copy is returned.
+
+        For boolean masks, indexing already returns a copy.
+        For slices, indexing returns a view, so we explicitly copy.
+        """
+        result = arr[selector]
+        if isinstance(selector, slice):
+            # Slice returns view - copy for consistency
+            return result.copy() if hasattr(result, 'copy') else result.clone()
+        return result
+
     def _slice_all(
         self,
-        atom_mask: Array,
-        res_mask: Array,
-        chain_mask: Array,
+        atom_sel: Array | slice,
+        res_sel: Array | slice,
+        chain_sel: Array | slice,
     ) -> dict:
         """
         Slice all descriptor-based attributes according to their scale.
 
         Args:
-            atom_mask: Boolean mask for atoms.
-            res_mask: Boolean mask for residues.
-            chain_mask: Boolean mask for chains.
+            atom_sel: Boolean mask or slice for atoms.
+            res_sel: Boolean mask or slice for residues.
+            chain_sel: Boolean mask or slice for chains.
 
         Returns:
             Dict mapping descriptor names to sliced values.
@@ -373,14 +386,17 @@ class Polymer:
             if value is None:
                 result[name] = None
             elif desc.scale == Scale.ATOM:
-                result[name] = value[atom_mask]
+                result[name] = self._index_copy(value, atom_sel)
             elif desc.scale == Scale.RESIDUE:
-                result[name] = value[res_mask]
+                result[name] = self._index_copy(value, res_sel)
             elif desc.scale == Scale.CHAIN:
                 if desc.is_list:
-                    result[name] = filter_by_mask(value, chain_mask)
+                    if isinstance(chain_sel, slice):
+                        result[name] = value[chain_sel]  # list slicing copies
+                    else:
+                        result[name] = filter_by_mask(value, chain_sel)
                 else:
-                    result[name] = value[chain_mask]
+                    result[name] = self._index_copy(value, chain_sel)
             else:  # Scale.MOLECULE - scalars, no slicing
                 result[name] = value
         return result
@@ -1213,6 +1229,31 @@ class Polymer:
 
         return self._clone(**sliced)
 
+    def _select_contiguous(self: Polymer, ix: int, scale: Scale) -> Polymer:
+        """
+        Fast path for selecting a single contiguous unit (chain or residue).
+
+        Uses slice indexing instead of boolean masks for ~10x speedup.
+
+        Args:
+            ix: Index of the unit to select.
+            scale: Scale of the selection (CHAIN or RESIDUE).
+
+        Returns:
+            New Polymer with the selected unit.
+        """
+        # Get slice bounds from hierarchy
+        atom_slice, res_slice, chain_slice = self._hierarchy.bounds(ix, scale)
+
+        # Slice all fields using slices (fast path)
+        sliced = self._slice_all(atom_slice, res_slice, chain_slice)
+
+        # Get new hierarchy (also uses fast path)
+        new_hierarchy = self._hierarchy.select_contiguous(ix, scale)
+        sliced['hierarchy'] = new_hierarchy
+
+        return self._clone(**sliced)
+
     def select(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Polymer:
         """
         Select units at the specified scale.
@@ -1292,6 +1333,9 @@ class Polymer:
             >>> polymer.chain(0)           # First chain
             >>> polymer.chain([0, 2])      # First and third chains
         """
+        # Fast path for single integer selection
+        if isinstance(ix, int):
+            return self._select_contiguous(ix, Scale.CHAIN)
         return self.select(ix, Scale.CHAIN)
 
     def residue(self: Polymer, ix: Array | int) -> Polymer:
@@ -1311,6 +1355,9 @@ class Polymer:
             >>> polymer.residue(0)           # First residue
             >>> polymer.residue([0, 5, 10])  # Multiple residues
         """
+        # Fast path for single integer selection
+        if isinstance(ix, int):
+            return self._select_contiguous(ix, Scale.RESIDUE)
         return self.select(ix, Scale.RESIDUE)
 
     def atom(self: Polymer, ix: Array | int) -> Polymer:

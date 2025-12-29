@@ -174,13 +174,13 @@ def _map_command(args):
     if args.chain is not None:
         try:
             chain_idx = int(args.chain)
-            polymer = polymer.by_index(chain_idx)
+            polymer = polymer.chain(chain_idx)
         except ValueError:
             # Try to find by name
             chain_names = polymer.names
             if args.chain in chain_names:
                 chain_idx = chain_names.index(args.chain)
-                polymer = polymer.by_index(chain_idx)
+                polymer = polymer.chain(chain_idx)
             else:
                 print(f"Error: Chain '{args.chain}' not found. "
                       f"Available: {chain_names}", file=sys.stderr)

@@ -139,7 +139,7 @@ class TestIstype:
         # Get a single RNA chain
         rna = polymer.by_type(Molecule.RNA)
         if rna.size(Scale.CHAIN) > 0:
-            single_rna = rna.by_index(0)
+            single_rna = rna.chain(0)
             assert single_rna.istype(Molecule.RNA)
 
     def test_istype_single_protein_chain(self, backend):
@@ -152,7 +152,7 @@ class TestIstype:
         # Get a single protein chain
         protein = polymer.by_type(Molecule.PROTEIN)
         if protein.size(Scale.CHAIN) > 0:
-            single_protein = protein.by_index(0)
+            single_protein = protein.chain(0)
             assert single_protein.istype(Molecule.PROTEIN)
 
     def test_istype_returns_false_for_multi_chain(self, backend):
@@ -177,7 +177,7 @@ class TestIstype:
         # Get a single RNA chain and check if it's protein (should be False)
         rna = polymer.by_type(Molecule.RNA)
         if rna.size(Scale.CHAIN) > 0:
-            single_rna = rna.by_index(0)
+            single_rna = rna.chain(0)
             assert not single_rna.istype(Molecule.PROTEIN)
             assert not single_rna.istype(Molecule.DNA)
 
@@ -201,7 +201,7 @@ class TestIstype:
 
         # Test that istype doesn't crash for any molecule type
         for i in range(polymer.size(Scale.CHAIN)):
-            chain = polymer.by_index(i)
+            chain = polymer.chain(i)
             if chain.empty():
                 continue  # Skip empty chains
             # Just verify it returns bool without error

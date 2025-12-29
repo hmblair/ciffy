@@ -275,7 +275,7 @@ class TestAlign:
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        chain = p.by_index(0)
+        chain = p.chain(0)
 
         # Give varied coordinates for meaningful alignment
         np.random.seed(42)

@@ -341,7 +341,7 @@ class PolymerDataset(Dataset):
 
             if chain_idx is not None:
                 # Chain scale: filtering already done during indexing
-                polymer = polymer.by_index(chain_idx)
+                polymer = polymer.chain(chain_idx)
             elif self.molecule_types is not None:
                 # Molecule scale: filter out non-matching chains
                 polymer = self._filter_by_molecule_type(polymer)
@@ -369,4 +369,4 @@ class PolymerDataset(Dataset):
             # Return empty polymer (first 0 atoms)
             return polymer[:0]
 
-        return polymer.by_index(matching_indices)
+        return polymer.chain(matching_indices)

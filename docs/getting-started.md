@@ -161,10 +161,10 @@ protein = polymer.by_type(ciffy.PROTEIN)
 
 ```python
 # First chain
-chain_a = polymer.by_index(0)
+chain_a = polymer.chain(0)
 
 # Multiple chains
-chains_ab = polymer.by_index([0, 1])
+chains_ab = polymer.chain([0, 1])
 
 # Iterate over chains
 for chain in polymer.chains():

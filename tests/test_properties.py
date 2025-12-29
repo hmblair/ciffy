@@ -128,7 +128,7 @@ class TestResolution:
         original_resolution = polymer.resolution
 
         if polymer.size(Scale.CHAIN) > 0:
-            chain = polymer.by_index(0)
+            chain = polymer.chain(0)
             assert chain.resolution == original_resolution
 
 

@@ -588,7 +588,7 @@ class TestRMSD:
 
         polymer = load(any_cif)
         # Select first chain only
-        chain = polymer.by_index(0)
+        chain = polymer.chain(0)
 
         # Add small perturbation
         perturbed = copy.deepcopy(chain)

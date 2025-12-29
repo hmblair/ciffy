@@ -1275,7 +1275,7 @@ class Polymer:
         """
         return self.select(key, Scale.ATOM)
 
-    def by_index(self: Polymer, ix: Array | int) -> Polymer:
+    def chain(self: Polymer, ix: Array | int) -> Polymer:
         """
         Select chains by index.
 
@@ -1287,8 +1287,15 @@ class Polymer:
 
         Raises:
             IndexError: If any index is out of range.
+
+        Example:
+            >>> polymer.chain(0)           # First chain
+            >>> polymer.chain([0, 2])      # First and third chains
         """
         return self.select(ix, Scale.CHAIN)
+
+    # Deprecated alias for backwards compatibility
+    by_index = chain
 
     def by_atom(self: Polymer, name: Array | int) -> Polymer:
         """

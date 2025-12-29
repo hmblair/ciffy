@@ -61,10 +61,10 @@ Select specific chains by index:
 
 ```python
 # Select first chain
-chain_a = polymer.by_index(0)
+chain_a = polymer.chain(0)
 
 # Select multiple chains
-chains_ac = polymer.by_index([0, 2])
+chains_ac = polymer.chain([0, 2])
 
 # Chain names are preserved
 print(polymer.names)  # ['A', 'B', 'C', ...]
@@ -260,8 +260,8 @@ Chain multiple selections together:
 rna_backbone = polymer.by_type(ciffy.RNA).backbone()
 
 # Get nucleobases of first chain
-chain_a_bases = polymer.by_index(0).nucleobase()
+chain_a_bases = polymer.chain(0).nucleobase()
 
 # Polymer-only, then by chain
-clean = polymer.poly().by_index([0, 1])
+clean = polymer.poly().chain([0, 1])
 ```

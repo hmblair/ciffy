@@ -154,12 +154,12 @@ class TestSingleResiduePolymer:
 class TestSingleChainPolymer:
     """Test operations on single-chain polymers."""
 
-    def test_single_chain_by_index(self, backend):
-        """by_index(0) returns same structure on single chain."""
+    def test_single_chain_select(self, backend):
+        """chain(0) returns same structure on single chain."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        chain = p.by_index(0)
+        chain = p.chain(0)
 
         assert chain.size() == p.size()
 
@@ -173,13 +173,13 @@ class TestSingleChainPolymer:
         assert len(chains) == 1
 
     def test_single_chain_out_of_bounds(self, backend):
-        """by_index(1) raises IndexError on single chain."""
+        """chain(1) raises IndexError on single chain."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
 
         with pytest.raises(IndexError):
-            p.by_index(1)
+            p.chain(1)
 
 
 class TestPolyHeteroPartition:

@@ -1,7 +1,7 @@
 """
 Tests for Polymer selection method edge cases.
 
-Tests by_atom, by_residue, by_type, by_index, mask, and __getitem__.
+Tests by_atom, by_residue, by_type, chain, mask, and __getitem__.
 """
 
 import pytest
@@ -153,34 +153,34 @@ class TestByType:
         assert rna.size(Scale.CHAIN) + protein.size(Scale.CHAIN) <= p.size(Scale.CHAIN)
 
 
-class TestByIndex:
-    """Test by_index() edge cases."""
+class TestChain:
+    """Test chain() edge cases."""
 
-    def test_by_index_first_chain(self, backend):
-        """by_index(0) returns first chain."""
+    def test_chain_first(self, backend):
+        """chain(0) returns first chain."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
-        chain = p.by_index(0)
+        chain = p.chain(0)
 
         assert not chain.empty()
         assert chain.size(Scale.CHAIN) == 1
 
-    def test_by_index_last_chain(self, backend):
-        """by_index with last valid index works."""
+    def test_chain_last(self, backend):
+        """chain() with last valid index works."""
         import ciffy
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
         last_idx = p.size(Scale.CHAIN) - 1
-        chain = p.by_index(last_idx)
+        chain = p.chain(last_idx)
 
         assert not chain.empty()
         assert chain.size(Scale.CHAIN) == 1
 
-    def test_by_index_out_of_bounds_positive(self, backend):
-        """by_index raises IndexError for out-of-bounds positive index."""
+    def test_chain_out_of_bounds(self, backend):
+        """chain() raises IndexError for out-of-bounds index."""
         import ciffy
         from ciffy import Scale
 
@@ -188,10 +188,10 @@ class TestByIndex:
         invalid_idx = p.size(Scale.CHAIN) + 10
 
         with pytest.raises(IndexError):
-            p.by_index(invalid_idx)
+            p.chain(invalid_idx)
 
-    def test_by_index_array_input(self, backend):
-        """by_index accepts array of indices."""
+    def test_chain_array_input(self, backend):
+        """chain() accepts array of indices."""
         import ciffy
         from ciffy import Scale
 
@@ -199,7 +199,7 @@ class TestByIndex:
         n_chains = p.size(Scale.CHAIN)
 
         if n_chains >= 2:
-            result = p.by_index(np.array([0, 1]))
+            result = p.chain(np.array([0, 1]))
             assert result.size(Scale.CHAIN) == 2
 
 

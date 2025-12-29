@@ -29,7 +29,7 @@
         - moment
         - mask
         - __getitem__
-        - by_index
+        - chain
         - by_atom
         - by_residue
         - by_type

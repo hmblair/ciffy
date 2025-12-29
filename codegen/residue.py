@@ -33,7 +33,6 @@ from .config import (
     Molecule,
     PURINE_RESIDUES,
     PYRIMIDINE_RESIDUES,
-    NUCLEIC_MOLECULE_TYPES,
     SIDECHAIN_CHI_DEFS,
 )
 
@@ -233,57 +232,4 @@ def compute_atom_dihedral_ownership(
                 atom_dihedral_refs[global_atom_idx, i, 1] = local_idx
 
     return atom_dihedral_type, atom_dihedral_refs
-
-
-def compute_residue_backbone_atoms(
-    all_residues: list[ResidueDefinition],
-    atom_index: dict[tuple[str, str], int],
-) -> np.ndarray:
-    """
-    Compute backbone atom indices for each residue type.
-
-    For each residue, stores the global atom indices of its backbone atoms:
-    - Protein: N, CA, C, O (4 atoms)
-    - Nucleic acid: P, O5', C5', C4', C3', O3' (6 atoms)
-
-    Args:
-        all_residues: List of all residue definitions.
-        atom_index: Dict mapping (cif_name, atom_name) -> global atom index.
-
-    Returns:
-        (num_residues, MAX_BACKBONE_ATOMS) int16 array where value is global
-        atom index or -1 if backbone atom not present.
-    """
-    from .config import Molecule
-
-    num_residues = len(all_residues)
-    # Max backbone atoms across all molecule types:
-    # - Protein has 4 (N, CA, C, O)
-    # - Nucleic acid has 6 (P, O5', C5', C4', C3', O3')
-    max_backbone = 6
-
-    backbone_atoms = np.full((num_residues, max_backbone), -1, dtype=np.int16)
-
-    for res_idx, res in enumerate(all_residues):
-        if not res.atoms:
-            continue
-
-        primary_cif = res.cif_names[0]
-
-        # Define backbone atoms by molecule type
-        if res.molecule_type == Molecule.PROTEIN:
-            backbone_names = ['N', 'CA', 'C', 'O']
-        elif res.molecule_type in NUCLEIC_MOLECULE_TYPES:
-            backbone_names = ["P", "O5'", "C5'", "C4'", "C3'", "O3'"]
-        else:
-            continue
-
-        for i, atom_name in enumerate(backbone_names):
-            if i >= max_backbone:
-                break
-            key = (primary_cif, atom_name)
-            if key in atom_index:
-                backbone_atoms[res_idx, i] = atom_index[key]
-
-    return backbone_atoms
 

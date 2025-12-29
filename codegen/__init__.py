@@ -32,12 +32,10 @@ from .c_codegen import (
     generate_gperf_files,
     generate_reverse_header,
     generate_bond_patterns_header,
-    generate_canonical_refs_header,
 )
 from .residue import (
     ResidueDefinition,
     compute_atom_dihedral_ownership,
-    compute_residue_backbone_atoms,
 )
 from .python_codegen import (
     generate_python_molecule,
@@ -71,7 +69,6 @@ class IndexedData:
     atom_index: dict[tuple[str, str], int]  # (cif_name, atom_name) -> atom index
     atom_dihedral_type: np.ndarray  # atom index -> dihedral type
     atom_dihedral_refs: np.ndarray  # atom index -> reference atoms
-    residue_backbone_atoms: np.ndarray  # residue index -> backbone atom indices
 
 
 @dataclass
@@ -218,7 +215,6 @@ def _build_indices(data: LoadedData) -> IndexedData:
     atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(
         residues, atom_index
     )
-    residue_backbone_atoms = compute_residue_backbone_atoms(residues, atom_index)
 
     return IndexedData(
         residue_index=residue_index,
@@ -227,7 +223,6 @@ def _build_indices(data: LoadedData) -> IndexedData:
         atom_index=atom_index,
         atom_dihedral_type=atom_dihedral_type,
         atom_dihedral_refs=atom_dihedral_refs,
-        residue_backbone_atoms=residue_backbone_atoms,
     )
 
 
@@ -263,14 +258,6 @@ def _generate_files(
         data.elements,
     )
     generate_bond_patterns_header(paths.internal_dir, data.residues, indices.atom_index)
-    generate_canonical_refs_header(
-        paths.internal_dir,
-        data.residues,
-        indices.atom_index,
-        indices.atom_dihedral_type,
-        indices.atom_dihedral_refs,
-        indices.residue_backbone_atoms,
-    )
 
     # Python code generation
     generate_python_molecule(paths.biochem_dir)

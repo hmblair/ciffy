@@ -378,87 +378,8 @@ def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> F
 # CHAIN ASSEMBLY (standalone function for generative models)
 # =============================================================================
 
-def assemble_chain(
-    residue_coords: list[Array],
-    transforms: list[Array],
-    residues: list[Residue],
-    atom_subsets: list[tuple[int, ...]],
-) -> Array:
-    """
-    Assemble a chain from pre-decoded residue coordinates and transforms.
-
-    This is the unified assembly function for all generative models (flow models,
-    autoregressive models, etc.). It handles frame resolution with caching and
-    uses the fast positioning path.
-
-    Args:
-        residue_coords: List of (n_atoms, 3) coordinate arrays per residue.
-            These are the decoded/predicted coordinates in canonical frame.
-        transforms: List of (6,) SE(3) transforms per residue [axis-angle, translation].
-            The transform for residue i positions it relative to residue i-1.
-        residues: List of Residue enum values.
-        atom_subsets: List of atom index tuples for each residue's coordinate array.
-            Must match the atom ordering in residue_coords.
-
-    Returns:
-        (N, 3) concatenated positioned coordinates for the entire chain.
-
-    Example:
-        >>> # In PolymerFlowModel.decode()
-        >>> residue_coords, transforms = [], []
-        >>> for i, res_type in enumerate(sequence):
-        ...     coords, transform = model.decode(latents[i])
-        ...     residue_coords.append(coords)
-        ...     transforms.append(transform)
-        >>> positioned = assemble_chain(residue_coords, transforms, residues, atom_subsets)
-    """
-    from ..geometry import position_residue_fast
-
-    if len(residue_coords) == 0:
-        return np.empty((0, 3), dtype=np.float32)
-
-    all_coords = []
-    prev_coords = None
-    prev_frame: FrameIndices | None = None
-    prev_transform = None
-
-    for i, (coords, transform, residue, atoms) in enumerate(
-        zip(residue_coords, transforms, residues, atom_subsets)
-    ):
-        # Get cached frame indices for this residue type + atom subset
-        frame = _resolve_frame_indices(residue.value, atoms)
-
-        if i == 0:
-            # First residue - no positioning needed, place at origin
-            positioned = coords
-        else:
-            # Position relative to previous residue
-            positioned = position_residue_fast(
-                prev_coords,
-                coords,
-                prev_transform,
-                prev_frame.prev_cols,
-                prev_frame.prev_z_toward,
-                frame.next_cols,
-                frame.next_z_toward,
-            )
-
-        all_coords.append(positioned)
-
-        # Store for next iteration
-        prev_coords = positioned
-        prev_frame = frame
-        prev_transform = transform
-
-    # Concatenate all positioned coordinates
-    if is_torch(all_coords[0]):
-        import torch
-        return torch.cat(all_coords, dim=0)
-    return np.concatenate(all_coords, axis=0)
-
-
 # =============================================================================
-# OPTIMIZED CHAIN ASSEMBLY (for uniform residue sizes)
+# CHAIN ASSEMBLY - OPTIMIZED WITH CUMULATIVE TRANSFORMS
 # =============================================================================
 
 
@@ -555,89 +476,6 @@ def _cumulative_matmul(matrices: Array) -> Array:
     return result
 
 
-def assemble_chain_fast(
-    coords: Array,
-    transforms: Array,
-    *,
-    compile: bool = False,
-) -> Array:
-    """
-    Fast chain assembly using cumulative transforms.
-
-    This optimized version is 10-20x faster than the standard assemble_chain
-    for chains with uniform residue sizes. It works by:
-    1. Converting all transforms to SE(3) matrices at once (vectorized)
-    2. Computing cumulative matrix products
-    3. Applying all transforms in a single batched operation
-
-    For GPU with torch tensors, use compile=True for additional 5-7x speedup
-    via kernel fusion.
-
-    Args:
-        coords: (n_residues, n_atoms, 3) canonical coordinates per residue.
-            All residues must have the same atom count (pad if needed).
-        transforms: (n_residues, 6) SE(3) transforms [axis-angle, translation].
-            Transform[i] positions residue i relative to the global frame.
-            Transform[0] is typically identity or the first residue's global pose.
-        compile: If True and using torch, apply torch.compile for GPU speedup.
-            Only effective on CUDA tensors.
-
-    Returns:
-        (n_residues, n_atoms, 3) positioned coordinates.
-
-    Example:
-        >>> # Stack coordinates (pad to uniform size if needed)
-        >>> coords = torch.stack([res_coords for res_coords in residue_list])
-        >>> transforms = torch.stack([t for t in transform_list])
-        >>> positioned = assemble_chain_fast(coords, transforms, compile=True)
-    """
-    n_residues, n_atoms, _ = coords.shape
-
-    if is_torch(coords):
-        import torch
-
-        # Build SE(3) matrices
-        Rs = _rodrigues_torch(transforms[:, :3])
-        T = torch.zeros(n_residues, 4, 4, device=coords.device, dtype=coords.dtype)
-        T[:, :3, :3] = Rs
-        T[:, :3, 3] = transforms[:, 3:]
-        T[:, 3, 3] = 1.0
-
-        # Cumulative product
-        if compile and coords.is_cuda:
-            _ensure_compiled()
-            T_cumul = _cumulative_matmul_compiled(T)
-        else:
-            T_cumul = _cumulative_matmul(T)
-
-        # Apply to all coordinates: (n, 4, 4) @ (n, n_atoms, 4).T
-        ones = torch.ones(n_residues, n_atoms, 1, device=coords.device, dtype=coords.dtype)
-        coords_h = torch.cat([coords, ones], dim=2)  # (n, n_atoms, 4)
-
-        # Batch transform
-        result_h = torch.bmm(T_cumul, coords_h.transpose(1, 2)).transpose(1, 2)
-        return result_h[:, :, :3]
-
-    else:
-        # NumPy path
-        Rs = _rodrigues_numpy(transforms[:, :3])
-        T = np.zeros((n_residues, 4, 4), dtype=coords.dtype)
-        T[:, :3, :3] = Rs
-        T[:, :3, 3] = transforms[:, 3:]
-        T[:, 3, 3] = 1.0
-
-        # Cumulative product
-        T_cumul = _cumulative_matmul(T)
-
-        # Apply to all coordinates
-        ones = np.ones((n_residues, n_atoms, 1), dtype=coords.dtype)
-        coords_h = np.concatenate([coords, ones], axis=2)
-
-        # Batch transform using einsum for efficiency
-        result_h = np.einsum('nij,nmj->nmi', T_cumul, coords_h)
-        return result_h[:, :, :3]
-
-
 # Compiled version for GPU (lazy initialization)
 _cumulative_matmul_compiled = None
 
@@ -654,9 +492,178 @@ def _get_compiled_cumulative_matmul():
     return _cumulative_matmul_compiled
 
 
-# Re-assign for use in assemble_chain_fast
 def _ensure_compiled():
+    """Ensure the compiled cumulative matmul is initialized."""
     global _cumulative_matmul_compiled
     if _cumulative_matmul_compiled is None:
         _cumulative_matmul_compiled = _get_compiled_cumulative_matmul()
+
+
+def _apply_cumulative_transforms_torch(
+    coords: "torch.Tensor",
+    transforms: "torch.Tensor",
+    compile: bool = False,
+) -> "torch.Tensor":
+    """Apply cumulative SE(3) transforms to batched coordinates (torch path)."""
+    import torch
+
+    n_residues = len(transforms)
+
+    # Build SE(3) matrices
+    Rs = _rodrigues_torch(transforms[:, :3])
+    T = torch.zeros(n_residues, 4, 4, device=coords.device, dtype=coords.dtype)
+    T[:, :3, :3] = Rs
+    T[:, :3, 3] = transforms[:, 3:]
+    T[:, 3, 3] = 1.0
+
+    # Cumulative product
+    if compile and coords.is_cuda:
+        _ensure_compiled()
+        T_cumul = _cumulative_matmul_compiled(T)
+    else:
+        T_cumul = _cumulative_matmul(T)
+
+    # Apply to all coordinates: (n, 4, 4) @ (n, n_atoms, 4).T
+    n_atoms = coords.shape[1]
+    ones = torch.ones(n_residues, n_atoms, 1, device=coords.device, dtype=coords.dtype)
+    coords_h = torch.cat([coords, ones], dim=2)
+
+    # Batch transform
+    result_h = torch.bmm(T_cumul, coords_h.transpose(1, 2)).transpose(1, 2)
+    return result_h[:, :, :3]
+
+
+def _apply_cumulative_transforms_numpy(
+    coords: np.ndarray,
+    transforms: np.ndarray,
+) -> np.ndarray:
+    """Apply cumulative SE(3) transforms to batched coordinates (numpy path)."""
+    n_residues = len(transforms)
+
+    # Build SE(3) matrices
+    Rs = _rodrigues_numpy(transforms[:, :3])
+    T = np.zeros((n_residues, 4, 4), dtype=coords.dtype)
+    T[:, :3, :3] = Rs
+    T[:, :3, 3] = transforms[:, 3:]
+    T[:, 3, 3] = 1.0
+
+    # Cumulative product
+    T_cumul = _cumulative_matmul(T)
+
+    # Apply to all coordinates
+    n_atoms = coords.shape[1]
+    ones = np.ones((n_residues, n_atoms, 1), dtype=coords.dtype)
+    coords_h = np.concatenate([coords, ones], axis=2)
+
+    # Batch transform using einsum
+    result_h = np.einsum('nij,nmj->nmi', T_cumul, coords_h)
+    return result_h[:, :, :3]
+
+
+def assemble_chain(
+    residue_coords: list[Array],
+    transforms: list[Array],
+    residues: list[Residue] | None = None,
+    atom_subsets: list[tuple[int, ...]] | None = None,
+    *,
+    compile: bool = False,
+) -> Array:
+    """
+    Assemble a chain from per-residue coordinates and transforms.
+
+    Uses optimized cumulative transform computation (10-20x faster than
+    sequential positioning). Coordinates are padded to uniform size if needed,
+    then transformed in batch, then unpadded.
+
+    For GPU tensors, set compile=True for additional 5-7x speedup via
+    kernel fusion (only effective on CUDA).
+
+    Args:
+        residue_coords: List of (n_atoms, 3) coordinate arrays per residue.
+            These are the decoded/predicted coordinates in canonical frame.
+        transforms: List of (6,) SE(3) transforms per residue [axis-angle, translation].
+            Transform[i] positions residue i relative to residue i-1.
+        residues: (Unused, kept for API compatibility) List of Residue enum values.
+        atom_subsets: (Unused, kept for API compatibility) List of atom index tuples.
+        compile: If True and using CUDA tensors, use torch.compile for speedup.
+
+    Returns:
+        (N, 3) concatenated positioned coordinates for the entire chain.
+
+    Example:
+        >>> residue_coords = [model.decode(latent)[0] for latent in latents]
+        >>> transforms = [model.decode(latent)[1] for latent in latents]
+        >>> positioned = assemble_chain(residue_coords, transforms, compile=True)
+    """
+    if len(residue_coords) == 0:
+        if is_torch(residue_coords):
+            import torch
+            return torch.empty(0, 3)
+        return np.empty((0, 3), dtype=np.float32)
+
+    # Get atom counts per residue
+    atom_counts = [c.shape[0] for c in residue_coords]
+    max_atoms = max(atom_counts)
+    n_residues = len(residue_coords)
+    use_torch = is_torch(residue_coords[0])
+
+    if use_torch:
+        import torch
+
+        device = residue_coords[0].device
+        dtype = residue_coords[0].dtype
+
+        # Pad and stack coordinates
+        if all(c == max_atoms for c in atom_counts):
+            # Uniform size - no padding needed
+            coords_padded = torch.stack(residue_coords)
+            needs_unpad = False
+        else:
+            # Variable sizes - pad to max
+            coords_padded = torch.zeros(n_residues, max_atoms, 3, device=device, dtype=dtype)
+            for i, (coords, n) in enumerate(zip(residue_coords, atom_counts)):
+                coords_padded[i, :n] = coords
+            needs_unpad = True
+
+        # Stack transforms
+        transforms_stacked = torch.stack(transforms)
+
+        # Apply cumulative transforms
+        result_padded = _apply_cumulative_transforms_torch(
+            coords_padded, transforms_stacked, compile=compile
+        )
+
+        # Unpad and concatenate
+        if needs_unpad:
+            result_list = [result_padded[i, :n] for i, n in enumerate(atom_counts)]
+            return torch.cat(result_list, dim=0)
+        else:
+            return result_padded.reshape(-1, 3)
+
+    else:
+        # NumPy path
+        dtype = residue_coords[0].dtype
+
+        # Pad and stack coordinates
+        if all(c == max_atoms for c in atom_counts):
+            coords_padded = np.stack(residue_coords)
+            needs_unpad = False
+        else:
+            coords_padded = np.zeros((n_residues, max_atoms, 3), dtype=dtype)
+            for i, (coords, n) in enumerate(zip(residue_coords, atom_counts)):
+                coords_padded[i, :n] = coords
+            needs_unpad = True
+
+        # Stack transforms
+        transforms_stacked = np.stack(transforms)
+
+        # Apply cumulative transforms
+        result_padded = _apply_cumulative_transforms_numpy(coords_padded, transforms_stacked)
+
+        # Unpad and concatenate
+        if needs_unpad:
+            result_list = [result_padded[i, :n] for i, n in enumerate(atom_counts)]
+            return np.concatenate(result_list, axis=0)
+        else:
+            return result_padded.reshape(-1, 3)
 

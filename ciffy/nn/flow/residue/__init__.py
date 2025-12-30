@@ -39,7 +39,6 @@ from .data import (
     ResidueDataset,
 )
 from .train import train_pca_flow
-from .trainer import ResidueFlowTrainer, ResidueFlowTrainingConfig, TrainingResult
 
 # Re-export from geometry for convenience
 from ciffy.geometry import (
@@ -70,7 +69,4 @@ __all__ = [
     "ResidueDataset",
     # Training
     "train_pca_flow",
-    "ResidueFlowTrainer",
-    "ResidueFlowTrainingConfig",
-    "TrainingResult",
 ]

@@ -60,9 +60,6 @@ from .residue import (
     ResidueDataset,
     # Training
     train_pca_flow,
-    ResidueFlowTrainer,
-    ResidueFlowTrainingConfig,
-    TrainingResult,
 )
 
 from .metrics import (
@@ -97,9 +94,6 @@ __all__ = [
     "ResidueDataset",
     # Training
     "train_pca_flow",
-    "ResidueFlowTrainer",
-    "ResidueFlowTrainingConfig",
-    "TrainingResult",
     # Metrics
     "LatentMoments",
     "FlowMetrics",

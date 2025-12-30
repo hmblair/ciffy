@@ -40,6 +40,7 @@ Repository = "https://github.com/hmblair/ciffy"
 [tool.setuptools]
 packages = [
     "ciffy",
+    "ciffy._selection",
     "ciffy.backend",
     "ciffy.biochemistry",
     "ciffy.cli",
@@ -47,6 +48,7 @@ packages = [
     "ciffy.geometry",
     "ciffy.io",
     "ciffy.operations",
+    "ciffy.polymer",
     "ciffy.utils",
     "ciffy.visualize",
     # Excluded from distribution (research code):

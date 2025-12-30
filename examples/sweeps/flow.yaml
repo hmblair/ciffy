@@ -1,0 +1,38 @@
+# W&B Sweep configuration for residue flow model hyperparameter search
+#
+# Usage:
+#   wandb sweep configs/sweeps/flow.yaml
+#   sbatch scripts/slurm/run_sweep.sh <sweep-id>
+
+program: scripts/train_flow.py
+method: bayes
+metric:
+  name: val/nll
+  goal: minimize
+
+parameters:
+  # Latent dimension (most important hyperparameter)
+  --latent-dim:
+    values: [8, 12, 16, 20]
+
+  # Flow architecture
+  --n-layers:
+    values: [4, 6, 8]
+
+  --hidden-dim:
+    values: [32, 64, 128]
+
+  # Training
+  --lr:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01
+
+  # Regularization
+  --noise-std:
+    values: [0.0, 0.01, 0.05]
+
+early_terminate:
+  type: hyperband
+  min_iter: 20
+  eta: 3

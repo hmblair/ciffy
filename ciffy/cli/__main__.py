@@ -10,10 +10,17 @@ Usage:
     ciffy split <file.cif>           # Split into per-chain files
     ciffy template <sequence>        # Create template from sequence with sampled dihedrals
     ciffy cluster data/*.cif         # Cluster structures by similarity, return representatives
-    ciffy train flow --data /path --output /path  # Train flow model
+
+    # Training
+    ciffy train flow --data /path --output /path              # Train flow model
     ciffy train latent-diffusion --data /path --output /path  # Train latent diffusion
     ciffy train coord-diffusion --data /path --output /path   # Train coordinate diffusion
-    ciffy predict model.safetensors --sequence ACGU -o out.cif  # Generate structure
+
+    # Prediction/Sampling
+    ciffy predict flow model_dir --sequence acgu -o out.cif           # Sample from flow
+    ciffy predict latent-diffusion model.safetensors --sequence acgu  # Generate from diffusion
+    ciffy predict coord-diffusion model.safetensors --sequence acgu   # Generate from diffusion
+
     ciffy download --max_count 100   # Download structures from RCSB PDB
     ciffy download --preset casp15   # Download CASP15 benchmark targets
 """
@@ -651,8 +658,8 @@ def _train_coord_diffusion_command(args):
         print(f"Saved to: {save_path}")
 
 
-def _sample_command(args):
-    """Handle the sample subcommand."""
+def _predict_flow_command(args):
+    """Handle the predict flow subcommand."""
     from pathlib import Path
 
     from ciffy import from_sequence
@@ -665,12 +672,12 @@ def _sample_command(args):
         sys.exit(1)
 
     if not args.quiet:
-        print(f"Loading model from {model_path}...")
+        print(f"Loading flow model from {model_path}...")
 
     model = PolymerFlowModel.load(model_path)
 
     if not args.quiet:
-        print(f"Model residues: {[r.name for r in model.residue_types]}")
+        print(f"Residues: {[r.name for r in model.residue_types]}")
         print(f"Latent dim: {model.latent_dim}")
 
     # Create template
@@ -696,6 +703,140 @@ def _sample_command(args):
             print(f"Saved to {out_path}")
     else:
         # Multiple files
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
+
+
+def _predict_latent_diffusion_command(args):
+    """Handle the predict latent-diffusion subcommand."""
+    from pathlib import Path
+
+    import torch
+
+    from ciffy import from_sequence
+    from ciffy.nn.flow import PolymerFlowModel, load_pretrained
+    from ciffy.nn.diffusion.latent_diffusion import LatentDiffusionModel
+
+    # Determine device
+    device = args.device
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Load flow model (for decoding)
+    if not args.quiet:
+        print(f"Loading flow model...")
+
+    if args.flow_model:
+        flow_model = PolymerFlowModel.load(args.flow_model, device=device)
+    else:
+        flow_model = load_pretrained("rna", device=device)
+
+    # Load diffusion model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading diffusion model from {model_path}...")
+
+    model = LatentDiffusionModel.load(model_path, flow_model=flow_model)
+    model = model.to(device)
+    model.eval()
+
+    # Create template
+    template = from_sequence(args.sequence, atoms=flow_model.atom_filter)
+
+    if not args.quiet:
+        print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")
+
+    # Set seed
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    # Generate
+    with torch.no_grad():
+        samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
+
+
+def _predict_coord_diffusion_command(args):
+    """Handle the predict coord-diffusion subcommand."""
+    from pathlib import Path
+
+    import torch
+
+    from ciffy import from_sequence
+    from ciffy.nn.diffusion.coordinate_diffusion import CoordinateDiffusionModel
+
+    # Determine device
+    device = args.device
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Load model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading diffusion model from {model_path}...")
+
+    model = CoordinateDiffusionModel.load(model_path)
+    model = model.to(device)
+    model.eval()
+
+    # Create template
+    template = from_sequence(args.sequence)
+
+    if not args.quiet:
+        print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")
+
+    # Set seed
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    # Generate
+    with torch.no_grad():
+        samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
         output.mkdir(parents=True, exist_ok=True)
         for i, polymer in enumerate(samples):
             out_path = output / f"sample_{i:03d}.cif"
@@ -864,186 +1005,10 @@ def _cluster_command(args):
                 print(rep)
 
 
-def _predict_command(args):
-    """Handle the predict subcommand (unified inference)."""
-    from glob import glob
-    from pathlib import Path
-
-    try:
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch is required for prediction.\n"
-            "Install with: pip install torch",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    try:
-        from ciffy.nn import load_model, get_model_info
-    except ImportError:
-        print(
-            "Error: Neural network modules not available.\n"
-            "Install with: pip install ciffy[nn]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    from ciffy import from_sequence
-
-    # Determine device
-    device = args.device
-    if device == "auto":
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-
-    # Collect sequences
-    sequences = []  # List of (id, sequence) tuples
-
-    if args.sequence:
-        for i, seq in enumerate(args.sequence):
-            sequences.append((f"seq_{i}", seq))
-    elif args.fasta:
-        # Read sequences from FASTA
-        try:
-            with open(args.fasta) as f:
-                content = f.read()
-
-            if content.startswith(">"):
-                # FASTA format
-                current_id = None
-                current_seq = []
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith(">"):
-                        if current_id is not None:
-                            sequences.append((current_id, "".join(current_seq)))
-                        current_id = line[1:].split()[0]
-                        current_seq = []
-                    elif line:
-                        current_seq.append(line)
-                if current_id is not None:
-                    sequences.append((current_id, "".join(current_seq)))
-            else:
-                # Plain text, one per line
-                for i, line in enumerate(content.splitlines()):
-                    line = line.strip()
-                    if line:
-                        sequences.append((f"seq_{i}", line))
-
-            if not sequences:
-                print(f"Error: No sequences found in {args.fasta}", file=sys.stderr)
-                sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: FASTA file not found: {args.fasta}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print("Error: Must provide --sequence or --fasta", file=sys.stderr)
-        sys.exit(1)
-
-    # Check model file exists
-    model_path = Path(args.model)
-    if not model_path.exists():
-        print(f"Error: Model not found: {model_path}", file=sys.stderr)
-        sys.exit(1)
-
-    # Show model info
-    if not args.quiet:
-        info = get_model_info(model_path)
-        print(f"Loading {info['model_type']} model...")
-
-    # Load model
-    try:
-        model = load_model(model_path, device=device)
-        model.eval()
-    except Exception as e:
-        print(f"Error loading model: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Get atom filter from model
-    atom_filter = getattr(model, "atom_filter", None)
-    if atom_filter is None and hasattr(model, "flow_model"):
-        atom_filter = model.flow_model.atom_filter
-
-    # Set seed if specified
-    if args.seed is not None:
-        torch.manual_seed(args.seed)
-
-    # Determine output handling
-    output = Path(args.output)
-    single_sequence = len(sequences) == 1
-    single_sample = args.n_samples == 1
-
-    # Generate structures for each sequence
-    total_structures = 0
-    for seq_id, sequence in sequences:
-        if not args.quiet:
-            seq_display = sequence[:50] + ('...' if len(sequence) > 50 else '')
-            print(f"Generating {args.n_samples} sample(s) for {seq_id}: {seq_display} ({len(sequence)} residues)")
-
-        # Create template
-        try:
-            template = from_sequence(sequence, atoms=atom_filter)
-        except Exception as e:
-            print(f"Error creating template for {seq_id}: {e}", file=sys.stderr)
-            continue
-
-        # Generate samples
-        try:
-            with torch.no_grad():
-                samples = model.sample(
-                    template,
-                    n_samples=args.n_samples,
-                    temperature=args.temperature,
-                )
-        except Exception as e:
-            print(f"Error generating samples for {seq_id}: {e}", file=sys.stderr)
-            continue
-
-        # Write outputs
-        if single_sequence and single_sample:
-            # Single file output
-            out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
-            samples[0].write(str(out_path))
-            if not args.quiet:
-                print(f"Wrote {out_path} ({samples[0].size()} atoms)")
-        elif single_sequence:
-            # Multiple samples, single sequence -> numbered files
-            if output.suffix == ".cif":
-                base = output.stem
-                parent = output.parent
-            else:
-                base = "sample"
-                parent = output
-            parent.mkdir(parents=True, exist_ok=True)
-            for i, sample in enumerate(samples):
-                out_path = parent / f"{base}_{i:03d}.cif"
-                sample.write(str(out_path))
-                if not args.quiet:
-                    print(f"Wrote {out_path}")
-        else:
-            # Multiple sequences -> directory structure
-            output.mkdir(parents=True, exist_ok=True)
-            for i, sample in enumerate(samples):
-                out_path = output / f"{seq_id}_{i:03d}.cif"
-                sample.write(str(out_path))
-                if not args.quiet:
-                    print(f"Wrote {out_path}")
-
-        total_structures += len(samples)
-
-    if not args.quiet:
-        print(f"Generated {total_structures} structure(s)")
-
-
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "sample", "predict", "download", "cluster"}
+    subcommands = {"map", "info", "split", "template", "train", "predict", "download", "cluster"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command (deprecated)
@@ -1396,96 +1361,104 @@ def main():
         help="Maximum atoms per chain (default: 2000)",
     )
 
-    # Sample subcommand (for flow models)
-    sample_parser = subparsers.add_parser(
-        "sample",
-        help="Sample conformations from a trained flow model",
-        description="Generate polymer conformations using a trained flow model.",
-    )
-    sample_parser.add_argument(
-        "model",
-        help="Path to flow model directory",
-    )
-    sample_parser.add_argument(
-        "--sequence", "-s",
-        required=True,
-        help="Sequence to generate (e.g., 'acguacgu' for RNA)",
-    )
-    sample_parser.add_argument(
-        "--output", "-o",
-        default="sample.cif",
-        help="Output path (file for single, directory for multiple)",
-    )
-    sample_parser.add_argument(
-        "--n-samples", "-n",
-        type=int,
-        default=1,
-        help="Number of samples to generate (default: 1)",
-    )
-    sample_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducibility",
-    )
-    sample_parser.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress output messages",
-    )
-
-    # Predict subcommand
+    # Predict subcommand with subparsers for model types
     predict_parser = subparsers.add_parser(
         "predict",
-        help="Generate structures from a trained model",
-        description="Generate polymer structures from sequences using trained models.",
+        help="Generate structures (flow, latent-diffusion, coord-diffusion)",
+        description=(
+            "Generate polymer structures using trained models.\n\n"
+            "Subcommands:\n"
+            "  flow              Sample from flow model\n"
+            "  latent-diffusion  Generate from latent diffusion model\n"
+            "  coord-diffusion   Generate from coordinate diffusion model"
+        ),
     )
-    predict_parser.add_argument(
-        "model",
-        help="Path to model file (.safetensors or directory)",
+    predict_subparsers = predict_parser.add_subparsers(dest="predict_type")
+
+    # Common arguments helper for predict
+    def add_common_predict_args(parser):
+        parser.add_argument(
+            "model",
+            help="Path to model (directory for flow, .safetensors for diffusion)",
+        )
+        parser.add_argument(
+            "--sequence", "-s",
+            required=True,
+            help="Sequence to generate (e.g., 'acguacgu' for RNA)",
+        )
+        parser.add_argument(
+            "--output", "-o",
+            default="output.cif",
+            help="Output path (file for single, directory for multiple)",
+        )
+        parser.add_argument(
+            "--n-samples", "-n",
+            type=int,
+            default=1,
+            help="Number of samples to generate (default: 1)",
+        )
+        parser.add_argument(
+            "--seed",
+            type=int,
+            default=None,
+            help="Random seed for reproducibility",
+        )
+        parser.add_argument(
+            "--quiet", "-q",
+            action="store_true",
+            help="Suppress output messages",
+        )
+
+    # Predict flow subcommand
+    predict_flow_parser = predict_subparsers.add_parser(
+        "flow",
+        help="Sample conformations from a flow model",
+        description="Generate polymer conformations using a trained flow model.",
     )
-    predict_parser.add_argument(
-        "--sequence", "-s",
-        nargs="+",
-        help="Sequence(s) to generate structures for (e.g., ACGU or MGKLF)",
+    add_common_predict_args(predict_flow_parser)
+
+    # Predict latent-diffusion subcommand
+    predict_latent_parser = predict_subparsers.add_parser(
+        "latent-diffusion",
+        help="Generate from latent diffusion model",
+        description="Generate structures using a trained latent diffusion model.",
     )
-    predict_parser.add_argument(
-        "--fasta", "-f",
-        help="Path to FASTA or plain text file with sequences",
-    )
-    predict_parser.add_argument(
-        "--output", "-o",
-        default="output.cif",
-        help="Output path: file.cif for single, directory for multiple (default: output.cif)",
-    )
-    predict_parser.add_argument(
-        "--n-samples", "-n",
-        type=int,
-        default=1,
-        help="Number of samples per sequence (default: 1)",
-    )
-    predict_parser.add_argument(
-        "--temperature", "-t",
-        type=float,
-        default=1.0,
-        help="Sampling temperature (default: 1.0)",
-    )
-    predict_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducibility",
-    )
-    predict_parser.add_argument(
+    add_common_predict_args(predict_latent_parser)
+    predict_latent_parser.add_argument(
         "--device", "-d",
         default="auto",
         choices=["auto", "cuda", "mps", "cpu"],
         help="Device to use (default: auto)",
     )
-    predict_parser.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress progress output",
+    predict_latent_parser.add_argument(
+        "--flow-model",
+        help="Path to flow model for decoding (default: built-in RNA model)",
+    )
+    predict_latent_parser.add_argument(
+        "--steps",
+        type=int,
+        default=100,
+        help="Number of diffusion steps (default: 100)",
+    )
+
+    # Predict coord-diffusion subcommand
+    predict_coord_parser = predict_subparsers.add_parser(
+        "coord-diffusion",
+        help="Generate from coordinate diffusion model",
+        description="Generate structures using a trained coordinate diffusion model.",
+    )
+    add_common_predict_args(predict_coord_parser)
+    predict_coord_parser.add_argument(
+        "--device", "-d",
+        default="auto",
+        choices=["auto", "cuda", "mps", "cpu"],
+        help="Device to use (default: auto)",
+    )
+    predict_coord_parser.add_argument(
+        "--steps",
+        type=int,
+        default=100,
+        help="Number of diffusion steps (default: 100)",
     )
 
     # Download subcommand
@@ -1684,10 +1657,15 @@ def main():
             train_parser.print_help()
     elif args.command == "template":
         _template_command(args)
-    elif args.command == "sample":
-        _sample_command(args)
     elif args.command == "predict":
-        _predict_command(args)
+        if args.predict_type == "flow":
+            _predict_flow_command(args)
+        elif args.predict_type == "latent-diffusion":
+            _predict_latent_diffusion_command(args)
+        elif args.predict_type == "coord-diffusion":
+            _predict_coord_diffusion_command(args)
+        else:
+            predict_parser.print_help()
     elif args.command == "download":
         _download_command(args)
     elif args.command == "map":

@@ -231,26 +231,34 @@ print(model.residue_types)  # [Residue.A, Residue.C, Residue.G, Residue.U]
 
 ## Advanced Usage
 
-For more control over the flow model architecture and training, use the lower-level API:
+For more control over the flow model architecture and training, use PyTorch Lightning:
 
 ```python
-from ciffy.nn.flow import (
-    ResidueFlowModel,
-    ResidueFlowTrainer,
-    PolymerFlowModel,
-    TrainingConfig,
+import lightning as L
+from ciffy.nn.lightning import FlowDataModule, ResidueFlowModule
+from ciffy.nn.lightning.modules.residue_flow import (
+    ResidueFlowFullConfig,
+    ResidueFlowModelConfig,
 )
+from ciffy.nn.flow import PolymerFlowModel
 from ciffy import Residue
 
-# Create individual residue models
-config = TrainingConfig(latent_dim=16, n_layers=12)
-trainer = ResidueFlowTrainer(config)
+# Create config
+config = ResidueFlowFullConfig(
+    model=ResidueFlowModelConfig(latent_dim=16, n_layers=12),
+)
 
 # Train each residue type
-results = trainer.train_all(cif_paths, [Residue.A, Residue.C, Residue.G, Residue.U])
+models = {}
+for residue in [Residue.A, Residue.C, Residue.G, Residue.U]:
+    dm = FlowDataModule(cif_paths, residue)
+    module = ResidueFlowModule(config, residue)
+    trainer = L.Trainer(max_epochs=200)
+    trainer.fit(module, dm)
+    models[residue] = module.get_model()
 
 # Combine into polymer model
-polymer_model = trainer.to_polymer_model(results)
+polymer_model = PolymerFlowModel(models)
 ```
 
 See the [Deep Learning Guide](deep-learning.md) for detailed documentation of the lower-level API.

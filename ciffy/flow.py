@@ -23,7 +23,7 @@ Example usage:
     >>> for i, p in enumerate(samples):
     ...     p.write(f"sample_{i}.cif")
     >>>
-    >>> # Train a model
+    >>> # Train a model (uses PyTorch Lightning)
     >>> model = flow.train(["data/*.cif"], residues="ACGU", n_epochs=200)
     >>>
     >>> # Encode/decode
@@ -149,12 +149,21 @@ def train(
     cif_paths: list[Union[str, Path]],
     residues: Union[list[str], str] = "ACGU",
     output_dir: Union[str, Path, None] = None,
-    **config_kwargs,
+    n_epochs: int = 200,
+    latent_dim: int = 12,
+    n_layers: int = 6,
+    hidden_dim: int = 64,
+    batch_size: int = 256,
+    lr: float = 1e-3,
+    accelerator: str = "auto",
+    verbose: bool = True,
+    **kwargs,
 ) -> "PolymerFlowModel":
     """
     Train a flow model on CIF structures.
 
-    Simplified interface for training custom models.
+    Uses PyTorch Lightning for training. This is a simplified interface
+    for training custom models.
 
     Args:
         cif_paths: Paths to CIF files for training data. Supports:
@@ -165,12 +174,15 @@ def train(
             - String like "ACGU" (each character is a residue)
             - List of residue names ["A", "C", "G", "U"]
         output_dir: Where to save trained model (optional).
-        **config_kwargs: Passed to ResidueFlowTrainingConfig. Common options:
-            - latent_dim: Latent space dimension (default: 12)
-            - n_epochs: Number of training epochs (default: 200)
-            - device: Training device ("cpu" or "cuda")
-            - n_layers: Number of flow layers (default: 8)
-            - hidden_dim: Hidden layer dimension (default: 64)
+        n_epochs: Number of training epochs (default: 200).
+        latent_dim: Latent space dimension (default: 12).
+        n_layers: Number of flow layers (default: 6).
+        hidden_dim: Hidden layer dimension (default: 64).
+        batch_size: Training batch size (default: 256).
+        lr: Learning rate (default: 1e-3).
+        accelerator: Device for training ("auto", "cpu", "gpu", "mps").
+        verbose: Whether to show progress bars.
+        **kwargs: Additional arguments passed to Lightning Trainer.
 
     Returns:
         Trained PolymerFlowModel.
@@ -183,11 +195,19 @@ def train(
         ...     residues="ACGU",
         ...     output_dir="models/my_rna",
         ...     n_epochs=200,
-        ...     device="cuda",
+        ...     accelerator="gpu",
         ... )
     """
-    from .nn.flow import ResidueFlowTrainer, ResidueFlowTrainingConfig
+    import lightning as L
     from .biochemistry import Residue
+    from .nn.flow import PolymerFlowModel
+    from .nn.lightning import FlowDataModule, ResidueFlowModule
+    from .nn.lightning.modules.residue_flow import (
+        ResidueFlowFullConfig,
+        ResidueFlowModelConfig,
+        ResidueFlowDataConfig,
+    )
+    from .nn.config import TrainingConfig
 
     # Parse residues
     if isinstance(residues, str):
@@ -209,16 +229,89 @@ def train(
         else:
             resolved_paths.append(path)
 
-    # Create config and train
-    config = ResidueFlowTrainingConfig(**config_kwargs)
-    trainer = ResidueFlowTrainer(config)
-    results = trainer.train_all(resolved_paths, residue_list)
+    if not resolved_paths:
+        raise ValueError(f"No CIF files found in {cif_paths}")
+
+    if verbose:
+        print(f"Training on {len(resolved_paths)} CIF files")
+
+    # Create config
+    config = ResidueFlowFullConfig(
+        model=ResidueFlowModelConfig(
+            latent_dim=latent_dim,
+            n_layers=n_layers,
+            hidden_dim=hidden_dim,
+        ),
+        data=ResidueFlowDataConfig(
+            batch_size=batch_size,
+        ),
+        training=TrainingConfig(
+            lr=lr,
+            epochs=n_epochs,
+        ),
+    )
+
+    # Train each residue type
+    residue_models = {}
+
+    for residue in residue_list:
+        if verbose:
+            print(f"\nTraining model for {residue.name}...")
+
+        try:
+            # Create data module
+            dm = FlowDataModule(
+                cif_paths=list(resolved_paths),
+                residue=residue,
+                batch_size=batch_size,
+            )
+
+            # Create Lightning module
+            module = ResidueFlowModule(config, residue)
+
+            # Create trainer
+            trainer = L.Trainer(
+                max_epochs=n_epochs,
+                accelerator=accelerator,
+                enable_progress_bar=verbose,
+                enable_model_summary=verbose,
+                logger=False,  # Disable logging for simple API
+                **kwargs,
+            )
+
+            # Train
+            trainer.fit(module, dm)
+
+            # Get trained model
+            model = module.get_model()
+            residue_models[residue] = model
+
+            if verbose:
+                print(f"  {residue.name}: {model.n_atoms} atoms, latent_dim={model.latent_dim}")
+
+            # Save individual model if output_dir specified
+            if output_dir:
+                model_path = Path(output_dir) / residue.name
+                model.save(model_path)
+
+        except Exception as e:
+            if verbose:
+                print(f"  {residue.name}: Failed - {e}")
+
+    if not residue_models:
+        raise ValueError("No models were trained successfully")
+
+    # Create PolymerFlowModel
+    polymer_model = PolymerFlowModel(residue_models)
 
     # Save if requested
     if output_dir:
-        trainer.save(results, output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        polymer_model.save(output_dir)
+        if verbose:
+            print(f"\nSaved PolymerFlowModel to {output_dir}")
 
-    return trainer.to_polymer_model(results)
+    return polymer_model
 
 
 def encode(

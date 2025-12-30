@@ -588,13 +588,20 @@ class ResidueFlowModel(nn.Module, HubMixin):
         n_atoms: Number of atoms per residue.
 
     Example:
-        >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
+        >>> # Train using Lightning (see ciffy.nn.lightning.ResidueFlowModule)
+        >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+        >>> module = ResidueFlowModule(config, Residue.A)
+        >>> trainer.fit(module, dm)
+        >>> model = module.get_model()
+        >>>
+        >>> # Or use high-level API
+        >>> from ciffy import flow
+        >>> polymer_model = flow.train(cif_paths, residues="ACGU")
+        >>>
+        >>> # Decode to get coordinates and transform
         >>> coords, transform = model.decode(z)
-        >>> # Position next residue using the transform
-        >>> from ciffy.nn.residue_flow import position_next_residue
-        >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
-
-        # Can be used as part of a larger module:
+        >>>
+        >>> # Can be used as part of a larger module:
         >>> class MolecularModel(nn.Module):
         ...     def __init__(self):
         ...         super().__init__()

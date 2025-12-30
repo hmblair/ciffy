@@ -3,7 +3,7 @@
 Example: Training ResidueFlowModels and sampling RNA conformations.
 
 This example demonstrates the complete workflow for:
-1. Training flow models on RNA residues from CIF structures
+1. Training flow models on RNA residues from CIF structures using Lightning
 2. Creating a PolymerFlowModel for multi-residue sampling
 3. Sampling multiple conformations for a given sequence
 4. Saving sampled structures to CIF files
@@ -30,23 +30,52 @@ from ciffy.nn.flow import (
 def train_residue_models(
     cif_paths: list[Path],
     residues: list,
-    config: ResidueFlowConfig,
+    latent_dim: int = 8,
+    n_layers: int = 4,
+    hidden_dim: int = 32,
     n_epochs: int = 50,
     verbose: bool = True,
 ) -> dict:
     """
-    Train flow models for each residue type.
+    Train flow models for each residue type using Lightning.
 
     Args:
         cif_paths: List of CIF file paths for training data.
         residues: List of residue types to train (e.g., [Residue.A, Residue.C]).
-        config: Configuration for the flow model.
+        latent_dim: Latent space dimension.
+        n_layers: Number of flow layers.
+        hidden_dim: Hidden layer size.
         n_epochs: Number of training epochs per residue.
         verbose: Whether to print training progress.
 
     Returns:
         Dictionary mapping residue type to trained ResidueFlowModel.
     """
+    import lightning as L
+    from ciffy.nn.lightning import FlowDataModule, ResidueFlowModule
+    from ciffy.nn.lightning.modules.residue_flow import (
+        ResidueFlowFullConfig,
+        ResidueFlowModelConfig,
+        ResidueFlowDataConfig,
+    )
+    from ciffy.nn.config import TrainingConfig
+
+    # Create config
+    config = ResidueFlowFullConfig(
+        model=ResidueFlowModelConfig(
+            latent_dim=latent_dim,
+            n_layers=n_layers,
+            hidden_dim=hidden_dim,
+        ),
+        data=ResidueFlowDataConfig(
+            batch_size=256,
+        ),
+        training=TrainingConfig(
+            lr=1e-3,
+            epochs=n_epochs,
+        ),
+    )
+
     models = {}
 
     for residue in residues:
@@ -54,19 +83,35 @@ def train_residue_models(
             print(f"\nTraining model for {residue.name}...")
 
         try:
-            model = ResidueFlowModel.from_structures(
-                cif_paths,
-                residue,
-                config=config,
-                n_epochs=n_epochs,
-                verbose=verbose,
+            # Create data module
+            dm = FlowDataModule(
+                cif_paths=list(cif_paths),
+                residue=residue,
+                batch_size=256,
+                min_coverage=0.5,  # Lower for small datasets
             )
+
+            # Create Lightning module
+            module = ResidueFlowModule(config, residue)
+
+            # Create trainer
+            trainer = L.Trainer(
+                max_epochs=n_epochs,
+                accelerator="auto",
+                enable_progress_bar=verbose,
+                enable_model_summary=False,
+                logger=False,
+            )
+
+            # Train
+            trainer.fit(module, dm)
+
+            # Get trained model
+            model = module.get_model()
             models[residue] = model
 
             if verbose:
-                print(f"  {residue.name}: {model.n_atoms} atoms, "
-                      f"{model.var_explained*100:.1f}% variance explained, "
-                      f"PCA RMSD = {model.pca_rmsd:.3f} Å")
+                print(f"  {residue.name}: {model.n_atoms} atoms, latent_dim={model.latent_dim}")
 
         except Exception as e:
             if verbose:
@@ -123,13 +168,6 @@ def main():
 
     # Flow model configuration
     # Note: Small values for quick demo; increase for production
-    config = ResidueFlowConfig(
-        latent_dim=8,       # Dimensionality of latent space
-        n_layers=4,         # Number of flow layers
-        hidden_dim=32,      # Hidden layer size
-        min_coverage=0.5,   # Minimum atom coverage (lower for small datasets)
-    )
-
     n_epochs = 30  # Quick training for demo
 
     # =========================================================================
@@ -137,13 +175,15 @@ def main():
     # =========================================================================
 
     print("\n" + "=" * 60)
-    print("Training ResidueFlowModels")
+    print("Training ResidueFlowModels (using Lightning)")
     print("=" * 60)
 
     models = train_residue_models(
         cif_paths,
         rna_residues,
-        config,
+        latent_dim=8,
+        n_layers=4,
+        hidden_dim=32,
         n_epochs=n_epochs,
         verbose=True,
     )
@@ -154,7 +194,7 @@ def main():
 
     print(f"\nSuccessfully trained {len(models)} models:")
     for res, model in models.items():
-        print(f"  {res.name}: latent_dim={config.latent_dim}, n_atoms={model.n_atoms}")
+        print(f"  {res.name}: latent_dim={model.latent_dim}, n_atoms={model.n_atoms}")
 
     # =========================================================================
     # Create PolymerFlowModel
@@ -167,7 +207,7 @@ def main():
     # Create polymer model from residue models
     polymer_model = PolymerFlowModel(models)
     print(f"\nPolymerFlowModel created:")
-    print(f"  Supported residues: {[r.name for r in polymer_model.supported_residues]}")
+    print(f"  Supported residues: {list(models.keys())}")
     print(f"  Latent dimension: {polymer_model.latent_dim}")
 
     # =========================================================================
@@ -228,52 +268,6 @@ def main():
         print(f"  Saved: {output_path}")
 
     # =========================================================================
-    # Encode and Reconstruct (using a real structure)
-    # =========================================================================
-
-    print("\n" + "=" * 60)
-    print("Encode-Decode Roundtrip")
-    print("=" * 60)
-
-    # Load a structure with RNA residues (9MDS has RNA)
-    # Find a structure that has A or G residues
-    for cif_path in cif_paths:
-        polymer = ciffy.load(str(cif_path)).poly()
-        seq_indices = set(polymer.sequence.tolist())
-        if Residue.A.value in seq_indices or Residue.G.value in seq_indices:
-            print(f"\nUsing structure: {polymer.pdb_id}")
-            print(f"  Chains: {polymer.names}")
-            print(f"  Residues: {polymer.size(Scale.RESIDUE)}")
-            break
-    else:
-        print("No structures with trainable residues found.")
-        polymer = None
-
-    if polymer is not None:
-        # Find residues that we can encode
-        encodable = []
-        for idx in polymer.sequence[:20]:
-            try:
-                res = Residue.from_index(int(idx))
-                if res in models:
-                    encodable.append(res)
-            except (ValueError, KeyError):
-                pass
-
-        if encodable:
-            print(f"\nEncodable residues in first 20: {[r.name for r in encodable]}")
-            print(f"  (Total: {len(encodable)} residues can be encoded)")
-
-            # Note: Full encode/decode requires matching atoms to model's atom order
-            # The ResidueFlowModel expects coordinates in a specific order
-            print("\n  For full encode/decode workflow, use:")
-            print("    - extract_residues_with_links() to get aligned coordinates")
-            print("    - polymer_model.encode_polymer() for direct polymer encoding")
-            print("    - polymer_model.decode_to_polymer() for polymer output")
-        else:
-            print("No encodable residues found in first 20 residues.")
-
-    # =========================================================================
     # Summary
     # =========================================================================
 
@@ -282,7 +276,7 @@ def main():
     print("=" * 60)
     print(f"""
 Trained {len(models)} ResidueFlowModels on {len(cif_paths)} structures.
-Created PolymerFlowModel for sequences containing: {[r.name for r in models.keys()]}
+Created PolymerFlowModel for sequences containing: {list(models.keys())}
 Sampled {n_samples} conformations for sequence '{sequence_str}'.
 Saved CIF files to: {output_dir}
 
@@ -292,7 +286,7 @@ with sufficient coverage). Hydrogens and rare atoms are excluded.
 Next steps:
 - Train with more data for better models (hundreds of structures)
 - Increase latent_dim (12-16) and n_layers (8) for more expressive models
-- Use ResidueFlowTrainer for batch training multiple residue types
+- Use ciffy.flow.train() for a simpler high-level API
 - Add hydrogens with a molecular dynamics package if needed
 """)
 

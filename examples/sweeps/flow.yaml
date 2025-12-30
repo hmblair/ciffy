@@ -4,7 +4,7 @@
 #   wandb sweep configs/sweeps/flow.yaml
 #   sbatch scripts/slurm/run_sweep.sh <sweep-id>
 
-program: scripts/train_flow.py
+program: scripts/train_rna_flow.py
 method: bayes
 metric:
   name: val/nll

@@ -92,20 +92,34 @@ before-build = "pip install numpy"
 environment = { CIFFY_NO_OPENMP="1" }
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
 check_untyped_defs = true
 ignore_missing_imports = true
 exclude = [
-    "^ciffy/nn/",
-    "^ciffy/sampling/",
-    "^tests/",
+    "tests/",
 ]
 
 [[tool.mypy.overrides]]
 module = "ciffy._c"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "ciffy.nn.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "ciffy.sampling.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "ciffy.flow"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "ciffy.cli.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]

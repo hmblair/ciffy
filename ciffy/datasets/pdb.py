@@ -44,8 +44,16 @@ def _colored_count(count: int) -> str:
 RCSB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
 RCSB_DOWNLOAD_URL = "https://files.rcsb.org/download"
 
+# Experimental method type
+ExperimentalMethod = Literal[
+    "X-RAY DIFFRACTION",
+    "ELECTRON MICROSCOPY",
+    "SOLUTION NMR",
+    "NEUTRON DIFFRACTION",
+]
+
 # Experimental method mapping (short name -> RCSB value)
-EXPERIMENTAL_METHODS = {
+EXPERIMENTAL_METHODS: dict[str, ExperimentalMethod] = {
     "xray": "X-RAY DIFFRACTION",
     "em": "ELECTRON MICROSCOPY",
     "nmr": "SOLUTION NMR",
@@ -253,13 +261,7 @@ def search_structures(
     max_resolution: float | None = None,
     min_length: int | None = None,
     max_length: int | None = None,
-    experimental_method: Literal[
-        "X-RAY DIFFRACTION",
-        "ELECTRON MICROSCOPY",
-        "SOLUTION NMR",
-        "NEUTRON DIFFRACTION",
-    ]
-    | None = None,
+    experimental_method: ExperimentalMethod | None = None,
     released_after: str | None = None,
     released_before: str | None = None,
     timeout: float = 60.0,
@@ -366,13 +368,7 @@ def search_rna_structures(
     max_resolution: float | None = None,
     min_length: int | None = None,
     max_length: int | None = None,
-    experimental_method: Literal[
-        "X-RAY DIFFRACTION",
-        "ELECTRON MICROSCOPY",
-        "SOLUTION NMR",
-        "NEUTRON DIFFRACTION",
-    ]
-    | None = None,
+    experimental_method: ExperimentalMethod | None = None,
     timeout: float = 60.0,
 ) -> list[str]:
     """

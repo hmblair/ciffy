@@ -12,10 +12,15 @@ tensors, and outputs will match the input backend.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from . import Array, is_torch, to_numpy
 from .ops import to_backend
+
+if TYPE_CHECKING:
+    from ..polymer import Polymer
 
 # C extension imports (required)
 from .._c import _build_bond_graph as _build_bond_graph_c
@@ -34,7 +39,7 @@ __all__ = [
 # =============================================================================
 
 
-def build_bond_graph(polymer) -> tuple[np.ndarray, int]:
+def build_bond_graph(polymer: "Polymer") -> tuple[np.ndarray, int]:
     """
     Build edge list representation of molecular bonds.
 

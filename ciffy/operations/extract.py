@@ -74,11 +74,11 @@ def extract(
     Returns:
         A tuple of (coords, atom_indices):
 
-        - coords: Dense coordinate array of shape (n_instances, n_atoms, 3).
-          Backend matches input (NumPy or PyTorch).
-        - atom_indices: List of atom type indices in column order. These
-          correspond to the residue's atom enum values (e.g., for adenosine,
-          index 2 is A.P, index 9 is A.C3p, etc.).
+            - coords: Dense coordinate array of shape (n_instances, n_atoms, 3).
+              Backend matches input (NumPy or PyTorch).
+            - atom_indices: List of atom type indices in column order. These
+              correspond to the residue's atom enum values (e.g., for adenosine,
+              index 2 is A.P, index 9 is A.C3p, etc.).
 
     Raises:
         ValueError: If no residues of the given type are found.

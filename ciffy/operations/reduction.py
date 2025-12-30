@@ -134,7 +134,9 @@ ReductionResult = Union[
 ]
 
 
-def create_reduction_index(count: int, sizes: Array, device=None) -> Array:
+def create_reduction_index(
+    count: int, sizes: Array, device: "str | torch.device | None" = None
+) -> Array:
     """
     Create an index array for scatter reduction.
 

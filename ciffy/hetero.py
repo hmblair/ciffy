@@ -135,7 +135,11 @@ class HeteroAtoms:
             pdb_id=self.pdb_id,
         )
 
-    def to(self, device=None, dtype=None) -> HeteroAtoms:
+    def to(
+        self,
+        device: "str | torch.device | None" = None,
+        dtype: "torch.dtype | None" = None,
+    ) -> HeteroAtoms:
         """
         Move tensors to device and/or convert dtype (torch backend only).
 

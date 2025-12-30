@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 T = TypeVar('T')
 
 
-def all_equal(*values) -> bool:
+def all_equal(*values: object) -> bool:
     """
     Check if all values are equal.
 

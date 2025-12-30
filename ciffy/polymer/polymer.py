@@ -216,7 +216,7 @@ class Polymer:
     def __init__(
         self: Polymer,
         hierarchy: _Hierarchy | None = None,
-        **fields,
+        **fields: Any,
     ) -> None:
         """
         Initialize a Polymer structure.
@@ -1939,7 +1939,11 @@ class Polymer:
         converted['hierarchy'] = self._hierarchy.torch()
         return self._clone(**converted)
 
-    def to(self: Polymer, device=None, dtype=None) -> Polymer:
+    def to(
+        self: Polymer,
+        device: "str | torch.device | None" = None,
+        dtype: "torch.dtype | None" = None,
+    ) -> Polymer:
         """
         Move tensors to device and/or convert dtype (torch backend only).
 

@@ -16,6 +16,7 @@ import numpy as np
 if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..utils.gmm import GaussianMixtureModel
+    from .backbone import PolymerEvaluator
 
 
 class EnergyFunction(ABC):
@@ -180,7 +181,7 @@ class ClashEnergy(EnergyFunction):
 
     def __init__(
         self,
-        polymer_evaluator,
+        polymer_evaluator: "PolymerEvaluator",
         lambda_clash: float = 100.0,
         r_min: float = 0.5,
     ):
@@ -350,7 +351,7 @@ class StackingEnergy(EnergyFunction):
 
     def __init__(
         self,
-        polymer_evaluator,
+        polymer_evaluator: "PolymerEvaluator",
         lambda_stacking: float = 100.0,
     ):
         """

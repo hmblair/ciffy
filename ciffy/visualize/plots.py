@@ -46,7 +46,7 @@ def plot_profile(
     xlabel: Union[str, None] = None,
     ylabel: Union[str, None] = None,
     title: Union[str, None] = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> Any:
     """
     Plot values as a profile along the sequence.
@@ -133,7 +133,7 @@ def contact_map(
     vmax: Union[float, None] = None,
     colorbar: bool = True,
     title: Union[str, None] = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> Any:
     """
     Plot a contact map showing pairwise proximity.

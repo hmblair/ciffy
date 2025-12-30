@@ -651,6 +651,59 @@ def _train_coord_diffusion_command(args):
         print(f"Saved to: {save_path}")
 
 
+def _sample_command(args):
+    """Handle the sample subcommand."""
+    from pathlib import Path
+
+    from ciffy import from_sequence
+    from ciffy.nn.flow import PolymerFlowModel
+
+    # Load model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading model from {model_path}...")
+
+    model = PolymerFlowModel.load(model_path)
+
+    if not args.quiet:
+        print(f"Model residues: {[r.name for r in model.residue_types]}")
+        print(f"Latent dim: {model.latent_dim}")
+
+    # Create template
+    template = from_sequence(args.sequence, atoms=model.atom_filter)
+
+    if not args.quiet:
+        print(f"\nSampling {args.n_samples} conformation(s) for '{args.sequence}'...")
+
+    # Sample
+    import torch
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    samples = model.sample(template, n_samples=args.n_samples)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        # Single file
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
+        # Multiple files
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
+
+
 def _download_command(args):
     """Handle the download subcommand."""
     from ciffy.datasets import download_cli
@@ -990,7 +1043,7 @@ def _predict_command(args):
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "predict", "download", "cluster"}
+    subcommands = {"map", "info", "split", "template", "train", "sample", "predict", "download", "cluster"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command (deprecated)
@@ -1343,6 +1396,44 @@ def main():
         help="Maximum atoms per chain (default: 2000)",
     )
 
+    # Sample subcommand (for flow models)
+    sample_parser = subparsers.add_parser(
+        "sample",
+        help="Sample conformations from a trained flow model",
+        description="Generate polymer conformations using a trained flow model.",
+    )
+    sample_parser.add_argument(
+        "model",
+        help="Path to flow model directory",
+    )
+    sample_parser.add_argument(
+        "--sequence", "-s",
+        required=True,
+        help="Sequence to generate (e.g., 'acguacgu' for RNA)",
+    )
+    sample_parser.add_argument(
+        "--output", "-o",
+        default="sample.cif",
+        help="Output path (file for single, directory for multiple)",
+    )
+    sample_parser.add_argument(
+        "--n-samples", "-n",
+        type=int,
+        default=1,
+        help="Number of samples to generate (default: 1)",
+    )
+    sample_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility",
+    )
+    sample_parser.add_argument(
+        "--quiet", "-q",
+        action="store_true",
+        help="Suppress output messages",
+    )
+
     # Predict subcommand
     predict_parser = subparsers.add_parser(
         "predict",
@@ -1593,6 +1684,8 @@ def main():
             train_parser.print_help()
     elif args.command == "template":
         _template_command(args)
+    elif args.command == "sample":
+        _sample_command(args)
     elif args.command == "predict":
         _predict_command(args)
     elif args.command == "download":

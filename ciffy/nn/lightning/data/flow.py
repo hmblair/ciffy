@@ -112,8 +112,11 @@ class FlowDataModule(LightningDataModule):
                 min_coverage=self.min_coverage,
                 verbose=False,
             )
-            test_coords_flat = test_coords.reshape(len(test_coords), -1)
-            self.test_data = np.concatenate([test_coords_flat, test_transforms], axis=1)
+            if len(test_coords) > 0:
+                test_coords_flat = test_coords.reshape(len(test_coords), -1)
+                self.test_data = np.concatenate([test_coords_flat, test_transforms], axis=1)
+            else:
+                self.test_data = self.train_data  # Use train as val if no test samples
         else:
             self.test_data = self.train_data  # Use train as val if no test
 

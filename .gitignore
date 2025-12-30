@@ -26,6 +26,7 @@ site/
 checkpoints/
 samples/
 inference_output/
+lightning_logs/
 
 # Personal config files (use examples/configs as templates)
 configs/

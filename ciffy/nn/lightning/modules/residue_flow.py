@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import torch
 from lightning import LightningModule
 from torch.optim import Adam
@@ -18,6 +19,7 @@ from ciffy.nn.config import TrainingConfig
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
+    from ciffy.nn.flow.residue.model import ResidueFlowModel
 
 # Pre-computed constant for Gaussian log-prob
 LOG_2PI = math.log(2 * math.pi)
@@ -62,16 +64,26 @@ class ResidueFlowModule(LightningModule):
     Unlike diffusion modules, this handles:
     - PCA computation during setup (requires full dataset)
     - Normalizing flow training with NLL loss
+    - Creates a full ResidueFlowModel with metadata for save/load
 
     The model is created in setup() after PCA is computed from the
     DataModule's training data.
 
     Example:
+        >>> from ciffy.biochemistry import Residue
+        >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+        >>> import lightning as L
+        >>>
         >>> config = ResidueFlowFullConfig()
-        >>> module = ResidueFlowModule(config, residue=Residue.A)
         >>> dm = FlowDataModule(cif_paths, residue=Residue.A)
+        >>> module = ResidueFlowModule(config, residue=Residue.A)
+        >>>
         >>> trainer = L.Trainer(max_epochs=200)
         >>> trainer.fit(module, dm)
+        >>>
+        >>> # Get the trained model for inference/saving
+        >>> model = module.get_model()
+        >>> model.save("my_model")
     """
 
     def __init__(
@@ -93,9 +105,29 @@ class ResidueFlowModule(LightningModule):
         self.residue = residue
 
         # Model created in setup() after PCA computed
-        self.model: torch.nn.Module | None = None
+        self._residue_model: "ResidueFlowModel | None" = None
         self.pca_V: torch.Tensor | None = None
         self.pca_mean: torch.Tensor | None = None
+
+    @property
+    def model(self) -> torch.nn.Module | None:
+        """The underlying PCAFlow model (for training)."""
+        if self._residue_model is None:
+            return None
+        return self._residue_model.flow
+
+    def get_model(self) -> "ResidueFlowModel":
+        """Get the trained ResidueFlowModel for inference/saving.
+
+        Returns:
+            The trained ResidueFlowModel with all metadata.
+
+        Raises:
+            ValueError: If training hasn't been run yet.
+        """
+        if self._residue_model is None:
+            raise ValueError("Model not yet created. Run trainer.fit() first.")
+        return self._residue_model
 
     def setup(self, stage: str) -> None:
         """Create model with PCA from training data.
@@ -103,18 +135,20 @@ class ResidueFlowModule(LightningModule):
         This is called after DataModule.setup(), so we can access
         the training data for PCA computation.
         """
-        if stage != "fit" or self.model is not None:
+        if stage != "fit" or self._residue_model is not None:
             return
 
-        # Get training data from datamodule
-        train_data = self.trainer.datamodule.train_data
+        # Get training data and atoms from datamodule
+        dm = self.trainer.datamodule
+        train_data = dm.train_data
+        atoms = dm.atoms
 
         if train_data is None or len(train_data) == 0:
             raise ValueError("No training data available for PCA computation")
 
         # Import here to avoid circular imports
         from ciffy.nn.flow.residue.data import compute_pca
-        from ciffy.nn.flow.residue.model import PCAFlow
+        from ciffy.nn.flow.residue.model import PCAFlow, ResidueFlowModel
 
         config = self.config.model
 
@@ -126,12 +160,11 @@ class ResidueFlowModule(LightningModule):
         self.pca_V = torch.from_numpy(V).float()
         self.pca_mean = torch.from_numpy(mean).float()
 
-        # Log PCA info
-        pca_var = var_explained[config.latent_dim - 1]
-        self.log("pca/variance_explained", pca_var)
+        # Store PCA info for logging later (can't log in setup)
+        self._pca_var_explained = var_explained[config.latent_dim - 1]
 
-        # Create flow model
-        self.model = PCAFlow(
+        # Create PCAFlow
+        flow = PCAFlow(
             self.pca_V,
             self.pca_mean,
             n_layers=config.n_layers,
@@ -140,22 +173,33 @@ class ResidueFlowModule(LightningModule):
             use_rotation=config.use_rotation,
         )
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        # Wrap in ResidueFlowModel with metadata
+        self._residue_model = ResidueFlowModel(
+            flow=flow,
+            residue=self.residue,
+            atom_indices=atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms),
+            n_atoms=len(atoms),
+        )
+
+    def training_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute NLL loss for a batch.
 
         Args:
-            batch: (batch_size, n_features) flattened coordinates.
+            batch: Tuple containing (data,) tensor of shape (batch_size, n_features).
             batch_idx: Batch index (unused).
 
         Returns:
             Negative log-likelihood loss.
         """
+        # TensorDataset returns tuple
+        data = batch[0] if isinstance(batch, (tuple, list)) else batch
+
         # Add noise regularization during training
         if self.config.model.noise_std > 0:
-            batch = batch + self.config.model.noise_std * torch.randn_like(batch)
+            data = data + self.config.model.noise_std * torch.randn_like(data)
 
-        # Forward pass
-        z, log_det = self.model(batch)
+        # Forward pass through the flow
+        z, log_det = self._residue_model.flow(data)
 
         # Compute NLL: -log p(z) - log |det J|
         log_pz = -0.5 * (z**2 + LOG_2PI).sum(dim=-1)
@@ -165,9 +209,11 @@ class ResidueFlowModule(LightningModule):
 
         return loss
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute validation NLL."""
-        z, log_det = self.model(batch)
+        data = batch[0] if isinstance(batch, (tuple, list)) else batch
+
+        z, log_det = self._residue_model.flow(data)
         log_pz = -0.5 * (z**2 + LOG_2PI).sum(dim=-1)
         loss = -(log_pz + log_det).mean()
 
@@ -179,7 +225,7 @@ class ResidueFlowModule(LightningModule):
         """Configure optimizer and scheduler."""
         config = self.training_config
 
-        optimizer = Adam(self.model.parameters(), lr=config.lr)
+        optimizer = Adam(self._residue_model.parameters(), lr=config.lr)
 
         scheduler = CosineAnnealingLR(
             optimizer,
@@ -196,7 +242,7 @@ class ResidueFlowModule(LightningModule):
         """Apply gradient clipping if configured."""
         if self.training_config.grad_clip:
             torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
+                self._residue_model.parameters(),
                 self.training_config.grad_clip,
             )
 

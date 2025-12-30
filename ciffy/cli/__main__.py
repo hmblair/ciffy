@@ -280,9 +280,9 @@ def _train_flow_command(args):
         print(f"Error: No CIF files found in {args.data}", file=sys.stderr)
         sys.exit(1)
 
-    # Parse residue types
+    # Parse residue types (convert to uppercase for Residue lookup)
     residue_chars = args.residues.upper()
-    residues = [Residue[c] for c in residue_chars]
+    residues = [getattr(Residue, c) for c in residue_chars]
 
     # Create output directory
     output_dir = Path(args.output)

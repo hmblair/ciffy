@@ -1,12 +1,66 @@
 """Tests for ciffy.nn.flow.residue module."""
 
+import math
 import tempfile
 import numpy as np
 import pytest
 import torch
 
-from ciffy.nn.flow.residue import PCAFlow, train_pca_flow
+from ciffy.nn.flow.residue import PCAFlow
 from ciffy.nn.flow.residue.data import compute_pca
+
+
+def create_trained_flow(data: np.ndarray, latent_dim: int = 6, n_layers: int = 4,
+                        hidden_dim: int = 32, bound: float | None = None,
+                        n_epochs: int = 10) -> tuple[PCAFlow, dict]:
+    """Create and train a PCAFlow for testing.
+
+    This is a minimal training loop for unit tests - production training
+    should use the Lightning module.
+    """
+    # Flatten if 3D (N, atoms, 3) -> (N, atoms*3)
+    if data.ndim == 3:
+        data = data.reshape(len(data), -1)
+
+    # Compute PCA
+    V, mean, singular_values, var_explained = compute_pca(data, n_components=latent_dim)
+    V_t = torch.from_numpy(V).float()
+    mean_t = torch.from_numpy(mean).float()
+
+    # Create flow
+    flow = PCAFlow(V_t, mean_t, n_layers=n_layers, hidden_dim=hidden_dim, bound=bound)
+
+    # Train
+    optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+    X = torch.from_numpy(data).float()
+
+    LOG_2PI = math.log(2 * math.pi)
+    losses = []
+
+    for _ in range(n_epochs):
+        optimizer.zero_grad()
+        z, log_det = flow(X)
+        log_pz = -0.5 * (z**2 + LOG_2PI).sum(dim=-1)
+        loss = -(log_pz + log_det).mean()
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+
+    # Compute info
+    with torch.no_grad():
+        z = flow.encode(X)
+        recon = flow.decode(z)
+
+    pca_rmsd = torch.sqrt(((X - recon) ** 2).mean()).item()
+
+    info = {
+        "pca_rmsd": pca_rmsd,
+        "flow_rmsd": pca_rmsd,  # Flow is invertible
+        "var_explained": var_explained,
+        "losses": losses,
+    }
+
+    return flow, info
 
 
 @pytest.fixture
@@ -41,9 +95,9 @@ class TestPCAFlow:
 
     def test_encode_decode_roundtrip(self, sample_coords):
         """Test that encode-decode is approximately invertible."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
+            n_epochs=10
         )
         flow.eval()
 
@@ -61,9 +115,9 @@ class TestPCAFlow:
 
     def test_bound_prevents_extrapolation(self, sample_coords):
         """Test that bound parameter limits latent values."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            bound=2.0, n_epochs=10, verbose=False
+            bound=2.0, n_epochs=10
         )
         flow.eval()
 
@@ -78,9 +132,9 @@ class TestPCAFlow:
 
     def test_sample(self, sample_coords):
         """Test sampling from the model."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
+            n_epochs=10
         )
         flow.eval()
 
@@ -92,9 +146,9 @@ class TestPCAFlow:
 
     def test_log_prob(self, sample_coords):
         """Test log probability computation."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
+            n_epochs=10
         )
         flow.eval()
 
@@ -106,9 +160,9 @@ class TestPCAFlow:
 
     def test_gradient_flow(self, sample_coords):
         """Test that gradients flow through decode."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
+            n_epochs=10
         )
         flow.eval()
 
@@ -122,9 +176,9 @@ class TestPCAFlow:
 
     def test_device_transfer(self, sample_coords):
         """Test model works on different devices."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            n_epochs=10, verbose=False
+            n_epochs=10
         )
 
         # Test on CPU
@@ -143,9 +197,9 @@ class TestPCAFlow:
 
     def test_save_load_state_dict(self, sample_coords):
         """Test model serialization via state_dict."""
-        flow, _ = train_pca_flow(
+        flow, _ = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            bound=2.5, n_epochs=10, verbose=False
+            bound=2.5, n_epochs=10
         )
 
         with tempfile.NamedTemporaryFile(suffix=".pt") as f:
@@ -163,9 +217,9 @@ class TestPCAFlow:
         from ciffy.nn.flow.residue import ResidueFlowModel
         from ciffy.biochemistry import Residue
 
-        flow, info = train_pca_flow(
+        flow, info = create_trained_flow(
             sample_coords, latent_dim=6, n_layers=4, hidden_dim=32,
-            bound=2.5, n_epochs=10, verbose=False
+            bound=2.5, n_epochs=10
         )
 
         # Create a mock model with valid Residue.A atom indices
@@ -248,13 +302,13 @@ class TestPCAFlow:
         assert torch.allclose(trans_no_jit, trans_jit, atol=1e-5)
 
 
-class TestTrainPCAFlow:
-    """Tests for train_pca_flow function."""
+class TestPCAFlowTraining:
+    """Tests for PCAFlow training behavior."""
 
     def test_basic_training(self, sample_coords):
         """Test basic training workflow."""
-        flow, info = train_pca_flow(
-            sample_coords, latent_dim=6, n_epochs=20, verbose=False
+        flow, info = create_trained_flow(
+            sample_coords, latent_dim=6, n_epochs=20
         )
 
         assert isinstance(flow, PCAFlow)
@@ -265,8 +319,8 @@ class TestTrainPCAFlow:
 
     def test_pca_rmsd_matches_flow_rmsd(self, sample_coords):
         """Test that flow RMSD equals PCA RMSD (flow is invertible)."""
-        flow, info = train_pca_flow(
-            sample_coords, latent_dim=6, n_epochs=50, verbose=False
+        flow, info = create_trained_flow(
+            sample_coords, latent_dim=6, n_epochs=50
         )
 
         # Flow should be exactly invertible, so RMSD = PCA RMSD
@@ -274,11 +328,11 @@ class TestTrainPCAFlow:
 
     def test_more_dims_lower_rmsd(self, sample_coords):
         """Test that more latent dims gives lower RMSD."""
-        _, info_6d = train_pca_flow(
-            sample_coords, latent_dim=6, n_epochs=10, verbose=False
+        _, info_6d = create_trained_flow(
+            sample_coords, latent_dim=6, n_epochs=10
         )
-        _, info_12d = train_pca_flow(
-            sample_coords, latent_dim=12, n_epochs=10, verbose=False
+        _, info_12d = create_trained_flow(
+            sample_coords, latent_dim=12, n_epochs=10
         )
 
         assert info_12d["pca_rmsd"] < info_6d["pca_rmsd"]

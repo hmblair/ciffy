@@ -5,7 +5,7 @@ Provides configuration dataclasses for training neural network models.
 Trainers should use PyTorch Lightning Fabric for device handling.
 
 Example:
-    >>> from ciffy.nn.base_trainer import BaseConfig, TrainingConfig
+    >>> from ciffy.nn.config import BaseConfig, TrainingConfig
     >>>
     >>> @dataclass
     >>> class MyConfig(BaseConfig):
@@ -323,6 +323,34 @@ class MetricsLogger(Protocol):
         ...
 
 
+# =============================================================================
+# Device Utilities
+# =============================================================================
+
+
+def get_device(device: str = "auto") -> str:
+    """Resolve device string to actual device.
+
+    Args:
+        device: Device specification. 'auto' detects cuda/mps/cpu.
+
+    Returns:
+        Resolved device string ('cuda', 'mps', or 'cpu').
+    """
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if device == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    return device
+
+
 __all__ = [
     "SchedulerConfig",
     "ValidationConfig",
@@ -332,4 +360,5 @@ __all__ = [
     "WandbConfig",
     "BaseConfig",
     "MetricsLogger",
+    "get_device",
 ]

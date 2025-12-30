@@ -7,9 +7,15 @@ of RNA residue conformations that enable valid sampling.
 Example:
     >>> from ciffy.nn.flow.residue import ResidueFlowModel, FrameIndices
     >>> from ciffy.biochemistry import Residue
+    >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+    >>> import lightning as L
     >>>
-    >>> # Train a model for adenosine
-    >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
+    >>> # Train using Lightning
+    >>> dm = FlowDataModule(cif_paths, Residue.A)
+    >>> module = ResidueFlowModule(config, Residue.A)
+    >>> trainer = L.Trainer(max_epochs=200)
+    >>> trainer.fit(module, dm)
+    >>> model = module.get_model()
     >>>
     >>> # Decode gives coords + link transform to next residue
     >>> coords, transform = model.decode(z)
@@ -38,8 +44,6 @@ from .data import (
     position_next_residue,
     ResidueDataset,
 )
-from .train import train_pca_flow
-from .trainer import ResidueFlowTrainer, ResidueFlowTrainingConfig, TrainingResult
 
 # Re-export from geometry for convenience
 from ciffy.geometry import (
@@ -68,9 +72,4 @@ __all__ = [
     "extract_residues_with_links",
     "position_next_residue",
     "ResidueDataset",
-    # Training
-    "train_pca_flow",
-    "ResidueFlowTrainer",
-    "ResidueFlowTrainingConfig",
-    "TrainingResult",
 ]

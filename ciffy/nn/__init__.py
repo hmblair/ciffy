@@ -31,13 +31,7 @@ from .layers import (
     SwiGLU,
 )
 
-from .training import (
-    ExperimentResult,
-    get_device,
-    save_checkpoint,
-    load_checkpoint,
-)
-from .base_trainer import (
+from .config import (
     BaseConfig,
     TrainingConfig,
     OutputConfig,
@@ -61,18 +55,8 @@ from .diagnostics import (
     diagnose_gradients,
 )
 
-# Runners (moved from root to runners/)
-from .runners import (
-    run_experiments,
-    format_results_table,
-    InferenceResult,
-    run_inference_jobs,
-    format_inference_results_table,
-)
 
 from .protocols import PolymerGenerativeModel, PolymerEncoder, PolymerPropertyPredictor
-from .schedulers import create_scheduler, get_current_lr
-from .early_stopping import EarlyStopper
 from .model_registry import register_model, get_model_class, list_registered_models
 from .model_io import save_model, load_model, get_model_info, SaveableModel
 from .inference import load_model_from_checkpoint, generate_samples
@@ -96,8 +80,11 @@ from .diffusion import (
     LatentDenoiser,
     LatentDiffusionConfig,
     LatentDiffusionModel,
-    LatentDiffusionTrainingConfig,
-    LatentDiffusionTrainer,
+    # Coordinate diffusion
+    CoordinateDenoiserConfig,
+    CoordinateDenoiser,
+    CoordinateDiffusionConfig,
+    CoordinateDiffusionModel,
 )
 
 # Flow models (triggers @register_model decorators)
@@ -125,10 +112,6 @@ __all__ = [
     "RMSNorm",
     "RotaryPositionEmbedding",
     "SwiGLU",
-    # Training utilities
-    "get_device",
-    "save_checkpoint",
-    "load_checkpoint",
     # Config framework
     "BaseConfig",
     "TrainingConfig",
@@ -149,10 +132,6 @@ __all__ = [
     "TrainingDiagnostics",
     "DiagnosticsConfig",
     "diagnose_gradients",
-    # Experiment running (from runners/)
-    "ExperimentResult",
-    "run_experiments",
-    "format_results_table",
     # Inference protocols and models
     "PolymerGenerativeModel",
     "PolymerEncoder",
@@ -165,17 +144,10 @@ __all__ = [
     "save_model",
     "load_model",
     "get_model_info",
-    # Schedulers and early stopping
-    "create_scheduler",
-    "get_current_lr",
-    "EarlyStopper",
-    # Inference utilities (from runners/)
+    # Inference utilities
     "load_model_from_checkpoint",
     "generate_samples",
     "InferenceConfig",
-    "InferenceResult",
-    "run_inference_jobs",
-    "format_inference_results_table",
     # Data splitting
     "DataSplit",
     "DataScalingSplit",
@@ -199,8 +171,11 @@ __all__ = [
     "LatentDenoiser",
     "LatentDiffusionConfig",
     "LatentDiffusionModel",
-    "LatentDiffusionTrainingConfig",
-    "LatentDiffusionTrainer",
+    # Coordinate diffusion (from diffusion/)
+    "CoordinateDenoiserConfig",
+    "CoordinateDenoiser",
+    "CoordinateDiffusionConfig",
+    "CoordinateDiffusionModel",
     # Flow models
     "PolymerFlowModel",
     # Hub integration

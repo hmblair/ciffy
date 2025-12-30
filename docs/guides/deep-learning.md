@@ -540,6 +540,6 @@ polymers = [ciffy.load(f, backend="torch").to("cuda") for f in files]
 for epoch in range(100):
     polymer = ciffy.load(file, backend="torch")  # Slow!
 
-# Parallel inference via CLI (auto-distributes across GPUs)
-# ciffy inference configs/*.yaml
+# CLI inference
+# ciffy predict model.safetensors --sequence ACGU -o output.cif
 ```

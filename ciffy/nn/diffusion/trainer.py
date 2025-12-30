@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from ..base_trainer import (
+from ..config import (
     BaseConfig,
     OutputConfig,
     TrainingConfig,

@@ -142,24 +142,25 @@ polymer.poly().write("polymer_only.cif")
 
 ```bash
 # View structure summary
-ciffy structure.cif
+ciffy info structure.cif
 
 # Show sequences per chain
-ciffy structure.cif --sequence
+ciffy info structure.cif --sequence
 
 # Show entity descriptions per chain
-ciffy structure.cif --desc
+ciffy info structure.cif --desc
 
 # Multiple files
-ciffy file1.cif file2.cif
+ciffy info file1.cif file2.cif
 
-# Run multiple training experiments in parallel
-ciffy experiment configs/*.yaml
+# Train models
+ciffy train flow --data data/*.cif --output models/flow
+ciffy train latent-diffusion --data data/*.cif --output models/diffusion
+ciffy train coord-diffusion --data data/*.cif --output models/coord
 
-# Run inference to generate structures from sequences
-# Copy example config and customize for your setup:
-# cp examples/configs/inference_example.yaml configs/inference.yaml
-ciffy inference configs/inference.yaml
+# Generate structures from trained models
+ciffy predict flow models/flow --sequence acguacgu -o output.cif
+ciffy predict flow models/flow --sequence acguacgu -n 10 -o samples/
 
 # Cluster structures by sequence identity (requires mmseqs2)
 ciffy cluster data/*.cif --threshold 0.5
@@ -189,33 +190,34 @@ Descriptions:
 
 ## Training Neural Networks
 
-ciffy includes PyTorch modules for deep learning on molecular structures. See the [deep learning guide](docs/guides/deep-learning.md) for full documentation.
+ciffy includes PyTorch Lightning modules for training generative models. See the [deep learning guide](docs/guides/deep-learning.md) for full documentation.
 
-### Running Experiments
-
-Train multiple models in parallel across GPUs:
+### Training from CLI
 
 ```bash
-# Run all configs in parallel (auto-distributes across GPUs)
-ciffy experiment configs/*.yaml
+# Train flow model (for sampling RNA conformations)
+ciffy train flow --data data/*.cif --output models/rna --epochs 200
 
-# Run sequentially
-ciffy experiment configs/*.yaml --sequential
+# Train with custom hyperparameters
+ciffy train flow --data data/*.cif --output models/rna \
+    --latent-dim 16 --n-layers 8 --hidden-dim 128
 
-# Force CPU
-ciffy experiment configs/*.yaml --device cpu
+# Train with W&B logging
+ciffy train flow --data data/*.cif --output models/rna --wandb
+
+# Train diffusion models
+ciffy train latent-diffusion --data data/*.cif --output models/diffusion
+ciffy train coord-diffusion --data data/*.cif --output models/coord
 ```
 
-Results are displayed in a comparison table:
+### Generating Structures
 
-```
-Experiment            Status    Best Loss   Device    Time
---------------------  --------  ----------  --------  ----------
-vae_small             success   0.1234      cuda:0    45.2s
-vae_medium            success   0.0987      cuda:1    2m0s
-vae_large             failed    N/A         cuda:0    5.3s
---------------------  --------  ----------  --------  ----------
-Total: 2/3 succeeded in 2m51s
+```bash
+# Sample from trained flow model
+ciffy predict flow models/rna --sequence acguacgu -o output.cif
+
+# Generate multiple samples
+ciffy predict flow models/rna --sequence acguacgu -n 10 -o samples/
 ```
 
 ## Flow Models for Generative Modeling

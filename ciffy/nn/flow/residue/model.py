@@ -588,13 +588,20 @@ class ResidueFlowModel(nn.Module, HubMixin):
         n_atoms: Number of atoms per residue.
 
     Example:
-        >>> model = ResidueFlowModel.from_structures(cif_paths, Residue.A)
+        >>> # Train using Lightning (see ciffy.nn.lightning.ResidueFlowModule)
+        >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+        >>> module = ResidueFlowModule(config, Residue.A)
+        >>> trainer.fit(module, dm)
+        >>> model = module.get_model()
+        >>>
+        >>> # Or use high-level API
+        >>> from ciffy import flow
+        >>> polymer_model = flow.train(cif_paths, residues="ACGU")
+        >>>
+        >>> # Decode to get coordinates and transform
         >>> coords, transform = model.decode(z)
-        >>> # Position next residue using the transform
-        >>> from ciffy.nn.residue_flow import position_next_residue
-        >>> coords2 = position_next_residue(coords, ref_coords, transform, atoms, residue)
-
-        # Can be used as part of a larger module:
+        >>>
+        >>> # Can be used as part of a larger module:
         >>> class MolecularModel(nn.Module):
         ...     def __init__(self):
         ...         super().__init__()
@@ -669,82 +676,6 @@ class ResidueFlowModel(nn.Module, HubMixin):
                 # Atoms don't include required frame atoms
                 return None
         return self._frame_indices
-
-    @classmethod
-    def from_structures(
-        cls,
-        cif_paths: list[Path],
-        residue: "Residue",
-        config: ResidueFlowConfig | None = None,
-        n_epochs: int = 200,
-        device: str = "cpu",
-        verbose: bool = True,
-    ) -> "ResidueFlowModel":
-        """
-        Train a model from CIF structures.
-
-        Args:
-            cif_paths: List of paths to CIF files.
-            residue: Residue type to extract.
-            config: Model configuration.
-            n_epochs: Number of training epochs.
-            device: Device to train on.
-            verbose: Print progress.
-
-        Returns:
-            Tuple of (model, info) where info contains training metrics.
-        """
-        from .data import extract_residues_with_links
-        from .train import train_pca_flow
-
-        if config is None:
-            config = ResidueFlowConfig()
-
-        # Extract residues with link transforms
-        if verbose:
-            print(f"Extracting {residue.name} residues with links...")
-        coords, transforms, atoms = extract_residues_with_links(
-            cif_paths, residue, min_coverage=config.min_coverage, verbose=verbose
-        )
-
-        n_instances = len(coords)
-        n_atoms = len(atoms)
-
-        if verbose:
-            print(f"Dataset: {n_instances} instances, {n_atoms} atoms")
-
-        # Create extended representation (coords + SE(3) transforms)
-        coords_flat = coords.reshape(n_instances, -1)
-        extended = np.concatenate([coords_flat, transforms], axis=1)
-
-        if verbose:
-            print(f"Extended representation: {extended.shape[1]} dims ({n_atoms}*3 + 6)")
-
-        # Train flow model
-        flow, info = train_pca_flow(
-            extended,
-            latent_dim=config.latent_dim,
-            n_layers=config.n_layers,
-            hidden_dim=config.hidden_dim,
-            bound=config.bound,
-            n_epochs=n_epochs,
-            device=device,
-            verbose=verbose,
-            use_rotation=config.use_rotation,
-            noise_std=config.noise_std,
-        )
-
-        model = cls(
-            flow=flow,
-            residue=residue,
-            atom_indices=atoms,
-            n_atoms=n_atoms,
-        )
-
-        # Add sample count to info
-        info["n_samples"] = n_instances
-
-        return model, info
 
     def encode(
         self,

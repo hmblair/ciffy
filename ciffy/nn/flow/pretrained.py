@@ -90,7 +90,7 @@ def load_pretrained(
         raise FileNotFoundError(
             f"Pre-trained model '{name}' not found at {model_path}. "
             f"The model may not be installed. Try reinstalling ciffy or "
-            f"training your own model with ResidueFlowTrainer."
+            f"training your own model with ciffy.flow.train()."
         )
 
     return PolymerFlowModel.load(model_path, device=device, jit=jit)

@@ -10,10 +10,17 @@ Usage:
     ciffy split <file.cif>           # Split into per-chain files
     ciffy template <sequence>        # Create template from sequence with sampled dihedrals
     ciffy cluster data/*.cif         # Cluster structures by similarity, return representatives
-    ciffy train configs/*.yaml       # Run training from config files
-    ciffy experiment configs/*.yaml  # Run multiple training experiments
-    ciffy predict model.safetensors --sequence ACGU -o out.cif  # Generate structure
-    ciffy predict --config inference.yaml  # Batch prediction from config
+
+    # Training
+    ciffy train flow --data /path --output /path              # Train flow model
+    ciffy train latent-diffusion --data /path --output /path  # Train latent diffusion
+    ciffy train coord-diffusion --data /path --output /path   # Train coordinate diffusion
+
+    # Prediction/Sampling
+    ciffy predict flow model_dir --sequence acgu -o out.cif           # Sample from flow
+    ciffy predict latent-diffusion model.safetensors --sequence acgu  # Generate from diffusion
+    ciffy predict coord-diffusion model.safetensors --sequence acgu   # Generate from diffusion
+
     ciffy download --max_count 100   # Download structures from RCSB PDB
     ciffy download --preset casp15   # Download CASP15 benchmark targets
 """
@@ -241,85 +248,601 @@ def _template_command(args):
         sys.exit(1)
 
 
-def _experiment_command(args):
-    """Handle the experiment subcommand."""
+def _train_flow_command(args):
+    """Handle the train flow subcommand."""
     try:
+        import lightning as L
         import torch
     except ImportError:
         print(
-            "Error: PyTorch is required for experiment runner.\n"
-            "Install with: pip install torch",
+            "Error: PyTorch and Lightning are required for training.\n"
+            "Install with: pip install torch lightning",
             file=sys.stderr,
         )
         sys.exit(1)
 
     from glob import glob
+    from pathlib import Path
 
+    from ciffy import Residue
+    from ciffy.nn.lightning import FlowDataModule, ResidueFlowModule
+    from ciffy.nn.lightning.modules.residue_flow import (
+        ResidueFlowFullConfig,
+        ResidueFlowModelConfig,
+        ResidueFlowDataConfig,
+    )
+    from ciffy.nn.config import TrainingConfig
+    from ciffy.nn.flow import PolymerFlowModel
+
+    # Expand glob patterns in data paths
+    cif_paths = []
+    for pattern in glob(str(Path(args.data) / "*.cif")):
+        cif_paths.append(pattern)
+
+    if not cif_paths:
+        # Try as glob pattern directly
+        cif_paths = glob(args.data)
+
+    if not cif_paths:
+        print(f"Error: No CIF files found in {args.data}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse residue types (convert to uppercase for Residue lookup)
+    residue_chars = args.residues.upper()
+    residues = [getattr(Residue, c) for c in residue_chars]
+
+    # Create output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create config
+    config = ResidueFlowFullConfig(
+        model=ResidueFlowModelConfig(
+            latent_dim=args.latent_dim,
+            n_layers=args.n_layers,
+            hidden_dim=args.hidden_dim,
+            noise_std=args.noise_std,
+        ),
+        data=ResidueFlowDataConfig(
+            batch_size=args.batch_size,
+            min_coverage=args.min_coverage,
+        ),
+        training=TrainingConfig(
+            lr=args.lr,
+            epochs=args.epochs,
+        ),
+    )
+
+    # Determine accelerator
+    accelerator = args.accelerator
+    if accelerator == "auto":
+        if torch.cuda.is_available():
+            accelerator = "gpu"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            accelerator = "mps"
+        else:
+            accelerator = "cpu"
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Ciffy Flow Model Training")
+        print("=" * 60)
+        print(f"Data: {len(cif_paths)} CIF files")
+        print(f"Residues: {residue_chars}")
+        print(f"Output: {output_dir}")
+        print(f"Epochs: {args.epochs}")
+        print(f"Accelerator: {accelerator}")
+        print()
+
+    # Set up W&B logging if requested
+    logger = None
+    if args.wandb:
+        from lightning.pytorch.loggers import WandbLogger
+        logger = WandbLogger(
+            project=args.wandb_project or "ciffy-flow",
+            name=args.wandb_name,
+        )
+
+    # Train each residue type
+    models = {}
+    for residue in residues:
+        if not args.quiet:
+            print(f"\nTraining model for {residue.name}...")
+            print("-" * 40)
+
+        try:
+            # Create data module
+            dm = FlowDataModule(
+                cif_paths=cif_paths,
+                residue=residue,
+                batch_size=args.batch_size,
+                min_coverage=args.min_coverage,
+            )
+
+            # Create Lightning module
+            module = ResidueFlowModule(config, residue)
+
+            # Create trainer
+            trainer = L.Trainer(
+                max_epochs=args.epochs,
+                accelerator=accelerator,
+                enable_progress_bar=not args.quiet,
+                enable_model_summary=not args.quiet,
+                logger=logger,
+                default_root_dir=str(output_dir),
+            )
+
+            # Train
+            trainer.fit(module, dm)
+
+            # Get trained model
+            model = module.get_model()
+            models[residue] = model
+
+            if not args.quiet:
+                print(f"  {residue.name}: {model.n_atoms} atoms, latent_dim={model.latent_dim}")
+
+        except Exception as e:
+            print(f"  {residue.name}: Failed - {e}", file=sys.stderr)
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+
+    if not models:
+        print("\nNo models were trained successfully.", file=sys.stderr)
+        sys.exit(1)
+
+    # Create and save PolymerFlowModel
+    polymer_model = PolymerFlowModel(models)
+    save_path = output_dir / "model"
+    polymer_model.save(save_path)
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Training Complete")
+        print("=" * 60)
+        print(f"Trained {len(models)} residue models: {[r.name for r in models.keys()]}")
+        print(f"Saved to: {save_path}")
+
+
+def _train_latent_diffusion_command(args):
+    """Handle the train latent-diffusion subcommand."""
     try:
-        from ciffy.nn.runners import format_results_table, run_experiments
+        import lightning as L
+        import torch
     except ImportError:
         print(
-            "Error: Neural network modules not available.\n"
-            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
+            "Error: PyTorch and Lightning are required for training.\n"
+            "Install with: pip install torch lightning",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # Expand glob patterns in config paths
-    config_paths = []
-    for pattern in args.configs:
-        expanded = glob(pattern)
-        if not expanded:
-            print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
-        config_paths.extend(sorted(expanded))
+    from pathlib import Path
 
-    if not config_paths:
-        print("Error: No config files found.", file=sys.stderr)
+    from ciffy.nn.flow import load_pretrained
+    from ciffy.nn.lightning.data.diffusion import LatentDiffusionDataModule
+    from ciffy.nn.lightning.modules.latent_diffusion import (
+        LatentDiffusionFullConfig,
+        LatentDiffusionDataConfig,
+        LatentDiffusionModule,
+    )
+    from ciffy.nn.diffusion.latent_diffusion import LatentDiffusionConfig
+    from ciffy.nn.config import TrainingConfig
+
+    # Check data directory
+    data_dir = Path(args.data)
+    if not data_dir.exists():
+        print(f"Error: Data directory not found: {data_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Display experiment plan
-    print()
-    print("=" * 60)
-    print("Ciffy Experiment Runner")
-    print("=" * 60)
-    print(f"Configs: {len(config_paths)}")
-    print(f"Parallel: {not args.sequential}")
-    print(f"Device: {args.device}")
-    print()
+    # Create output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    for i, path in enumerate(config_paths, 1):
-        print(f"  {i}. {path}")
-    print()
+    # Determine accelerator
+    accelerator = args.accelerator
+    if accelerator == "auto":
+        if torch.cuda.is_available():
+            accelerator = "gpu"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            accelerator = "mps"
+        else:
+            accelerator = "cpu"
 
-    # Run experiments
-    print("Running experiments...")
-    print("-" * 60)
+    # Load flow model
+    if not args.quiet:
+        print("Loading flow model...")
 
-    try:
-        results = run_experiments(
-            config_paths=config_paths,
-            parallel=not args.sequential,
-            device=args.device,
+    if args.flow_model:
+        from ciffy.nn.flow import PolymerFlowModel
+        flow_model = PolymerFlowModel.load(args.flow_model, device="cpu")
+    else:
+        flow_model = load_pretrained("rna", device="cpu")
+
+    # Create config
+    config = LatentDiffusionFullConfig(
+        model=LatentDiffusionConfig(
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            num_timesteps=args.num_timesteps,
+        ),
+        data=LatentDiffusionDataConfig(
+            batch_size=args.batch_size,
+            min_residues=args.min_residues,
+            max_residues=args.max_residues,
+        ),
+        training=TrainingConfig(
+            lr=args.lr,
+            epochs=args.epochs,
+        ),
+    )
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Ciffy Latent Diffusion Training")
+        print("=" * 60)
+        print(f"Data: {data_dir}")
+        print(f"Output: {output_dir}")
+        print(f"Epochs: {args.epochs}")
+        print(f"Accelerator: {accelerator}")
+        print(f"Flow model: {args.flow_model or 'pretrained RNA'}")
+        print()
+
+    # Set up W&B logging if requested
+    logger = None
+    if args.wandb:
+        from lightning.pytorch.loggers import WandbLogger
+        logger = WandbLogger(
+            project=args.wandb_project or "ciffy-latent-diffusion",
+            name=args.wandb_name,
         )
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error running experiments: {e}", file=sys.stderr)
+
+    # Create data module
+    dm = LatentDiffusionDataModule(
+        data_dir=data_dir,
+        flow_model=flow_model,
+        batch_size=args.batch_size,
+        min_residues=args.min_residues,
+        max_residues=args.max_residues,
+    )
+
+    # Create Lightning module
+    module = LatentDiffusionModule(config, flow_model=flow_model)
+
+    # Create trainer
+    trainer = L.Trainer(
+        max_epochs=args.epochs,
+        accelerator=accelerator,
+        enable_progress_bar=not args.quiet,
+        enable_model_summary=not args.quiet,
+        logger=logger,
+        default_root_dir=str(output_dir),
+    )
+
+    # Train
+    trainer.fit(module, dm)
+
+    # Save model
+    save_path = output_dir / "model.safetensors"
+    module.model.save(save_path)
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Training Complete")
+        print("=" * 60)
+        print(f"Saved to: {save_path}")
+
+
+def _train_coord_diffusion_command(args):
+    """Handle the train coord-diffusion subcommand."""
+    try:
+        import lightning as L
+        import torch
+    except ImportError:
+        print(
+            "Error: PyTorch and Lightning are required for training.\n"
+            "Install with: pip install torch lightning",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    # Print results table
-    print()
-    print("=" * 60)
-    print("Results")
-    print("=" * 60)
-    print(format_results_table(results))
-    print()
+    from pathlib import Path
 
-    # Exit with error code if any experiments failed
-    failed = sum(1 for r in results if r.status != "success")
-    if failed > 0:
+    from ciffy.nn.lightning.data.diffusion import CoordinateDiffusionDataModule
+    from ciffy.nn.lightning.modules.coordinate_diffusion import (
+        CoordinateDiffusionFullConfig,
+        CoordinateDiffusionDataConfig,
+        CoordinateDiffusionModule,
+    )
+    from ciffy.nn.diffusion.coordinate_diffusion import CoordinateDiffusionConfig
+    from ciffy.nn.config import TrainingConfig
+
+    # Check data directory
+    data_dir = Path(args.data)
+    if not data_dir.exists():
+        print(f"Error: Data directory not found: {data_dir}", file=sys.stderr)
         sys.exit(1)
+
+    # Create output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine accelerator
+    accelerator = args.accelerator
+    if accelerator == "auto":
+        if torch.cuda.is_available():
+            accelerator = "gpu"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            accelerator = "mps"
+        else:
+            accelerator = "cpu"
+
+    # Create config
+    config = CoordinateDiffusionFullConfig(
+        model=CoordinateDiffusionConfig(
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            num_timesteps=args.num_timesteps,
+        ),
+        data=CoordinateDiffusionDataConfig(
+            batch_size=args.batch_size,
+            min_atoms=args.min_atoms,
+            max_atoms=args.max_atoms,
+        ),
+        training=TrainingConfig(
+            lr=args.lr,
+            epochs=args.epochs,
+        ),
+    )
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Ciffy Coordinate Diffusion Training")
+        print("=" * 60)
+        print(f"Data: {data_dir}")
+        print(f"Output: {output_dir}")
+        print(f"Epochs: {args.epochs}")
+        print(f"Accelerator: {accelerator}")
+        print()
+
+    # Set up W&B logging if requested
+    logger = None
+    if args.wandb:
+        from lightning.pytorch.loggers import WandbLogger
+        logger = WandbLogger(
+            project=args.wandb_project or "ciffy-coord-diffusion",
+            name=args.wandb_name,
+        )
+
+    # Create data module
+    dm = CoordinateDiffusionDataModule(
+        data_dir=data_dir,
+        batch_size=args.batch_size,
+        min_atoms=args.min_atoms,
+        max_atoms=args.max_atoms,
+    )
+
+    # Create Lightning module
+    module = CoordinateDiffusionModule(config)
+
+    # Create trainer
+    trainer = L.Trainer(
+        max_epochs=args.epochs,
+        accelerator=accelerator,
+        enable_progress_bar=not args.quiet,
+        enable_model_summary=not args.quiet,
+        logger=logger,
+        default_root_dir=str(output_dir),
+    )
+
+    # Train
+    trainer.fit(module, dm)
+
+    # Save model
+    save_path = output_dir / "model.safetensors"
+    module.model.save(save_path)
+
+    if not args.quiet:
+        print()
+        print("=" * 60)
+        print("Training Complete")
+        print("=" * 60)
+        print(f"Saved to: {save_path}")
+
+
+def _predict_flow_command(args):
+    """Handle the predict flow subcommand."""
+    from pathlib import Path
+
+    from ciffy import from_sequence
+    from ciffy.nn.flow import PolymerFlowModel
+
+    # Load model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading flow model from {model_path}...")
+
+    model = PolymerFlowModel.load(model_path)
+
+    if not args.quiet:
+        print(f"Residues: {[r.name for r in model.residue_types]}")
+        print(f"Latent dim: {model.latent_dim}")
+
+    # Create template
+    template = from_sequence(args.sequence, atoms=model.atom_filter)
+
+    if not args.quiet:
+        print(f"\nSampling {args.n_samples} conformation(s) for '{args.sequence}'...")
+
+    # Sample
+    import torch
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    samples = model.sample(template, n_samples=args.n_samples)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        # Single file
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
+        # Multiple files
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
+
+
+def _predict_latent_diffusion_command(args):
+    """Handle the predict latent-diffusion subcommand."""
+    from pathlib import Path
+
+    import torch
+
+    from ciffy import from_sequence
+    from ciffy.nn.flow import PolymerFlowModel, load_pretrained
+    from ciffy.nn.diffusion.latent_diffusion import LatentDiffusionModel
+
+    # Determine device
+    device = args.device
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Load flow model (for decoding)
+    if not args.quiet:
+        print(f"Loading flow model...")
+
+    if args.flow_model:
+        flow_model = PolymerFlowModel.load(args.flow_model, device=device)
+    else:
+        flow_model = load_pretrained("rna", device=device)
+
+    # Load diffusion model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading diffusion model from {model_path}...")
+
+    model = LatentDiffusionModel.load(model_path, flow_model=flow_model)
+    model = model.to(device)
+    model.eval()
+
+    # Create template
+    template = from_sequence(args.sequence, atoms=flow_model.atom_filter)
+
+    if not args.quiet:
+        print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")
+
+    # Set seed
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    # Generate
+    with torch.no_grad():
+        samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
+
+
+def _predict_coord_diffusion_command(args):
+    """Handle the predict coord-diffusion subcommand."""
+    from pathlib import Path
+
+    import torch
+
+    from ciffy import from_sequence
+    from ciffy.nn.diffusion.coordinate_diffusion import CoordinateDiffusionModel
+
+    # Determine device
+    device = args.device
+    if device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Load model
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"Error: Model not found: {model_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.quiet:
+        print(f"Loading diffusion model from {model_path}...")
+
+    model = CoordinateDiffusionModel.load(model_path)
+    model = model.to(device)
+    model.eval()
+
+    # Create template
+    template = from_sequence(args.sequence)
+
+    if not args.quiet:
+        print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")
+
+    # Set seed
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
+    # Generate
+    with torch.no_grad():
+        samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
+
+    # Save outputs
+    output = Path(args.output)
+    if args.n_samples == 1:
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        samples[0].write(str(out_path))
+        if not args.quiet:
+            print(f"Saved to {out_path}")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(samples):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not args.quiet:
+                print(f"Saved {out_path}")
 
 
 def _download_command(args):
@@ -482,330 +1005,10 @@ def _cluster_command(args):
                 print(rep)
 
 
-def _predict_command(args):
-    """Handle the predict subcommand (unified inference)."""
-    from glob import glob
-    from pathlib import Path
-
-    try:
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch is required for prediction.\n"
-            "Install with: pip install torch",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    try:
-        from ciffy.nn import load_model, get_model_info
-    except ImportError:
-        print(
-            "Error: Neural network modules not available.\n"
-            "Install with: pip install ciffy[nn]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Config file mode - use batch runner
-    if args.config:
-        from ciffy.nn.runners import run_inference_jobs, format_inference_results_table
-
-        # Expand glob patterns
-        config_paths = []
-        for pattern in args.config:
-            expanded = glob(pattern)
-            if not expanded:
-                print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
-            config_paths.extend(sorted(expanded))
-
-        if not config_paths:
-            print("Error: No config files found.", file=sys.stderr)
-            sys.exit(1)
-
-        if not args.quiet:
-            print()
-            print("=" * 60)
-            print("Ciffy Predict (Batch Mode)")
-            print("=" * 60)
-            print(f"Configs: {len(config_paths)}")
-            print(f"Parallel: {not args.sequential}")
-            print(f"Device: {args.device}")
-            print()
-            for i, path in enumerate(config_paths, 1):
-                print(f"  {i}. {path}")
-            print()
-            print("Running predictions...")
-            print("-" * 60)
-
-        try:
-            results = run_inference_jobs(
-                config_paths=config_paths,
-                parallel=not args.sequential,
-                device=args.device,
-            )
-        except FileNotFoundError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error running predictions: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        if not args.quiet:
-            print()
-            print("=" * 60)
-            print("Results")
-            print("=" * 60)
-            print(format_inference_results_table(results))
-            print()
-
-        failed = sum(1 for r in results if r.status != "success")
-        if failed > 0:
-            sys.exit(1)
-        return
-
-    # Direct CLI mode - model is required
-    if not args.model:
-        print("Error: Model path required for direct mode.", file=sys.stderr)
-        print("Usage: ciffy predict model.safetensors --sequence ACGU", file=sys.stderr)
-        sys.exit(1)
-
-    from ciffy import from_sequence
-
-    # Determine device
-    device = args.device
-    if device == "auto":
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-
-    # Collect sequences
-    sequences = []  # List of (id, sequence) tuples
-
-    if args.sequence:
-        for i, seq in enumerate(args.sequence):
-            sequences.append((f"seq_{i}", seq))
-    elif args.fasta:
-        # Read sequences from FASTA
-        try:
-            with open(args.fasta) as f:
-                content = f.read()
-
-            if content.startswith(">"):
-                # FASTA format
-                current_id = None
-                current_seq = []
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith(">"):
-                        if current_id is not None:
-                            sequences.append((current_id, "".join(current_seq)))
-                        current_id = line[1:].split()[0]
-                        current_seq = []
-                    elif line:
-                        current_seq.append(line)
-                if current_id is not None:
-                    sequences.append((current_id, "".join(current_seq)))
-            else:
-                # Plain text, one per line
-                for i, line in enumerate(content.splitlines()):
-                    line = line.strip()
-                    if line:
-                        sequences.append((f"seq_{i}", line))
-
-            if not sequences:
-                print(f"Error: No sequences found in {args.fasta}", file=sys.stderr)
-                sys.exit(1)
-        except FileNotFoundError:
-            print(f"Error: FASTA file not found: {args.fasta}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print("Error: Must provide --sequence, --fasta, or --config", file=sys.stderr)
-        sys.exit(1)
-
-    # Check model file exists
-    model_path = Path(args.model)
-    if not model_path.exists():
-        print(f"Error: Model not found: {model_path}", file=sys.stderr)
-        sys.exit(1)
-
-    # Show model info
-    if not args.quiet:
-        info = get_model_info(model_path)
-        print(f"Loading {info['model_type']} model...")
-
-    # Load model
-    try:
-        model = load_model(model_path, device=device)
-        model.eval()
-    except Exception as e:
-        print(f"Error loading model: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Get atom filter from model
-    atom_filter = getattr(model, "atom_filter", None)
-    if atom_filter is None and hasattr(model, "flow_model"):
-        atom_filter = model.flow_model.atom_filter
-
-    # Set seed if specified
-    if args.seed is not None:
-        torch.manual_seed(args.seed)
-
-    # Determine output handling
-    output = Path(args.output)
-    single_sequence = len(sequences) == 1
-    single_sample = args.n_samples == 1
-
-    # Generate structures for each sequence
-    total_structures = 0
-    for seq_id, sequence in sequences:
-        if not args.quiet:
-            seq_display = sequence[:50] + ('...' if len(sequence) > 50 else '')
-            print(f"Generating {args.n_samples} sample(s) for {seq_id}: {seq_display} ({len(sequence)} residues)")
-
-        # Create template
-        try:
-            template = from_sequence(sequence, atoms=atom_filter)
-        except Exception as e:
-            print(f"Error creating template for {seq_id}: {e}", file=sys.stderr)
-            continue
-
-        # Generate samples
-        try:
-            with torch.no_grad():
-                samples = model.sample(
-                    template,
-                    n_samples=args.n_samples,
-                    temperature=args.temperature,
-                )
-        except Exception as e:
-            print(f"Error generating samples for {seq_id}: {e}", file=sys.stderr)
-            continue
-
-        # Write outputs
-        if single_sequence and single_sample:
-            # Single file output
-            out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
-            samples[0].write(str(out_path))
-            if not args.quiet:
-                print(f"Wrote {out_path} ({samples[0].size()} atoms)")
-        elif single_sequence:
-            # Multiple samples, single sequence -> numbered files
-            if output.suffix == ".cif":
-                base = output.stem
-                parent = output.parent
-            else:
-                base = "sample"
-                parent = output
-            parent.mkdir(parents=True, exist_ok=True)
-            for i, sample in enumerate(samples):
-                out_path = parent / f"{base}_{i:03d}.cif"
-                sample.write(str(out_path))
-                if not args.quiet:
-                    print(f"Wrote {out_path}")
-        else:
-            # Multiple sequences -> directory structure
-            output.mkdir(parents=True, exist_ok=True)
-            for i, sample in enumerate(samples):
-                out_path = output / f"{seq_id}_{i:03d}.cif"
-                sample.write(str(out_path))
-                if not args.quiet:
-                    print(f"Wrote {out_path}")
-
-        total_structures += len(samples)
-
-    if not args.quiet:
-        print(f"Generated {total_structures} structure(s)")
-
-
-def _train_command(args):
-    """Handle the train subcommand."""
-    try:
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch is required for training.\n"
-            "Install with: pip install torch",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    from glob import glob
-
-    try:
-        from ciffy.nn.runners import format_training_results_table, run_training_jobs
-    except ImportError:
-        print(
-            "Error: Neural network modules not available.\n"
-            "Install from source: pip install git+https://github.com/hmblair/ciffy.git",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # Expand glob patterns in config paths
-    config_paths = []
-    for pattern in args.configs:
-        expanded = glob(pattern)
-        if not expanded:
-            print(f"Warning: No files match pattern: {pattern}", file=sys.stderr)
-        config_paths.extend(sorted(expanded))
-
-    if not config_paths:
-        print("Error: No config files found.", file=sys.stderr)
-        sys.exit(1)
-
-    # Display training plan
-    print()
-    print("=" * 60)
-    print("Ciffy Training Runner")
-    print("=" * 60)
-    print(f"Configs: {len(config_paths)}")
-    print(f"Parallel: {not args.sequential}")
-    print(f"Device: {args.device}")
-    print()
-
-    for i, path in enumerate(config_paths, 1):
-        print(f"  {i}. {path}")
-    print()
-
-    # Run training jobs
-    print("Running training...")
-    print("-" * 60)
-
-    try:
-        results = run_training_jobs(
-            config_paths=config_paths,
-            parallel=not args.sequential,
-            device=args.device,
-        )
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error running training: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Print results table
-    print()
-    print("=" * 60)
-    print("Results")
-    print("=" * 60)
-    print(format_training_results_table(results))
-    print()
-
-    # Exit with error code if any jobs failed
-    failed = sum(1 for r in results if r.status != "success")
-    if failed > 0:
-        sys.exit(1)
-
-
 def main():
     """Main entry point for the ciffy CLI."""
     # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "experiment", "predict", "download", "cluster"}
+    subcommands = {"map", "info", "split", "template", "train", "predict", "download", "cluster"}
 
     # If no args or first arg starts with - or is not a subcommand,
     # treat as the info command (deprecated)
@@ -947,127 +1150,315 @@ def main():
              "overlaps. Use this flag for faster (but potentially overlapping) sampling.",
     )
 
-    # Train subcommand
+    # Train subcommand with subparsers for model types
     train_parser = subparsers.add_parser(
         "train",
-        help="Run training from config files",
+        help="Train models (flow, latent-diffusion, coord-diffusion)",
         description=(
-            "Run model training from YAML config files.\n"
-            "Supports multiple trainer types (flow, latent_diffusion, diffusion).\n"
-            "Multiple configs run in parallel by default."
+            "Train ciffy models using PyTorch Lightning.\n\n"
+            "Subcommands:\n"
+            "  flow              Train residue flow models (ACGU)\n"
+            "  latent-diffusion  Train latent diffusion model\n"
+            "  coord-diffusion   Train coordinate diffusion model"
         ),
     )
-    train_parser.add_argument(
-        "configs",
-        nargs="+",
-        help="Config file paths or glob patterns (e.g., configs/*.yaml)",
+    train_subparsers = train_parser.add_subparsers(dest="train_type")
+
+    # Common arguments helper
+    def add_common_train_args(parser):
+        parser.add_argument(
+            "--data", "-d",
+            required=True,
+            help="Path to training data (directory of CIF files or glob pattern)",
+        )
+        parser.add_argument(
+            "--output", "-o",
+            required=True,
+            help="Output directory for trained model",
+        )
+        parser.add_argument(
+            "--epochs", "-e",
+            type=int,
+            default=200,
+            help="Number of training epochs (default: 200)",
+        )
+        parser.add_argument(
+            "--lr",
+            type=float,
+            default=1e-3,
+            help="Learning rate (default: 1e-3)",
+        )
+        parser.add_argument(
+            "--batch-size", "-b",
+            type=int,
+            default=256,
+            help="Batch size (default: 256)",
+        )
+        parser.add_argument(
+            "--accelerator",
+            default="auto",
+            choices=["auto", "cpu", "gpu", "mps"],
+            help="Accelerator (default: auto)",
+        )
+        parser.add_argument(
+            "--wandb",
+            action="store_true",
+            help="Enable Weights & Biases logging",
+        )
+        parser.add_argument(
+            "--wandb-project",
+            help="W&B project name",
+        )
+        parser.add_argument(
+            "--wandb-name",
+            help="W&B run name",
+        )
+        parser.add_argument(
+            "--quiet", "-q",
+            action="store_true",
+            help="Suppress progress output",
+        )
+        parser.add_argument(
+            "--verbose", "-v",
+            action="store_true",
+            help="Show detailed error messages",
+        )
+
+    # Flow subcommand
+    flow_parser = train_subparsers.add_parser(
+        "flow",
+        help="Train residue flow models",
+        description="Train normalizing flow models for RNA residues (A, C, G, U).",
     )
-    train_parser.add_argument(
-        "--sequential", "-s",
-        action="store_true",
-        help="Run training jobs sequentially (default: parallel)",
+    add_common_train_args(flow_parser)
+    flow_parser.add_argument(
+        "--residues",
+        default="ACGU",
+        help="Residue types to train (default: ACGU)",
     )
-    train_parser.add_argument(
-        "--device", "-d",
-        default="auto",
-        choices=["auto", "cuda", "mps", "cpu"],
-        help="Device strategy (default: auto)",
+    flow_parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=12,
+        help="Latent space dimension (default: 12)",
+    )
+    flow_parser.add_argument(
+        "--n-layers",
+        type=int,
+        default=6,
+        help="Number of flow layers (default: 6)",
+    )
+    flow_parser.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=64,
+        help="Hidden layer size (default: 64)",
+    )
+    flow_parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.05,
+        help="Training noise standard deviation (default: 0.05)",
+    )
+    flow_parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=0.9,
+        help="Minimum atom coverage for training data (default: 0.9)",
     )
 
-    # Experiment subcommand
-    experiment_parser = subparsers.add_parser(
-        "experiment",
-        help="Run multiple training experiments",
-        description=(
-            "Run multiple VAE training experiments from config files.\n"
-            "Supports parallel execution across GPUs."
-        ),
+    # Latent diffusion subcommand
+    latent_parser = train_subparsers.add_parser(
+        "latent-diffusion",
+        help="Train latent diffusion model",
+        description="Train diffusion model in latent space (requires pre-trained flow model).",
     )
-    experiment_parser.add_argument(
-        "configs",
-        nargs="+",
-        help="Config file paths or glob patterns (e.g., configs/*.yaml)",
+    add_common_train_args(latent_parser)
+    latent_parser.set_defaults(batch_size=32)  # Override default for diffusion
+    latent_parser.add_argument(
+        "--flow-model",
+        help="Path to pre-trained flow model (default: built-in RNA model)",
     )
-    experiment_parser.add_argument(
-        "--sequential", "-s",
-        action="store_true",
-        help="Run experiments sequentially (default: parallel)",
+    latent_parser.add_argument(
+        "--d-model",
+        type=int,
+        default=256,
+        help="Transformer dimension (default: 256)",
     )
-    experiment_parser.add_argument(
-        "--device", "-d",
-        default="auto",
-        choices=["auto", "cuda", "mps", "cpu"],
-        help="Device strategy (default: auto)",
+    latent_parser.add_argument(
+        "--num-layers",
+        type=int,
+        default=6,
+        help="Number of transformer layers (default: 6)",
+    )
+    latent_parser.add_argument(
+        "--num-heads",
+        type=int,
+        default=8,
+        help="Number of attention heads (default: 8)",
+    )
+    latent_parser.add_argument(
+        "--num-timesteps",
+        type=int,
+        default=1000,
+        help="Number of diffusion timesteps (default: 1000)",
+    )
+    latent_parser.add_argument(
+        "--min-residues",
+        type=int,
+        default=10,
+        help="Minimum residues per chain (default: 10)",
+    )
+    latent_parser.add_argument(
+        "--max-residues",
+        type=int,
+        default=500,
+        help="Maximum residues per chain (default: 500)",
     )
 
-    # Predict subcommand (unified inference)
+    # Coordinate diffusion subcommand
+    coord_parser = train_subparsers.add_parser(
+        "coord-diffusion",
+        help="Train coordinate diffusion model",
+        description="Train diffusion model directly on coordinates.",
+    )
+    add_common_train_args(coord_parser)
+    coord_parser.set_defaults(batch_size=8)  # Override default for coord diffusion
+    coord_parser.add_argument(
+        "--d-model",
+        type=int,
+        default=256,
+        help="Transformer dimension (default: 256)",
+    )
+    coord_parser.add_argument(
+        "--num-layers",
+        type=int,
+        default=6,
+        help="Number of transformer layers (default: 6)",
+    )
+    coord_parser.add_argument(
+        "--num-heads",
+        type=int,
+        default=8,
+        help="Number of attention heads (default: 8)",
+    )
+    coord_parser.add_argument(
+        "--num-timesteps",
+        type=int,
+        default=1000,
+        help="Number of diffusion timesteps (default: 1000)",
+    )
+    coord_parser.add_argument(
+        "--min-atoms",
+        type=int,
+        default=50,
+        help="Minimum atoms per chain (default: 50)",
+    )
+    coord_parser.add_argument(
+        "--max-atoms",
+        type=int,
+        default=2000,
+        help="Maximum atoms per chain (default: 2000)",
+    )
+
+    # Predict subcommand with subparsers for model types
     predict_parser = subparsers.add_parser(
         "predict",
-        help="Generate structures from a trained model",
+        help="Generate structures (flow, latent-diffusion, coord-diffusion)",
         description=(
-            "Generate polymer structures from sequences using trained models.\n\n"
-            "Two modes:\n"
-            "  Direct:  ciffy predict model.safetensors --sequence ACGU -o out.cif\n"
-            "  Batch:   ciffy predict --config configs/*.yaml"
+            "Generate polymer structures using trained models.\n\n"
+            "Subcommands:\n"
+            "  flow              Sample from flow model\n"
+            "  latent-diffusion  Generate from latent diffusion model\n"
+            "  coord-diffusion   Generate from coordinate diffusion model"
         ),
     )
-    predict_parser.add_argument(
-        "model",
-        nargs="?",
-        help="Path to model file (.safetensors). Required for direct mode.",
+    predict_subparsers = predict_parser.add_subparsers(dest="predict_type")
+
+    # Common arguments helper for predict
+    def add_common_predict_args(parser):
+        parser.add_argument(
+            "model",
+            help="Path to model (directory for flow, .safetensors for diffusion)",
+        )
+        parser.add_argument(
+            "--sequence", "-s",
+            required=True,
+            help="Sequence to generate (e.g., 'acguacgu' for RNA)",
+        )
+        parser.add_argument(
+            "--output", "-o",
+            default="output.cif",
+            help="Output path (file for single, directory for multiple)",
+        )
+        parser.add_argument(
+            "--n-samples", "-n",
+            type=int,
+            default=1,
+            help="Number of samples to generate (default: 1)",
+        )
+        parser.add_argument(
+            "--seed",
+            type=int,
+            default=None,
+            help="Random seed for reproducibility",
+        )
+        parser.add_argument(
+            "--quiet", "-q",
+            action="store_true",
+            help="Suppress output messages",
+        )
+
+    # Predict flow subcommand
+    predict_flow_parser = predict_subparsers.add_parser(
+        "flow",
+        help="Sample conformations from a flow model",
+        description="Generate polymer conformations using a trained flow model.",
     )
-    predict_parser.add_argument(
-        "--sequence", "-s",
-        nargs="+",
-        help="Sequence(s) to generate structures for (e.g., ACGU or MGKLF)",
+    add_common_predict_args(predict_flow_parser)
+
+    # Predict latent-diffusion subcommand
+    predict_latent_parser = predict_subparsers.add_parser(
+        "latent-diffusion",
+        help="Generate from latent diffusion model",
+        description="Generate structures using a trained latent diffusion model.",
     )
-    predict_parser.add_argument(
-        "--fasta", "-f",
-        help="Path to FASTA or plain text file with sequences",
-    )
-    predict_parser.add_argument(
-        "--config", "-c",
-        nargs="+",
-        help="Config file(s) for batch mode (glob patterns supported)",
-    )
-    predict_parser.add_argument(
-        "--output", "-o",
-        default="output.cif",
-        help="Output path: file.cif for single, directory for multiple (default: output.cif)",
-    )
-    predict_parser.add_argument(
-        "--n-samples", "-n",
-        type=int,
-        default=1,
-        help="Number of samples per sequence (default: 1)",
-    )
-    predict_parser.add_argument(
-        "--temperature", "-t",
-        type=float,
-        default=1.0,
-        help="Sampling temperature (default: 1.0)",
-    )
-    predict_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducibility",
-    )
-    predict_parser.add_argument(
+    add_common_predict_args(predict_latent_parser)
+    predict_latent_parser.add_argument(
         "--device", "-d",
         default="auto",
         choices=["auto", "cuda", "mps", "cpu"],
         help="Device to use (default: auto)",
     )
-    predict_parser.add_argument(
-        "--sequential",
-        action="store_true",
-        help="Run batch jobs sequentially (default: parallel)",
+    predict_latent_parser.add_argument(
+        "--flow-model",
+        help="Path to flow model for decoding (default: built-in RNA model)",
     )
-    predict_parser.add_argument(
-        "--quiet", "-q",
-        action="store_true",
-        help="Suppress progress output",
+    predict_latent_parser.add_argument(
+        "--steps",
+        type=int,
+        default=100,
+        help="Number of diffusion steps (default: 100)",
+    )
+
+    # Predict coord-diffusion subcommand
+    predict_coord_parser = predict_subparsers.add_parser(
+        "coord-diffusion",
+        help="Generate from coordinate diffusion model",
+        description="Generate structures using a trained coordinate diffusion model.",
+    )
+    add_common_predict_args(predict_coord_parser)
+    predict_coord_parser.add_argument(
+        "--device", "-d",
+        default="auto",
+        choices=["auto", "cuda", "mps", "cpu"],
+        help="Device to use (default: auto)",
+    )
+    predict_coord_parser.add_argument(
+        "--steps",
+        type=int,
+        default=100,
+        help="Number of diffusion steps (default: 100)",
     )
 
     # Download subcommand
@@ -1256,13 +1647,25 @@ def main():
 
     # Route to appropriate handler
     if args.command == "train":
-        _train_command(args)
-    elif args.command == "experiment":
-        _experiment_command(args)
+        if args.train_type == "flow":
+            _train_flow_command(args)
+        elif args.train_type == "latent-diffusion":
+            _train_latent_diffusion_command(args)
+        elif args.train_type == "coord-diffusion":
+            _train_coord_diffusion_command(args)
+        else:
+            train_parser.print_help()
     elif args.command == "template":
         _template_command(args)
     elif args.command == "predict":
-        _predict_command(args)
+        if args.predict_type == "flow":
+            _predict_flow_command(args)
+        elif args.predict_type == "latent-diffusion":
+            _predict_latent_diffusion_command(args)
+        elif args.predict_type == "coord-diffusion":
+            _predict_coord_diffusion_command(args)
+        else:
+            predict_parser.print_help()
     elif args.command == "download":
         _download_command(args)
     elif args.command == "map":

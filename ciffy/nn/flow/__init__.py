@@ -6,7 +6,6 @@ over molecular conformations:
 
 - `ResidueFlowModel`: Per-residue flow model (PCA + normalizing flow)
 - `PolymerFlowModel`: Multi-residue orchestration with SE(3) positioning
-- `ResidueFlowTrainer`: Training infrastructure for multiple residue types
 - `load_pretrained`: Load pre-trained models
 
 Quick Start:
@@ -27,18 +26,17 @@ Quick Start:
     >>> path = model.interpolate(polymer1, polymer2, n_steps=20)
 
 Training Custom Models:
-    >>> from ciffy.nn.flow import ResidueFlowTrainer, ResidueFlowTrainingConfig
+    >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
     >>> from ciffy.biochemistry import Residue
+    >>> import lightning as L
     >>>
-    >>> config = ResidueFlowTrainingConfig(latent_dim=12, n_epochs=200, device="cuda")
-    >>> trainer = ResidueFlowTrainer(config)
-    >>>
-    >>> # Train on your data
-    >>> results = trainer.train_all(cif_paths, [Residue.A, Residue.C, Residue.G, Residue.U])
-    >>>
-    >>> # Save and convert to PolymerFlowModel
-    >>> trainer.save(results, "models/my_rna")
-    >>> model = trainer.to_polymer_model(results)
+    >>> # Train a model for each residue type
+    >>> dm = FlowDataModule(cif_paths, Residue.A)
+    >>> module = ResidueFlowModule(config, Residue.A)
+    >>> trainer = L.Trainer(max_epochs=200)
+    >>> trainer.fit(module, dm)
+    >>> model = module.get_model()
+    >>> model.save("models/A")
 """
 
 from .residue import (
@@ -58,11 +56,6 @@ from .residue import (
     extract_residues_with_links,
     position_next_residue,
     ResidueDataset,
-    # Training
-    train_pca_flow,
-    ResidueFlowTrainer,
-    ResidueFlowTrainingConfig,
-    TrainingResult,
 )
 
 from .metrics import (
@@ -95,11 +88,6 @@ __all__ = [
     "extract_residues_with_links",
     "position_next_residue",
     "ResidueDataset",
-    # Training
-    "train_pca_flow",
-    "ResidueFlowTrainer",
-    "ResidueFlowTrainingConfig",
-    "TrainingResult",
     # Metrics
     "LatentMoments",
     "FlowMetrics",

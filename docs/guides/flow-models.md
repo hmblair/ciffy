@@ -229,6 +229,22 @@ model = flow.load("rna", device="cuda")
 print(model.residue_types)  # [Residue.A, Residue.C, Residue.G, Residue.U]
 ```
 
+## CLI Training
+
+For training from the command line:
+
+```bash
+# Train flow model on RNA data
+ciffy train flow --data /path/to/cifs --output models/rna --epochs 200
+
+# With custom config
+ciffy train flow --data /path/to/cifs --output models/rna \
+    --latent-dim 16 --n-layers 8 --hidden-dim 128
+
+# With W&B logging
+ciffy train flow --data /path/to/cifs --output models/rna --wandb
+```
+
 ## Advanced Usage
 
 For more control over the flow model architecture and training, use PyTorch Lightning:

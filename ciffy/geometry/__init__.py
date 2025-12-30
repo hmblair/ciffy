@@ -80,6 +80,18 @@ from .transforms import (
     position_residue_fast,
 )
 
+# Frame computation with precomputed indices (fast path)
+from .frames import (
+    FrameIndices,
+    compute_glycosidic_frame_indexed,
+    align_to_frame,
+    align_and_compute_transform,
+    position_next_residue,
+)
+
+# Geometry projection (torch-only, differentiable)
+from .projection import project_bond_lengths
+
 __all__ = [
     # Vector operations
     "cross",
@@ -124,4 +136,12 @@ __all__ = [
     # Residue linking
     "position_residue",
     "position_residue_fast",
+    # Frame computation with precomputed indices
+    "FrameIndices",
+    "compute_glycosidic_frame_indexed",
+    "align_to_frame",
+    "align_and_compute_transform",
+    "position_next_residue",
+    # Geometry projection
+    "project_bond_lengths",
 ]

@@ -271,21 +271,25 @@ def to_backend(arr: np.ndarray, like: Array) -> Array:
 
 def convert_backend(arr: Array, like: Array) -> Array:
     """
-    Convert arr to match the backend of 'like'.
+    Convert arr to match the backend and device of 'like'.
 
     More general than to_backend - works with both numpy and torch inputs.
+    When both are torch tensors, also aligns device.
 
     Args:
         arr: Array to convert.
-        like: Template array for backend detection.
+        like: Template array for backend and device detection.
 
     Returns:
-        Array in the same backend as 'like'.
+        Array in the same backend and device as 'like'.
     """
     if is_torch(like):
         if not is_torch(arr):
             import torch
             return torch.from_numpy(np.asarray(arr)).to(like.device)
+        # Both are torch - also align device
+        if arr.device != like.device:
+            return arr.to(like.device)
         return arr
     else:
         if is_torch(arr):

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
+from ciffy.backend import stack, cat, convert_backend
+from ciffy.geometry import project_bond_lengths
 from ciffy.nn.hub import HubMixin
 
 if TYPE_CHECKING:
@@ -622,6 +624,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
         self.n_atoms = n_atoms
         self._atoms_group: "AtomGroup | None" = None
         self._jit_decoder: torch.jit.ScriptModule | None = None
+        self._frame_indices: "FrameIndices | None" = None
 
         # Cached geometry projector (built lazily, invalidated on device change)
         self._geometry_projector: callable | None = None
@@ -648,6 +651,24 @@ class ResidueFlowModel(nn.Module, HubMixin):
         if self._atoms_group is None:
             self._atoms_group = self.residue.subset(set(self._atom_indices))
         return self._atoms_group
+
+    @property
+    def frame_indices(self) -> "FrameIndices | None":
+        """FrameIndices for glycosidic frame alignment (cached).
+
+        Returns None if the model's atoms don't include the required
+        atoms for frame computation (e.g., test models with partial atoms).
+        """
+        if self._frame_indices is None:
+            from .data import FrameIndices
+
+            atoms_array = np.array(self._atom_indices, dtype=np.int64)
+            try:
+                self._frame_indices = FrameIndices.from_atoms(atoms_array, self.residue)
+            except ValueError:
+                # Atoms don't include required frame atoms
+                return None
+        return self._frame_indices
 
     @classmethod
     def from_structures(
@@ -727,28 +748,103 @@ class ResidueFlowModel(nn.Module, HubMixin):
 
     def encode(
         self,
-        coords: "torch.Tensor",
+        coords: "torch.Tensor | np.ndarray",
+        next_coords: "torch.Tensor | np.ndarray | None" = None,
+    ) -> "torch.Tensor":
+        """
+        Encode raw coordinates to latent space.
+
+        If frame_indices are available (model has required atoms), aligns
+        coordinates to the glycosidic frame and computes link transforms,
+        matching the preprocessing used during training.
+
+        If frame_indices are not available (e.g., test models with partial
+        atoms), assumes coordinates are already aligned and uses zero transforms.
+
+        Args:
+            coords: (n_atoms, 3) or (N, n_atoms, 3) raw coordinates.
+            next_coords: Optional coordinates of next residue(s) for computing
+                link transforms. If None, uses zero transforms.
+
+        Returns:
+            (latent_dim,) or (N, latent_dim) latent vectors.
+        """
+        # Convert to torch tensor on model's device (flow model is torch-based)
+        coords_t = convert_backend(coords, self.flow.V).float()
+
+        # Check if we can do alignment
+        indices = self.frame_indices
+        if indices is None:
+            # No frame indices - assume coords are already aligned
+            # Use encode_aligned with zero transforms
+            if coords_t.dim() == 2:
+                coords_t = coords_t.unsqueeze(0)
+                z = self.encode_aligned(coords_t)
+                return z.squeeze(0)
+            return self.encode_aligned(coords_t)
+
+        # We have frame indices - do full alignment (backend-agnostic)
+        from .data import align_and_compute_transform
+
+        # Convert next_coords to match backend if provided
+        next_t = convert_backend(next_coords, coords_t) if next_coords is not None else None
+
+        # Handle single sample
+        single = coords_t.dim() == 2
+        if single:
+            aligned, transform = align_and_compute_transform(
+                coords_t, next_t, indices
+            )
+            aligned_flat = aligned.reshape(-1)
+            extended = cat([aligned_flat, transform]).unsqueeze(0)
+            z = self.flow.encode(extended)
+            return z.squeeze(0)
+
+        # Batched
+        n_batch = len(coords_t)
+        aligned_list = []
+        transforms_list = []
+
+        for i in range(n_batch):
+            next_i = next_t[i] if next_t is not None else None
+            aligned, transform = align_and_compute_transform(
+                coords_t[i], next_i, indices
+            )
+            aligned_list.append(aligned.reshape(-1))
+            transforms_list.append(transform)
+
+        aligned_flat = stack(aligned_list)
+        transforms_t = stack(transforms_list)
+        extended = cat([aligned_flat, transforms_t], axis=-1)
+        return self.flow.encode(extended)
+
+    def encode_aligned(
+        self,
+        aligned_coords: "torch.Tensor",
         transforms: "torch.Tensor | None" = None,
     ) -> "torch.Tensor":
         """
-        Encode coordinates and transforms to latent space.
+        Encode pre-aligned coordinates directly.
+
+        Use this when coordinates are already in the glycosidic frame
+        (e.g., during training). For raw coordinates, use encode() instead.
 
         Args:
-            coords: (N, n_atoms, 3) or (N, n_atoms*3) coordinates.
+            aligned_coords: (N, n_atoms, 3) or (N, n_atoms*3) aligned coordinates.
             transforms: (N, 6) SE(3) transforms. If None, uses zeros.
 
         Returns:
             (N, latent_dim) latent vectors.
         """
         # Flatten coords if needed
-        if coords.dim() == 3:
-            coords = coords.reshape(coords.shape[0], -1)
+        if aligned_coords.dim() == 3:
+            aligned_coords = aligned_coords.reshape(aligned_coords.shape[0], -1)
 
         # Add transforms
         if transforms is None:
-            transforms = torch.zeros(coords.shape[0], 6, device=coords.device)
+            transforms = torch.zeros(aligned_coords.shape[0], 6, device=aligned_coords.device)
 
-        extended = torch.cat([coords, transforms], dim=-1)
+        extended = torch.cat([aligned_coords, transforms], dim=-1)
         return self.flow.encode(extended)
 
     def decode(
@@ -905,36 +1001,31 @@ class ResidueFlowModel(nn.Module, HubMixin):
     # Geometry Projection
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_geometry_projector(self, device: torch.device) -> callable:
+    def _get_bond_constraints(self, device: torch.device) -> tuple:
         """
-        Get cached geometry projector for device, building if needed.
+        Get cached bond constraint tensors for the specified device.
 
-        The projector is cached and reused for subsequent calls on the same
-        device. Moving to a different device invalidates the cache.
+        Returns (bonds, ideal_lengths) tensors, creating them if needed.
+        The tensors are cached per device for efficiency.
         """
         if (self._geometry_projector is None or
                 self._geometry_projector_device != device):
-            self._geometry_projector = self._build_geometry_projector(device)
+            self._geometry_projector = self._build_bond_constraints(device)
             self._geometry_projector_device = device
         return self._geometry_projector
 
-    def _build_geometry_projector(self, device: torch.device) -> dict:
+    def _build_bond_constraints(self, device: torch.device) -> tuple:
         """
-        Build a Newton projector for bond length constraints.
+        Build bond constraint tensors from residue's bond definitions.
 
-        Uses the residue's bond definitions and ideal coordinates to compute
-        target bond lengths. Only includes bonds where both atoms are present
-        in the model's atom subset.
+        Extracts bond pairs and ideal lengths for atoms present in this
+        model's atom subset.
 
-        Returns a dict with:
-            - newton_step: Function that projects coordinates using Gauss-Newton
-            - compute_jacobian: Function that computes constraint Jacobian
-            - n_atoms: Number of atoms in the model's subset
-            - n_constraints: Number of bond constraints
+        Returns:
+            Tuple of (bonds, ideal_lengths) tensors, or (None, None) if no bonds.
         """
         residue = self.residue
         atom_indices = self._atom_indices
-        n_atoms = len(atom_indices)
 
         # Map from global atom value to local index in this model's subset
         global_to_model_local = {a: i for i, a in enumerate(atom_indices)}
@@ -964,226 +1055,53 @@ class ResidueFlowModel(nn.Module, HubMixin):
                 bond_pairs.append((model_i, model_j))
 
                 # Compute ideal bond length from ideal coordinates
-                # Use residue local indices for ideal_coords access
                 pos1 = ideal_coords[local1]
                 pos2 = ideal_coords[local2]
                 ideal_length = float(np.linalg.norm(pos2 - pos1))
                 bond_targets.append(ideal_length)
 
-        n_bonds = len(bond_targets)
+        if len(bond_targets) == 0:
+            return None, None
 
-        if n_bonds == 0:
-            # No bonds to project - return identity functions
-            def identity(coords: torch.Tensor) -> torch.Tensor:
-                return coords
+        # Create tensors on target device
+        bonds_t = torch.tensor(bond_pairs, device=device, dtype=torch.long)
+        ideal_lengths_t = torch.tensor(bond_targets, device=device, dtype=torch.float32)
 
-            def empty_jacobian(coords: torch.Tensor) -> torch.Tensor:
-                return torch.zeros(0, n_atoms * 3, device=coords.device)
-
-            return {
-                "newton_step": identity,
-                "compute_jacobian": empty_jacobian,
-                "n_atoms": n_atoms,
-                "n_constraints": 0,
-            }
-
-        # Pre-move constraint tensors to target device (cached for reuse)
-        bond_pairs_d = torch.tensor(bond_pairs, device=device, dtype=torch.long)
-        bond_targets_d = torch.tensor(bond_targets, device=device, dtype=torch.float32)
-
-        # Pre-compute constant index tensors
-        bond_idx = torch.arange(n_bonds, device=device)
-        dims = torch.arange(3, device=device)
-
-        def compute_jacobian(coords: torch.Tensor) -> torch.Tensor:
-            """Compute constraint Jacobian at coords. Returns (n_bonds, n_atoms*3)."""
-            J = torch.zeros(n_bonds, n_atoms * 3, device=coords.device)
-
-            a1_idx = bond_pairs_d[:, 0]
-            a2_idx = bond_pairs_d[:, 1]
-            diff = coords[a2_idx] - coords[a1_idx]
-            lengths = torch.norm(diff, dim=1)
-            units = diff / (lengths.unsqueeze(1) + 1e-8)
-
-            row_idx = bond_idx.unsqueeze(1).expand(-1, 3).reshape(-1)
-            col_a1 = (a1_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-            col_a2 = (a2_idx.unsqueeze(1) * 3 + dims).reshape(-1)
-            J[row_idx, col_a1] = -units.reshape(-1)
-            J[row_idx, col_a2] = units.reshape(-1)
-
-            return J
-
-        def newton_step(coords: torch.Tensor) -> torch.Tensor:
-            """Single vectorized Newton step. coords: (n_atoms, 3)"""
-            # Compute residuals
-            a1_idx = bond_pairs_d[:, 0]
-            a2_idx = bond_pairs_d[:, 1]
-            diff = coords[a2_idx] - coords[a1_idx]
-            lengths = torch.norm(diff, dim=1)
-            residuals = lengths - bond_targets_d
-
-            # Get Jacobian
-            J = compute_jacobian(coords)
-
-            # Gauss-Newton: dx = -J^T @ (J @ J^T)^{-1} @ residuals
-            JJT = J @ J.T
-            y = torch.linalg.solve(JJT, residuals)
-            dx = -J.T @ y
-
-            return coords + dx.reshape(n_atoms, 3)
-
-        return {
-            "newton_step": newton_step,
-            "compute_jacobian": compute_jacobian,
-            "n_atoms": n_atoms,
-            "n_constraints": n_bonds,
-        }
+        return bonds_t, ideal_lengths_t
 
     def project_geometry(
         self,
         coords: "torch.Tensor",
         n_steps: int = 2,
-        implicit: bool = True,
+        differentiable: bool = True,
     ) -> "torch.Tensor":
         """
-        Project coordinates onto ideal bond length and angle constraints.
+        Project coordinates onto ideal bond length constraints.
 
         Uses Gauss-Newton optimization to correct local geometry while
         preserving overall conformation. Typically 2 steps are sufficient
         for sub-0.01Å bond length accuracy.
 
-        The geometry projector is cached per device for efficiency.
-
         Args:
             coords: (N, n_atoms, 3) or (n_atoms, 3) coordinates.
             n_steps: Number of Newton steps (default 2).
-            implicit: If True, use implicit differentiation for the backward
-                pass. This makes gradients independent of iteration count -
-                at convergence, the gradient projects onto the constraint
-                manifold's tangent space. Useful for latent space optimization.
+            differentiable: If True, use implicit differentiation for the
+                backward pass. This makes gradients independent of iteration
+                count - at convergence, the gradient projects onto the
+                constraint manifold's tangent space.
 
         Returns:
             Projected coordinates with same shape as input.
         """
-        projector = self._get_geometry_projector(coords.device)
-        newton_step = projector["newton_step"]
-        compute_jacobian = projector["compute_jacobian"]
+        bonds, ideal_lengths = self._get_bond_constraints(coords.device)
 
-        single = coords.dim() == 2
-        if single:
-            coords = coords.unsqueeze(0)
+        if bonds is None:
+            return coords  # No constraints
 
-        if implicit:
-            # Use implicit differentiation
-            projected = _ImplicitGeometryProjection.apply(
-                coords, newton_step, compute_jacobian, n_steps
-            )
-        else:
-            # Explicit backprop through Newton steps
-            projected = []
-            for i in range(coords.shape[0]):
-                c = coords[i]
-                for _ in range(n_steps):
-                    c = newton_step(c)
-                projected.append(c)
-            projected = torch.stack(projected)
-
-        return projected[0] if single else projected
-
-
-class _ImplicitGeometryProjection(torch.autograd.Function):
-    """
-    Implicit differentiation for geometry projection.
-
-    At convergence of the Newton solver, the gradient is computed by projecting
-    the incoming gradient onto the tangent space of the constraint manifold:
-
-        grad_input = P_tangent @ grad_output
-
-    where P_tangent = I - J^T @ (J @ J^T)^{-1} @ J is the projection onto the
-    null space of the constraint Jacobian J.
-
-    This makes the gradient independent of the number of Newton steps taken,
-    which is desirable for latent space optimization where we want gradients
-    to reflect the geometry of the converged solution rather than the
-    optimization path.
-    """
-
-    @staticmethod
-    def forward(ctx, coords, newton_step, compute_jacobian, n_steps):
-        """
-        Forward: run Newton projection to convergence.
-
-        Args:
-            coords: (N, n_atoms, 3) coordinates
-            newton_step: Function that applies one Newton step
-            compute_jacobian: Function that computes constraint Jacobian
-            n_steps: Number of Newton iterations
-        """
-        # Run Newton steps without tracking gradients through iterations
-        with torch.no_grad():
-            projected = []
-            for i in range(coords.shape[0]):
-                c = coords[i].clone()
-                for _ in range(n_steps):
-                    c = newton_step(c)
-                projected.append(c)
-            result = torch.stack(projected)
-
-        # Save for backward - need converged coordinates and jacobian function
-        ctx.compute_jacobian = compute_jacobian
-        ctx.save_for_backward(result)
-
-        # Return with gradient tracking enabled
-        return result.requires_grad_(coords.requires_grad)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        Backward: project gradient onto constraint manifold tangent space.
-
-        At the converged point x*, the constraints are satisfied: c(x*) = 0.
-        The tangent space is the null space of the Jacobian J = dc/dx.
-
-        The projection onto the tangent space is:
-            P_tangent = I - J^T @ (J @ J^T)^{-1} @ J
-
-        So: grad_input = grad_output - J^T @ (J @ J^T)^{-1} @ (J @ grad_output)
-        """
-        (converged_coords,) = ctx.saved_tensors
-        compute_jacobian = ctx.compute_jacobian
-
-        # Process each sample in the batch
-        grad_input = []
-        for i in range(converged_coords.shape[0]):
-            coords_i = converged_coords[i]  # (n_atoms, 3)
-            grad_i = grad_output[i]  # (n_atoms, 3)
-
-            # Compute Jacobian at converged point
-            J = compute_jacobian(coords_i)  # (n_constraints, n_atoms*3)
-
-            if J.shape[0] == 0:
-                # No constraints - gradient passes through unchanged
-                grad_input.append(grad_i)
-                continue
-
-            # Flatten gradient for matrix operations
-            g_flat = grad_i.reshape(-1)  # (n_atoms*3,)
-
-            # Project onto tangent space:
-            # g_proj = g - J^T @ (J @ J^T)^{-1} @ (J @ g)
-            Jg = J @ g_flat  # (n_constraints,)
-            JJT = J @ J.T  # (n_constraints, n_constraints)
-            v = torch.linalg.solve(JJT, Jg)  # (n_constraints,)
-            correction = J.T @ v  # (n_atoms*3,)
-
-            g_proj = g_flat - correction
-            grad_input.append(g_proj.reshape_as(grad_i))
-
-        grad_input = torch.stack(grad_input)
-
-        # Return gradients for (coords, newton_step, compute_jacobian, n_steps)
-        return grad_input, None, None, None
+        return project_bond_lengths(
+            coords, bonds, ideal_lengths,
+            n_steps=n_steps, differentiable=differentiable
+        )
 
 
 # Add __repr__ back to ResidueFlowModel (was displaced by class insertion)

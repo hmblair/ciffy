@@ -30,6 +30,7 @@ from .data import (
     FrameIndices,
     # Frame computation
     compute_glycosidic_frame,
+    align_and_compute_transform,
     # Data extraction
     extract_residues,
     align_to_frame,
@@ -57,6 +58,7 @@ __all__ = [
     "compute_frame_from_indices",
     # Frame computation
     "compute_glycosidic_frame",
+    "align_and_compute_transform",
     # SE(3) transforms
     "compute_relative_transform",
     "apply_relative_transform",

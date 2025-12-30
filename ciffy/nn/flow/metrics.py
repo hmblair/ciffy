@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
-from ciffy.backend import Array
+from ciffy.backend import Array, convert_backend
 
 if TYPE_CHECKING:
     from .residue.model import PCAFlow
@@ -135,12 +135,7 @@ def compute_nll(
         Mean negative log-likelihood.
     """
     flow.eval()
-    device = flow.V.device
-
-    if isinstance(data, np.ndarray):
-        data = torch.from_numpy(data).float()
-    data = data.to(device)
-
+    data = convert_backend(data, flow.V).float()
     n_samples = len(data)
     total_nll = 0.0
 
@@ -173,11 +168,7 @@ def compute_latent_moments(
         LatentMoments with per-dimension statistics.
     """
     flow.eval()
-    device = flow.V.device
-
-    if isinstance(data, np.ndarray):
-        data = torch.from_numpy(data).float()
-    data = data.to(device)
+    data = convert_backend(data, flow.V).float()
 
     # Encode all data
     encoded = []

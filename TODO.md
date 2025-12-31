@@ -181,23 +181,6 @@ def filter_dataset(
 
 ---
 
-### Chain-Level Positioning Primitives (Partial)
-
-**Completed**:
-- ✅ `ciffy.join(*polymers)` - Combine multiple poly-only Polymers
-- ✅ `Polymer.extend(residue)` - Append residue to single-chain polymer
-
-**Remaining**:
-```python
-def insert_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
-    """Insert residue at position, reposition all downstream residues."""
-
-def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
-    """Replace residue at position, keeping backbone frame alignment."""
-```
-
----
-
 ## LOW Priority
 
 ### Extract Frame Computation to Geometry Helper
@@ -218,38 +201,6 @@ def replace_residue(chain: Polymer, position: int, residue: Residue) -> Polymer:
 - Cleaner flow model API
 
 **Note**: Frame cols could also be stored as `np.ndarray` shape `(3,)` with `-1` sentinel for `None`, enabling vectorized operations across multiple residues.
-
----
-
-## CIF Parsing Performance Optimizations
-
-Current: ~11ms for 100K atoms (9M atoms/sec). Bottleneck is memory-bound, not compute-bound.
-
-### Binary Cache Format (3-5x faster on repeated loads)
-
-Cache parsed structures in binary format to skip ASCII parsing on subsequent loads.
-
-```python
-polymer = ciffy.load('file.cif')  # First: 11ms (parses + writes cache)
-polymer = ciffy.load('file.cif')  # Second: ~2ms (reads binary cache)
-```
-
-**Effort**: 1-2 days
-**Impact**: 3-5x faster for ML training loops
-
-### Columnar Pre-scan (1.5-2x faster)
-
-Parse one column at a time across all rows instead of row-by-row with scattered column access. Improves CPU prefetcher efficiency.
-
-**Effort**: 4-6 hours
-**Impact**: 1.5-2x faster parsing
-
-### Integer Hash Keys (1.3-1.5x faster)
-
-Replace string-based gperf hash lookups with integer-encoded keys for direct array lookup.
-
-**Effort**: 1 day
-**Impact**: 1.3-1.5x faster element/atom type lookups
 
 ---
 

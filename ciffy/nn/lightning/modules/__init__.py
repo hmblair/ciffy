@@ -17,6 +17,12 @@ from .residue_flow import (
     ResidueFlowModelConfig,
     ResidueFlowModule,
 )
+from .residue_vae import (
+    ResidueVAEDataConfig,
+    ResidueVAEFullConfig,
+    ResidueVAEModelConfig,
+    ResidueVAEModule,
+)
 
 __all__ = [
     # Base
@@ -34,4 +40,9 @@ __all__ = [
     "ResidueFlowFullConfig",
     "ResidueFlowModelConfig",
     "ResidueFlowModule",
+    # Residue VAE
+    "ResidueVAEDataConfig",
+    "ResidueVAEFullConfig",
+    "ResidueVAEModelConfig",
+    "ResidueVAEModule",
 ]

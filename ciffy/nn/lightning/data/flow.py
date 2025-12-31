@@ -1,6 +1,7 @@
-"""DataModule for residue flow model training.
+"""DataModule for residue-level generative model training.
 
-Handles data extraction and exposes training data for PCA computation.
+Handles data extraction for both flow and VAE models.
+Exposes training data for model initialization (e.g., PCA for flows).
 """
 
 from __future__ import annotations
@@ -17,24 +18,26 @@ if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
 
 
-class FlowDataModule(LightningDataModule):
-    """DataModule for residue flow training.
+class ResidueDataModule(LightningDataModule):
+    """DataModule for residue-level generative model training.
 
     This module:
     - Extracts residue conformations from CIF files
     - Splits by structure to prevent data leakage
-    - Exposes train_data for PCA computation in ResidueFlowModule.setup()
+    - Exposes train_data for model initialization (e.g., PCA for flows)
 
     The train_data attribute is a numpy array of shape (n_instances, n_features)
     containing flattened coordinates + SE(3) transforms.
 
+    Works with both ResidueFlowModel and ResidueVAE training.
+
     Example:
         >>> from ciffy.biochemistry import Residue
-        >>> dm = FlowDataModule(
+        >>> dm = ResidueDataModule(
         ...     cif_paths=list(Path("./data").glob("*.cif")),
         ...     residue=Residue.A,
         ... )
-        >>> # After setup(), dm.train_data is available for PCA
+        >>> # After setup(), dm.train_data is available
     """
 
     def __init__(
@@ -46,7 +49,7 @@ class FlowDataModule(LightningDataModule):
         batch_size: int = 256,
         seed: int = 42,
     ) -> None:
-        """Initialize the flow data module.
+        """Initialize the residue data module.
 
         Args:
             cif_paths: List of paths to CIF files.
@@ -159,4 +162,7 @@ class FlowDataModule(LightningDataModule):
         return self.train_data.shape[1] if self.train_data is not None else 0
 
 
-__all__ = ["FlowDataModule"]
+# Backwards-compatible alias
+FlowDataModule = ResidueDataModule
+
+__all__ = ["ResidueDataModule", "FlowDataModule"]

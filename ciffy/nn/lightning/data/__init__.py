@@ -1,10 +1,11 @@
 """LightningDataModules for ciffy training."""
 
 from .diffusion import LatentDiffusionDataModule, CoordinateDiffusionDataModule
-from .flow import FlowDataModule
+from .flow import ResidueDataModule, FlowDataModule  # FlowDataModule is alias
 
 __all__ = [
     "LatentDiffusionDataModule",
     "CoordinateDiffusionDataModule",
-    "FlowDataModule",
+    "ResidueDataModule",
+    "FlowDataModule",  # Backwards-compatible alias
 ]

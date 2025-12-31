@@ -119,8 +119,11 @@ from .diffusion import (
     CoordinateDiffusionModel,
 )
 
-# Flow models (triggers @register_model decorators)
-from .flow import PolymerFlowModel
+# Polymer model and protocol (generic, works with Flow/VAE)
+from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
+
+# VAE models
+from .vae import ResidueVAE, ResidueVAEConfig
 
 # Hub integration for model distribution
 from .hub import HubMixin, get_cache_dir, set_cache_dir
@@ -210,8 +213,13 @@ __all__ = [
     "CoordinateDenoiser",
     "CoordinateDiffusionConfig",
     "CoordinateDiffusionModel",
-    # Flow models
-    "PolymerFlowModel",
+    # Polymer model (generic, works with Flow/VAE)
+    "PolymerModel",
+    "PolymerFlowModel",  # Deprecated alias
+    "ResidueGenerativeCore",
+    # VAE models
+    "ResidueVAE",
+    "ResidueVAEConfig",
     # Hub integration
     "HubMixin",
     "get_cache_dir",

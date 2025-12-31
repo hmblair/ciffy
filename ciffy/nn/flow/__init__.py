@@ -1,16 +1,20 @@
 """
-Flow models for molecular conformations.
+Normalizing flow models for molecular conformations.
 
 This module provides normalizing flow-based models for learning distributions
 over molecular conformations:
 
 - `ResidueFlowModel`: Per-residue flow model (PCA + normalizing flow)
-- `PolymerFlowModel`: Multi-residue orchestration with SE(3) positioning
 - `load_pretrained`: Load pre-trained models
+
+Note: `PolymerModel` (formerly `PolymerFlowModel`) has moved to `ciffy.nn.polymer`
+since it works with any residue-level model (Flow, VAE, etc.). Import from there:
+
+    >>> from ciffy.nn import PolymerModel, ResidueGenerativeCore
 
 Quick Start:
     >>> import ciffy
-    >>> from ciffy.nn.flow import PolymerFlowModel
+    >>> from ciffy.nn import PolymerModel
     >>>
     >>> # Load pre-trained model (if available)
     >>> model = ciffy.load_flow_model("rna", device="cuda")
@@ -21,17 +25,14 @@ Quick Start:
     >>>
     >>> # Sample new conformations
     >>> samples = model.sample(polymer.sequence, n_samples=10)
-    >>>
-    >>> # Interpolate between conformations
-    >>> path = model.interpolate(polymer1, polymer2, n_steps=20)
 
 Training Custom Models:
-    >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+    >>> from ciffy.nn.lightning import ResidueFlowModule, ResidueDataModule
     >>> from ciffy.biochemistry import Residue
     >>> import lightning as L
     >>>
     >>> # Train a model for each residue type
-    >>> dm = FlowDataModule(cif_paths, Residue.A)
+    >>> dm = ResidueDataModule(cif_paths, Residue.A)
     >>> module = ResidueFlowModule(config, Residue.A)
     >>> trainer = L.Trainer(max_epochs=200)
     >>> trainer.fit(module, dm)
@@ -67,10 +68,13 @@ from .metrics import (
     estimate_kl_divergence,
 )
 
-from .polymer import PolymerFlowModel
+# Re-export from new location (ciffy.nn.polymer) for backwards compatibility
+from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
 from .pretrained import load_pretrained, list_pretrained, is_pretrained_available
 
 __all__ = [
+    # Protocol for residue-level models (now in ciffy.nn.polymer)
+    "ResidueGenerativeCore",
     # Residue flow
     "PCAFlow",
     "ResidueFlowModel",
@@ -95,8 +99,9 @@ __all__ = [
     "compute_latent_moments",
     "compute_flow_metrics",
     "estimate_kl_divergence",
-    # Polymer flow
-    "PolymerFlowModel",
+    # Polymer model (now in ciffy.nn.polymer, re-exported for backwards compat)
+    "PolymerModel",
+    "PolymerFlowModel",  # Deprecated alias
     # Pre-trained models
     "load_pretrained",
     "list_pretrained",

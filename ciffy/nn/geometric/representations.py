@@ -524,7 +524,7 @@ class Repr(nn.Module):
         """
         # Weight the generators of so(3) by the axis values
         *b, _ = axis.size()
-        gens = (axis @ self.generators).view(*b, self.dim(), self.dim())
+        gens = (axis @ self.generators.to(axis.dtype)).view(*b, self.dim(), self.dim())
 
         # Multiply by the angle and exponentiate to move to SO(3)
         rot = torch.linalg.matrix_exp(angle[..., None, None] * gens)

@@ -4,12 +4,14 @@ Provides foundational layers used across the ciffy.nn module:
 - DenseNetwork: Multi-layer perceptron
 - PolymerEmbedding: Embeddings for polymer features
 - Transformer components: RMSNorm, RoPE, SwiGLU, etc.
+- Pairformer: AlphaFold3-style transformer for pair representations
 
 Example:
-    >>> from ciffy.nn.layers import DenseNetwork, Transformer
+    >>> from ciffy.nn.layers import DenseNetwork, Transformer, Pairformer
     >>>
     >>> mlp = DenseNetwork(64, 10, hidden_sizes=[128, 64])
     >>> transformer = Transformer(d_model=256, num_layers=4, num_heads=8)
+    >>> pairformer = Pairformer(d_pair=128, num_layers=4, num_heads=8)
 """
 
 from .dense_network import DenseNetwork
@@ -21,6 +23,15 @@ from .transformer import (
     RMSNorm,
     RotaryPositionEmbedding,
     SwiGLU,
+)
+from .pairformer import (
+    Pairformer,
+    PairformerBlock,
+    TriangularMultiplicativeUpdate,
+    TriangularAttention,
+    PairTransition,
+    OuterProductMean,
+    PairToSingleAttention,
 )
 
 __all__ = [
@@ -35,4 +46,12 @@ __all__ = [
     "RMSNorm",
     "RotaryPositionEmbedding",
     "SwiGLU",
+    # Pairformer components
+    "Pairformer",
+    "PairformerBlock",
+    "TriangularMultiplicativeUpdate",
+    "TriangularAttention",
+    "PairTransition",
+    "OuterProductMean",
+    "PairToSingleAttention",
 ]

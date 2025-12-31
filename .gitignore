@@ -27,9 +27,11 @@ checkpoints/
 samples/
 inference_output/
 lightning_logs/
+wandb/
 
 # Personal config files (use examples/configs as templates)
 configs/
+.rex.toml
 
 # Scratch directory for local experiments
 scratch/

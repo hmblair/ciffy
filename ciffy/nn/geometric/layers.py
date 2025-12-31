@@ -625,8 +625,8 @@ class Attention(nn.Module):
         # queries: (N, nheads, head_dim) -> (N, nheads, 1, head_dim)
         # neighbor_keys: (N, k, nheads, head_dim) -> (N, nheads, k, head_dim)
         queries = queries.unsqueeze(2)  # (N, nheads, 1, head_dim)
-        neighbor_keys = neighbor_keys.transpose(1, 2)  # (N, nheads, k, head_dim)
-        neighbor_values = neighbor_values.transpose(1, 2)  # (N, nheads, k, head_dim)
+        neighbor_keys = neighbor_keys.transpose(1, 2).contiguous()  # (N, nheads, k, head_dim)
+        neighbor_values = neighbor_values.transpose(1, 2).contiguous()  # (N, nheads, k, head_dim)
 
         scores = (queries @ neighbor_keys.transpose(-2, -1)).squeeze(2) * self.scale
         # scores: (N, nheads, k)
@@ -886,12 +886,12 @@ class EquivariantAttention(nn.Module):
         # Reshape for attention: (N, nheads, seq_len, head_dim)
         q_heads = queries.flatten(-2, -1).view(N, self.nheads, 1, self.head_dim)
         k_heads = keys.flatten(-2, -1).view(N, k, self.nheads, self.head_dim)
-        k_heads = k_heads.transpose(1, 2)  # (N, nheads, k, head_dim)
+        k_heads = k_heads.transpose(1, 2).contiguous()  # (N, nheads, k, head_dim)
 
         v_hidden_size = self.out_mult * self.out_dim
         v_head_dim = v_hidden_size // self.nheads
         v_heads = values.flatten(-2, -1).view(N, k, self.nheads, v_head_dim)
-        v_heads = v_heads.transpose(1, 2)  # (N, nheads, k, v_head_dim)
+        v_heads = v_heads.transpose(1, 2).contiguous()  # (N, nheads, k, v_head_dim)
 
         # Use SDPA for non-learned scaling (fused CUDA kernels)
         # Fall back to manual for learned scaling (Parameter requires grad)
@@ -949,10 +949,10 @@ class EquivariantAttention(nn.Module):
         k_heads = keys.flatten(-2, -1).view(N, k, self.nheads, self.head_dim)
         v_heads = values.flatten(-2, -1).view(N, k, self.nheads, self.head_dim)
 
-        # Transpose to (N, nheads, k, head_dim)
-        q_heads = q_heads.transpose(1, 2)
-        k_heads = k_heads.transpose(1, 2)
-        v_heads = v_heads.transpose(1, 2)
+        # Transpose to (N, nheads, k, head_dim) and make contiguous for efficient ops
+        q_heads = q_heads.transpose(1, 2).contiguous()
+        k_heads = k_heads.transpose(1, 2).contiguous()
+        v_heads = v_heads.transpose(1, 2).contiguous()
 
         # Edge attention scores: element-wise Q · K, sum over head_dim
         scores = (q_heads * k_heads).sum(dim=-1) * self.scale

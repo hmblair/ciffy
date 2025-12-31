@@ -11,6 +11,38 @@ Modules:
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
+import torch
+
+
+def configure_precision(
+    tf32: bool = True,
+    matmul_precision: str = "high",
+) -> None:
+    """Configure GPU precision settings for optimal performance.
+
+    Enables TF32 tensor core operations and sets matrix multiplication precision.
+    TF32 provides up to 3x speedup on Ampere+ GPUs (A100, RTX 30xx, RTX 40xx)
+    with minimal accuracy loss for most deep learning workloads.
+
+    Call this once at the start of your script before creating models.
+
+    Args:
+        tf32: Enable TF32 for matmul and cuDNN operations. Default True.
+        matmul_precision: Precision for float32 matmuls. Options:
+            - "highest": Full float32 precision (slowest, most accurate)
+            - "high": TF32 for internal computations (good balance)
+            - "medium": TF32 with reduced accumulation precision (fastest)
+
+    Example:
+        >>> import ciffy.nn as nn
+        >>> nn.configure_precision(tf32=True, matmul_precision="high")
+        >>> # Now all models will use TF32 tensor cores on compatible GPUs
+    """
+    torch.backends.cuda.matmul.allow_tf32 = tf32
+    torch.backends.cudnn.allow_tf32 = tf32
+    torch.set_float32_matmul_precision(matmul_precision)
+
+
 from .data_validation import (
     DataCompatibilityReport,
     StructureExample,
@@ -94,6 +126,8 @@ from .flow import PolymerFlowModel
 from .hub import HubMixin, get_cache_dir, set_cache_dir
 
 __all__ = [
+    # Precision configuration
+    "configure_precision",
     # Data validation and filtering
     "DataCompatibilityReport",
     "StructureExample",

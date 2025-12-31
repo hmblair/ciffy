@@ -65,16 +65,21 @@ class RepNorm(nn.Module):
 
     def __init__(self: RepNorm, repr: Repr) -> None:
         super().__init__()
-        self.nreps = repr.nreps()
-        # Store split sizes for torch.split (compile-friendly)
+        self.num_reps = repr.nreps()
+
+        # Create indices mapping each dimension to its irrep index
+        # e.g., for lvals=[0,1,2]: indices = [0, 1,1,1, 2,2,2,2,2]
         cdims = repr.cumdims()
-        self.split_sizes = [cdims[i + 1] - cdims[i] for i in range(self.nreps)]
+        indices = []
+        for i in range(self.num_reps):
+            size = cdims[i + 1] - cdims[i]
+            indices.extend([i] * size)
+        self.register_buffer('indices', torch.tensor(indices, dtype=torch.long))
 
     def forward(self: RepNorm, st: torch.Tensor) -> torch.Tensor:
         """Compute the norm of each irrep component.
 
-        Uses torch.split + explicit squared sum for torch.compile compatibility.
-        Note: .norm(dim=-1) has FakeTensor shape inference issues with compile.
+        Uses vectorized scatter_add for GPU efficiency, avoiding Python loops.
 
         Args:
             st: Spherical tensor of shape (..., dim).
@@ -82,12 +87,18 @@ class RepNorm(nn.Module):
         Returns:
             Norms of shape (..., nreps).
         """
-        # Split along last dimension into irrep components
-        components = torch.split(st, self.split_sizes, dim=-1)
-        # Compute squared norm of each component (explicit multiply avoids .norm() compile issues)
-        sq_norms = [(c * c).sum(dim=-1) for c in components]
-        # Stack and take sqrt
-        return torch.stack(sq_norms, dim=-1).sqrt()
+        # Compute squared values
+        sq = st * st
+
+        # Allocate output and use scatter_add to sum within each irrep
+        result = torch.zeros(
+            *sq.shape[:-1], self.num_reps,
+            device=sq.device, dtype=sq.dtype
+        )
+        ix = self.indices.expand(sq.shape)
+        result.scatter_add_(-1, ix, sq)
+
+        return result.sqrt()
 
 
 class SphericalHarmonic(nn.Module):
@@ -139,6 +150,9 @@ class SphericalHarmonic(nn.Module):
     def forward(self: SphericalHarmonic, x: torch.Tensor) -> torch.Tensor:
         """Compute spherical harmonic features for points.
 
+        Compatible with torch.autocast (AMP). Sphericart only supports float32/64,
+        so autocast is temporarily disabled during computation.
+
         Args:
             x: Coordinates of shape (..., N, 3).
 
@@ -153,12 +167,15 @@ class SphericalHarmonic(nn.Module):
         x = x[:, self.ix]
 
         # Handle dtype (sphericart only supports float32/64)
+        # Save original dtype for restoration after computation
         dtype = x.dtype
         if dtype not in [torch.float32, torch.float64]:
             x = x.to(torch.float32)
 
-        # Compute spherical harmonics
-        sh = self.sh.compute(x)
+        # Compute spherical harmonics with autocast disabled
+        # (sphericart doesn't support float16/bfloat16)
+        with torch.amp.autocast(x.device.type, enabled=False):
+            sh = self.sh.compute(x)
 
         # Restore original dtype and handle NaN
         sh = sh.to(dtype)

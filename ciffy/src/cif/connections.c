@@ -30,6 +30,23 @@ static ConnType _parse_conn_type(const char *str, size_t len) {
  * ATOM LOOKUP HASH
  * ============================================================================ */
 
+/**
+ * @brief Extract field pointer and length using direct pointer arithmetic.
+ *
+ * Faster than _get_field_ptr for fixed-width blocks in tight loops.
+ */
+static inline void _extract_field(char *line_start, const int *offsets, int idx,
+                                   char **out_ptr, size_t *out_len) {
+    char *p = line_start + offsets[idx];
+    while (*p == ' ') p++;  /* Skip leading whitespace */
+
+    char *end = p;
+    while (*end != ' ' && *end != '\n' && *end != '\0') end++;
+
+    *out_ptr = p;
+    *out_len = (size_t)(end - p);
+}
+
 AtomHash _build_atom_lookup(mmBlock *block, int n_atoms, CifErrorContext *ctx) {
     AtomHash hash = atom_hash_create((size_t)n_atoms);
     if (!hash.entries) {
@@ -58,24 +75,47 @@ AtomHash _build_atom_lookup(mmBlock *block, int n_atoms, CifErrorContext *ctx) {
         return (AtomHash){NULL, 0, 0};
     }
 
-    /* Build hash from each atom row */
-    for (int row = 0; row < n_atoms; row++) {
-        size_t asym_len, seq_len, atom_len;
+    /* Use fast path for fixed-width blocks (most common case) */
+    if (!block->variable_width && block->offsets != NULL) {
+        char **lines = block->lines;
+        const int *offsets = block->offsets;
 
-        char *asym = _get_field_ptr(block, row, asym_idx, &asym_len);
-        char *seq = _get_field_ptr(block, row, seq_idx, &seq_len);
-        char *atom = _get_field_ptr(block, row, atom_idx, &atom_len);
+        for (int row = 0; row < n_atoms; row++) {
+            char *line_start = lines[row];
+            char *asym, *seq, *atom;
+            size_t asym_len, seq_len, atom_len;
 
-        if (!asym || !seq || !atom) continue;
+            /* Direct pointer arithmetic - matches BATCH_* macros */
+            _extract_field(line_start, offsets, asym_idx, &asym, &asym_len);
+            _extract_field(line_start, offsets, seq_idx, &seq, &seq_len);
+            _extract_field(line_start, offsets, atom_idx, &atom, &atom_len);
 
-        /* Strip quotes if present */
-        _strip_outer_quotes((const char **)&asym, &asym_len);
-        _strip_outer_quotes((const char **)&seq, &seq_len);
-        _strip_outer_quotes((const char **)&atom, &atom_len);
+            /* Strip quotes if present */
+            _strip_outer_quotes((const char **)&asym, &asym_len);
+            _strip_outer_quotes((const char **)&seq, &seq_len);
+            _strip_outer_quotes((const char **)&atom, &atom_len);
 
-        /* Insert into hash */
-        if (!atom_hash_insert(&hash, asym, asym_len, seq, seq_len, atom, atom_len, row)) {
-            LOG_DEBUG("Hash insert failed at row %d", row);
+            /* Insert into hash */
+            atom_hash_insert(&hash, asym, asym_len, seq, seq_len, atom, atom_len, row);
+        }
+    } else {
+        /* Fallback for variable-width blocks */
+        for (int row = 0; row < n_atoms; row++) {
+            size_t asym_len, seq_len, atom_len;
+
+            char *asym = _get_field_ptr(block, row, asym_idx, &asym_len);
+            char *seq = _get_field_ptr(block, row, seq_idx, &seq_len);
+            char *atom = _get_field_ptr(block, row, atom_idx, &atom_len);
+
+            if (!asym || !seq || !atom) continue;
+
+            /* Strip quotes if present */
+            _strip_outer_quotes((const char **)&asym, &asym_len);
+            _strip_outer_quotes((const char **)&seq, &seq_len);
+            _strip_outer_quotes((const char **)&atom, &atom_len);
+
+            /* Insert into hash */
+            atom_hash_insert(&hash, asym, asym_len, seq, seq_len, atom, atom_len, row);
         }
     }
 

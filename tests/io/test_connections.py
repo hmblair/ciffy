@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 import ciffy
-from ciffy._c import _load
 
 
 class TestConnectionLoading:
@@ -11,20 +10,20 @@ class TestConnectionLoading:
 
     def test_connections_not_loaded_by_default(self):
         """Connections should not be loaded unless explicitly requested."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions")
-        assert "connections" not in data
-        assert "connection_types" not in data
+        polymer = ciffy.load("tests/data/9MDS.cif")
+        assert polymer.connections is None
+        assert polymer.connection_types is None
 
     def test_connections_loaded_when_requested(self):
-        """Connections should be loaded when connections=True."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        assert "connections" in data
-        assert "connection_types" in data
+        """Connections should be loaded when not in skip list."""
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        assert polymer.connections is not None
+        assert polymer.connection_types is not None
 
     def test_connections_shape(self):
         """Connections should be (N, 2) array of atom index pairs."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
 
         assert connections.ndim == 2
         assert connections.shape[1] == 2
@@ -32,9 +31,9 @@ class TestConnectionLoading:
 
     def test_connection_types_shape(self):
         """Connection types should be (N,) array matching connections."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
-        conn_types = data["connection_types"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
+        conn_types = polymer.connection_types
 
         assert conn_types.ndim == 1
         assert len(conn_types) == len(connections)
@@ -42,17 +41,17 @@ class TestConnectionLoading:
 
     def test_connection_indices_valid(self):
         """All connection atom indices should be within valid range."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
-        n_atoms = data["atoms_per_chain"].sum()
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
+        n_atoms = polymer.size()
 
         assert connections.min() >= 0
         assert connections.max() < n_atoms
 
     def test_connection_types_valid(self):
         """Connection types should be valid enum values (1-4)."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        conn_types = data["connection_types"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        conn_types = polymer.connection_types
 
         # ConnType enum: HYDROG=1, COVALE=2, METALC=3, DISULF=4, UNKNOWN=0
         assert conn_types.min() >= 0
@@ -60,36 +59,36 @@ class TestConnectionLoading:
 
     def test_9mds_has_expected_connections(self):
         """9MDS should have ~4404 hydrogen bond connections."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
 
         # 9MDS is an RNA structure with many base pair hydrogen bonds
         assert len(connections) == 4404
 
     def test_connections_are_hydrogen_bonds(self):
         """9MDS connections should be primarily hydrogen bonds (type 1)."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        conn_types = data["connection_types"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        conn_types = polymer.connection_types
 
         # All connections in 9MDS should be hydrogen bonds
         assert np.all(conn_types == 1)
 
     def test_connection_pairs_are_distinct(self):
         """Connection pairs should have distinct atom indices."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
 
         # No self-connections
         assert np.all(connections[:, 0] != connections[:, 1])
 
     def test_no_connections_when_block_missing(self):
-        """Files without _struct_conn should return empty connections."""
+        """Files without _struct_conn should return empty or None connections."""
         # 1ZEW may not have _struct_conn block or have fewer connections
-        data = _load("tests/data/1ZEW.cif", skip="descriptions", connections=True)
+        polymer = ciffy.load("tests/data/1ZEW.cif", skip=["descriptions"])
 
         # Should not crash, may have 0 or some connections
-        if "connections" in data:
-            assert data["connections"].shape[1] == 2
+        if polymer.connections is not None:
+            assert polymer.connections.shape[1] == 2
 
 
 class TestConnectionCorrectness:
@@ -97,9 +96,9 @@ class TestConnectionCorrectness:
 
     def test_hydrogen_bond_distances(self):
         """Hydrogen bond connections should have distances in valid range (2-4 Å)."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        coords = data["coordinates"]
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        coords = polymer.coordinates
+        connections = polymer.connections
 
         # Compute distances for all connections
         atom1_coords = coords[connections[:, 0]]
@@ -117,9 +116,8 @@ class TestConnectionCorrectness:
 
     def test_connections_between_different_residues(self):
         """Base pair H-bonds should connect atoms from different residues."""
-        polymer = ciffy.load("tests/data/9MDS.cif", connections=True)
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        connections = polymer.connections
 
         # Get residue membership for each atom
         residue_idx = polymer.membership(ciffy.Scale.RESIDUE)
@@ -133,13 +131,12 @@ class TestConnectionCorrectness:
 
     def test_connections_involve_expected_elements(self):
         """H-bond atoms should be N, O, or sometimes C (for C-H...O bonds)."""
-        data = _load("tests/data/9MDS.cif", skip="descriptions", connections=True)
-        elements = data["elements"]
-        connections = data["connections"]
+        polymer = ciffy.load("tests/data/9MDS.cif", skip=["descriptions"])
+        elements = polymer.elements
+        connections = polymer.connections
 
         # Element indices: N=7, O=8, C=6
         N, O, C = 7, 8, 6
-        valid_elements = {N, O, C}
 
         elem1 = elements[connections[:, 0]]
         elem2 = elements[connections[:, 1]]

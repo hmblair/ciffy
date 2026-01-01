@@ -240,6 +240,8 @@ class Polymer:
                 - descriptions: List of entity descriptions per chain.
                 - bfactors: (N,) array of B-factors per atom.
                 - resolution: Structure resolution in Angstroms.
+                - connections: (C, 2) array of atom index pairs for H-bonds, etc.
+                - connection_types: (C,) array of connection type indices.
 
         Raises:
             TypeError: If fields other than pdb_id are passed without hierarchy.
@@ -252,6 +254,10 @@ class Polymer:
             >>> empty.size(Scale.CHAIN)
             0
         """
+        # Extract connections before descriptor processing (not scale-based fields)
+        connections = fields.pop('connections', None)
+        connection_types = fields.pop('connection_types', None)
+
         # Validate: only pdb_id allowed without hierarchy
         if hierarchy is None:
             invalid_fields = [k for k in fields if k != 'pdb_id']
@@ -276,7 +282,9 @@ class Polymer:
             )
 
         self._hierarchy = hierarchy
-        self._bonds: np.ndarray | None = None
+        self._bonds: Array | None = None
+        self._connections: Array | None = connections
+        self._connection_types: Array | None = connection_types
 
         # Validate field sizes match hierarchy
         self._validate_sizes()
@@ -630,6 +638,33 @@ class Polymer:
             # Filter to i < j to avoid duplicates
             self._bonds = edges[edges[:, 0] < edges[:, 1]]
         return self._bonds
+
+    @property
+    def connections(self) -> Array | None:
+        """
+        Non-covalent connections as atom index pairs (H-bonds, metal coordination, etc).
+
+        Returns:
+            (C, 2) int32 array where each row [i, j] represents a connection
+            between atoms i and j, or None if connections were not loaded.
+
+        Note:
+            Connections must be explicitly loaded via skip parameter:
+            ``ciffy.load(file, skip=[])`` or ``skip=["descriptions"]``.
+            By default, connections are skipped for performance.
+        """
+        return self._connections
+
+    @property
+    def connection_types(self) -> Array | None:
+        """
+        Types of non-covalent connections.
+
+        Returns:
+            (C,) int32 array of connection type indices, or None if not loaded.
+            Values: 0=UNKNOWN, 1=HYDROG (H-bond), 2=COVALE, 3=METALC, 4=DISULF.
+        """
+        return self._connection_types
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification

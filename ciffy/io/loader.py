@@ -19,8 +19,7 @@ def load(
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = "descriptions",
-    connections: bool = False,
+    skip: Union[str, List[str], None] = ("descriptions", "connections"),
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -41,18 +40,15 @@ def load(
         model: Model number to load for multi-model structures (e.g., NMR
             ensembles). Currently only model 1 is supported. Default is 1.
         skip: Fields to skip loading. Can be:
-            - "descriptions": Skip entity descriptions (default)
+            - A tuple/list of field names (default: ["descriptions", "connections"])
             - "metadata": Skip heavy atom-level fields (coordinates, bfactors,
               atoms, elements, atoms_per_res). Useful for fast indexing.
             - A single field name: Skip that field (e.g., "bfactors")
-            - A list of field names: Skip multiple fields
-            - None or []: Load all fields including descriptions
+            - None or []: Load all fields including descriptions and connections
             Skippable fields: coordinates, bfactors, atoms (types), elements,
             sequence (residues), res_per_chain, atoms_per_res, resolution,
-            descriptions. Core fields (chains, names, etc.) cannot be skipped.
-        connections: If True, parse _struct_conn block for hydrogen bonds,
-            covalent bonds to modified residues, metal coordination, and
-            disulfide bridges. Adds ~20% overhead to load time. Default is False.
+            descriptions, connections. Core fields (chains, names, etc.)
+            cannot be skipped.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -69,8 +65,13 @@ def load(
         >>> print(polymer)
         PDB 1ABC with 1234 atoms (numpy).
 
-        >>> # Load with entity descriptions
-        >>> polymer = load("1abc.cif", skip=None)
+        >>> # Load with connections (H-bonds, metal coordination, etc.)
+        >>> polymer = load("1abc.cif", skip=["descriptions"])
+        >>> print(polymer.connections.shape)
+        (4404, 2)
+
+        >>> # Load everything including descriptions and connections
+        >>> polymer = load("1abc.cif", skip=[])
         >>> print(polymer.descriptions)
         ['RNA (66-MER)', 'CESIUM ION', ...]
 
@@ -89,10 +90,7 @@ def load(
         >>> rna_ab = load("1abc.cif", molecule_types=Molecule.RNA, chains=["A", "B"])
 
         >>> # Skip loading B-factors for faster loading
-        >>> polymer = load("1abc.cif", skip="bfactors")
-
-        >>> # Skip multiple fields
-        >>> polymer = load("1abc.cif", skip=["bfactors", "resolution"])
+        >>> polymer = load("1abc.cif", skip=["descriptions", "connections", "bfactors"])
     """
     # Import here to avoid circular imports
     from ..polymer import Polymer
@@ -135,9 +133,32 @@ def load(
         else:
             chain_filter = list(chains)
 
+    # Validate and parse skip parameter
+    skip_set = set()
+    if skip is not None:
+        if isinstance(skip, str):
+            skip_set.add(skip)
+        elif hasattr(skip, '__iter__'):
+            skip_set.update(skip)
+        else:
+            raise TypeError(
+                f"skip must be None, a string, or an iterable of strings, got {type(skip).__name__}"
+            )
+    load_connections = "connections" not in skip_set
+
+    # Normalize skip to list for C extension (exclude "connections" - handled separately)
+    if skip is None:
+        skip_for_c = None
+    elif isinstance(skip, str):
+        skip_for_c = skip if skip != "connections" else None
+    else:
+        skip_for_c = [s for s in skip if s != "connections"]
+        if not skip_for_c:
+            skip_for_c = None
+
     # Load returns a dict with all parsed data
-    data = _load(file, skip=skip, molecule_types=mol_type_filter, chains=chain_filter,
-                 connections=connections)
+    data = _load(file, skip=skip_for_c, molecule_types=mol_type_filter, chains=chain_filter,
+                 connections=load_connections)
 
     # Extract fields from dict
     id = data["id"]
@@ -173,6 +194,10 @@ def load(
     if resolution is not None and resolution < 0:
         resolution = None
 
+    # Get connections if loaded
+    connections = data.get("connections", None)
+    connection_types = data.get("connection_types", None)
+
     # Create hierarchy from sizes and lengths
     from ..polymer.hierarchy import _Hierarchy
     hierarchy = _Hierarchy.from_sizes_and_lengths(
@@ -196,6 +221,8 @@ def load(
         descriptions=descriptions,
         bfactors=bfactors,
         resolution=resolution,
+        connections=connections,
+        connection_types=connection_types,
     )
 
     # Convert to torch if requested

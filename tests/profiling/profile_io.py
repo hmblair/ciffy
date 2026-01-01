@@ -85,6 +85,9 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     def load_ciffy():
         return ciffy.load(filepath, backend="numpy")
 
+    def load_ciffy_connections():
+        return ciffy.load(filepath, backend="numpy", skip=["descriptions"])
+
     def load_ciffy_metadata():
         return ciffy.load_metadata(filepath)
 
@@ -112,6 +115,9 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     result = Timer.benchmark(load_ciffy, runs=runs)
     results["ciffy"] = result.to_dict()
 
+    result = Timer.benchmark(load_ciffy_connections, runs=runs)
+    results["ciffy_connections"] = result.to_dict()
+
     result = Timer.benchmark(load_ciffy_metadata, runs=runs)
     results["ciffy_metadata"] = result.to_dict()
 
@@ -127,9 +133,10 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     else:
         results["biotite"] = None
 
-    # Load once to get atom count and profile data
-    poly = load_ciffy()
+    # Load once to get atom count and connection count
+    poly = load_ciffy_connections()
     results["atoms"] = poly.size()
+    results["n_connections"] = len(poly.connections) if poly.connections is not None else 0
 
     # Get profile data if available (from the last load)
     profile = None
@@ -196,6 +203,15 @@ def print_results(results: dict, profile: dict = None) -> None:
     # Print profile breakdown if available
     if profile is not None:
         print_profile_breakdown(profile, c['mean']*1000)
+
+    # Print connection loading timing
+    if results.get("ciffy_connections"):
+        cc = results["ciffy_connections"]
+        n_conn = results.get("n_connections", 0)
+        overhead_ms = (cc["mean"] - c["mean"]) * 1000
+        overhead_pct = (cc["mean"] / c["mean"] - 1) * 100 if c["mean"] > 0 else 0
+        print(f"+ connections: {cc['mean']*1000:7.2f} ms ± {cc['std']*1000:.2f} ms "
+              f"(+{overhead_pct:.0f}%, {n_conn} connections)")
 
     # Print metadata-only timing
     if results.get("ciffy_metadata"):

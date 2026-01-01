@@ -35,6 +35,7 @@ class ResidueFlowModelConfig:
     bound: float | None = None
     use_rotation: bool = True
     noise_std: float = 0.05
+    latent_reg: float = 0.0  # Regularization weight (0 = disabled)
 
 
 @dataclass
@@ -71,11 +72,11 @@ class ResidueFlowModule(LightningModule):
 
     Example:
         >>> from ciffy.biochemistry import Residue
-        >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
+        >>> from ciffy.nn.lightning import ResidueFlowModule, ResidueDataModule
         >>> import lightning as L
         >>>
         >>> config = ResidueFlowFullConfig()
-        >>> dm = FlowDataModule(cif_paths, residue=Residue.A)
+        >>> dm = ResidueDataModule(cif_paths, residue=Residue.A)
         >>> module = ResidueFlowModule(config, residue=Residue.A)
         >>>
         >>> trainer = L.Trainer(max_epochs=200)
@@ -194,6 +195,10 @@ class ResidueFlowModule(LightningModule):
         # TensorDataset returns tuple
         data = batch[0] if isinstance(batch, (tuple, list)) else batch
 
+        # Log input data statistics per batch
+        self.log("train/data_mean", data.mean(), on_step=True, on_epoch=False)
+        self.log("train/data_std", data.std(), on_step=True, on_epoch=False)
+
         # Add noise regularization during training
         if self.config.model.noise_std > 0:
             data = data + self.config.model.noise_std * torch.randn_like(data)
@@ -203,11 +208,44 @@ class ResidueFlowModule(LightningModule):
 
         # Compute NLL: -log p(z) - log |det J|
         log_pz = -0.5 * (z**2 + LOG_2PI).sum(dim=-1)
-        loss = -(log_pz + log_det).mean()
+        nll = -(log_pz + log_det).mean()
 
-        self.log("train/nll", loss, prog_bar=True, on_step=True, on_epoch=True)
+        # Jacobian regularization: penalize log_det away from 0
+        # This directly prevents the model from exploiting the Jacobian
+        jac_reg = self.config.model.latent_reg
+        loss = nll + jac_reg * (log_det ** 2).mean()
+
+        self.log("train/nll", nll, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train/loss", loss, on_step=False, on_epoch=True)
+
+        # Log latent statistics (should be mean≈0, std≈1 for Gaussian)
+        self.log("train/z_mean", z.mean(), on_step=False, on_epoch=True)
+        self.log("train/z_std", z.std(), on_step=False, on_epoch=True)
+
+        # Log component breakdown for diagnostics
+        self.log("train/log_pz", -log_pz.mean(), on_step=False, on_epoch=True)
+        self.log("train/log_det", -log_det.mean(), on_step=False, on_epoch=True)
+
+        # Log ActNorm statistics (every 100 steps to reduce overhead)
+        if batch_idx % 100 == 0:
+            self._log_actnorm_stats()
 
         return loss
+
+    def _log_actnorm_stats(self) -> None:
+        """Log ActNorm log_scale statistics for debugging."""
+        from ciffy.nn.flow.residue.model import ActNorm
+
+        total_log_scale_sum = 0.0
+        for i, layer in enumerate(self._residue_model.flow.layers):
+            if isinstance(layer, ActNorm):
+                log_scale = layer.log_scale.detach()
+                total_log_scale_sum += log_scale.sum().item()
+                self.log(f"actnorm/{i}/log_scale_mean", log_scale.mean())
+                self.log(f"actnorm/{i}/log_scale_std", log_scale.std())
+                self.log(f"actnorm/{i}/log_scale_sum", log_scale.sum())
+
+        self.log("actnorm/total_log_det", total_log_scale_sum)
 
     def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute validation NLL."""
@@ -239,12 +277,23 @@ class ResidueFlowModule(LightningModule):
         }
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Apply gradient clipping if configured."""
+        """Apply gradient clipping if configured and log gradient norms."""
+        # Log gradient norm before clipping
+        total_norm = 0.0
+        for p in self._residue_model.parameters():
+            if p.grad is not None:
+                total_norm += p.grad.data.norm(2).item() ** 2
+        total_norm = total_norm ** 0.5
+        self.log("train/grad_norm_raw", total_norm, on_step=True, on_epoch=False)
+
         if self.training_config.grad_clip:
             torch.nn.utils.clip_grad_norm_(
                 self._residue_model.parameters(),
                 self.training_config.grad_clip,
             )
+            # Log clipped norm
+            clipped_norm = min(total_norm, self.training_config.grad_clip)
+            self.log("train/grad_norm_clipped", clipped_norm, on_step=True, on_epoch=False)
 
 
 __all__ = [

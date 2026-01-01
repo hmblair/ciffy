@@ -310,6 +310,7 @@ def _train_flow_command(args):
         training=TrainingConfig(
             lr=args.lr,
             epochs=args.epochs,
+            grad_clip=args.grad_clip,
         ),
     )
 
@@ -1212,6 +1213,12 @@ def main():
         parser.add_argument(
             "--wandb-name",
             help="W&B run name",
+        )
+        parser.add_argument(
+            "--grad-clip",
+            type=float,
+            default=None,
+            help="Gradient clipping norm (default: None)",
         )
         parser.add_argument(
             "--quiet", "-q",

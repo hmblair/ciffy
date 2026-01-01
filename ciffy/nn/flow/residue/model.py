@@ -36,12 +36,17 @@ class ActNorm(nn.Module):
     On the first forward pass, initializes scale and bias to normalize
     the input to zero mean and unit variance. After initialization,
     these become learnable parameters.
+
+    The log_scale is clamped to [-max_log_scale, max_log_scale] to prevent
+    the Jacobian determinant from exploding during training. Without this,
+    the optimizer can exploit unbounded scaling to artificially reduce NLL.
     """
 
-    def __init__(self, dim: int):
+    def __init__(self, dim: int, max_log_scale: float = 3.0):
         super().__init__()
         self.log_scale = nn.Parameter(torch.zeros(dim))
         self.bias = nn.Parameter(torch.zeros(dim))
+        self.max_log_scale = max_log_scale
         self.register_buffer("initialized", torch.tensor(False))
         # Cache exp(log_scale) to avoid recomputing
         self._cached_scale: torch.Tensor | None = None
@@ -59,13 +64,16 @@ class ActNorm(nn.Module):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if not self.initialized:
             self.initialize(x)
-        scale = torch.exp(self.log_scale)
+        # Clamp log_scale to prevent Jacobian exploitation
+        log_scale = self.log_scale.clamp(-self.max_log_scale, self.max_log_scale)
+        scale = torch.exp(log_scale)
         y = (x + self.bias) * scale
-        log_det = self.log_scale.sum().expand(x.shape[0])
+        log_det = log_scale.sum().expand(x.shape[0])
         return y, log_det
 
     def inverse(self, y: torch.Tensor) -> torch.Tensor:
-        return y * torch.exp(-self.log_scale) - self.bias
+        log_scale = self.log_scale.clamp(-self.max_log_scale, self.max_log_scale)
+        return y * torch.exp(-log_scale) - self.bias
 
 
 class OrthogonalLinear(nn.Module):

@@ -28,7 +28,7 @@
 AtomHash _build_atom_lookup(mmBlock *block, int n_atoms, CifErrorContext *ctx);
 
 /**
- * @brief Parse _struct_conn block and resolve to atom indices.
+ * @brief Parse _struct_conn block and resolve to atom indices (hash-based).
  *
  * Parses connection records and uses the atom hash to convert
  * (chain, seq, atom) references to global atom indices.
@@ -41,5 +41,20 @@ AtomHash _build_atom_lookup(mmBlock *block, int n_atoms, CifErrorContext *ctx);
  */
 CifError _parse_connections(mmCIF *cif, mmBlock *conn_block,
                             const AtomHash *atom_hash, CifErrorContext *ctx);
+
+/**
+ * @brief Parse _struct_conn using binary search (faster for large structures).
+ *
+ * Uses O(log n) binary search per lookup instead of building O(n) hash table.
+ * For structures with many more atoms than connections, this is faster.
+ *
+ * @param cif Output structure (must have names, chains, atoms_per_chain set)
+ * @param atom_block The _atom_site block (must have lines precomputed)
+ * @param conn_block The _struct_conn block
+ * @param ctx Error context
+ * @return CIF_OK on success, error code on failure
+ */
+CifError _parse_connections_bsearch(mmCIF *cif, mmBlock *atom_block,
+                                     mmBlock *conn_block, CifErrorContext *ctx);
 
 #endif /* _CIFFY_CONNECTIONS_H */

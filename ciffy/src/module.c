@@ -656,20 +656,14 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         mmBlock *conn_block = _get_block_by_id(&blocks, BLOCK_CONN);
 
         if (atom_block && atom_block->size > 0) {
-            /* Build atom lookup hash */
-            AtomHash atom_hash = _build_atom_lookup(atom_block, cif.atoms, &ctx);
-            if (atom_hash.entries) {
-                /* Parse connections */
-                err = _parse_connections(&cif, conn_block, &atom_hash, &ctx);
-                atom_hash_free(&atom_hash);
-
-                if (err != CIF_OK) {
-                    free(cif.id);
-                    _free_block_list(&blocks);
-                    free(cpy);
-                    _free_filter(&filter);
-                    return _set_py_error(&ctx, file);
-                }
+            /* Use binary search approach - faster for large structures */
+            err = _parse_connections_bsearch(&cif, atom_block, conn_block, &ctx);
+            if (err != CIF_OK) {
+                free(cif.id);
+                _free_block_list(&blocks);
+                free(cpy);
+                _free_filter(&filter);
+                return _set_py_error(&ctx, file);
             }
         }
     }

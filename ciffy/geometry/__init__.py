@@ -92,6 +92,9 @@ from .frames import (
 # Geometry projection (torch-only, differentiable)
 from .projection import project_bond_lengths
 
+# Geometry constraints (general system for bond/angle losses)
+from .constraints import GeometryConstraints
+
 __all__ = [
     # Vector operations
     "cross",
@@ -144,4 +147,6 @@ __all__ = [
     "position_next_residue",
     # Geometry projection
     "project_bond_lengths",
+    # Geometry constraints
+    "GeometryConstraints",
 ]

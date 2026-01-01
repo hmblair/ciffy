@@ -477,6 +477,7 @@ c_sources = [
     'ciffy/src/cif/parser.c',
     'ciffy/src/cif/writer.c',
     'ciffy/src/cif/registry.c',
+    'ciffy/src/cif/connections.c',
     # Internal coordinates C extension
     'ciffy/src/internal/geometry.c',
     'ciffy/src/internal/batch.c',

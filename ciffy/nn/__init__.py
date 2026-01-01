@@ -123,7 +123,12 @@ from .diffusion import (
 from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
 
 # VAE models
-from .vae import ResidueVAE, ResidueVAEConfig
+from .vae import (
+    ResidueVAE,
+    ResidueVAEConfig,
+    AttentionResidueVAE,
+    AttentionResidueVAEConfig,
+)
 
 # Hub integration for model distribution
 from .hub import HubMixin, get_cache_dir, set_cache_dir
@@ -220,6 +225,8 @@ __all__ = [
     # VAE models
     "ResidueVAE",
     "ResidueVAEConfig",
+    "AttentionResidueVAE",
+    "AttentionResidueVAEConfig",
     # Hub integration
     "HubMixin",
     "get_cache_dir",

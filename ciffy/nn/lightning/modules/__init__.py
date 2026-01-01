@@ -1,6 +1,7 @@
 """LightningModules for ciffy models."""
 
 from .base import BaseCiffyModule
+from .vae_base import BaseVAEModule, BaseVAEModelConfig
 from .latent_diffusion import (
     LatentDiffusionDataConfig,
     LatentDiffusionFullConfig,
@@ -23,10 +24,18 @@ from .residue_vae import (
     ResidueVAEModelConfig,
     ResidueVAEModule,
 )
+from .attention_vae import (
+    AttentionVAEDataConfig,
+    AttentionVAEFullConfig,
+    AttentionVAEModelConfig,
+    AttentionResidueVAEModule,
+)
 
 __all__ = [
     # Base
     "BaseCiffyModule",
+    "BaseVAEModule",
+    "BaseVAEModelConfig",
     # Latent diffusion
     "LatentDiffusionDataConfig",
     "LatentDiffusionFullConfig",
@@ -40,9 +49,14 @@ __all__ = [
     "ResidueFlowFullConfig",
     "ResidueFlowModelConfig",
     "ResidueFlowModule",
-    # Residue VAE
+    # Residue VAE (MLP)
     "ResidueVAEDataConfig",
     "ResidueVAEFullConfig",
     "ResidueVAEModelConfig",
     "ResidueVAEModule",
+    # Attention VAE
+    "AttentionVAEDataConfig",
+    "AttentionVAEFullConfig",
+    "AttentionVAEModelConfig",
+    "AttentionResidueVAEModule",
 ]

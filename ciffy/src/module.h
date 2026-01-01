@@ -12,6 +12,7 @@
 #include "cif/parser.h"
 #include "cif/writer.h"
 #include "cif/registry.h"
+#include "cif/connections.h"
 
 #define __py_init() if (PyArray_API == NULL) { import_array(); }
 

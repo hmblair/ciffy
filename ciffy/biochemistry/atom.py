@@ -432,6 +432,115 @@ class AtomGroup:
         )
         return lengths.astype(np.float64)
 
+    @property
+    def angles(self) -> NDArray[np.int64] | None:
+        """
+        Extract angle triplets (A-B-C) from bond connectivity.
+
+        An angle is formed by any two bonds sharing a common atom (the vertex B).
+        Returns triplets where B is the central/vertex atom.
+
+        Returns:
+            (n_angles, 3) int64 array of local indices [A, B, C], or None.
+        """
+        if self.bonds is None or len(self.bonds) < 2:
+            return None
+
+        bonds = self.bonds  # (n_bonds, 2)
+        n_bonds = len(bonds)
+
+        # Create all bond pairs (upper triangle to avoid duplicates)
+        i, j = np.triu_indices(n_bonds, k=1)
+        bonds_i = bonds[i]  # (n_pairs, 2)
+        bonds_j = bonds[j]  # (n_pairs, 2)
+
+        # Find shared atoms (4 possible matches per pair)
+        # shared_XY means bonds_i[:, X] == bonds_j[:, Y]
+        shared_00 = bonds_i[:, 0] == bonds_j[:, 0]
+        shared_01 = bonds_i[:, 0] == bonds_j[:, 1]
+        shared_10 = bonds_i[:, 1] == bonds_j[:, 0]
+        shared_11 = bonds_i[:, 1] == bonds_j[:, 1]
+
+        # Build angle triplets for each case: [other_i, shared, other_j]
+        triplets = []
+
+        # Case 00: shared at i[:,0] and j[:,0] -> [i[:,1], shared, j[:,1]]
+        if shared_00.any():
+            mask = shared_00
+            triplets.append(np.stack([
+                bonds_i[mask, 1],
+                bonds_i[mask, 0],  # shared vertex
+                bonds_j[mask, 1],
+            ], axis=1))
+
+        # Case 01: shared at i[:,0] and j[:,1] -> [i[:,1], shared, j[:,0]]
+        if shared_01.any():
+            mask = shared_01
+            triplets.append(np.stack([
+                bonds_i[mask, 1],
+                bonds_i[mask, 0],  # shared vertex
+                bonds_j[mask, 0],
+            ], axis=1))
+
+        # Case 10: shared at i[:,1] and j[:,0] -> [i[:,0], shared, j[:,1]]
+        if shared_10.any():
+            mask = shared_10
+            triplets.append(np.stack([
+                bonds_i[mask, 0],
+                bonds_i[mask, 1],  # shared vertex
+                bonds_j[mask, 1],
+            ], axis=1))
+
+        # Case 11: shared at i[:,1] and j[:,1] -> [i[:,0], shared, j[:,0]]
+        if shared_11.any():
+            mask = shared_11
+            triplets.append(np.stack([
+                bonds_i[mask, 0],
+                bonds_i[mask, 1],  # shared vertex
+                bonds_j[mask, 0],
+            ], axis=1))
+
+        if not triplets:
+            return None
+
+        return np.concatenate(triplets, axis=0).astype(np.int64)
+
+    @property
+    def n_angles(self) -> int:
+        """Number of angles (0 if no geometry)."""
+        angles = self.angles
+        return 0 if angles is None else len(angles)
+
+    @property
+    def angle_values(self) -> NDArray[np.float64] | None:
+        """
+        Compute ideal angle values from stored geometry.
+
+        Returns:
+            (n_angles,) float64 array of angles in radians, or None.
+        """
+        angles = self.angles
+        if angles is None or self.ideal is None:
+            return None
+
+        coords = self.ideal  # (n_atoms, 3)
+
+        # Vectorized angle computation
+        a_pos = coords[angles[:, 0]]  # (n_angles, 3)
+        b_pos = coords[angles[:, 1]]  # (n_angles, 3) - vertex
+        c_pos = coords[angles[:, 2]]  # (n_angles, 3)
+
+        v1 = a_pos - b_pos  # B -> A
+        v2 = c_pos - b_pos  # B -> C
+
+        # Compute cos(angle) = (v1 · v2) / (|v1| |v2|)
+        dot = (v1 * v2).sum(axis=1)
+        norm1 = np.linalg.norm(v1, axis=1)
+        norm2 = np.linalg.norm(v2, axis=1)
+        cos_angles = dot / (norm1 * norm2 + 1e-8)
+
+        return np.arccos(np.clip(cos_angles, -1, 1)).astype(np.float64)
+
     # =========================================================================
     # Filtering methods
     # =========================================================================

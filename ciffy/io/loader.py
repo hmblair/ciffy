@@ -20,6 +20,7 @@ def load(
     chains: Union[str, List[str], None] = None,
     model: int = 1,
     skip: Union[str, List[str], None] = "descriptions",
+    connections: bool = False,
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -49,6 +50,9 @@ def load(
             Skippable fields: coordinates, bfactors, atoms (types), elements,
             sequence (residues), res_per_chain, atoms_per_res, resolution,
             descriptions. Core fields (chains, names, etc.) cannot be skipped.
+        connections: If True, parse _struct_conn block for hydrogen bonds,
+            covalent bonds to modified residues, metal coordination, and
+            disulfide bridges. Adds ~20% overhead to load time. Default is False.
 
     Returns:
         Polymer object containing the parsed structure.
@@ -132,7 +136,8 @@ def load(
             chain_filter = list(chains)
 
     # Load returns a dict with all parsed data
-    data = _load(file, skip=skip, molecule_types=mol_type_filter, chains=chain_filter)
+    data = _load(file, skip=skip, molecule_types=mol_type_filter, chains=chain_filter,
+                 connections=connections)
 
     # Extract fields from dict
     id = data["id"]

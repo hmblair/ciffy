@@ -37,17 +37,74 @@ class ResidueVAEConfig:
         hidden_dims: Hidden layer dimensions for encoder/decoder.
         beta: Weight for KL divergence loss (beta-VAE).
         dropout: Dropout probability (0 to disable).
+        use_input_norm: Learn input mean/std normalization (improves reconstruction).
+        use_residual: Add residual connections in decoder.
+        separate_heads: Use separate decoder heads for coords vs transforms.
     """
 
     latent_dim: int = 12
     hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     beta: float = 1.0
     dropout: float = 0.0
+    use_input_norm: bool = True
+    use_residual: bool = True
+    separate_heads: bool = True
 
 
 # =============================================================================
 # ResidueVAE
 # =============================================================================
+
+
+class InputNorm(nn.Module):
+    """
+    Learnable input normalization (like BatchNorm but with data-dependent init).
+
+    On first forward pass, initializes to normalize input to zero mean, unit std.
+    After initialization, scale and bias become learnable parameters.
+    """
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        self.register_buffer("initialized", torch.tensor(False))
+
+    def initialize(self, x: torch.Tensor) -> None:
+        with torch.no_grad():
+            mean = x.mean(dim=0)
+            std = x.std(dim=0, correction=0).clamp(min=1e-6)
+            self.bias.copy_(-mean / std)
+            self.scale.copy_(1.0 / std)
+            self.initialized.fill_(True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.initialized:
+            self.initialize(x)
+        return x * self.scale + self.bias
+
+    def inverse(self, y: torch.Tensor) -> torch.Tensor:
+        """Unnormalize output back to original scale."""
+        return (y - self.bias) / self.scale
+
+
+class ResidualBlock(nn.Module):
+    """Residual block with LayerNorm and SiLU activation."""
+
+    def __init__(self, dim: int, hidden_dim: int, dropout: float = 0.0):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+            nn.Linear(hidden_dim, dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.net(x)
 
 
 class ResidueVAE(nn.Module, HubMixin):
@@ -56,7 +113,7 @@ class ResidueVAE(nn.Module, HubMixin):
 
     This model learns the joint distribution of residue coordinates AND
     the SE(3) transform to the next residue in the chain, matching the
-    interface of ResidueFlowModel for use with PolymerFlowModel.
+    interface of ResidueFlowModel for use with PolymerModel.
 
     Unlike ResidueFlowModel (which uses PCA + normalizing flows), this
     model learns the dimensionality reduction end-to-end via a neural
@@ -65,6 +122,11 @@ class ResidueVAE(nn.Module, HubMixin):
     The representation is: [coords_flat (n_atoms*3), transform (6)]
     where transform = [axis-angle (3), translation (3)] defines the relative
     position and orientation of the next residue's P atom.
+
+    Architecture options (enabled by default for better reconstruction):
+    - Input normalization: Learn mean/std to normalize input features
+    - Residual connections: Skip connections in decoder layers
+    - Separate heads: Different output heads for coords vs transforms
 
     Attributes:
         latent_dim: Dimensionality of latent space.
@@ -83,9 +145,9 @@ class ResidueVAE(nn.Module, HubMixin):
         >>> # Decode to get coordinates and transform
         >>> coords, transform = model.decode(z)
         >>>
-        >>> # Use with PolymerFlowModel (works with VAE too!)
-        >>> from ciffy.nn.flow import PolymerFlowModel
-        >>> polymer_model = PolymerFlowModel({Residue.A: model, ...})
+        >>> # Use with PolymerModel (works with VAE too!)
+        >>> from ciffy.nn import PolymerModel
+        >>> polymer_model = PolymerModel({Residue.A: model, ...})
     """
 
     _hub_model_type = "residue-vae"
@@ -98,6 +160,9 @@ class ResidueVAE(nn.Module, HubMixin):
         residue: "Residue",
         atom_indices: list[int],
         dropout: float = 0.0,
+        use_input_norm: bool = True,
+        use_residual: bool = True,
+        separate_heads: bool = True,
     ):
         """
         Initialize ResidueVAE.
@@ -109,6 +174,9 @@ class ResidueVAE(nn.Module, HubMixin):
             residue: Residue type this model handles.
             atom_indices: List of atom type indices in column order.
             dropout: Dropout probability.
+            use_input_norm: Learn input normalization (like ActNorm).
+            use_residual: Add residual connections in decoder.
+            separate_heads: Use separate heads for coords vs transforms.
         """
         super().__init__()
 
@@ -119,10 +187,16 @@ class ResidueVAE(nn.Module, HubMixin):
         self._atom_indices = atom_indices
         self._hidden_dims = hidden_dims
         self._dropout = dropout
+        self._use_input_norm = use_input_norm
+        self._use_residual = use_residual
+        self._separate_heads = separate_heads
 
         # Cached properties
         self._atoms_group: "AtomGroup | None" = None
         self._frame_indices: "FrameIndices | None" = None
+
+        # Input normalization (optional but recommended)
+        self.input_norm = InputNorm(input_dim) if use_input_norm else None
 
         # Build encoder: input -> hidden layers -> (mu, logvar)
         encoder_layers = []
@@ -141,26 +215,75 @@ class ResidueVAE(nn.Module, HubMixin):
         self.fc_mu = nn.Linear(hidden_dims[-1], latent_dim)
         self.fc_logvar = nn.Linear(hidden_dims[-1], latent_dim)
 
-        # Build decoder: latent -> hidden layers -> output
-        decoder_layers = []
+        # Build decoder
         decoder_hidden = list(reversed(hidden_dims))
-        in_dim = latent_dim
-        for h_dim in decoder_hidden:
-            decoder_layers.extend([
-                nn.Linear(in_dim, h_dim),
-                nn.LayerNorm(h_dim),
+
+        if use_residual and len(decoder_hidden) >= 2:
+            # Use residual blocks for better gradient flow
+            # First layer projects from latent to hidden
+            self.decoder_input = nn.Sequential(
+                nn.Linear(latent_dim, decoder_hidden[0]),
+                nn.LayerNorm(decoder_hidden[0]),
                 nn.SiLU(),
+            )
+
+            # Residual blocks at the largest hidden dim
+            self.decoder_residual = nn.Sequential(*[
+                ResidualBlock(decoder_hidden[0], decoder_hidden[0], dropout)
+                for _ in range(2)  # 2 residual blocks
             ])
-            if dropout > 0:
-                decoder_layers.append(nn.Dropout(dropout))
-            in_dim = h_dim
 
-        self.decoder = nn.Sequential(*decoder_layers)
-        self.fc_out = nn.Linear(decoder_hidden[-1], input_dim)
+            # Project down through remaining dims
+            decoder_layers = []
+            in_dim = decoder_hidden[0]
+            for h_dim in decoder_hidden[1:]:
+                decoder_layers.extend([
+                    nn.Linear(in_dim, h_dim),
+                    nn.LayerNorm(h_dim),
+                    nn.SiLU(),
+                ])
+                if dropout > 0:
+                    decoder_layers.append(nn.Dropout(dropout))
+                in_dim = h_dim
+            self.decoder = nn.Sequential(*decoder_layers) if decoder_layers else nn.Identity()
+            self._decoder_out_dim = decoder_hidden[-1]
+        else:
+            # Simple sequential decoder (original behavior)
+            self.decoder_input = None
+            self.decoder_residual = None
+            decoder_layers = []
+            in_dim = latent_dim
+            for h_dim in decoder_hidden:
+                decoder_layers.extend([
+                    nn.Linear(in_dim, h_dim),
+                    nn.LayerNorm(h_dim),
+                    nn.SiLU(),
+                ])
+                if dropout > 0:
+                    decoder_layers.append(nn.Dropout(dropout))
+                in_dim = h_dim
+            self.decoder = nn.Sequential(*decoder_layers)
+            self._decoder_out_dim = decoder_hidden[-1]
 
-        # Initialize output layer near zero for stable training
-        nn.init.zeros_(self.fc_out.weight)
-        nn.init.zeros_(self.fc_out.bias)
+        # Output heads
+        n_coord_dims = self.n_atoms * 3
+        if separate_heads:
+            # Separate heads for coords and transforms (different scales)
+            self.fc_coords = nn.Linear(self._decoder_out_dim, n_coord_dims)
+            self.fc_transform = nn.Linear(self._decoder_out_dim, 6)
+            self.fc_out = None
+            # Initialize near zero
+            nn.init.zeros_(self.fc_coords.weight)
+            nn.init.zeros_(self.fc_coords.bias)
+            nn.init.zeros_(self.fc_transform.weight)
+            nn.init.zeros_(self.fc_transform.bias)
+        else:
+            # Single output layer (original behavior)
+            self.fc_coords = None
+            self.fc_transform = None
+            self.fc_out = nn.Linear(self._decoder_out_dim, input_dim)
+            nn.init.zeros_(self.fc_out.weight)
+            nn.init.zeros_(self.fc_out.bias)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Properties (compatible with ResidueFlowModel)
@@ -213,6 +336,8 @@ class ResidueVAE(nn.Module, HubMixin):
             mu: (N, latent_dim) mean of latent distribution.
             logvar: (N, latent_dim) log-variance of latent distribution.
         """
+        if self.input_norm is not None:
+            x = self.input_norm(x)
         h = self.encoder(x)
         return self.fc_mu(h), self.fc_logvar(h)
 
@@ -245,8 +370,27 @@ class ResidueVAE(nn.Module, HubMixin):
         Returns:
             (N, input_dim) reconstructed [coords_flat, transform].
         """
-        h = self.decoder(z)
-        return self.fc_out(h)
+        # Apply decoder with optional residual blocks
+        if self.decoder_input is not None:
+            h = self.decoder_input(z)
+            h = self.decoder_residual(h)
+            h = self.decoder(h)
+        else:
+            h = self.decoder(z)
+
+        # Apply output heads
+        if self._separate_heads:
+            coords = self.fc_coords(h)
+            transform = self.fc_transform(h)
+            output = torch.cat([coords, transform], dim=-1)
+        else:
+            output = self.fc_out(h)
+
+        # Unnormalize output if input normalization was used
+        if self.input_norm is not None:
+            output = self.input_norm.inverse(output)
+
+        return output
 
     def forward(
         self,
@@ -415,6 +559,9 @@ class ResidueVAE(nn.Module, HubMixin):
             "latent_dim": self.latent_dim,
             "hidden_dims": self._hidden_dims,
             "dropout": self._dropout,
+            "use_input_norm": self._use_input_norm,
+            "use_residual": self._use_residual,
+            "separate_heads": self._separate_heads,
         }
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=2)
@@ -454,6 +601,9 @@ class ResidueVAE(nn.Module, HubMixin):
             residue=residue,
             atom_indices=config["atom_indices"],
             dropout=config.get("dropout", 0.0),
+            use_input_norm=config.get("use_input_norm", False),
+            use_residual=config.get("use_residual", False),
+            separate_heads=config.get("separate_heads", False),
         ).to(device)
 
         model.load_state_dict(tensors)

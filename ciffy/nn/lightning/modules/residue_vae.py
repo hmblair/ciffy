@@ -7,16 +7,13 @@ dimensionality reduction end-to-end.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-from lightning import LightningModule
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
+from .vae_base import BaseVAEModule
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -25,13 +22,25 @@ if TYPE_CHECKING:
 
 @dataclass
 class ResidueVAEModelConfig:
-    """Configuration for ResidueVAE model."""
+    """Configuration for ResidueVAE model.
+
+    The beta parameter controls the reconstruction-regularization trade-off:
+    - Higher beta (1.0): Better N(0,1) latent but worse reconstruction
+    - Lower beta (0.1): Better reconstruction but latent deviates from N(0,1)
+
+    The free_bits parameter helps balance this by only applying KL penalty
+    above a threshold per dimension, allowing minimum information usage.
+    """
 
     latent_dim: int = 12
     hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
-    beta: float = 1.0  # KL weight (beta-VAE)
+    beta: float = 1.0  # KL weight (standard VAE)
     beta_warmup_epochs: int = 50  # Epochs to linearly warm up beta
+    free_bits: float = 0.5  # Min nats/dim before KL penalty - prevents collapse
     dropout: float = 0.0
+    use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
+    use_residual: bool = True  # Residual connections in decoder
+    separate_heads: bool = True  # Separate output heads for coords vs transforms
 
 
 @dataclass
@@ -55,7 +64,7 @@ class ResidueVAEFullConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
-class ResidueVAEModule(LightningModule):
+class ResidueVAEModule(BaseVAEModule):
     """LightningModule for training residue VAE models.
 
     Unlike flow models, VAE doesn't need PCA preprocessing:
@@ -82,9 +91,9 @@ class ResidueVAEModule(LightningModule):
         >>> model = module.get_model()
         >>> model.save("my_vae_model")
         >>>
-        >>> # Works with PolymerFlowModel!
-        >>> from ciffy.nn.flow import PolymerFlowModel
-        >>> polymer_model = PolymerFlowModel({Residue.A: model, ...})
+        >>> # Works with PolymerModel!
+        >>> from ciffy.nn import PolymerModel
+        >>> polymer_model = PolymerModel({Residue.A: model, ...})
     """
 
     def __init__(
@@ -98,12 +107,12 @@ class ResidueVAEModule(LightningModule):
             config: Full training configuration.
             residue: Residue type to train on.
         """
-        super().__init__()
-        self.save_hyperparameters(ignore=["residue"])
-
+        super().__init__(
+            model_config=config.model,
+            training_config=config.training,
+            residue=residue,
+        )
         self.config = config
-        self.training_config = config.training
-        self.residue = residue
 
         # Model created in setup()
         self._residue_model: "ResidueVAE | None" = None
@@ -155,105 +164,29 @@ class ResidueVAEModule(LightningModule):
             residue=self.residue,
             atom_indices=atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms),
             dropout=config.dropout,
+            use_input_norm=config.use_input_norm,
+            use_residual=config.use_residual,
+            separate_heads=config.separate_heads,
         )
 
-    def _get_beta(self) -> float:
-        """Get current beta value with optional warmup."""
-        config = self.config.model
-        if config.beta_warmup_epochs <= 0:
-            return config.beta
-
-        # Linear warmup
-        warmup_progress = min(1.0, self.current_epoch / config.beta_warmup_epochs)
-        return config.beta * warmup_progress
-
-    def training_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Compute ELBO loss for a batch.
-
-        Loss = reconstruction_loss + beta * KL_divergence
+    def _forward_batch(
+        self, batch: tuple[torch.Tensor], batch_idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass for a batch.
 
         Args:
             batch: Tuple containing (data,) tensor of shape (batch_size, n_features).
             batch_idx: Batch index (unused).
 
         Returns:
-            ELBO loss.
+            recon: Reconstructed output.
+            target: Original data.
+            mu: Latent means.
+            logvar: Latent log-variances.
         """
         data = batch[0] if isinstance(batch, (tuple, list)) else batch
-
-        # Forward pass
         recon, mu, logvar = self._residue_model(data)
-
-        # Reconstruction loss (MSE)
-        recon_loss = F.mse_loss(recon, data, reduction="mean")
-
-        # KL divergence: -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-        # Per-sample, then mean across batch
-        kl_loss = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1).mean()
-
-        # ELBO with beta weighting
-        beta = self._get_beta()
-        loss = recon_loss + beta * kl_loss
-
-        # Logging
-        self.log("train/recon", recon_loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train/kl", kl_loss, on_step=True, on_epoch=True)
-        self.log("train/beta", beta, on_step=False, on_epoch=True)
-        self.log("train/loss", loss, on_step=False, on_epoch=True)
-
-        # Latent statistics
-        self.log("train/z_mean", mu.mean(), on_step=False, on_epoch=True)
-        self.log("train/z_std", mu.std(), on_step=False, on_epoch=True)
-        self.log("train/logvar_mean", logvar.mean(), on_step=False, on_epoch=True)
-
-        return loss
-
-    def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
-        """Compute validation ELBO."""
-        data = batch[0] if isinstance(batch, (tuple, list)) else batch
-
-        recon, mu, logvar = self._residue_model(data)
-
-        recon_loss = F.mse_loss(recon, data, reduction="mean")
-        kl_loss = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1).mean()
-
-        beta = self._get_beta()
-        loss = recon_loss + beta * kl_loss
-
-        self.log("val/recon", recon_loss, sync_dist=True)
-        self.log("val/kl", kl_loss, sync_dist=True)
-        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
-
-        return loss
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        """Configure optimizer and scheduler."""
-        config = self.training_config
-
-        optimizer = AdamW(
-            self._residue_model.parameters(),
-            lr=config.lr,
-            weight_decay=config.weight_decay if hasattr(config, "weight_decay") else 0.01,
-        )
-
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=config.scheduler.min_lr if hasattr(config, "scheduler") else 1e-6,
-        )
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
-        }
-
-    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Apply gradient clipping if configured."""
-        if self.training_config.grad_clip:
-            torch.nn.utils.clip_grad_norm_(
-                self._residue_model.parameters(),
-                self.training_config.grad_clip,
-            )
+        return recon, data, mu, logvar
 
 
 __all__ = [

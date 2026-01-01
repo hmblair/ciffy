@@ -29,7 +29,19 @@ typedef struct LoadFilter {
     int mol_type_count;     /**< Number of molecule types in filter */
     int chain_count;        /**< Number of chain names in filter */
     int model;              /**< Model number to load (1-indexed), 0 = default (first) */
+    bool connections;       /**< If true, parse _struct_conn for hydrogen bonds etc. */
 } LoadFilter;
+
+/**
+ * @brief Connection type enum (from _struct_conn.conn_type_id).
+ */
+typedef enum {
+    CONN_TYPE_UNKNOWN = 0,
+    CONN_TYPE_HYDROG  = 1,  /**< Hydrogen bond (base pairs, etc.) */
+    CONN_TYPE_COVALE  = 2,  /**< Covalent bond (to/from modified residues) */
+    CONN_TYPE_METALC  = 3,  /**< Metal coordination */
+    CONN_TYPE_DISULF  = 4,  /**< Disulfide bridge */
+} ConnType;
 
 /**
  * @brief Parsed mmCIF molecular structure data.
@@ -75,6 +87,11 @@ typedef struct mmCIF {
     int excluded_count;     /**< Count of excluded atoms */
     int original_chains;    /**< Original chain count before filtering */
     int original_atoms;     /**< Original atom count before filtering */
+
+    /* Connection data from _struct_conn (optional, requires connections=true) */
+    int *connections;       /**< Atom index pairs [n_connections * 2] as (atom1, atom2) */
+    int *conn_types;        /**< Connection type per connection [n_connections] */
+    int n_connections;      /**< Number of connections */
 
 } mmCIF;
 

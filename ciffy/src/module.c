@@ -497,15 +497,16 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifErrorContext ctx = CIF_ERROR_INIT;
 
     /* Parse arguments: filename (required) + optional keywords */
-    static char *kwlist[] = {"filename", "skip", "molecule_types", "chains", NULL};
+    static char *kwlist[] = {"filename", "skip", "molecule_types", "chains", "connections", NULL};
     const char *file = NULL;
     PyObject *py_skip = NULL;   /* Default: None - load all fields */
     PyObject *py_mol_types = NULL;  /* Optional list of molecule type ints */
     PyObject *py_chains = NULL;     /* Optional list of chain name strings */
+    int py_connections = 0;         /* Default: False - don't load connections */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|OOO", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|OOOp", kwlist,
                                       &file, &py_skip,
-                                      &py_mol_types, &py_chains)) {
+                                      &py_mol_types, &py_chains, &py_connections)) {
         return NULL;
     }
 
@@ -517,6 +518,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
 
     /* Build LoadFilter from Python arguments */
     LoadFilter filter = {0};
+    filter.connections = (bool)py_connections;
 
     /* Parse molecule_types filter */
     if (py_mol_types != NULL && py_mol_types != Py_None) {
@@ -648,6 +650,30 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
     }
 
+    /* Optionally parse connections (hydrogen bonds, etc.) from _struct_conn */
+    if (filter.connections && !skip_batch) {
+        mmBlock *atom_block = _get_block_by_id(&blocks, BLOCK_ATOM);
+        mmBlock *conn_block = _get_block_by_id(&blocks, BLOCK_CONN);
+
+        if (atom_block && atom_block->size > 0) {
+            /* Build atom lookup hash */
+            AtomHash atom_hash = _build_atom_lookup(atom_block, cif.atoms, &ctx);
+            if (atom_hash.entries) {
+                /* Parse connections */
+                err = _parse_connections(&cif, conn_block, &atom_hash, &ctx);
+                atom_hash_free(&atom_hash);
+
+                if (err != CIF_OK) {
+                    free(cif.id);
+                    _free_block_list(&blocks);
+                    free(cpy);
+                    _free_filter(&filter);
+                    return _set_py_error(&ctx, file);
+                }
+            }
+        }
+    }
+
     /* Free filter resources */
     _free_filter(&filter);
 
@@ -678,6 +704,45 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
             free(cif.descriptions[i]);
         }
         free(cif.descriptions);
+    }
+
+    /* Add connections to dict if loaded */
+    if (filter.connections && cif.n_connections > 0) {
+        /* Create (n_connections, 2) array for atom pairs */
+        npy_intp conn_dims[2] = {cif.n_connections, 2};
+        PyObject *py_connections = PyArray_SimpleNew(2, conn_dims, NPY_INT32);
+        if (py_connections == NULL) {
+            Py_DECREF(dict);
+            return NULL;
+        }
+        memcpy(PyArray_DATA((PyArrayObject *)py_connections),
+               cif.connections, cif.n_connections * 2 * sizeof(int));
+
+        /* Create (n_connections,) array for connection types */
+        npy_intp type_dims[1] = {cif.n_connections};
+        PyObject *py_conn_types = PyArray_SimpleNew(1, type_dims, NPY_INT32);
+        if (py_conn_types == NULL) {
+            Py_DECREF(py_connections);
+            Py_DECREF(dict);
+            return NULL;
+        }
+        memcpy(PyArray_DATA((PyArrayObject *)py_conn_types),
+               cif.conn_types, cif.n_connections * sizeof(int));
+
+        /* Add to dict */
+        if (PyDict_SetItemString(dict, "connections", py_connections) < 0 ||
+            PyDict_SetItemString(dict, "connection_types", py_conn_types) < 0) {
+            Py_DECREF(py_connections);
+            Py_DECREF(py_conn_types);
+            Py_DECREF(dict);
+            return NULL;
+        }
+        Py_DECREF(py_connections);
+        Py_DECREF(py_conn_types);
+
+        /* Free C arrays */
+        free(cif.connections);
+        free(cif.conn_types);
     }
 
     return dict;

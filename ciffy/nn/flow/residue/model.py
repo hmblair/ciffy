@@ -691,71 +691,27 @@ class ResidueFlowModel(nn.Module, HubMixin):
         next_coords: "torch.Tensor | np.ndarray | None" = None,
     ) -> "torch.Tensor":
         """
-        Encode raw coordinates to latent space.
+        Encode coordinates to latent space (ResidueGenerativeCore protocol).
 
-        If frame_indices are available (model has required atoms), aligns
-        coordinates to the glycosidic frame and computes link transforms,
-        matching the preprocessing used during training.
-
-        If frame_indices are not available (e.g., test models with partial
-        atoms), assumes coordinates are already aligned and uses zero transforms.
+        Assumes coordinates are already aligned to the glycosidic frame.
+        For raw coordinates, use PolymerModel which handles alignment.
 
         Args:
-            coords: (n_atoms, 3) or (N, n_atoms, 3) raw coordinates.
-            next_coords: Optional coordinates of next residue(s) for computing
-                link transforms. If None, uses zero transforms.
+            coords: (n_atoms, 3) or (N, n_atoms, 3) pre-aligned coordinates.
+            next_coords: Ignored (kept for protocol compatibility).
 
         Returns:
             (latent_dim,) or (N, latent_dim) latent vectors.
         """
-        # Convert to torch tensor on model's device (flow model is torch-based)
         coords_t = convert_backend(coords, self.flow.V).float()
 
-        # Check if we can do alignment
-        indices = self.frame_indices
-        if indices is None:
-            # No frame indices - assume coords are already aligned
-            # Use encode_aligned with zero transforms
-            if coords_t.dim() == 2:
-                coords_t = coords_t.unsqueeze(0)
-                z = self.encode_aligned(coords_t)
-                return z.squeeze(0)
-            return self.encode_aligned(coords_t)
-
-        # We have frame indices - do full alignment (backend-agnostic)
-        from .data import align_and_compute_transform
-
-        # Convert next_coords to match backend if provided
-        next_t = convert_backend(next_coords, coords_t) if next_coords is not None else None
-
         # Handle single sample
-        single = coords_t.dim() == 2
-        if single:
-            aligned, transform = align_and_compute_transform(
-                coords_t, next_t, indices
-            )
-            aligned_flat = aligned.reshape(-1)
-            extended = cat([aligned_flat, transform]).unsqueeze(0)
-            z = self.flow.encode(extended)
+        if coords_t.dim() == 2:
+            coords_t = coords_t.unsqueeze(0)
+            z = self.encode_aligned(coords_t)
             return z.squeeze(0)
 
-        # Batched
-        n_batch = len(coords_t)
-        aligned_list = []
-        transforms_list = []
-
-        for i in range(n_batch):
-            next_i = next_t[i] if next_t is not None else None
-            aligned, transform = align_and_compute_transform(
-                coords_t[i], next_i, indices
-            )
-            aligned_list.append(aligned.reshape(-1))
-            transforms_list.append(transform)
-
-        aligned_flat = stack(aligned_list)
-        transforms_t = stack(transforms_list)
-        extended = cat([aligned_flat, transforms_t], axis=-1)
-        return self.flow.encode(extended)
+        return self.encode_aligned(coords_t)
 
     def encode_aligned(
         self,
@@ -845,6 +801,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
         import ciffy
         config = {
             "version": ciffy.__version__,
+            "model_type": self._hub_model_type,
             "residue_name": self.residue.name,
             "atom_indices": [int(x) for x in self._atom_indices],
             "n_atoms": self.n_atoms,

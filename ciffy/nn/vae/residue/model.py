@@ -422,59 +422,30 @@ class ResidueVAE(nn.Module, HubMixin):
         next_coords: "torch.Tensor | np.ndarray | None" = None,
     ) -> torch.Tensor:
         """
-        Encode raw coordinates to latent space (deterministic mean).
+        Encode coordinates to latent space (ResidueGenerativeCore protocol).
 
-        If frame_indices are available, aligns coordinates to the glycosidic
-        frame and computes link transforms, matching preprocessing used during
-        training.
+        Assumes coordinates are already aligned to the glycosidic frame.
+        For raw coordinates, use PolymerModel which handles alignment.
 
         Args:
-            coords: (n_atoms, 3) or (N, n_atoms, 3) raw coordinates.
-            next_coords: Optional coordinates of next residue(s) for computing
-                link transforms. If None, uses zero transforms.
+            coords: (n_atoms, 3) or (N, n_atoms, 3) pre-aligned coordinates.
+            next_coords: Ignored (kept for protocol compatibility).
 
         Returns:
             (latent_dim,) or (N, latent_dim) latent vectors (mean).
         """
         coords_t = convert_backend(coords, self.fc_mu.weight).float()
-        indices = self.frame_indices
-
-        if indices is None:
-            # No frame indices - assume coords are already aligned
-            if coords_t.dim() == 2:
-                coords_t = coords_t.unsqueeze(0)
-            return self.encode_aligned(coords_t).squeeze(0)
-
-        # We have frame indices - do full alignment
-        from ciffy.geometry import align_and_compute_transform
-
-        next_t = convert_backend(next_coords, coords_t) if next_coords is not None else None
 
         # Handle single sample
         single = coords_t.dim() == 2
         if single:
-            aligned, transform = align_and_compute_transform(coords_t, next_t, indices)
-            aligned_flat = aligned.reshape(-1)
-            extended = cat([aligned_flat, transform]).unsqueeze(0)
-            mu, _ = self.encode_distribution(extended)
-            return mu.squeeze(0)
+            coords_t = coords_t.unsqueeze(0)
 
-        # Batched
-        n_batch = len(coords_t)
-        aligned_list = []
-        transforms_list = []
+        z = self.encode_aligned(coords_t)
 
-        for i in range(n_batch):
-            next_i = next_t[i] if next_t is not None else None
-            aligned, transform = align_and_compute_transform(coords_t[i], next_i, indices)
-            aligned_list.append(aligned.reshape(-1))
-            transforms_list.append(transform)
-
-        aligned_flat = stack(aligned_list)
-        transforms_t = stack(transforms_list)
-        extended = cat([aligned_flat, transforms_t], axis=-1)
-        mu, _ = self.encode_distribution(extended)
-        return mu
+        if single:
+            return z.squeeze(0)
+        return z
 
     def encode_aligned(
         self,
@@ -553,6 +524,7 @@ class ResidueVAE(nn.Module, HubMixin):
         import ciffy
         config = {
             "version": ciffy.__version__,
+            "model_type": self._hub_model_type,
             "residue_name": self.residue.name,
             "atom_indices": [int(x) for x in self._atom_indices],
             "input_dim": self.input_dim,

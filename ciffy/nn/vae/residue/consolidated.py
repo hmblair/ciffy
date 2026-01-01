@@ -1,0 +1,537 @@
+"""
+Consolidated VAE with shared encoder and per-residue decoders.
+
+Architecture:
+- Single rotation-invariant encoder handles all residue types (A, C, G, U)
+- Separate decoder heads for each residue type (different atom counts)
+- Shared latent space enables learning common RNA backbone dynamics
+
+Benefits:
+- 4x more training data per encoder
+- Shared representations for common backbone atoms
+- Simpler deployment (1 model instead of 4)
+
+Example with PolymerModel:
+    >>> from ciffy.nn.vae.residue import ConsolidatedResidueVAE
+    >>> from ciffy.nn.polymer import PolymerModel
+    >>>
+    >>> # Train consolidated model
+    >>> model = ConsolidatedResidueVAE(residue_atoms)
+    >>> # ... training ...
+    >>>
+    >>> # Use with PolymerModel for chain sampling
+    >>> polymer_model = PolymerModel(model.as_residue_models())
+    >>> polymer = polymer_model.sample_from_sequence("acgu")
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+if TYPE_CHECKING:
+    from ciffy.biochemistry import Residue, AtomGroup
+    from ciffy.geometry import FrameIndices
+
+from .invariant import InvariantAttentionEncoder
+from ciffy.nn.blocks import CoordinateDecoder
+
+
+@dataclass
+class ConsolidatedVAEConfig:
+    """Configuration for ConsolidatedResidueVAE."""
+
+    latent_dim: int = 12
+    d_model: int = 64
+    d_dist: int = 32
+    n_heads: int = 4
+    n_encoder_layers: int = 2
+    decoder_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
+    dropout: float = 0.1
+
+
+class ConsolidatedResidueVAE(nn.Module):
+    """VAE with shared encoder and per-residue decoders.
+
+    The encoder is rotation/translation invariant (uses only pairwise distances).
+    Each residue type has its own decoder head to handle different atom counts.
+
+    Example:
+        >>> from ciffy.biochemistry import Residue
+        >>>
+        >>> # Define atom indices for each residue type
+        >>> residue_atoms = {
+        ...     Residue.A: [1, 2, 3, ...],  # 22 atoms
+        ...     Residue.C: [1, 2, 3, ...],  # 20 atoms
+        ...     Residue.G: [1, 2, 3, ...],  # 23 atoms
+        ...     Residue.U: [1, 2, 3, ...],  # 20 atoms
+        ... }
+        >>>
+        >>> model = ConsolidatedResidueVAE(residue_atoms)
+        >>>
+        >>> # Encode any residue type (internal batched method)
+        >>> z, mu, logvar = model.encode_batch(atom_types, coords, mask, return_distribution=True)
+        >>>
+        >>> # Decode for specific residue type
+        >>> coords, transform = model.decode(z, Residue.A)
+    """
+
+    def __init__(
+        self,
+        residue_atoms: dict["Residue", list[int]],
+        config: ConsolidatedVAEConfig | None = None,
+    ):
+        """Initialize consolidated VAE.
+
+        Args:
+            residue_atoms: Dict mapping Residue enum to list of atom indices.
+            config: Model configuration.
+        """
+        super().__init__()
+
+        if config is None:
+            config = ConsolidatedVAEConfig()
+
+        self.config = config
+        self.latent_dim = config.latent_dim
+
+        # Store residue info
+        self._residue_atoms = residue_atoms
+        self._residues = list(residue_atoms.keys())
+
+        # Compute max atom type index across all residues
+        all_atom_indices = []
+        for indices in residue_atoms.values():
+            all_atom_indices.extend(indices)
+        self.n_atom_types = max(all_atom_indices) + 1
+
+        # Shared encoder
+        self.encoder = InvariantAttentionEncoder(
+            n_atom_types=self.n_atom_types,
+            d_model=config.d_model,
+            d_dist=config.d_dist,
+            n_heads=config.n_heads,
+            n_layers=config.n_encoder_layers,
+            dropout=config.dropout,
+        )
+
+        # Latent projection (shared)
+        self.fc_mu = nn.Linear(config.d_model, config.latent_dim)
+        self.fc_logvar = nn.Linear(config.d_model, config.latent_dim)
+
+        # Per-residue decoders
+        self.decoders = nn.ModuleDict()
+        for residue, atom_indices in residue_atoms.items():
+            n_atoms = len(atom_indices)
+            decoder = CoordinateDecoder(
+                latent_dim=config.latent_dim,
+                n_atoms=n_atoms,
+                hidden_dims=config.decoder_hidden_dims,
+                dropout=config.dropout,
+            )
+            # Use residue name as key (ModuleDict requires string keys)
+            self.decoders[residue.name] = decoder
+
+        # Register atom indices as buffers for each residue
+        for residue, atom_indices in residue_atoms.items():
+            self.register_buffer(
+                f"_atom_indices_{residue.name}",
+                torch.tensor(atom_indices, dtype=torch.long),
+            )
+
+    @property
+    def device(self) -> torch.device:
+        return self.fc_mu.weight.device
+
+    @property
+    def residues(self) -> list["Residue"]:
+        """List of supported residue types."""
+        return self._residues
+
+    def get_atom_indices(self, residue: "Residue") -> torch.Tensor:
+        """Get atom indices for a residue type."""
+        return getattr(self, f"_atom_indices_{residue.name}")
+
+    def encode_batch(
+        self,
+        atom_types: torch.Tensor,
+        coords: torch.Tensor,
+        mask: torch.Tensor,
+        return_distribution: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Encode batched residues to latent space (internal method for training).
+
+        Args:
+            atom_types: (batch, max_atoms) atom type indices.
+            coords: (batch, max_atoms, 3) coordinates.
+            mask: (batch, max_atoms) boolean mask for present atoms.
+            return_distribution: If True, return (z, mu, logvar).
+
+        Returns:
+            z or (z, mu, logvar).
+        """
+        h = self.encoder(atom_types, coords, mask)
+
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            z = mu + std * torch.randn_like(std)
+        else:
+            z = mu
+
+        if return_distribution:
+            return z, mu, logvar
+        return z
+
+    def decode(
+        self, z: torch.Tensor, residue: "Residue"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Decode latent to coordinates for a specific residue type.
+
+        Args:
+            z: (batch, latent_dim) latent vectors.
+            residue: Target residue type.
+
+        Returns:
+            coords: (batch, n_atoms, 3) in canonical frame.
+            transform: (batch, 6) SE(3) transform parameters.
+        """
+        decoder = self.decoders[residue.name]
+        return decoder(z)
+
+    def forward(
+        self,
+        atom_types: torch.Tensor,
+        coords: torch.Tensor,
+        mask: torch.Tensor,
+        residue: "Residue",
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass for training.
+
+        Args:
+            atom_types: (batch, max_atoms) atom type indices.
+            coords: (batch, max_atoms, 3) input coordinates.
+            mask: (batch, max_atoms) boolean mask.
+            residue: Residue type for decoding.
+
+        Returns:
+            recon_coords, transform, mu, logvar.
+        """
+        z, mu, logvar = self.encode_batch(atom_types, coords, mask, return_distribution=True)
+        recon_coords, transform = self.decode(z, residue)
+        return recon_coords, transform, mu, logvar
+
+    def sample(
+        self, residue: "Residue", n_samples: int = 1
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample from prior for a specific residue type.
+
+        Args:
+            residue: Target residue type.
+            n_samples: Number of samples.
+
+        Returns:
+            coords: (n_samples, n_atoms, 3) sampled coordinates.
+            transform: (n_samples, 6) sampled transforms.
+        """
+        z = torch.randn(n_samples, self.latent_dim, device=self.device)
+        return self.decode(z, residue)
+
+    def as_residue_models(self) -> dict["Residue", "ConsolidatedResidueView"]:
+        """Return dict of residue views for use with PolymerModel.
+
+        Creates lightweight wrapper objects that present a per-residue interface
+        while sharing the underlying consolidated model. This allows seamless
+        integration with PolymerModel.
+
+        Returns:
+            Dict mapping Residue to ConsolidatedResidueView.
+
+        Example:
+            >>> model = ConsolidatedResidueVAE(residue_atoms)
+            >>> polymer_model = PolymerModel(model.as_residue_models())
+            >>> polymer = polymer_model.sample_from_sequence("acgu")
+        """
+        return {
+            residue: ConsolidatedResidueView(self, residue)
+            for residue in self._residues
+        }
+
+    def save(self, path: str | Path) -> None:
+        """Save model to directory.
+
+        Args:
+            path: Directory to save to.
+        """
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        # Save model state
+        torch.save(self.state_dict(), path / "model.pt")
+
+        # Save config
+        config = {
+            "latent_dim": self.config.latent_dim,
+            "d_model": self.config.d_model,
+            "d_dist": self.config.d_dist,
+            "n_heads": self.config.n_heads,
+            "n_encoder_layers": self.config.n_encoder_layers,
+            "decoder_hidden_dims": self.config.decoder_hidden_dims,
+            "dropout": self.config.dropout,
+            "residue_atoms": {
+                res.name: indices for res, indices in self._residue_atoms.items()
+            },
+        }
+        with open(path / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+
+    @classmethod
+    def load(cls, path: str | Path, device: str = "cpu") -> "ConsolidatedResidueVAE":
+        """Load model from directory.
+
+        Args:
+            path: Directory containing saved model.
+            device: Device to load model to.
+
+        Returns:
+            Loaded ConsolidatedResidueVAE.
+        """
+        from ciffy.biochemistry import Residue
+
+        path = Path(path)
+
+        # Load config
+        with open(path / "config.json") as f:
+            config_dict = json.load(f)
+
+        # Reconstruct residue_atoms with Residue keys
+        residue_atoms = {
+            getattr(Residue, name): indices
+            for name, indices in config_dict["residue_atoms"].items()
+        }
+
+        # Create config
+        config = ConsolidatedVAEConfig(
+            latent_dim=config_dict["latent_dim"],
+            d_model=config_dict["d_model"],
+            d_dist=config_dict["d_dist"],
+            n_heads=config_dict["n_heads"],
+            n_encoder_layers=config_dict["n_encoder_layers"],
+            decoder_hidden_dims=config_dict["decoder_hidden_dims"],
+            dropout=config_dict["dropout"],
+        )
+
+        # Create model and load state
+        model = cls(residue_atoms, config)
+        model.load_state_dict(torch.load(path / "model.pt", map_location=device))
+        model.to(device)
+
+        return model
+
+
+class ConsolidatedResidueView(nn.Module):
+    """Wrapper presenting a single-residue view of ConsolidatedResidueVAE.
+
+    This class implements the ResidueGenerativeCore protocol, allowing the
+    consolidated model to be used with PolymerModel. Each view wraps the
+    same underlying model but presents a residue-specific interface.
+
+    This is a lightweight wrapper - it doesn't copy any parameters, just
+    delegates to the consolidated model with the appropriate residue type.
+    """
+
+    def __init__(self, model: ConsolidatedResidueVAE, residue: "Residue"):
+        """Initialize view for a specific residue type.
+
+        Args:
+            model: The underlying consolidated model.
+            residue: The residue type this view represents.
+        """
+        super().__init__()
+        # Store reference to parent model (not as submodule to avoid double-counting params)
+        self._model = model
+        self._residue = residue
+        self._atom_indices = model._residue_atoms[residue]
+        self._frame_indices: "FrameIndices | None" = None
+
+        # Build frame indices lazily
+        self._frame_indices_built = False
+
+    def _ensure_frame_indices(self) -> None:
+        """Build frame indices if not already done."""
+        if not self._frame_indices_built:
+            from ciffy.geometry import FrameIndices
+            atom_tensor = self._model.get_atom_indices(self._residue)
+            try:
+                self._frame_indices = FrameIndices.from_atoms(atom_tensor, self._residue)
+            except ValueError:
+                # Atoms don't include required frame atoms (e.g., test data)
+                self._frame_indices = None
+            self._frame_indices_built = True
+
+    @property
+    def latent_dim(self) -> int:
+        """Latent space dimension."""
+        return self._model.latent_dim
+
+    @property
+    def n_atoms(self) -> int:
+        """Number of atoms for this residue type."""
+        return len(self._atom_indices)
+
+    @property
+    def residue(self) -> "Residue":
+        """The residue type this view represents."""
+        return self._residue
+
+    @property
+    def device(self) -> torch.device:
+        """Device where model parameters reside."""
+        return self._model.device
+
+    @property
+    def atoms(self) -> "AtomGroup":
+        """AtomGroup subset containing the atoms used by this residue."""
+        from ciffy.biochemistry import AtomGroup
+        return AtomGroup(self._atom_indices)
+
+    @property
+    def frame_indices(self) -> "FrameIndices | None":
+        """FrameIndices for positioning in chain assembly."""
+        self._ensure_frame_indices()
+        return self._frame_indices
+
+    def encode(
+        self,
+        coords: torch.Tensor,
+        next_coords: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Encode coordinates to latent space (ResidueGenerativeCore protocol).
+
+        Args:
+            coords: (n_atoms, 3) or (batch, n_atoms, 3) coordinates.
+            next_coords: Ignored (for protocol compatibility).
+
+        Returns:
+            (latent_dim,) or (batch, latent_dim) latent vectors.
+        """
+        # Handle single sample
+        single = coords.dim() == 2
+        if single:
+            coords = coords.unsqueeze(0)
+
+        batch_size = coords.shape[0]
+        device = coords.device
+
+        # Build atom types and mask
+        atom_indices = self._model.get_atom_indices(self._residue).to(device)
+        atom_types = atom_indices.unsqueeze(0).expand(batch_size, -1)
+        mask = torch.ones(batch_size, self.n_atoms, dtype=torch.bool, device=device)
+
+        z = self._model.encode_batch(atom_types, coords, mask, return_distribution=False)
+
+        if single:
+            return z.squeeze(0)
+        return z
+
+    def decode(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Decode latents to coordinates and transform.
+
+        Args:
+            z: (batch, latent_dim) latent vectors.
+
+        Returns:
+            coords: (batch, n_atoms, 3) coordinates.
+            transform: (batch, 6) SE(3) transform parameters.
+        """
+        return self._model.decode(z, self._residue)
+
+    def sample(self, n_samples: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample from prior.
+
+        Args:
+            n_samples: Number of samples.
+
+        Returns:
+            coords: (n_samples, n_atoms, 3) sampled coordinates.
+            transform: (n_samples, 6) sampled transforms.
+        """
+        return self._model.sample(self._residue, n_samples)
+
+    def __repr__(self) -> str:
+        return f"ConsolidatedResidueView(residue={self._residue.name}, n_atoms={self.n_atoms})"
+
+
+def _test_consolidated_vae():
+    """Test the consolidated VAE."""
+    from ciffy.biochemistry import Residue
+    from ciffy.nn.flow.residue.data import extract_residues_with_links
+    from pathlib import Path
+
+    print("=" * 60)
+    print("ConsolidatedResidueVAE Test")
+    print("=" * 60)
+
+    # Load atom indices for each residue type
+    data_dir = Path("/Users/hmblair/academic/data/structures/rna")
+    cif_files = sorted(data_dir.glob("*.cif"))[:10]
+
+    residue_atoms = {}
+    for res_name in ["A", "C", "G", "U"]:
+        residue = getattr(Residue, res_name)
+        coords, transforms, atoms = extract_residues_with_links(
+            cif_paths=cif_files,
+            residue_type=residue,
+            min_coverage=0.9,
+            verbose=False,
+        )
+        residue_atoms[residue] = atoms.tolist()
+        print(f"  {res_name}: {len(atoms)} atoms")
+
+    # Create model
+    model = ConsolidatedResidueVAE(residue_atoms)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"\nModel parameters: {n_params:,}")
+    print(f"  Encoder: {sum(p.numel() for p in model.encoder.parameters()):,}")
+    print(f"  Latent proj: {sum(p.numel() for p in model.fc_mu.parameters()) + sum(p.numel() for p in model.fc_logvar.parameters()):,}")
+    for name, decoder in model.decoders.items():
+        print(f"  Decoder {name}: {sum(p.numel() for p in decoder.parameters()):,}")
+
+    # Test forward pass for each residue type
+    print("\nTesting forward pass...")
+    for residue in model.residues:
+        n_atoms = len(residue_atoms[residue])
+        batch_size = 4
+
+        # Create dummy input
+        atom_indices = model.get_atom_indices(residue)
+        atom_types = atom_indices.unsqueeze(0).expand(batch_size, -1)
+        coords = torch.randn(batch_size, n_atoms, 3)
+        mask = torch.ones(batch_size, n_atoms, dtype=torch.bool)
+
+        # Forward
+        recon_coords, transform, mu, logvar = model(atom_types, coords, mask, residue)
+        print(f"  {residue.name}: input {coords.shape} -> output {recon_coords.shape}")
+
+    # Test sampling
+    print("\nTesting sampling...")
+    model.eval()
+    for residue in model.residues:
+        coords, transform = model.sample(residue, n_samples=8)
+        print(f"  {residue.name}: sampled {coords.shape}")
+
+    print("\n" + "=" * 60)
+    print("All tests passed!")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    _test_consolidated_vae()

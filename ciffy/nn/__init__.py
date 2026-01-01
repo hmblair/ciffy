@@ -63,6 +63,14 @@ from .layers import (
     SwiGLU,
 )
 
+# Shared building blocks for residue models
+from .blocks import (
+    InputNorm,
+    ResidualBlock,
+    CoordinateDecoder,
+    RBFDistanceEncoder,
+)
+
 from .config import (
     BaseConfig,
     TrainingConfig,

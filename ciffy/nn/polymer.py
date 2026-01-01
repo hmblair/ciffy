@@ -58,7 +58,7 @@ import torch
 import torch.nn as nn
 
 # Frame-based positioning for chain assembly
-from ciffy.geometry import FrameIndices, position_next_residue
+from ciffy.geometry import FrameIndices, position_next_residue, align_to_frame
 from ciffy.nn.hub import HubMixin
 from ciffy.nn.model_registry import register_model
 
@@ -489,6 +489,9 @@ class PolymerModel(nn.Module, HubMixin):
         """
         Encode polymer coordinates to per-residue latent vectors.
 
+        Handles alignment automatically for frame-dependent models (ResidueFlowModel,
+        ResidueVAE). Invariant models (InvariantResidueVAE) don't require alignment.
+
         Accepts both NumPy arrays and PyTorch tensors. NumPy arrays are
         converted to tensors internally.
 
@@ -519,10 +522,15 @@ class PolymerModel(nn.Module, HubMixin):
             # Extract this residue's coordinates
             res_coords = coords[offset:offset + n_atoms]
 
-            # Reshape to (1, n_atoms, 3) for model.encode()
+            # Reshape to (1, n_atoms, 3) for alignment and model.encode()
             res_coords = res_coords.unsqueeze(0)
 
-            # Encode (transforms=None uses zeros, which is fine for encoding)
+            # Align if model has frame indices (frame-dependent model)
+            frame_indices = model.frame_indices
+            if frame_indices is not None:
+                res_coords = align_to_frame(res_coords, frame_indices)
+
+            # Encode (models expect aligned input)
             z = model.encode(res_coords)  # (1, k)
             latents.append(z.squeeze(0))  # (k,)
 
@@ -802,6 +810,7 @@ class PolymerModel(nn.Module, HubMixin):
         Save model to directory.
 
         Each residue model is saved to a subdirectory named by residue.
+        Supports any model implementing ResidueGenerativeCore with save().
 
         Args:
             path: Directory to save to.
@@ -837,34 +846,62 @@ class PolymerModel(nn.Module, HubMixin):
         """
         Load model from directory.
 
+        Automatically detects model types (ResidueFlowModel, ResidueVAE,
+        InvariantResidueVAE) from saved config.
+
         Args:
             path: Directory containing saved model.
             device: Device to load models to.
-            jit: Whether to JIT-compile the decoders.
+            jit: Whether to JIT-compile the decoders (Flow models only).
 
         Returns:
             Loaded PolymerModel.
         """
         import json
         from ciffy.biochemistry import Residue
-        from ciffy.nn.flow.residue import ResidueFlowModel
 
         path = Path(path)
 
         with open(path / "config.json") as f:
             config = json.load(f)
 
-        # Load models with int keys
+        # Load models with int keys, detecting type from each model's config
         residue_models = {}
         for res_name in config["residue_types"]:
             res_type = getattr(Residue, res_name).value
-            residue_models[res_type] = ResidueFlowModel.load(
-                path / res_name,
-                device=device,
-                jit=jit,
-            )
+            model_path = path / res_name
+
+            # Read the model's config to determine type
+            with open(model_path / "config.json") as f:
+                model_config = json.load(f)
+
+            model_type = model_config.get("model_type", "residue-flow")
+
+            # Load the appropriate model type
+            model = cls._load_residue_model(model_type, model_path, device, jit)
+            residue_models[res_type] = model
 
         return cls(residue_models)
+
+    @staticmethod
+    def _load_residue_model(
+        model_type: str,
+        path: Path,
+        device: str,
+        jit: bool,
+    ) -> "ResidueGenerativeCore":
+        """Load a residue model based on its type."""
+        if model_type == "residue-flow":
+            from ciffy.nn.flow.residue import ResidueFlowModel
+            return ResidueFlowModel.load(path, device=device, jit=jit)
+        elif model_type == "residue-vae":
+            from ciffy.nn.vae.residue import ResidueVAE
+            return ResidueVAE.load(path, device=device)
+        elif model_type == "residue-invariant-vae":
+            from ciffy.nn.vae.residue import InvariantResidueVAE
+            return InvariantResidueVAE.load(path, device=device)
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Unified Save/Load (SaveableModel protocol)

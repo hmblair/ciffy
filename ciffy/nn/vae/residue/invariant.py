@@ -25,11 +25,16 @@ import torch.nn.functional as F
 if TYPE_CHECKING:
     from ciffy import Polymer
     from ciffy.biochemistry import AtomGroup, Residue
+    from ciffy.geometry import FrameIndices
 
 
 # =============================================================================
 # Distance Encoder
 # =============================================================================
+
+# Note: RBFDistanceEncoder and CoordinateDecoder are also available in
+# ciffy.nn.blocks for reuse by other models. The local definitions are
+# kept for backward compatibility.
 
 
 class RBFDistanceEncoder(nn.Module):
@@ -281,6 +286,8 @@ class InvariantResidueVAE(nn.Module):
         >>> z = model.encode_polymer(polymer)  # No alignment needed!
     """
 
+    _hub_model_type = "residue-invariant-vae"
+
     def __init__(
         self,
         n_atom_types: int,
@@ -400,14 +407,14 @@ class InvariantResidueVAE(nn.Module):
     # Core VAE methods
     # ─────────────────────────────────────────────────────────────────────────
 
-    def encode(
+    def encode_batch(
         self,
         atom_types: torch.Tensor,
         coords: torch.Tensor,
         mask: torch.Tensor,
         return_distribution: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode to latent space.
+        """Encode batched data to latent space (internal method for training).
 
         Args:
             atom_types: (batch, max_atoms) atom type indices.
@@ -431,6 +438,44 @@ class InvariantResidueVAE(nn.Module):
 
         if return_distribution:
             return z, mu, logvar
+        return z
+
+    def encode(
+        self,
+        coords: torch.Tensor,
+        next_coords: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Encode coordinates to latent space (ResidueGenerativeCore protocol).
+
+        This method provides protocol-compliant interface for PolymerModel.
+        The encoder is rotation/translation invariant, so no alignment is needed.
+
+        Args:
+            coords: (n_atoms, 3) or (N, n_atoms, 3) coordinates.
+            next_coords: Ignored (for protocol compatibility only).
+
+        Returns:
+            (latent_dim,) or (N, latent_dim) latent vectors.
+        """
+        # Handle single sample
+        single = coords.dim() == 2
+        if single:
+            coords = coords.unsqueeze(0)
+
+        batch_size = coords.shape[0]
+        device = coords.device
+
+        # Build atom types from stored indices
+        atom_types = self._atom_indices_tensor.unsqueeze(0).expand(batch_size, -1)
+
+        # All atoms present (no padding needed for single residue type)
+        mask = torch.ones(batch_size, self.n_atoms, dtype=torch.bool, device=device)
+
+        # Use internal batched encode
+        z = self.encode_batch(atom_types, coords, mask, return_distribution=False)
+
+        if single:
+            return z.squeeze(0)
         return z
 
     def decode(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -461,7 +506,7 @@ class InvariantResidueVAE(nn.Module):
         Returns:
             recon_coords, transform, mu, logvar.
         """
-        z, mu, logvar = self.encode(atom_types, coords, mask, return_distribution=True)
+        z, mu, logvar = self.encode_batch(atom_types, coords, mask, return_distribution=True)
         recon_coords, transform = self.decode(z)
         return recon_coords, transform, mu, logvar
 
@@ -469,6 +514,77 @@ class InvariantResidueVAE(nn.Module):
         """Sample from prior."""
         z = torch.randn(n_samples, self.latent_dim, device=self.device)
         return self.decode(z)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Save/Load
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def save(self, path: "str | Path") -> None:
+        """Save model to directory."""
+        import json
+        from pathlib import Path
+        from safetensors.torch import save_file
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        tensors = {k: v.cpu().contiguous() for k, v in self.state_dict().items()}
+        save_file(tensors, path / "tensors.safetensors")
+
+        import ciffy
+        config = {
+            "version": ciffy.__version__,
+            "model_type": self._hub_model_type,
+            "residue_name": self.residue.name,
+            "atom_indices": [int(x) for x in self._atom_indices],
+            "n_atoms": self.n_atoms,
+            "latent_dim": self.latent_dim,
+            "d_model": self._d_model,
+            "d_dist": self._d_dist,
+            "n_heads": self._n_heads,
+            "n_encoder_layers": self._n_encoder_layers,
+            "decoder_hidden_dims": self._decoder_hidden_dims,
+            "dropout": self._dropout,
+        }
+        with open(path / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+
+    @classmethod
+    def load(
+        cls,
+        path: "str | Path",
+        device: str = "cpu",
+    ) -> "InvariantResidueVAE":
+        """Load model from directory."""
+        import json
+        from pathlib import Path
+        from safetensors.torch import load_file
+        from ciffy.biochemistry import Residue
+
+        path = Path(path)
+
+        tensors = load_file(path / "tensors.safetensors", device=device)
+        with open(path / "config.json") as f:
+            config = json.load(f)
+
+        residue = getattr(Residue, config["residue_name"])
+
+        model = cls(
+            n_atom_types=max(config["atom_indices"]) + 1,
+            n_atoms=config["n_atoms"],
+            latent_dim=config["latent_dim"],
+            d_model=config["d_model"],
+            d_dist=config["d_dist"],
+            n_heads=config["n_heads"],
+            n_encoder_layers=config["n_encoder_layers"],
+            decoder_hidden_dims=config["decoder_hidden_dims"],
+            residue=residue,
+            atom_indices=config["atom_indices"],
+            dropout=config.get("dropout", 0.1),
+        ).to(device)
+
+        model.load_state_dict(tensors)
+        return model
 
     # ─────────────────────────────────────────────────────────────────────────
     # Polymer integration (vectorized!)
@@ -555,7 +671,7 @@ class InvariantResidueVAE(nn.Module):
         mask[batch_idx, position_in_residue] = True
 
         # Encode (invariant - no alignment needed!)
-        z = self.encode(atoms_padded, coords_padded, mask)
+        z = self.encode_batch(atoms_padded, coords_padded, mask)
 
         return z
 

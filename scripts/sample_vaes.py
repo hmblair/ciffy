@@ -189,6 +189,51 @@ def train_invariant(model, loader, optimizer, n_atoms, atom_indices, constraints
         optimizer.step()
 
 
+def train_consolidated(model, residue_data, optimizer, beta=1.0, gamma=0.1, free_bits=0.5, n_geom_samples=16):
+    """Train Consolidated VAE with reconstruction + KL + geometry losses."""
+    from ciffy.operations.metrics import rmsd
+    model.train()
+    device = next(model.parameters()).device
+
+    for res_name, rd in residue_data.items():
+        residue = rd["residue"]
+        n_atoms = rd["n_atoms"]
+        atom_indices = rd["atom_indices"]
+        constraints = rd["constraints"]
+
+        # Get data
+        data = torch.tensor(rd["data"], dtype=torch.float32, device=device)
+        n_coord_dims = n_atoms * 3
+        coords = data[:, :n_coord_dims].reshape(-1, n_atoms, 3)
+        transforms = data[:, n_coord_dims:]
+
+        batch_size = coords.shape[0]
+        atom_types = torch.tensor(atom_indices, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
+        mask = torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device)
+
+        optimizer.zero_grad()
+
+        # Reconstruction loss
+        recon_coords, recon_transforms, mu, logvar = model(atom_types, coords, mask, residue)
+        coord_rmsd = rmsd(recon_coords, coords, eps=1e-8)
+        coord_loss = (coord_rmsd ** 2).mean()
+        recon_loss = coord_loss + F.mse_loss(recon_transforms, transforms)
+
+        # KL loss
+        kl = 0.5 * (mu.pow(2) + logvar.exp() - 1 - logvar)
+        kl = torch.clamp(kl - free_bits, min=0.0).sum(-1).mean()
+
+        # Geometry loss on samples from prior
+        z = torch.randn(n_geom_samples, model.latent_dim, device=device)
+        sample_coords, sample_transforms = model.decode(z, residue)
+
+        geom_loss = constraints.total_loss(sample_coords, sample_transforms)
+
+        loss = recon_loss + beta * kl + gamma * geom_loss
+        loss.backward()
+        optimizer.step()
+
+
 def sample_and_save(polymer_model, sequence, output_path, name):
     """Sample a chain using PolymerModel and save as CIF."""
     # Sample using PolymerModel (handles positioning correctly)
@@ -261,6 +306,14 @@ def main():
             all_models[arch][rd["residue"]] = model
             all_optimizers[arch][rd["residue"]] = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
+    # Create consolidated model (single model for all residue types)
+    from ciffy.nn.vae.residue import ConsolidatedResidueVAE, ConsolidatedVAEConfig
+    residue_atoms = {rd["residue"]: rd["atom_indices"] for rd in residue_data.values()}
+    consolidated_config = ConsolidatedVAEConfig(latent_dim=12)
+    consolidated_model = ConsolidatedResidueVAE(residue_atoms, consolidated_config)
+    consolidated_optimizer = torch.optim.AdamW(consolidated_model.parameters(), lr=1e-3)
+    print(f"  Consolidated: {sum(p.numel() for p in consolidated_model.parameters()):,} parameters (shared encoder)")
+
     # Create data loaders
     loaders = {}
     for res_name, rd in residue_data.items():
@@ -304,6 +357,14 @@ def main():
                 beta=beta,
             )
 
+        # Train consolidated model (all residue types in one pass)
+        train_consolidated(
+            consolidated_model,
+            residue_data,
+            consolidated_optimizer,
+            beta=beta,
+        )
+
         if epoch % 20 == 0 or epoch == args.epochs - 1:
             print(f"  Epoch {epoch}/{args.epochs}")
 
@@ -321,12 +382,21 @@ def main():
         polymer_model = PolymerModel(all_models[arch])
         sample_and_save(polymer_model, sequence, output_path, arch)
 
-    # Save ground truth chain from real data
-    print(f"\nGround truth (from data):")
+    # Build atom filter (needed for fragment assembly)
+    atom_filter = {rd["residue"].value: rd["atom_indices"] for rd in residue_data.values()}
+
+    # Sample from consolidated model using PolymerModel interface
+    print(f"\nConsolidated VAE:")
+    consolidated_model.eval()
+    polymer_model = PolymerModel(consolidated_model.as_residue_models())
+    sample_and_save(polymer_model, sequence, output_path, "Consolidated")
+
+    # Save fragment assembly chain from real data
+    print(f"\nFragment assembly (from data):")
     from ciffy.geometry import position_next_residue
     from ciffy import from_sequence
 
-    # Build ground truth by picking random residues of each type
+    # Build chain by picking random residues of each type from training data
     gt_coords_list = []
     gt_transforms_list = []
     gt_residues = []
@@ -359,15 +429,12 @@ def main():
             )
             positioned_coords.append(positioned)
 
-    # Build atom filter from all residue types
-    atom_filter = {rd["residue"].value: rd["atom_indices"] for rd in residue_data.values()}
-
     # Create polymer and save
     polymer = from_sequence(sequence, atoms=atom_filter)
     all_coords = np.concatenate(positioned_coords, axis=0).astype(np.float32)
     polymer.coordinates = all_coords
 
-    output_file = output_path / "GroundTruth_chain.cif"
+    output_file = output_path / "FragmentAssembly_chain.cif"
     polymer.write(str(output_file))
     print(f"  Saved: {output_file}")
 

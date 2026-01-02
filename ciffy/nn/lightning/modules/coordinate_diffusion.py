@@ -86,15 +86,42 @@ class CoordinateDiffusionModule(BaseCiffyModule):
         # Create the model
         self.model = CoordinateDiffusionModel(config.model)
 
+    def _aggregate_polymer_losses(
+        self, batch: list["Polymer"]
+    ) -> tuple[torch.Tensor, int]:
+        """Aggregate losses across a batch of polymers.
+
+        Due to variable atom counts, we process each polymer individually
+        and weight losses by atom count for fair averaging.
+
+        Args:
+            batch: List of Polymer objects from dataloader.
+
+        Returns:
+            Tuple of (total_weighted_loss, total_atoms).
+        """
+        total_loss = torch.tensor(0.0, device=self.device)
+        total_atoms = 0
+
+        for polymer in batch:
+            if polymer is None:
+                continue
+
+            loss, _ = self.model.training_step(polymer)
+
+            # Weight by number of atoms for fair averaging
+            n_atoms = polymer.size()
+            total_loss = total_loss + loss * n_atoms
+            total_atoms += n_atoms
+
+        return total_loss, total_atoms
+
     def training_step(
         self,
         batch: list["Polymer"],
         batch_idx: int,
     ) -> torch.Tensor:
         """Compute training loss for a batch of polymers.
-
-        Due to variable atom counts, we process each polymer individually
-        and aggregate losses.
 
         Args:
             batch: List of Polymer objects from dataloader.
@@ -103,27 +130,12 @@ class CoordinateDiffusionModule(BaseCiffyModule):
         Returns:
             Aggregated loss tensor.
         """
-        total_loss = 0.0
-        total_atoms = 0
-
-        for polymer in batch:
-            if polymer is None:
-                continue
-
-            loss, metrics = self.model.training_step(polymer)
-
-            # Weight by number of atoms for fair averaging
-            n_atoms = polymer.size()
-            total_loss = total_loss + loss * n_atoms
-            total_atoms += n_atoms
+        total_loss, total_atoms = self._aggregate_polymer_losses(batch)
 
         if total_atoms == 0:
-            # Empty batch
             return torch.tensor(0.0, device=self.device, requires_grad=True)
 
         avg_loss = total_loss / total_atoms
-
-        # Log metrics
         self.log("train/loss", avg_loss, prog_bar=True, on_step=True, on_epoch=True)
 
         return avg_loss
@@ -142,24 +154,12 @@ class CoordinateDiffusionModule(BaseCiffyModule):
         Returns:
             Aggregated loss tensor.
         """
-        total_loss = 0.0
-        total_atoms = 0
-
-        for polymer in batch:
-            if polymer is None:
-                continue
-
-            loss, metrics = self.model.training_step(polymer)
-
-            n_atoms = polymer.size()
-            total_loss = total_loss + loss * n_atoms
-            total_atoms += n_atoms
+        total_loss, total_atoms = self._aggregate_polymer_losses(batch)
 
         if total_atoms == 0:
             return torch.tensor(0.0, device=self.device)
 
         avg_loss = total_loss / total_atoms
-
         self.log("val/loss", avg_loss, prog_bar=True, sync_dist=True)
 
         return avg_loss

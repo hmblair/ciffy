@@ -225,58 +225,23 @@ class PolymerDataset(Dataset):
     def _build_index_sequential(self, cif_files: list[Path],
                                  type_filter_values: tuple | None,
                                  exclude_ids: frozenset | None) -> None:
-        """Build index using single-threaded scanning."""
-        from .. import load_metadata
+        """Build index using single-threaded scanning.
 
-        type_filter = set(type_filter_values) if type_filter_values else None
-
+        Reuses _process_file() to ensure filtering logic is consistent
+        with the parallel code path.
+        """
         for path in cif_files:
-            try:
-                meta = load_metadata(str(path))
-            except Exception as e:
-                logger.warning(f"Failed to load metadata from {path}: {e}")
-                continue
-
-            # Check exclude_ids
-            pdb_id = meta.get("id", "").upper()
-            if exclude_ids and pdb_id in exclude_ids:
-                continue
-
-            atoms_per_chain = meta["atoms_per_chain"]
-            mol_types = meta["molecule_types"]
-
-            if self.scale == Scale.MOLECULE:
-                # For molecule scale, check if structure has any matching chains
-                if type_filter is not None:
-                    has_matching = any(int(t) in type_filter for t in mol_types)
-                    if not has_matching:
-                        continue
-
-                # Check atom count bounds
-                total_atoms = meta["atoms"]
-                if self.min_atoms is not None and total_atoms < self.min_atoms:
-                    continue
-                if self.max_atoms is not None and total_atoms > self.max_atoms:
-                    continue
-
-                self._index.append((path, None))
-
-            else:  # Scale.CHAIN
-                for chain_idx in range(meta["chains"]):
-                    chain_mol_type = int(mol_types[chain_idx])
-
-                    # Skip chains not matching molecule_types filter
-                    if type_filter is not None and chain_mol_type not in type_filter:
-                        continue
-
-                    # Check atom count bounds
-                    chain_atoms = int(atoms_per_chain[chain_idx])
-                    if self.min_atoms is not None and chain_atoms < self.min_atoms:
-                        continue
-                    if self.max_atoms is not None and chain_atoms > self.max_atoms:
-                        continue
-
-                    self._index.append((path, chain_idx))
+            args = (
+                str(path),
+                self.scale.value,
+                self.min_atoms,
+                self.max_atoms,
+                type_filter_values,
+                exclude_ids,
+            )
+            results = _process_file(args)
+            for filepath_str, chain_idx in results:
+                self._index.append((Path(filepath_str), chain_idx))
 
     def _build_index_parallel(self, cif_files: list[Path],
                                type_filter_values: tuple | None,

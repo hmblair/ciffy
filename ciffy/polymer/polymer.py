@@ -207,6 +207,7 @@ class Polymer:
     # Molecule-level (polymer_count is a property delegated to hierarchy)
     pdb_id = Metadata(Scale.MOLECULE)
     resolution = Metadata(Scale.MOLECULE)
+    deposit_date = Metadata(Scale.MOLECULE)
 
     # Per-chain lists
     names = Metadata(Scale.CHAIN, is_list=True)
@@ -240,6 +241,7 @@ class Polymer:
                 - descriptions: List of entity descriptions per chain.
                 - bfactors: (N,) array of B-factors per atom.
                 - resolution: Structure resolution in Angstroms.
+                - deposit_date: Initial deposition date (datetime.date object).
                 - connections: (C, 2) array of atom index pairs for H-bonds, etc.
                 - connection_types: (C,) array of connection type indices.
 
@@ -1913,7 +1915,7 @@ class Polymer:
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
         rows = self.chain_info()
-        return format_chain_table(self.pdb_id, self.backend, rows)
+        return format_chain_table(self.pdb_id, self.backend, rows, self.deposit_date)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion

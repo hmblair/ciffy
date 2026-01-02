@@ -41,7 +41,8 @@ def _info_command(args):
         backend = "numpy"  # default
         for filepath in args.files:
             try:
-                polymer = load(filepath, load_descriptions=args.desc)
+                skip = ["connections"] if args.desc else ["descriptions", "connections"]
+                polymer = load(filepath, skip=skip)
                 if args.poly:
                     polymer = polymer.poly()
                 if not polymers:  # First successful load
@@ -66,7 +67,8 @@ def _info_command(args):
             print()
 
         try:
-            polymer = load(filepath, load_descriptions=args.desc)
+            skip = ["connections"] if args.desc else ["descriptions", "connections"]
+            polymer = load(filepath, skip=skip)
             if args.poly:
                 polymer = polymer.poly()
         except FileNotFoundError:

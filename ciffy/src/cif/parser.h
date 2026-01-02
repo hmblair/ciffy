@@ -74,6 +74,7 @@ typedef struct mmCIF {
     int   write_dest;       /**< Current write destination for batch callbacks */
 
     float resolution;       /**< Resolution in Angstroms (from _refine.ls_d_res_high), -1 if not available */
+    char *deposit_date;     /**< Initial deposition date (YYYY-MM-DD), NULL if not available */
 
     int *sequence;          /**< Residue type indices [residues] */
     int *res_per_chain;     /**< Residues per chain [chains] */

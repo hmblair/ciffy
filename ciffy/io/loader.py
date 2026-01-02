@@ -187,12 +187,23 @@ def load(
     # Get descriptions if loaded
     descriptions = data.get("descriptions", None)
 
-    # Get B-factors and resolution
+    # Get B-factors, resolution, and deposit date
     bfactors = data.get("bfactors", None)
     resolution = data.get("resolution", None)
     # C extension uses -1.0 as sentinel for unavailable; convert to None
     if resolution is not None and resolution < 0:
         resolution = None
+
+    # Convert deposit date string to datetime.date
+    deposit_date = None
+    deposit_date_str = data.get("deposit_date")
+    if deposit_date_str is not None:
+        from datetime import date
+        try:
+            year, month, day = deposit_date_str.split("-")
+            deposit_date = date(int(year), int(month), int(day))
+        except (ValueError, AttributeError):
+            pass  # Invalid format, leave as None
 
     # Get connections if loaded
     connections = data.get("connections", None)
@@ -221,6 +232,7 @@ def load(
         descriptions=descriptions,
         bfactors=bfactors,
         resolution=resolution,
+        deposit_date=deposit_date,
         connections=connections,
         connection_types=connection_types,
     )
@@ -257,6 +269,7 @@ def load_metadata(file: str | Path) -> dict:
             - residues_per_chain: Array of residue counts per chain (np.ndarray)
             - molecule_types: Array of molecule type per chain (np.ndarray)
               Values correspond to Molecule enum (0=PROTEIN, 1=RNA, 2=DNA, etc.)
+            - deposit_date: Initial deposition date (datetime.date) or None
 
     Raises:
         OSError: If the file does not exist.
@@ -286,6 +299,17 @@ def load_metadata(file: str | Path) -> dict:
     res_per_chain = data["res_per_chain"]
     molecule_types = data["molecule_types"]
 
+    # Convert deposit date string to datetime.date
+    deposit_date = None
+    deposit_date_str = data.get("deposit_date")
+    if deposit_date_str is not None:
+        from datetime import date
+        try:
+            year, month, day = deposit_date_str.split("-")
+            deposit_date = date(int(year), int(month), int(day))
+        except (ValueError, AttributeError):
+            pass  # Invalid format, leave as None
+
     return {
         "id": data["id"],
         "atoms": int(atoms_per_chain.sum()),
@@ -294,4 +318,5 @@ def load_metadata(file: str | Path) -> dict:
         "atoms_per_chain": atoms_per_chain,
         "residues_per_chain": res_per_chain,
         "molecule_types": molecule_types,
+        "deposit_date": deposit_date,
     }

@@ -176,6 +176,7 @@ typedef enum {
     FIELD_MOL_TYPES,     /**< cif->molecule_types - molecule type per chain */
     FIELD_DESCRIPTIONS,  /**< cif->descriptions - entity description per chain (optional) */
     FIELD_RESOLUTION,    /**< cif->resolution - structure resolution in Angstroms */
+    FIELD_DEPOSIT_DATE,  /**< cif->deposit_date - initial deposition date (YYYY-MM-DD) */
     FIELD_COUNT          /**< Total number of field types */
 } FieldId;
 

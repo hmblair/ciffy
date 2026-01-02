@@ -8,6 +8,7 @@
 
 #include "registry.h"
 #include "parser.h"
+#include "../common.h"
 #include "../log.h"
 
 #include <stddef.h>
@@ -49,6 +50,9 @@ static const char *ATTR_ATOM_TYPE[] = { "label_comp_id", "label_atom_id", NULL }
 
 /* Refinement attributes */
 static const char *ATTR_RESOLUTION[] = { "ls_d_res_high", NULL };
+
+/* Database status attributes */
+static const char *ATTR_DEPOSIT_DATE[] = { "recvd_initial_deposition_date", NULL };
 
 
 /* ============================================================================
@@ -390,6 +394,52 @@ static CifError _parse_resolution(mmCIF *cif, mmBlockList *blocks,
 }
 
 
+/**
+ * Parse deposit date from _pdbx_database_status.recvd_initial_deposition_date.
+ *
+ * Sets cif->deposit_date to the date string (YYYY-MM-DD), or NULL if not available.
+ */
+static CifError _parse_deposit_date(mmCIF *cif, mmBlockList *blocks,
+                                     const void *def, CifErrorContext *ctx) {
+    (void)def;
+
+    /* Default to NULL (not available) */
+    cif->deposit_date = NULL;
+
+    mmBlock *block = &blocks->b[BLOCK_DATABASE_STATUS];
+    if (block->category == NULL) {
+        LOG_DEBUG("No _pdbx_database_status block found, deposit date unavailable");
+        return CIF_OK;  /* Not an error, just no data */
+    }
+
+    /* Get attribute index for recvd_initial_deposition_date */
+    int date_idx = _get_attr_index(block, "recvd_initial_deposition_date", ctx);
+    if (date_idx == BAD_IX) {
+        LOG_DEBUG("No recvd_initial_deposition_date attribute found");
+        return CIF_OK;  /* Not an error */
+    }
+
+    /* Precompute lines and parse first row */
+    CifError err = _precompute_lines(block, ctx);
+    if (err != CIF_OK) return err;
+
+    if (block->size > 0) {
+        /* Extract the date string */
+        size_t len;
+        char *ptr = _get_field_ptr(block, 0, date_idx, &len);
+        if (ptr != NULL && len > 0 && ptr[0] != '?' && ptr[0] != '.') {
+            cif->deposit_date = _strdup_n(ptr, len, ctx);
+            if (cif->deposit_date != NULL) {
+                LOG_DEBUG("Deposit date: %s", cif->deposit_date);
+            }
+        }
+    }
+
+    _free_lines(block);
+    return CIF_OK;
+}
+
+
 /* ============================================================================
  * FIELD DEFINITIONS
  * Declarative specification of fields and their dependencies.
@@ -527,6 +577,13 @@ static const FieldDef FIELDS[] = {
       offsetof(mmCIF, resolution), STORAGE_FLOAT,
       SIZE_NONE, 0, 0,
       PY_FLOAT, NULL },
+
+    /* FIELD_DEPOSIT_DATE = 15 - parsed from _pdbx_database_status block */
+    { FIELD_DEPOSIT_DATE, "deposit_date", BLOCK_DATABASE_STATUS, OP_COMPUTE,
+      ATTR_DEPOSIT_DATE, NULL, _parse_deposit_date, false, NULL,
+      offsetof(mmCIF, deposit_date), STORAGE_NONE,
+      SIZE_NONE, 0, 0,
+      PY_STRING, NULL },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -574,6 +631,7 @@ static const struct {
     { "atoms_per_res", FIELD_ATOMS_PER_RES },
     { "descriptions", FIELD_DESCRIPTIONS },
     { "resolution", FIELD_RESOLUTION },
+    { "deposit_date", FIELD_DEPOSIT_DATE },
 
     /* Core fields - listed for error messages but cannot be skipped */
     { "models", FIELD_MODELS },

@@ -18,7 +18,6 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 from ciffy import Molecule, Scale
 from ciffy.nn.dataset import PolymerDataset
-from ciffy.nn.filtered_dataset import FilterConfig, FilteredPolymerDataset
 
 if TYPE_CHECKING:
     from ciffy.nn.flow import PolymerFlowModel
@@ -27,8 +26,8 @@ if TYPE_CHECKING:
 class LatentEncodingDataset(Dataset):
     """Dataset that encodes polymers to latent space on-the-fly.
 
-    Wraps a FilteredPolymerDataset and uses a flow model to encode
-    coordinates to latents. This avoids caching all latents in memory.
+    Wraps a PolymerDataset and uses a flow model to encode coordinates
+    to latents. This avoids caching all latents in memory.
 
     Note: This dataset performs GPU encoding in __getitem__, so it must
     be used with num_workers=0 in the DataLoader.
@@ -36,58 +35,70 @@ class LatentEncodingDataset(Dataset):
 
     def __init__(
         self,
-        filtered_dataset: FilteredPolymerDataset,
+        polymer_dataset: "PolymerDataset",
         flow_model: "PolymerFlowModel",
         device: str = "cpu",
     ) -> None:
-        self.filtered_dataset = filtered_dataset
+        self.polymer_dataset = polymer_dataset
         self.flow_model = flow_model
         self.device = device
 
     def __len__(self) -> int:
-        return len(self.filtered_dataset)
+        return len(self.polymer_dataset)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Get encoded latents and sequence for a sample.
 
         Returns:
-            (latents, sequence) where:
+            (latents, sequence) tuple, or None if sample is invalid:
             - latents: (n_residues, latent_dim)
             - sequence: (n_residues,) long tensor
         """
-        polymer = self.filtered_dataset[idx]
+        polymer = self.polymer_dataset[idx]
+        if polymer is None:
+            return None
 
-        coords = polymer.coordinates
-        sequence = polymer.sequence
+        try:
+            coords = polymer.coordinates
+            sequence = polymer.sequence
 
-        # Convert to tensors
-        if not isinstance(coords, torch.Tensor):
-            coords = torch.from_numpy(coords).float()
-        if not isinstance(sequence, torch.Tensor):
-            sequence = torch.tensor(sequence, dtype=torch.long)
+            # Convert to tensors
+            if not isinstance(coords, torch.Tensor):
+                coords = torch.from_numpy(coords).float()
+            if not isinstance(sequence, torch.Tensor):
+                sequence = torch.tensor(sequence, dtype=torch.long)
 
-        # Encode to latent space
-        with torch.no_grad():
-            coords = coords.to(self.device)
-            latents = self.flow_model.encode(coords, sequence.numpy())
+            # Encode to latent space
+            with torch.no_grad():
+                coords = coords.to(self.device)
+                latents = self.flow_model.encode(coords, sequence.numpy())
 
-        return latents.cpu(), sequence
+            return latents.cpu(), sequence
+        except Exception:
+            # Flow model encoding failed (incompatible structure)
+            return None
 
 
 def latent_collate_fn(
-    batch: list[tuple[torch.Tensor, torch.Tensor]],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    batch: list[tuple[torch.Tensor, torch.Tensor] | None],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
     """Collate variable-length latent sequences with padding.
 
     Args:
-        batch: List of (latents, sequence) tuples.
+        batch: List of (latents, sequence) tuples, may contain None.
 
     Returns:
         (latents, sequences, mask) where:
         - latents: (batch, max_len, latent_dim)
         - sequences: (batch, max_len)
         - mask: (batch, max_len) bool, True = padding
+        Returns None if all samples in batch are None.
     """
+    # Filter out None samples
+    batch = [item for item in batch if item is not None]
+    if len(batch) == 0:
+        return None
+
     latents_list = [item[0] for item in batch]
     seq_list = [item[1] for item in batch]
 
@@ -183,29 +194,19 @@ class LatentDiffusionDataModule(LightningDataModule):
             Molecule[m] if isinstance(m, str) else m for m in self.molecule_types
         )
 
-        # Create base dataset
-        base_dataset = PolymerDataset(
+        # Create dataset with filtering
+        polymer_dataset = PolymerDataset(
             self.data_dir,
             scale=Scale.CHAIN,
+            min_residues=self.min_residues,
+            max_residues=self.max_residues,
             molecule_types=mol_types,
             backend="torch",
         )
 
-        # Create filter config
-        filter_config = FilterConfig(
-            min_residues=self.min_residues,
-            max_residues=self.max_residues,
-            poly_only=True,
-            reject_unknown_residues=True,
-            flow_model=self.flow_model,
-        )
-
-        # Filter dataset
-        filtered_dataset = FilteredPolymerDataset(base_dataset, filter_config)
-
-        if len(filtered_dataset) == 0:
+        if len(polymer_dataset) == 0:
             raise ValueError(
-                f"No valid samples found in {self.data_dir} after filtering. "
+                f"No valid samples found in {self.data_dir}. "
                 f"Check molecule_types={self.molecule_types}, "
                 f"min_residues={self.min_residues}, max_residues={self.max_residues}"
             )
@@ -213,7 +214,7 @@ class LatentDiffusionDataModule(LightningDataModule):
         # Create encoding dataset
         # Note: device is set later when we know the accelerator
         encoding_dataset = LatentEncodingDataset(
-            filtered_dataset,
+            polymer_dataset,
             self.flow_model,
             device="cpu",  # Will be moved to correct device in on_after_batch_transfer
         )

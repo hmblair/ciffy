@@ -134,50 +134,134 @@ This works for standard polymers but misses connections involving modified resid
 
 ---
 
-### Refactor Dataset Validation into Reusable Helpers
+### Refactor CLI Module to Reduce Duplication
 
-**Goal**: Extract error checking and logging from `LatentEncodingDataset` into reusable modules.
+**Goal**: Extract repeated patterns from `ciffy/cli/__main__.py` to reduce maintenance burden.
 
-**Context**: `latent_trainer.py` now has extensive validation logic (residue count filtering, unknown residue detection, atom count validation, detailed logging). This should be reusable across different trainers and datasets.
+**Context**: The CLI module is 1,691 lines with significant code duplication identified during codebase audit.
 
-**Proposed refactor**:
+**Duplicated patterns**:
+
+| Pattern | Count | Lines |
+|---------|-------|-------|
+| Accelerator detection | 5 | 318-325, 447-454, 578-585, 726-733, 797-804 |
+| Error handling | 4+ | 51-56, 72-77, 113-118, 173-178 |
+| Output writing | 3 | 699-712, 773-784, 834-846 |
+| Training header | 3 | 327-337, 486-495, 606-615 |
+| W&B logger setup | 3 | 340-346, 498-504, 619-624 |
+
+**Proposed helpers** (create `ciffy/cli/helpers.py`):
+
 ```python
-# ciffy/nn/dataset_validation.py
-@dataclass
-class ValidationStats:
-    total: int
-    valid: int
-    too_small: int
-    too_large: int
-    unknown_residues: int
-    incomplete: int
-    errors: int
+def resolve_accelerator(accelerator: str) -> str:
+    """Resolve 'auto' to actual accelerator (gpu/mps/cpu)."""
+    if accelerator == "auto":
+        import torch
+        if torch.cuda.is_available():
+            return "gpu"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    return accelerator
 
-def validate_polymer_for_flow(
-    polymer: Polymer,
-    flow_model: PolymerFlowModel,
-    min_residues: int,
-    max_residues: int,
-) -> tuple[bool, str]:
-    """Check if polymer is valid for flow model training.
+def load_structure(filepath: str, **kwargs) -> Polymer | None:
+    """Load structure with standardized error handling."""
+    try:
+        return load(filepath, **kwargs)
+    except FileNotFoundError:
+        print(f"Error: File not found: {filepath}", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"Error loading {filepath}: {e}", file=sys.stderr)
+        return None
 
-    Returns (is_valid, reason) tuple.
-    """
+def save_polymers(polymers: list[Polymer], output: Path, quiet: bool = False) -> None:
+    """Save polymers to file(s) with standardized output."""
+    if len(polymers) == 1:
+        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
+        polymers[0].write(str(out_path))
+        if not quiet:
+            print(f"Saved to {out_path}")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        for i, polymer in enumerate(polymers):
+            out_path = output / f"sample_{i:03d}.cif"
+            polymer.write(str(out_path))
+            if not quiet:
+                print(f"Saved {out_path}")
 
-def filter_dataset(
-    dataset: PolymerDataset,
-    validator: Callable[[Polymer], tuple[bool, str]],
-) -> tuple[list[int], ValidationStats]:
-    """Filter dataset and return valid indices with stats."""
+def setup_wandb_logger(enable: bool, project: str, name: str | None = None):
+    """Set up W&B logger if enabled."""
+    if not enable:
+        return None
+    from lightning.pytorch.loggers import WandbLogger
+    return WandbLogger(project=project, name=name)
+
+def print_training_header(model_type: str, **info) -> None:
+    """Print standardized training header."""
+    print()
+    print("=" * 60)
+    print(f"Ciffy {model_type} Training")
+    print("=" * 60)
+    for key, value in info.items():
+        print(f"{key}: {value}")
+    print()
+```
+
+**Optional: Split into submodules**:
+```
+cli/
+├── __init__.py
+├── __main__.py      # Entry point, argparse setup
+├── helpers.py       # Common utilities
+├── commands/
+│   ├── info.py      # info, split, map, template
+│   ├── train.py     # train flow/latent-diffusion/coord-diffusion
+│   ├── predict.py   # predict flow/latent-diffusion/coord-diffusion
+│   └── download.py  # download command
 ```
 
 **Files affected**:
-- `ciffy/nn/dataset_validation.py` (new)
-- `ciffy/nn/diffusion/latent_trainer.py` - Use new helpers
-- `ciffy/nn/base_trainer.py` - Optional integration
+- `ciffy/cli/__main__.py` - Extract helpers, update commands to use them
+- `ciffy/cli/helpers.py` (new) - Shared CLI utilities
+
+**Effort**: 2-4 hours for helper extraction, 1 day for full submodule split
+**Impact**: ~200 fewer lines, easier maintenance, consistent behavior
+
+---
+
+### Consolidate Ensemble and ResidueDataset
+
+**Goal**: Unify `ciffy/ensemble.py::Ensemble` and `ciffy/nn/flow/residue/data.py::ResidueDataset` - both extract residue conformations into dense (n, n_atoms, 3) arrays.
+
+**Current duplication**:
+- `atom_to_col` remapping logic in `operations/extract.py:161-171` and `nn/flow/residue/data.py:140-145, 245-252`
+- Common atom finding (intersection vs coverage threshold)
+- Similar `__len__`/`__getitem__` protocols
+
+**Proposed design**:
+```python
+class Ensemble:
+    coords: Array              # (n, n_atoms, 3)
+    atoms: list[int]
+    residue: AtomGroup
+    transforms: Array | None   # (n, 6) optional SE(3) link transforms
+
+    @classmethod
+    def from_polymer(cls, poly, residue, ...): ...
+
+    @classmethod
+    def from_cif_files(cls, paths, residue, with_transforms=False, ...): ...
+```
+
+`ResidueDataset` becomes `Ensemble.from_cif_files(..., with_transforms=True)`.
+
+**Files affected**:
+- `ciffy/ensemble.py` - Add `from_cif_files()`, optional transforms
+- `ciffy/nn/flow/residue/data.py` - Deprecate `ResidueDataset`, use `Ensemble`
+- `ciffy/operations/extract.py` - Use `utils/mapping.py::atoms_to_col_map()`
 
 **Effort**: 2-3 hours
-**Impact**: Cleaner code, reusable validation, consistent error reporting
 
 ---
 

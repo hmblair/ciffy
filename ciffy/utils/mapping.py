@@ -6,15 +6,14 @@ used extensively for atom-to-column index lookups throughout ciffy.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Sequence, Union
+from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
-    import numpy as np
-    import torch
+    from ..backend.core import Array
 
 
 def atoms_to_col_map(
-    atoms: Union[Sequence[int], "np.ndarray", "torch.Tensor", tuple[int, ...]],
+    atoms: Sequence[int] | "Array",
 ) -> dict[int, int]:
     """
     Build atom value -> column index mapping from atoms array or sequence.
@@ -23,10 +22,7 @@ def atoms_to_col_map(
     used for coordinate indexing throughout ciffy.
 
     Args:
-        atoms: Sequence of atom type indices. Accepts:
-            - Python sequences (list, tuple)
-            - NumPy arrays
-            - PyTorch tensors
+        atoms: Sequence of atom type indices (list, tuple, NumPy array, or tensor).
 
     Returns:
         Dict mapping each atom type value to its column index.

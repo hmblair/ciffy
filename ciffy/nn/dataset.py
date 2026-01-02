@@ -35,7 +35,8 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
     """
     from ciffy import load_metadata
 
-    (filepath, scale_value, min_atoms, max_atoms, type_filter_values, exclude_ids) = args
+    (filepath, scale_value, min_atoms, max_atoms, min_residues, max_residues,
+     type_filter_values, exclude_ids) = args
 
     results = []
     try:
@@ -50,8 +51,10 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
         return results
 
     atoms_per_chain = meta["atoms_per_chain"]
+    res_per_chain = meta["residues_per_chain"]
     mol_types = meta["molecule_types"]
     total_atoms = meta["atoms"]
+    total_residues = meta["residues"]
 
     # Convert type_filter_values back to set if provided
     type_filter = set(type_filter_values) if type_filter_values else None
@@ -69,6 +72,12 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
         if max_atoms is not None and total_atoms > max_atoms:
             return results
 
+        # Check residue count bounds
+        if min_residues is not None and total_residues < min_residues:
+            return results
+        if max_residues is not None and total_residues > max_residues:
+            return results
+
         results.append((filepath, None))
 
     else:  # Scale.CHAIN
@@ -84,6 +93,13 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
             if min_atoms is not None and chain_atoms < min_atoms:
                 continue
             if max_atoms is not None and chain_atoms > max_atoms:
+                continue
+
+            # Check residue count bounds
+            chain_residues = int(res_per_chain[chain_idx])
+            if min_residues is not None and chain_residues < min_residues:
+                continue
+            if max_residues is not None and chain_residues > max_residues:
                 continue
 
             results.append((filepath, chain_idx))
@@ -122,6 +138,8 @@ class PolymerDataset(Dataset):
         scale: Scale = Scale.MOLECULE,
         min_atoms: int | None = None,
         max_atoms: int | None = None,
+        min_residues: int | None = None,
+        max_residues: int | None = None,
         backend: str = "torch",
         molecule_types: Molecule | tuple[Molecule, ...] | None = None,
         exclude_ids: list[str] | set[str] | None = None,
@@ -137,9 +155,13 @@ class PolymerDataset(Dataset):
                 - MOLECULE: iterate over full structures
                 - CHAIN: iterate over individual chains
             min_atoms: Minimum atoms per item. Items with fewer atoms
-                are filtered out. None = no minimum.
+                are filtered out during indexing. None = no minimum.
             max_atoms: Maximum atoms per item. Items exceeding this
-                are filtered out. None = no limit.
+                are filtered out during indexing. None = no limit.
+            min_residues: Minimum residues per item. Items with fewer residues
+                are filtered out during indexing. None = no minimum.
+            max_residues: Maximum residues per item. Items exceeding this
+                are filtered out during indexing. None = no limit.
             backend: Backend for loaded polymers ("torch" or "numpy").
             molecule_types: Filter to specific molecule type(s). Can be
                 a single Molecule or tuple of Molecules. Chains not matching
@@ -176,6 +198,8 @@ class PolymerDataset(Dataset):
         self.scale = scale
         self.min_atoms = min_atoms
         self.max_atoms = max_atoms
+        self.min_residues = min_residues
+        self.max_residues = max_residues
         self.backend = backend
         self.num_workers = num_workers
         self.limit = limit
@@ -236,6 +260,8 @@ class PolymerDataset(Dataset):
                 self.scale.value,
                 self.min_atoms,
                 self.max_atoms,
+                self.min_residues,
+                self.max_residues,
                 type_filter_values,
                 exclude_ids,
             )
@@ -252,7 +278,7 @@ class PolymerDataset(Dataset):
         # Prepare arguments for each file
         args_list = [
             (str(path), self.scale.value, self.min_atoms, self.max_atoms,
-             type_filter_values, exclude_ids)
+             self.min_residues, self.max_residues, type_filter_values, exclude_ids)
             for path in cif_files
         ]
 

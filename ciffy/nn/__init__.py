@@ -43,13 +43,7 @@ def configure_precision(
     torch.set_float32_matmul_precision(matmul_precision)
 
 
-from .data_validation import (
-    DataCompatibilityReport,
-    StructureExample,
-    validate_flow_model_compatibility,
-)
 from .dataset import PolymerDataset
-from .filtered_dataset import FilterConfig, FilteredPolymerDataset
 
 # Layers (moved from root to layers/)
 from .layers import (
@@ -141,15 +135,12 @@ from .vae import (
 # Hub integration for model distribution
 from .hub import HubMixin, get_cache_dir, set_cache_dir
 
+# Unified residue model training API
+from . import residue
+
 __all__ = [
     # Precision configuration
     "configure_precision",
-    # Data validation and filtering
-    "DataCompatibilityReport",
-    "StructureExample",
-    "validate_flow_model_compatibility",
-    "FilterConfig",
-    "FilteredPolymerDataset",
     # Dataset
     "PolymerDataset",
     # Layers (from layers/)
@@ -239,6 +230,8 @@ __all__ = [
     "HubMixin",
     "get_cache_dir",
     "set_cache_dir",
+    # Unified residue training API
+    "residue",
 ]
 
 # Optional geometric deep learning module

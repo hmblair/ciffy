@@ -293,6 +293,57 @@ class TestPolymerDatasetEdgeCases:
         large_limit = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, limit=10000)
         assert len(large_limit) == full_count
 
+    def test_dataset_min_residues_filter(self):
+        """Dataset min_residues filters correctly."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        # Very large min_residues should filter out everything
+        dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, min_residues=1000000)
+        assert len(dataset) == 0
+
+        # Reasonable min_residues should keep some
+        dataset_some = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, min_residues=10)
+        dataset_all = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        assert len(dataset_some) <= len(dataset_all)
+
+    def test_dataset_max_residues_filter(self):
+        """Dataset max_residues filters correctly."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        # max_residues=1 filters out chains with >1 residue
+        # (0-residue chains like ions/water pass this filter)
+        dataset_small = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, max_residues=1)
+        dataset_medium = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, max_residues=50)
+        dataset_all = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+
+        # Stricter filter should have fewer or equal entries
+        assert len(dataset_small) <= len(dataset_medium)
+        assert len(dataset_medium) <= len(dataset_all)
+
+        # Large max_residues should keep all
+        dataset_large = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, max_residues=100000)
+        assert len(dataset_large) == len(dataset_all)
+
+    def test_dataset_residue_range_filter(self):
+        """Dataset with both min and max residues filters correctly."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        # Impossible range (min > max effectively) should be empty
+        dataset = PolymerDataset(
+            DATA_DIR, scale=Scale.CHAIN, min_residues=1000, max_residues=10
+        )
+        assert len(dataset) == 0
+
+        # Reasonable range
+        dataset_range = PolymerDataset(
+            DATA_DIR, scale=Scale.CHAIN, min_residues=10, max_residues=1000
+        )
+        dataset_all = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        assert len(dataset_range) <= len(dataset_all)
+
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestPolymerEmbeddingEdgeCases:

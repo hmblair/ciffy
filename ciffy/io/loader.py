@@ -249,9 +249,12 @@ def load_metadata(file: str | Path) -> dict:
 
     Returns:
         Dict with keys:
+            - id: PDB identifier (str)
             - atoms: Total atom count (int)
+            - residues: Total residue count (int)
             - chains: Number of chains (int)
             - atoms_per_chain: Array of atom counts per chain (np.ndarray)
+            - residues_per_chain: Array of residue counts per chain (np.ndarray)
             - molecule_types: Array of molecule type per chain (np.ndarray)
               Values correspond to Molecule enum (0=PROTEIN, 1=RNA, 2=DNA, etc.)
 
@@ -280,12 +283,15 @@ def load_metadata(file: str | Path) -> dict:
     data = _load(file, skip='metadata')
 
     atoms_per_chain = data["atoms_per_chain"]
+    res_per_chain = data["res_per_chain"]
     molecule_types = data["molecule_types"]
 
     return {
         "id": data["id"],
         "atoms": int(atoms_per_chain.sum()),
+        "residues": int(res_per_chain.sum()),
         "chains": len(atoms_per_chain),
         "atoms_per_chain": atoms_per_chain,
+        "residues_per_chain": res_per_chain,
         "molecule_types": molecule_types,
     }

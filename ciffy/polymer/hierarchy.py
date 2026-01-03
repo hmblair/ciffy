@@ -30,6 +30,22 @@ def _empty_per() -> dict[tuple[Scale, Scale], np.ndarray]:
     }
 
 
+def backend_marker(arr: Array) -> Array:
+    """Create a minimal backend/device marker from an array.
+
+    Returns a zero-element array with the same backend and device as the input.
+    Used as a lightweight reference for backend/device detection without
+    holding actual data.
+
+    Args:
+        arr: Source array to match backend/device from.
+
+    Returns:
+        Empty (0,) array on same backend/device.
+    """
+    return ops.zeros(0, like=arr)
+
+
 class _Hierarchy:
     """
     Internal class for hierarchical scale bookkeeping.
@@ -55,7 +71,8 @@ class _Hierarchy:
     Attributes:
         _per: Dict mapping (inner_scale, outer_scale) to count arrays (may be None).
         _polymer_count: Number of polymer atoms (first _polymer_count atoms).
-        _ref: Reference array for backend/device detection.
+        _ref: Minimal (0,) array used solely for backend/device detection.
+            Does not hold actual data - just matches the target backend/device.
         _n_atoms: Total atom count (cached).
         _n_residues: Total residue count (cached).
         _n_chains: Total chain count (cached).
@@ -79,13 +96,13 @@ class _Hierarchy:
             per: Dict mapping (inner_scale, outer_scale) to count arrays.
                 If None, creates an empty hierarchy.
             polymer_count: Number of polymer atoms.
-            ref: Reference array for backend/device detection.
-                If None, uses a numpy array.
+            ref: Minimal array for backend/device detection (shape doesn't matter).
+                If None, uses an empty numpy array.
         """
         if per is None:
             per = _empty_per()
         if ref is None:
-            ref = np.zeros((0, 3), dtype=np.float32)
+            ref = np.zeros(0, dtype=np.float32)
 
         self._per = per
         self._polymer_count = polymer_count
@@ -154,7 +171,7 @@ class _Hierarchy:
             sizes: Dict mapping Scale to atoms-per-unit arrays.
             lengths: Array of residues per chain.
             polymer_count: Number of polymer atoms.
-            ref: Reference array for backend/device detection.
+            ref: Array to derive backend/device from (will be converted to marker).
 
         Returns:
             New _Hierarchy instance.
@@ -174,7 +191,9 @@ class _Hierarchy:
             # Chains per molecule
             (Scale.CHAIN, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
         }
-        return cls(per, polymer_count, ref)
+        # Convert ref to minimal marker
+        marker = backend_marker(arr_ref)
+        return cls(per, polymer_count, marker)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Properties

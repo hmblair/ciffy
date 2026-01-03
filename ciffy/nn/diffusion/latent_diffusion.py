@@ -528,27 +528,25 @@ class LatentDiffusionModel(nn.Module):
     def get_save_state(self) -> tuple[dict[str, "torch.Tensor"], dict[str, Any]]:
         """Get state for unified save format.
 
+        Only saves denoiser weights. The encoder model path is stored in config
+        and must be loaded separately.
+
         Returns:
             Tuple of (tensors_dict, config_dict) for safetensors serialization.
         """
         tensors = {}
 
-        # Denoiser tensors
+        # Only save denoiser tensors (encoder is loaded from path)
         for k, v in self.denoiser.state_dict().items():
-            tensors[f"denoiser.{k}"] = v
+            tensors[k] = v
 
-        # Encoder model tensors (nested, with prefix)
-        encoder_tensors, encoder_config = self.encoder_model.get_save_state()
-        for k, v in encoder_tensors.items():
-            tensors[f"encoder_model.{k}"] = v
-
-        # Config
+        # Config - store encoder path, not full encoder state
         config = {
             "num_timesteps": self.config.num_timesteps,
             "noise_schedule": self.config.noise_schedule,
             "freeze_encoder": self.config.freeze_encoder,
+            "encoder_path": self.config.encoder_path,
             "denoiser": asdict(self.config.denoiser),
-            "encoder_model": encoder_config,
         }
 
         return tensors, config
@@ -559,28 +557,31 @@ class LatentDiffusionModel(nn.Module):
         tensors: dict[str, "torch.Tensor"],
         config: dict[str, Any],
         device: str = "cpu",
+        encoder_model: Optional["PolymerModel"] = None,
     ) -> "LatentDiffusionModel":
         """Reconstruct model from unified save format.
 
         Args:
-            tensors: Loaded tensors dict with prefixed keys.
+            tensors: Loaded tensors dict (denoiser weights).
             config: Loaded config dict.
             device: Device to load model to.
+            encoder_model: Optional pre-loaded encoder. If None, loads from
+                config["encoder_path"].
 
         Returns:
             Reconstructed LatentDiffusionModel.
         """
         from ciffy.nn.polymer import PolymerModel
 
-        # Extract encoder model tensors and reconstruct
-        encoder_tensors = {
-            k[len("encoder_model."):]: v
-            for k, v in tensors.items()
-            if k.startswith("encoder_model.")
-        }
-        encoder_model = PolymerModel.from_save_state(
-            encoder_tensors, config["encoder_model"], device=device
-        )
+        # Load encoder model from path if not provided
+        if encoder_model is None:
+            encoder_path = config.get("encoder_path")
+            if encoder_path is None:
+                raise ValueError(
+                    "No encoder_path in config and no encoder_model provided. "
+                    "Either provide encoder_model or ensure config has encoder_path."
+                )
+            encoder_model = PolymerModel.load(encoder_path, device=device)
 
         # Build config
         denoiser_config = LatentDenoiserConfig(**config["denoiser"])
@@ -589,18 +590,14 @@ class LatentDiffusionModel(nn.Module):
             num_timesteps=config["num_timesteps"],
             noise_schedule=config["noise_schedule"],
             freeze_encoder=config["freeze_encoder"],
+            encoder_path=config.get("encoder_path"),
         )
 
         # Create model
         model = cls(model_config, encoder_model=encoder_model)
 
         # Load denoiser weights
-        denoiser_tensors = {
-            k[len("denoiser."):]: v
-            for k, v in tensors.items()
-            if k.startswith("denoiser.")
-        }
-        model.denoiser.load_state_dict(denoiser_tensors)
+        model.denoiser.load_state_dict(tensors)
 
         return model.to(device)
 

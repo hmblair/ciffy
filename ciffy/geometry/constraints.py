@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from ciffy.biochemistry.linking import NUCLEIC_ACID_LINK
+
 if TYPE_CHECKING:
     from ciffy.biochemistry.atom import AtomGroup
 
@@ -34,21 +36,21 @@ class GeometryConstraints:
         bond_targets: (n_bonds,) ideal bond lengths in Angstroms.
         angle_indices: (n_angles, 3) column indices [A, B, C] where B is vertex.
         angle_targets: (n_angles,) ideal angles in radians.
-        inter_bond_target: Target inter-residue bond length (1.60Å for RNA).
+        inter_bond_target: Target inter-residue bond length (from MonomerLibrary).
     """
 
     bond_indices: torch.Tensor
     bond_targets: torch.Tensor
     angle_indices: torch.Tensor
     angle_targets: torch.Tensor
-    inter_bond_target: float = 1.60
+    inter_bond_target: float = NUCLEIC_ACID_LINK.bond_length
 
     @classmethod
     def from_residue(
         cls,
         residue: "AtomGroup",
         model_atoms: list[int],
-        inter_bond_target: float = 1.60,
+        inter_bond_target: float = NUCLEIC_ACID_LINK.bond_length,
         device: str | torch.device = "cpu",
     ) -> "GeometryConstraints":
         """

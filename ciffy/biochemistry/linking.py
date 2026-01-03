@@ -20,6 +20,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._generated_molecule import Molecule
+from ._generated_linking import (
+    NUCLEIC_ACID_LINK_GEOMETRY,
+    PEPTIDE_LINK_GEOMETRY,
+)
 
 if TYPE_CHECKING:
     from . import Residue
@@ -231,10 +235,11 @@ class LinkingDefinition:
 # Phosphodiester bond: O3' of residue N to P of residue N+1
 # O3' frame: origin at O3', Z along C3'->O3', X toward C4'
 # P frame: origin at P, Z along O5'->P, X toward OP1
+# Bond length from MonomerLibrary (links_and_mods.cif)
 NUCLEIC_ACID_LINK = LinkingDefinition(
     prev_atom="O3p",
     next_atom="P",
-    bond_length=1.60,
+    bond_length=NUCLEIC_ACID_LINK_GEOMETRY.bond_length,
     prev_frame=FrameDefinition(
         origin="O3p",
         z_ref="C3p",
@@ -252,10 +257,11 @@ NUCLEIC_ACID_LINK = LinkingDefinition(
 # Peptide bond: C of residue N to N of residue N+1
 # C frame: origin at C, Z along CA->C, X toward O
 # N frame: origin at N, Z along N->CA (inverted), no perpendicular ref
+# Bond length from MonomerLibrary (links_and_mods.cif)
 PEPTIDE_LINK = LinkingDefinition(
     prev_atom="C",
     next_atom="N",
-    bond_length=1.33,
+    bond_length=PEPTIDE_LINK_GEOMETRY.bond_length,
     prev_frame=FrameDefinition(
         origin="C",
         z_ref="CA",

@@ -44,6 +44,7 @@ from .python_codegen import (
     generate_python_dihedraltypes,
     generate_python_atoms,
     generate_python_residues,
+    generate_linking_constants,
 )
 from .validation import run_all_validations
 
@@ -266,6 +267,11 @@ def _generate_files(
     generate_python_dihedraltypes(paths.biochem_dir)
     generate_python_atoms(paths.biochem_dir, indices.atom_index, data.residues)
     generate_python_residues(paths.biochem_dir, data.residues)
+
+    # Generate linking geometry constants from MonomerLibrary
+    from .cli import get_monlib_path
+    monlib_path = get_monlib_path()
+    generate_linking_constants(paths.biochem_dir, monlib_path)
 
 
 # =============================================================================

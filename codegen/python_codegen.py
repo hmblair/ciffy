@@ -670,3 +670,129 @@ def generate_python_dihedraltypes(biochem_dir: Path) -> None:
         lines,
         "DihedralType enum"
     )
+
+
+def generate_linking_constants(biochem_dir: Path, monlib_path: Path) -> None:
+    """
+    Generate inter-residue linkage geometry constants from MonomerLibrary.
+
+    Parses _chem_link_bond and _chem_link_angle to extract geometry for:
+    - Phosphodiester linkage (RNA/DNA): O3'-P bond
+    - Peptide linkage (protein): C-N bond
+
+    Args:
+        biochem_dir: Output directory for generated file.
+        monlib_path: Path to links_and_mods.cif.
+    """
+    from .monlib import parse_link_bonds, parse_link_angles
+
+    # Parse links
+    p_bonds = []
+    p_angles = []
+    trans_bonds = []
+    trans_angles = []
+
+    for bond in parse_link_bonds(monlib_path):
+        if bond.link_id == "p":
+            p_bonds.append(bond)
+        elif bond.link_id == "TRANS":
+            trans_bonds.append(bond)
+
+    for angle in parse_link_angles(monlib_path):
+        if angle.link_id == "p":
+            p_angles.append(angle)
+        elif angle.link_id == "TRANS":
+            trans_angles.append(angle)
+
+    # Validate we found what we expected
+    if not p_bonds:
+        raise CodegenError("No phosphodiester bond (link_id='p') found in MonomerLibrary")
+    if not trans_bonds:
+        raise CodegenError("No peptide bond (link_id='TRANS') found in MonomerLibrary")
+
+    # Get the primary linking bonds (should be exactly one each)
+    p_bond = p_bonds[0]  # O3'-P
+    trans_bond = trans_bonds[0]  # C-N
+
+    lines = [
+        '"""',
+        'Inter-residue linkage geometry constants.',
+        '',
+        'AUTO-GENERATED from MonomerLibrary (links_and_mods.cif) - DO NOT EDIT MANUALLY.',
+        '',
+        'Source: https://github.com/MonomerLibrary/monomers',
+        'License: LGPL-3.0',
+        '',
+        'Contains geometry data for inter-residue bonds and angles:',
+        "- Phosphodiester linkage (RNA/DNA): O3'(i) - P(i+1)",
+        '- Peptide linkage (protein): C(i) - N(i+1)',
+        '"""',
+        '',
+        'from dataclasses import dataclass',
+        '',
+        '',
+        '@dataclass(frozen=True)',
+        'class LinkAngleData:',
+        '    """Inter-residue bond angle with uncertainty."""',
+        '    atoms: tuple[str, str, str]  # (atom1, vertex, atom3)',
+        '    comps: tuple[int, int, int]  # Component ids (1=prev, 2=next residue)',
+        '    value: float  # Angle in degrees',
+        '    esd: float  # Standard deviation',
+        '',
+        '',
+        '@dataclass(frozen=True)',
+        'class LinkGeometry:',
+        '    """Complete inter-residue linkage geometry."""',
+        '    prev_atom: str  # Atom from previous residue',
+        '    next_atom: str  # Atom from next residue',
+        '    bond_length: float  # Bond length in Angstroms',
+        '    bond_length_esd: float  # Standard deviation',
+        '    angles: tuple[LinkAngleData, ...]  # Angles involving the linkage',
+        '',
+        '',
+    ]
+
+    # Generate phosphodiester geometry
+    lines.append('# Phosphodiester linkage: O3\'(i) - P(i+1)')
+    lines.append('NUCLEIC_ACID_LINK_GEOMETRY = LinkGeometry(')
+    lines.append(f'    prev_atom="{p_bond.atom_1}",')
+    lines.append(f'    next_atom="{p_bond.atom_2}",')
+    lines.append(f'    bond_length={p_bond.value_dist:.4f},')
+    lines.append(f'    bond_length_esd={p_bond.value_dist_esd:.5f},')
+    lines.append('    angles=(')
+    for angle in p_angles:
+        lines.append(f'        LinkAngleData(')
+        lines.append(f'            atoms=("{angle.atom_1}", "{angle.atom_2}", "{angle.atom_3}"),')
+        lines.append(f'            comps=({angle.comp_1}, {angle.comp_2}, {angle.comp_3}),')
+        lines.append(f'            value={angle.value_angle:.3f},')
+        lines.append(f'            esd={angle.value_angle_esd:.2f},')
+        lines.append(f'        ),')
+    lines.append('    ),')
+    lines.append(')')
+    lines.append('')
+    lines.append('')
+
+    # Generate peptide geometry
+    lines.append('# Peptide linkage: C(i) - N(i+1)')
+    lines.append('PEPTIDE_LINK_GEOMETRY = LinkGeometry(')
+    lines.append(f'    prev_atom="{trans_bond.atom_1}",')
+    lines.append(f'    next_atom="{trans_bond.atom_2}",')
+    lines.append(f'    bond_length={trans_bond.value_dist:.4f},')
+    lines.append(f'    bond_length_esd={trans_bond.value_dist_esd:.5f},')
+    lines.append('    angles=(')
+    for angle in trans_angles:
+        lines.append(f'        LinkAngleData(')
+        lines.append(f'            atoms=("{angle.atom_1}", "{angle.atom_2}", "{angle.atom_3}"),')
+        lines.append(f'            comps=({angle.comp_1}, {angle.comp_2}, {angle.comp_3}),')
+        lines.append(f'            value={angle.value_angle:.3f},')
+        lines.append(f'            esd={angle.value_angle_esd:.2f},')
+        lines.append(f'        ),')
+    lines.append('    ),')
+    lines.append(')')
+    lines.append('')
+
+    _write_validated_python(
+        biochem_dir / "_generated_linking.py",
+        lines,
+        "Linking geometry constants"
+    )

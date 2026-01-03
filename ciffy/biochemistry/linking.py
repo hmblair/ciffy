@@ -289,3 +289,34 @@ LINKING_BY_TYPE: dict[int, LinkingDefinition] = {
     Molecule.PROTEIN_D.value: PEPTIDE_LINK,
     Molecule.CYCLIC_PEPTIDE.value: PEPTIDE_LINK,
 }
+
+
+# =============================================================================
+# Alignment Frames
+# =============================================================================
+# Frame definitions for aligning residues to a canonical local frame.
+# Used by Polymer.align() to put residues in consistent orientations.
+
+# Glycosidic frame for purines (A, G): C1' origin, X toward N9
+PURINE_GLYCOSIDIC_FRAME = FrameDefinition(
+    origin="C1p",
+    z_ref="N9",
+    perp_ref="C4",
+    z_toward_origin=False,  # Z from C1' toward N9
+)
+
+# Glycosidic frame for pyrimidines (C, U, T): C1' origin, X toward N1
+PYRIMIDINE_GLYCOSIDIC_FRAME = FrameDefinition(
+    origin="C1p",
+    z_ref="N1",
+    perp_ref="C2",
+    z_toward_origin=False,  # Z from C1' toward N1
+)
+
+# Backbone frame for proteins: CA origin, X toward N
+PROTEIN_BACKBONE_FRAME = FrameDefinition(
+    origin="CA",
+    z_ref="N",
+    perp_ref="C",
+    z_toward_origin=False,  # Z from CA toward N
+)

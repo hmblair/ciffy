@@ -361,6 +361,143 @@ def compute_frame_from_indices(
     return origin, R
 
 
+def find_atom(atoms: Array, atom_name: str, residue=None) -> int:
+    """
+    Find column index of an atom by name in an atoms array.
+
+    Args:
+        atoms: (n_atoms,) atom type value array.
+        atom_name: Atom name (e.g., "O3p", "P", "CA", "N9").
+        residue: Optional residue enum to look up residue-specific atoms.
+                 If not provided, only backbone atoms can be found.
+
+    Returns:
+        Column index of the atom, or -1 if not found.
+    """
+    from ..biochemistry.linking import BACKBONE_ATOM_VALUES
+    from ..backend import ops
+
+    atom_value = None
+
+    # First try backbone atoms (shared across residue types)
+    if atom_name in BACKBONE_ATOM_VALUES:
+        atom_value = BACKBONE_ATOM_VALUES[atom_name]
+    # Then try residue-specific atoms
+    elif residue is not None:
+        atom_enum = getattr(residue, atom_name, None)
+        if atom_enum is not None:
+            atom_value = atom_enum.value
+
+    if atom_value is None:
+        return -1
+
+    # Search for atom in array
+    matches = ops.nonzero(atoms == atom_value)[0]
+    return int(matches[0]) if len(matches) > 0 else -1
+
+
+def compute_frame_from_atoms(
+    coords: Array,
+    atoms: Array,
+    frame_def: "FrameDefinition",
+    residue=None,
+) -> tuple[Array, Array]:
+    """
+    Compute coordinate frame using a FrameDefinition by looking up atoms by name.
+
+    This version finds atoms dynamically from the atoms array, unlike
+    compute_frame_from_indices which requires pre-computed column indices.
+
+    Args:
+        coords: (n_atoms, 3) coordinates.
+        atoms: (n_atoms,) atom type values.
+        frame_def: FrameDefinition specifying origin, z_ref, perp_ref atoms.
+        residue: Optional residue enum for looking up residue-specific atoms.
+
+    Returns:
+        origin: (3,) frame origin position.
+        R: (3, 3) rotation matrix with [x, y, z] as columns.
+
+    Raises:
+        ValueError: If required atoms are not found.
+    """
+    # Find atom positions
+    origin_col = find_atom(atoms, frame_def.origin, residue)
+    z_ref_col = find_atom(atoms, frame_def.z_ref, residue)
+    perp_ref_col = find_atom(atoms, frame_def.perp_ref, residue) if frame_def.perp_ref else -1
+
+    if origin_col < 0:
+        raise ValueError(f"Origin atom '{frame_def.origin}' not found in residue")
+    if z_ref_col < 0:
+        raise ValueError(f"Z-ref atom '{frame_def.z_ref}' not found in residue")
+
+    origin_pos = coords[origin_col]
+    z_ref_pos = coords[z_ref_col]
+
+    # Compute Z-axis
+    if frame_def.z_toward_origin:
+        z_axis = normalize(origin_pos - z_ref_pos)
+    else:
+        z_axis = normalize(z_ref_pos - origin_pos)
+
+    # Compute X-axis (perpendicular to Z)
+    if perp_ref_col >= 0:
+        perp_pos = coords[perp_ref_col]
+        perp_dir = perp_pos - z_ref_pos
+        x_axis = normalize(cross(perp_dir, z_axis))
+    else:
+        x_axis = _arbitrary_perpendicular(z_axis)
+
+    # Y-axis completes right-handed system
+    y_axis = cross(z_axis, x_axis)
+
+    # Stack into rotation matrix
+    origin = clone(origin_pos)
+    R = _stack_columns(x_axis, y_axis, z_axis)
+
+    return origin, R
+
+
+def rigid_align(
+    coords: Array,
+    current_origin: Array,
+    current_R: Array,
+    target_origin: Array,
+    target_R: Array,
+) -> Array:
+    """
+    Align coordinates so current frame matches target frame via rigid transform.
+
+    Computes and applies the rigid transformation (rotation + translation)
+    needed to move current_origin/current_R to target_origin/target_R.
+
+    Args:
+        coords: (n_atoms, 3) coordinates to transform.
+        current_origin: (3,) current frame origin.
+        current_R: (3, 3) current frame rotation.
+        target_origin: (3,) target frame origin.
+        target_R: (3, 3) target frame rotation.
+
+    Returns:
+        (n_atoms, 3) transformed coordinates.
+    """
+    # R_correction @ current_R = target_R
+    # => R_correction = target_R @ current_R.T
+    if is_torch(coords):
+        R_correction = target_R @ current_R.T
+        rotated_origin = R_correction @ current_origin
+        t_correction = target_origin - rotated_origin
+        positioned = (R_correction @ coords.T).T + t_correction
+    else:
+        R_correction = target_R @ current_R.T
+        rotated_origin = R_correction @ current_origin
+        t_correction = target_origin - rotated_origin
+        positioned = (R_correction @ coords.T).T + t_correction
+        positioned = positioned.astype(np.float32)
+
+    return positioned
+
+
 def compute_o3p_frame(
     coords: Array,
     atom_to_col: dict[int, int],

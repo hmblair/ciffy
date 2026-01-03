@@ -760,75 +760,8 @@ class Polymer:
         Raises:
             ValueError: If required atoms are not found.
         """
-        from ..geometry.primitives import normalize, cross, clone
-
-        # Find atom positions (pass residue for non-backbone atoms)
-        origin_col = Polymer._find_atom(atoms, frame_def.origin, residue)
-        z_ref_col = Polymer._find_atom(atoms, frame_def.z_ref, residue)
-        perp_ref_col = Polymer._find_atom(atoms, frame_def.perp_ref, residue) if frame_def.perp_ref else -1
-
-        if origin_col < 0:
-            raise ValueError(f"Origin atom '{frame_def.origin}' not found in residue")
-        if z_ref_col < 0:
-            raise ValueError(f"Z-ref atom '{frame_def.z_ref}' not found in residue")
-
-        origin_pos = coords[origin_col]
-        z_ref_pos = coords[z_ref_col]
-
-        # Compute Z-axis
-        if frame_def.z_toward_origin:
-            z_axis = normalize(origin_pos - z_ref_pos)
-        else:
-            z_axis = normalize(z_ref_pos - origin_pos)
-
-        # Compute X-axis (perpendicular to Z)
-        if perp_ref_col >= 0:
-            perp_pos = coords[perp_ref_col]
-            perp_dir = perp_pos - z_ref_pos
-            x_axis = normalize(cross(perp_dir, z_axis))
-        else:
-            # Arbitrary perpendicular
-            x_axis = Polymer._arbitrary_perpendicular(z_axis)
-
-        # Y-axis completes right-handed system
-        y_axis = cross(z_axis, x_axis)
-
-        # Stack into rotation matrix
-        origin = clone(origin_pos)
-        if is_torch(coords):
-            import torch
-            R = torch.stack([x_axis, y_axis, z_axis], dim=-1)
-        else:
-            R = np.stack([x_axis, y_axis, z_axis], axis=-1)
-
-        return origin, R
-
-    @staticmethod
-    def _arbitrary_perpendicular(z_axis: Array) -> Array:
-        """Find an arbitrary vector perpendicular to z_axis."""
-        from ..geometry.primitives import normalize, cross
-
-        # Find component with smallest absolute value
-        if is_torch(z_axis):
-            import torch
-            abs_z = torch.abs(z_axis)
-            min_idx = torch.argmin(abs_z).item()
-            perp = torch.zeros_like(z_axis)
-            perp[min_idx] = 1.0
-        else:
-            abs_z = np.abs(z_axis)
-            min_idx = int(np.argmin(abs_z))
-            perp = np.zeros_like(z_axis)
-            perp[min_idx] = 1.0
-
-        # Gram-Schmidt orthogonalization
-        if is_torch(z_axis):
-            import torch
-            dot = torch.sum(perp * z_axis)
-        else:
-            dot = np.sum(perp * z_axis)
-        x_axis = perp - dot * z_axis
-        return normalize(x_axis)
+        from ..geometry.transforms import compute_frame_from_atoms
+        return compute_frame_from_atoms(coords, atoms, frame_def, residue)
 
     @staticmethod
     def _align_to_target(
@@ -854,25 +787,8 @@ class Polymer:
         Returns:
             (n_atoms, 3) transformed coordinates.
         """
-        # R_correction @ current_R = target_R
-        # => R_correction = target_R @ current_R.T
-        if is_torch(coords):
-            import torch
-            R_correction = target_R @ current_R.T
-            # After rotation, current_origin moves to R_correction @ current_origin
-            # We want this to equal target_origin
-            rotated_origin = R_correction @ current_origin
-            t_correction = target_origin - rotated_origin
-            # Apply: coords_new = R_correction @ coords.T + t_correction
-            positioned = (R_correction @ coords.T).T + t_correction
-        else:
-            R_correction = target_R @ current_R.T
-            rotated_origin = R_correction @ current_origin
-            t_correction = target_origin - rotated_origin
-            positioned = (R_correction @ coords.T).T + t_correction
-            positioned = positioned.astype(np.float32)
-
-        return positioned
+        from ..geometry.transforms import rigid_align
+        return rigid_align(coords, current_origin, current_R, target_origin, target_R)
 
     def align(self: Polymer) -> list[Array]:
         """

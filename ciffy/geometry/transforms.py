@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..backend import Array, is_torch
+from ..backend.ops import to_backend, stack, unsqueeze
 
 if TYPE_CHECKING:
     from ..biochemistry import Residue
@@ -259,6 +260,15 @@ def apply_relative_transform(
 # columns representing the local x, y, z axes.
 
 
+def _find_atom_index(atoms: Array, vals: np.ndarray) -> int:
+    """Find index of first atom matching any value in vals."""
+    vals_backend = to_backend(vals, atoms)
+    mask = (atoms[:, None] == vals_backend).any(axis=1 if not is_torch(atoms) else -1)
+    if is_torch(atoms):
+        return mask.nonzero(as_tuple=True)[0][0]
+    return mask.argmax()
+
+
 def extract_frame_positions(
     coords: Array,
     atoms: Array,
@@ -278,37 +288,15 @@ def extract_frame_positions(
     Returns:
         (3, 3) or (..., 3, 3) positions [origin, axis_ref, plane_ref].
     """
-    # Get all possible atom values for each frame position
-    origin_vals = np.array(list(frame_def.origin.index()), dtype=np.int64)
-    axis_ref_vals = np.array(list(frame_def.axis_ref.index()), dtype=np.int64)
-    plane_ref_vals = np.array(list(frame_def.plane_ref.index()), dtype=np.int64)
+    origin_idx = _find_atom_index(atoms, frame_def.origin.index())
+    axis_ref_idx = _find_atom_index(atoms, frame_def.axis_ref.index())
+    plane_ref_idx = _find_atom_index(atoms, frame_def.plane_ref.index())
 
-    # Find indices using 2D comparison: atoms[:, None] == vals[None, :]
-    if is_torch(atoms):
-        import torch
-        origin_vals_t = torch.tensor(origin_vals, device=atoms.device)
-        axis_ref_vals_t = torch.tensor(axis_ref_vals, device=atoms.device)
-        plane_ref_vals_t = torch.tensor(plane_ref_vals, device=atoms.device)
-
-        origin_idx = (atoms[:, None] == origin_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
-        axis_ref_idx = (atoms[:, None] == axis_ref_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
-        plane_ref_idx = (atoms[:, None] == plane_ref_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
-
-        return torch.stack([
-            coords[..., origin_idx, :],
-            coords[..., axis_ref_idx, :],
-            coords[..., plane_ref_idx, :],
-        ], dim=-2)
-    else:
-        origin_idx = (atoms[:, None] == origin_vals).any(axis=1).argmax()
-        axis_ref_idx = (atoms[:, None] == axis_ref_vals).any(axis=1).argmax()
-        plane_ref_idx = (atoms[:, None] == plane_ref_vals).any(axis=1).argmax()
-
-        return np.stack([
-            coords[..., origin_idx, :],
-            coords[..., axis_ref_idx, :],
-            coords[..., plane_ref_idx, :],
-        ], axis=-2)
+    return stack([
+        coords[..., origin_idx, :],
+        coords[..., axis_ref_idx, :],
+        coords[..., plane_ref_idx, :],
+    ], axis=-2)
 
 
 def frame_from_positions(positions: Array) -> tuple[Array, Array]:
@@ -337,19 +325,11 @@ def frame_from_positions(positions: Array) -> tuple[Array, Array]:
     # X-axis: perpendicular to Z, toward plane_ref (Gram-Schmidt)
     plane_vec = plane_ref - origin
     proj = dot(plane_vec, z_axis)
-    if is_torch(positions):
-        import torch
-        if positions.ndim > 2:
-            proj = proj.unsqueeze(-1)
-        x_axis = normalize(plane_vec - proj * z_axis)
-        y_axis = cross(z_axis, x_axis)
-        R = torch.stack([x_axis, y_axis, z_axis], dim=-1)
-    else:
-        if positions.ndim > 2:
-            proj = np.expand_dims(proj, -1)
-        x_axis = normalize(plane_vec - proj * z_axis)
-        y_axis = cross(z_axis, x_axis)
-        R = np.stack([x_axis, y_axis, z_axis], axis=-1)
+    if positions.ndim > 2:
+        proj = unsqueeze(proj, -1)
+    x_axis = normalize(plane_vec - proj * z_axis)
+    y_axis = cross(z_axis, x_axis)
+    R = stack([x_axis, y_axis, z_axis], axis=-1)
 
     return origin, R
 

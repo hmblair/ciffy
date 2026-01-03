@@ -433,11 +433,13 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             d_dist=kwargs.get("d_dist", 32),
             n_heads=kwargs.get("n_heads", 4),
             n_encoder_layers=kwargs.get("n_encoder_layers", 2),
-            decoder_hidden_dims=kwargs.get("decoder_hidden_dims", [256, 128]),
+            hidden_dims=kwargs.get("hidden_dims", [256, 128]),
             dropout=kwargs.get("dropout", 0.1),
             beta=kwargs.get("beta", 1.0),
             beta_warmup_epochs=kwargs.get("beta_warmup_epochs", 50),
             free_bits=kwargs.get("free_bits", 0.5),
+            use_input_norm=kwargs.get("use_input_norm", True),
+            use_residual=kwargs.get("use_residual", True),
         )
         data_config = ConsolidatedVAEDataConfig(batch_size=batch_size)
         return config_cls(

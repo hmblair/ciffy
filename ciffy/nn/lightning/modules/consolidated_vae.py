@@ -31,11 +31,13 @@ class ConsolidatedVAEModelConfig:
     d_dist: int = 32
     n_heads: int = 4
     n_encoder_layers: int = 2
-    decoder_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
+    hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.1
     beta: float = 1.0
     beta_warmup_epochs: int = 50
     free_bits: float = 0.5
+    use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
+    use_residual: bool = True  # Residual connections in decoder
 
 
 @dataclass
@@ -141,8 +143,10 @@ class ConsolidatedVAEModule(LightningModule):
             d_dist=model_cfg.d_dist,
             n_heads=model_cfg.n_heads,
             n_encoder_layers=model_cfg.n_encoder_layers,
-            decoder_hidden_dims=model_cfg.decoder_hidden_dims,
+            hidden_dims=model_cfg.hidden_dims,
             dropout=model_cfg.dropout,
+            use_input_norm=model_cfg.use_input_norm,
+            use_residual=model_cfg.use_residual,
         )
 
         self._model = ConsolidatedResidueVAE(residue_atoms, config)

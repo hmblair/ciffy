@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from ciffy.geometry import FrameIndices
 
 from .invariant import InvariantAttentionEncoder
-from ciffy.nn.blocks import CoordinateDecoder, MLPEncoder
+from ciffy.nn.blocks import InputNorm, ResidualBlock, build_mlp_stack
 
 
 @dataclass
@@ -52,9 +52,11 @@ class ConsolidatedVAEConfig:
     d_dist: int = 32
     n_heads: int = 4
     n_encoder_layers: int = 2
-    decoder_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
+    hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.1
     encoder_type: str = "flat"  # "flat" (MLP on padded data) or "invariant" (attention on distances)
+    use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
+    use_residual: bool = True  # Residual connections in decoder
 
 
 class ConsolidatedResidueVAE(nn.Module):
@@ -116,17 +118,32 @@ class ConsolidatedResidueVAE(nn.Module):
             all_atom_indices.extend(indices)
         self.n_atom_types = max(all_atom_indices) + 1
 
+        # Input dimension for flat encoder
+        self._flat_input_dim = self.max_atoms * 3 + 6
+        hidden_dims = config.hidden_dims
+        decoder_hidden = list(reversed(hidden_dims))  # Mirror encoder dims
+
+        # Input normalization (optional but recommended)
+        self.input_norm = InputNorm(self._flat_input_dim) if config.use_input_norm else None
+
         # Build encoder based on type
         if config.encoder_type == "flat":
             # Flat MLP encoder on padded coords + transforms
-            # Input: (max_atoms * 3 + 6) for coords + transforms
-            flat_input_dim = self.max_atoms * 3 + 6
-            self.encoder = MLPEncoder(
-                input_dim=flat_input_dim,
-                latent_dim=config.latent_dim,
-                hidden_dims=config.decoder_hidden_dims,
-                dropout=config.dropout,
-            )
+            encoder_layers = []
+            in_dim = self._flat_input_dim
+            for h_dim in hidden_dims:
+                encoder_layers.extend([
+                    nn.Linear(in_dim, h_dim),
+                    nn.LayerNorm(h_dim),
+                    nn.SiLU(),
+                ])
+                if config.dropout > 0:
+                    encoder_layers.append(nn.Dropout(config.dropout))
+                in_dim = h_dim
+
+            self.encoder = nn.Sequential(*encoder_layers)
+            self.fc_mu = nn.Linear(hidden_dims[-1], config.latent_dim)
+            self.fc_logvar = nn.Linear(hidden_dims[-1], config.latent_dim)
             self._uses_mlp_encoder = True
         else:
             # Rotation-invariant attention encoder (separate mu/logvar projection)
@@ -142,18 +159,63 @@ class ConsolidatedResidueVAE(nn.Module):
             self.fc_logvar = nn.Linear(config.d_model, config.latent_dim)
             self._uses_mlp_encoder = False
 
-        # Per-residue decoders
+        # Per-residue decoders with residual blocks and separate heads
         self.decoders = nn.ModuleDict()
+        self.decoder_residuals = nn.ModuleDict()
+        self.fc_coords = nn.ModuleDict()
+        self.fc_transforms = nn.ModuleDict()
+
         for residue, atom_indices in residue_atoms.items():
             n_atoms = len(atom_indices)
-            decoder = CoordinateDecoder(
-                latent_dim=config.latent_dim,
-                n_atoms=n_atoms,
-                hidden_dims=config.decoder_hidden_dims,
-                dropout=config.dropout,
-            )
-            # Use residue name as key (ModuleDict requires string keys)
-            self.decoders[residue.name] = decoder
+            name = residue.name
+
+            if config.use_residual and len(decoder_hidden) >= 2:
+                # Decoder with residual blocks (like ResidueVAE)
+                decoder_input = nn.Sequential(
+                    nn.Linear(config.latent_dim, decoder_hidden[0]),
+                    nn.LayerNorm(decoder_hidden[0]),
+                    nn.SiLU(),
+                )
+                decoder_residual = nn.Sequential(*[
+                    ResidualBlock(decoder_hidden[0], decoder_hidden[0], config.dropout)
+                    for _ in range(2)
+                ])
+                decoder_layers = []
+                in_dim = decoder_hidden[0]
+                for h_dim in decoder_hidden[1:]:
+                    decoder_layers.extend([
+                        nn.Linear(in_dim, h_dim),
+                        nn.LayerNorm(h_dim),
+                        nn.SiLU(),
+                    ])
+                    if config.dropout > 0:
+                        decoder_layers.append(nn.Dropout(config.dropout))
+                    in_dim = h_dim
+                decoder = nn.Sequential(decoder_input, *decoder_layers) if decoder_layers else decoder_input
+                self.decoders[name] = decoder
+                self.decoder_residuals[name] = decoder_residual
+                self._decoder_out_dim = decoder_hidden[-1]
+            else:
+                # Simple sequential decoder
+                decoder = build_mlp_stack(
+                    config.latent_dim,
+                    decoder_hidden,
+                    dropout=config.dropout,
+                    zero_init_final=False,
+                )
+                self.decoders[name] = decoder
+                self.decoder_residuals[name] = nn.Identity()
+                self._decoder_out_dim = decoder_hidden[-1]
+
+            # Separate output heads for coords and transforms (different scales)
+            fc_coord = nn.Linear(self._decoder_out_dim, n_atoms * 3)
+            fc_transform = nn.Linear(self._decoder_out_dim, 6)
+            nn.init.zeros_(fc_coord.weight)
+            nn.init.zeros_(fc_coord.bias)
+            nn.init.zeros_(fc_transform.weight)
+            nn.init.zeros_(fc_transform.bias)
+            self.fc_coords[name] = fc_coord
+            self.fc_transforms[name] = fc_transform
 
         # Register atom indices as buffers for each residue
         for residue, atom_indices in residue_atoms.items():
@@ -165,10 +227,7 @@ class ConsolidatedResidueVAE(nn.Module):
     @property
     def device(self) -> torch.device:
         """Device where model parameters reside."""
-        if self._uses_mlp_encoder:
-            return self.encoder.fc_mu.weight.device
-        else:
-            return self.fc_mu.weight.device
+        return self.fc_mu.weight.device
 
     @property
     def residues(self) -> list["Residue"]:
@@ -206,7 +265,24 @@ class ConsolidatedResidueVAE(nn.Module):
             if transforms is None:
                 transforms = torch.zeros(batch_size, 6, device=coords.device)
             x = torch.cat([coords_flat, transforms], dim=-1)
-            return self.encoder(x, return_distribution=return_distribution)
+
+            # Apply input normalization
+            if self.input_norm is not None:
+                x = self.input_norm(x)
+
+            h = self.encoder(x)
+            mu = self.fc_mu(h)
+            logvar = self.fc_logvar(h)
+
+            if self.training:
+                std = torch.exp(0.5 * logvar)
+                z = mu + std * torch.randn_like(std)
+            else:
+                z = mu
+
+            if return_distribution:
+                return z, mu, logvar
+            return z
         else:
             # Invariant attention encoder: use atom types, coords, mask
             h = self.encoder(atom_types, coords, mask)
@@ -236,8 +312,37 @@ class ConsolidatedResidueVAE(nn.Module):
             coords: (batch, n_atoms, 3) in canonical frame.
             transform: (batch, 6) SE(3) transform parameters.
         """
-        decoder = self.decoders[residue.name]
-        return decoder(z)
+        name = residue.name
+        decoder = self.decoders[name]
+        residual = self.decoder_residuals[name]
+
+        # Apply decoder with residual blocks
+        if self.config.use_residual:
+            # decoder_input is the first part, then residual, then rest
+            h = decoder[0](z)  # First layer (input projection)
+            h = residual(h)  # Residual blocks
+            h = decoder[1:](h) if len(decoder) > 1 else h  # Remaining layers
+        else:
+            h = decoder(z)
+
+        # Apply separate output heads
+        coords_flat = self.fc_coords[name](h)
+        transform = self.fc_transforms[name](h)
+
+        # Unnormalize output to original scale
+        if self.input_norm is not None:
+            n_atoms = len(self._residue_atoms[residue])
+            # Reconstruct full output and unnormalize
+            output = torch.zeros(z.shape[0], self._flat_input_dim, device=z.device)
+            output[:, :n_atoms * 3] = coords_flat
+            output[:, self.max_atoms * 3:self.max_atoms * 3 + 6] = transform
+            output = self.input_norm.inverse(output)
+            coords_flat = output[:, :n_atoms * 3]
+            transform = output[:, self.max_atoms * 3:self.max_atoms * 3 + 6]
+
+        n_atoms = len(self._residue_atoms[residue])
+        coords = coords_flat.reshape(-1, n_atoms, 3)
+        return coords, transform
 
     def forward(
         self,
@@ -316,9 +421,11 @@ class ConsolidatedResidueVAE(nn.Module):
             "d_dist": self.config.d_dist,
             "n_heads": self.config.n_heads,
             "n_encoder_layers": self.config.n_encoder_layers,
-            "decoder_hidden_dims": self.config.decoder_hidden_dims,
+            "hidden_dims": self.config.hidden_dims,
             "dropout": self.config.dropout,
             "encoder_type": self.config.encoder_type,
+            "use_input_norm": self.config.use_input_norm,
+            "use_residual": self.config.use_residual,
             "residue_atoms": {
                 res.name: indices for res, indices in self._residue_atoms.items()
             },
@@ -351,16 +458,19 @@ class ConsolidatedResidueVAE(nn.Module):
             for name, indices in config_dict["residue_atoms"].items()
         }
 
-        # Create config
+        # Create config (handle legacy decoder_hidden_dims key)
+        hidden_dims = config_dict.get("hidden_dims", config_dict.get("decoder_hidden_dims", [256, 128]))
         config = ConsolidatedVAEConfig(
             latent_dim=config_dict["latent_dim"],
             d_model=config_dict["d_model"],
             d_dist=config_dict["d_dist"],
             n_heads=config_dict["n_heads"],
             n_encoder_layers=config_dict["n_encoder_layers"],
-            decoder_hidden_dims=config_dict["decoder_hidden_dims"],
+            hidden_dims=hidden_dims,
             dropout=config_dict["dropout"],
-            encoder_type=config_dict.get("encoder_type", "invariant"),  # Default to old behavior
+            encoder_type=config_dict.get("encoder_type", "flat"),
+            use_input_norm=config_dict.get("use_input_norm", True),
+            use_residual=config_dict.get("use_residual", True),
         )
 
         # Create model and load state

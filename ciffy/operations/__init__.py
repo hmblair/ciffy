@@ -13,7 +13,7 @@ from .alignment import (
 )
 from .extract import extract
 from .gnm import GNM, contact_map
-from .metrics import tm_score, lddt, rmsd, coordinate_covariance
+from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg
 from .cluster import cluster, cluster_representatives, ClusterResult
 
 # Legacy alias
@@ -36,6 +36,7 @@ __all__ = [
     "tm_score",
     "lddt",
     "rmsd",
+    "rg",
     # Structural clustering
     "cluster",
     "cluster_representatives",

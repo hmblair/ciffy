@@ -16,6 +16,7 @@ Operations:
     align(p1, p2, scale)    Align structures
     tm_score(pred, ref)     TM-score
     lddt(pred, ref)         lDDT score
+    rg(p)                   Radius of gyration
     join(*polymers)         Combine polymers
 
 Submodules:
@@ -68,7 +69,7 @@ from .ensemble import Ensemble
 
 # Operations - commonly used, re-exported at top level
 from .operations.alignment import align, intersect
-from .operations.metrics import rmsd, tm_score, lddt
+from .operations.metrics import rmsd, tm_score, lddt, rg
 from .operations.chain import join
 from .operations.reduction import Reduction
 
@@ -127,6 +128,7 @@ __all__ = [
     "align",
     "tm_score",
     "lddt",
+    "rg",
     "join",
     "Reduction",
     # Submodules

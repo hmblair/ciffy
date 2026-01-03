@@ -603,3 +603,57 @@ def rmsd(
     """
     _ensure_polymer_registered()
     return _rmsd_dispatch(a, b, scale, eps)
+
+
+# =============================================================================
+# Radius of Gyration
+# =============================================================================
+
+def rg(
+    polymer: "Polymer",
+    scale: "Scale" = Scale.MOLECULE,
+) -> Array:
+    """
+    Compute radius of gyration (Rg) of a structure.
+
+    Radius of gyration measures the compactness of a structure, defined as
+    the root-mean-square distance of atoms from their centroid:
+
+        Rg = sqrt(sum(|r_i - r_cm|^2) / N)
+
+    Equivalently, Rg = sqrt(Var_x + Var_y + Var_z) = sqrt(trace(cov)).
+
+    Args:
+        polymer: The polymer structure.
+        scale: Scale at which to compute Rg (default: MOLECULE).
+            - MOLECULE: Single Rg for the entire structure.
+            - CHAIN: Rg per chain.
+            - RESIDUE: Rg per residue.
+
+    Returns:
+        Array of Rg values, one per unit at the specified scale.
+        For MOLECULE scale, returns a 1-element array.
+
+    Examples:
+        >>> import ciffy
+        >>> p = ciffy.load("structure.cif")
+        >>> r = ciffy.rg(p)  # Single value for whole structure
+        >>> rg_per_chain = ciffy.rg(p, ciffy.CHAIN)  # Per chain
+    """
+    coords = polymer.coordinates
+    n_units = polymer.size(scale)
+
+    # Compute centroid per unit
+    centroids = polymer.reduce(coords, scale)  # (n_units, 3)
+
+    # Expand centroids back to atom level
+    centroids_expanded = polymer.expand(centroids, scale)  # (n_atoms, 3)
+
+    # Squared distances from centroid
+    diff = coords - centroids_expanded
+    sq_dist = (diff * diff).sum(axis=-1)  # (n_atoms,)
+
+    # Mean squared distance per unit
+    mean_sq_dist = polymer.reduce(sq_dist, scale)  # (n_units,)
+
+    return sqrt(mean_sq_dist)

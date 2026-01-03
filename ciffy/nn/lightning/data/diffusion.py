@@ -20,14 +20,14 @@ from ciffy import Molecule, Scale
 from ciffy.nn.dataset import PolymerDataset
 
 if TYPE_CHECKING:
-    from ciffy.nn.flow import PolymerFlowModel
+    from ciffy.nn.polymer import PolymerModel
 
 
 class LatentEncodingDataset(Dataset):
     """Dataset that encodes polymers to latent space on-the-fly.
 
-    Wraps a PolymerDataset and uses a flow model to encode coordinates
-    to latents. This avoids caching all latents in memory.
+    Wraps a PolymerDataset and uses an encoder model (any PolymerModel)
+    to encode coordinates to latents. This avoids caching all latents in memory.
 
     Note: This dataset performs GPU encoding in __getitem__, so it must
     be used with num_workers=0 in the DataLoader.
@@ -36,11 +36,11 @@ class LatentEncodingDataset(Dataset):
     def __init__(
         self,
         polymer_dataset: "PolymerDataset",
-        flow_model: "PolymerFlowModel",
+        encoder_model: "PolymerModel",
         device: str = "cpu",
     ) -> None:
         self.polymer_dataset = polymer_dataset
-        self.flow_model = flow_model
+        self.encoder_model = encoder_model
         self.device = device
 
     def __len__(self) -> int:
@@ -71,11 +71,11 @@ class LatentEncodingDataset(Dataset):
             # Encode to latent space
             with torch.no_grad():
                 coords = coords.to(self.device)
-                latents = self.flow_model.encode(coords, sequence.numpy())
+                latents = self.encoder_model.encode(coords, sequence.numpy())
 
             return latents.cpu(), sequence
         except Exception:
-            # Flow model encoding failed (incompatible structure)
+            # Encoder model encoding failed (incompatible structure)
             return None
 
 
@@ -125,16 +125,16 @@ class LatentDiffusionDataModule(LightningDataModule):
 
     Handles:
     - Loading polymer dataset from a directory of CIF files
-    - Filtering for flow model compatibility
+    - Filtering for encoder model compatibility
     - On-the-fly latent encoding
     - Train/val splitting
     - Variable-length batching with padding
 
     Example:
-        >>> flow_model = load_pretrained("rna")
+        >>> encoder_model = PolymerModel.load("outputs/models/flow")
         >>> dm = LatentDiffusionDataModule(
         ...     data_dir="./structures",
-        ...     flow_model=flow_model,
+        ...     encoder_model=encoder_model,
         ...     batch_size=32,
         ... )
         >>> trainer.fit(module, dm)
@@ -143,7 +143,7 @@ class LatentDiffusionDataModule(LightningDataModule):
     def __init__(
         self,
         data_dir: str | Path,
-        flow_model: "PolymerFlowModel",
+        encoder_model: "PolymerModel",
         batch_size: int = 32,
         molecule_types: tuple[str, ...] = ("RNA",),
         min_residues: int = 10,
@@ -155,7 +155,7 @@ class LatentDiffusionDataModule(LightningDataModule):
 
         Args:
             data_dir: Directory containing CIF files.
-            flow_model: Pre-trained flow model for encoding and validation.
+            encoder_model: Pre-trained PolymerModel for encoding.
             batch_size: Training batch size.
             molecule_types: Filter to specific molecule types.
             min_residues: Minimum residues per chain.
@@ -165,10 +165,10 @@ class LatentDiffusionDataModule(LightningDataModule):
                 encoding (GPU operations in __getitem__).
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["flow_model"])
+        self.save_hyperparameters(ignore=["encoder_model"])
 
         self.data_dir = Path(data_dir)
-        self.flow_model = flow_model
+        self.encoder_model = encoder_model
         self.batch_size = batch_size
         self.molecule_types = molecule_types
         self.min_residues = min_residues
@@ -215,7 +215,7 @@ class LatentDiffusionDataModule(LightningDataModule):
         # Note: device is set later when we know the accelerator
         encoding_dataset = LatentEncodingDataset(
             polymer_dataset,
-            self.flow_model,
+            self.encoder_model,
             device="cpu",  # Will be moved to correct device in on_after_batch_transfer
         )
 

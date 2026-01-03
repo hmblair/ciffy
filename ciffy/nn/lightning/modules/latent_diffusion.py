@@ -18,7 +18,7 @@ from ciffy.nn.diffusion.latent_diffusion import (
 )
 
 if TYPE_CHECKING:
-    from ciffy.nn.flow import PolymerFlowModel
+    from ciffy.nn.polymer import PolymerModel
 
 
 @dataclass
@@ -87,38 +87,41 @@ class LatentDiffusionModule(BaseCiffyModule):
     def __init__(
         self,
         config: LatentDiffusionFullConfig,
-        flow_model: Optional["PolymerFlowModel"] = None,
+        encoder_model: Optional["PolymerModel"] = None,
     ) -> None:
         """Initialize the latent diffusion module.
 
         Args:
             config: Full training configuration.
-            flow_model: Optional pre-loaded flow model. If None, loads from
-                config.model.flow_model_path or uses default pretrained.
+            encoder_model: Optional pre-loaded PolymerModel. If None, loads from
+                config.model.encoder_path.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["flow_model"])
+        self.save_hyperparameters(ignore=["encoder_model"])
 
         self.config = config
         self.training_config = config.training
 
         # Create the model
-        self.model = LatentDiffusionModel(config.model, flow_model=flow_model)
+        self.model = LatentDiffusionModel(config.model, encoder_model=encoder_model)
 
     def training_step(
         self,
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
         batch_idx: int,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | None:
         """Compute training loss for a batch.
 
         Args:
-            batch: Tuple of (latents, sequences, mask) from dataloader.
+            batch: Tuple of (latents, sequences, mask) from dataloader, or None.
             batch_idx: Batch index (unused).
 
         Returns:
-            Loss tensor.
+            Loss tensor, or None if batch was empty.
         """
+        if batch is None:
+            return None
+
         latents, sequences, mask = batch
 
         loss, metrics = self.model.training_step_batch(latents, sequences, mask)
@@ -131,18 +134,21 @@ class LatentDiffusionModule(BaseCiffyModule):
 
     def validation_step(
         self,
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
         batch_idx: int,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | None:
         """Compute validation loss for a batch.
 
         Args:
-            batch: Tuple of (latents, sequences, mask) from dataloader.
+            batch: Tuple of (latents, sequences, mask) from dataloader, or None.
             batch_idx: Batch index (unused).
 
         Returns:
-            Loss tensor.
+            Loss tensor, or None if batch was empty.
         """
+        if batch is None:
+            return None
+
         latents, sequences, mask = batch
 
         loss, metrics = self.model.training_step_batch(latents, sequences, mask)

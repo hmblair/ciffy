@@ -1,20 +1,20 @@
 """Latent diffusion model for polymer structure generation.
 
 This module provides the LatentDiffusionModel, which performs diffusion in the
-latent space of a pre-trained PolymerFlowModel. The model learns to denoise
-latent representations of polymer structures, enabling generation of new
-structures by sampling from noise and iteratively denoising.
+latent space of a pre-trained PolymerModel (flow, VAE, or consolidated). The
+model learns to denoise latent representations of polymer structures, enabling
+generation of new structures by sampling from noise and iteratively denoising.
 
 Similar to Stable Diffusion, this approach:
-- Performs diffusion in a compressed latent space (n_residues, 12) instead of coordinates
-- Uses a frozen pre-trained flow model for encoding/decoding
+- Performs diffusion in a compressed latent space (n_residues, latent_dim) instead of coordinates
+- Uses a frozen pre-trained encoder/decoder model (any PolymerModel)
 - Trains a transformer denoiser conditioned on residue sequence
 
 Example:
     >>> import ciffy
     >>> from ciffy.nn.diffusion import LatentDiffusionModel, LatentDiffusionConfig
     >>>
-    >>> config = LatentDiffusionConfig()
+    >>> config = LatentDiffusionConfig(encoder_path="outputs/models/flow")
     >>> model = LatentDiffusionModel(config)
     >>>
     >>> # Training step
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     import torch.nn.functional as F
 
     from ciffy import Polymer
+    from ciffy.nn.polymer import PolymerModel
 
 import numpy as np
 
@@ -64,15 +65,15 @@ class LatentDiffusionConfig:
         denoiser: Configuration for the transformer denoiser.
         num_timesteps: Number of diffusion steps.
         noise_schedule: Type of noise schedule ('cosine' or 'linear').
-        flow_model_path: Path to pre-trained PolymerFlowModel (None uses default).
-        freeze_flow_model: Whether to freeze the flow model weights.
+        encoder_path: Path to pre-trained PolymerModel (flow, vae, or consolidated).
+        freeze_encoder: Whether to freeze the encoder/decoder weights.
     """
 
     denoiser: LatentDenoiserConfig = field(default_factory=LatentDenoiserConfig)
     num_timesteps: int = 1000
     noise_schedule: str = "cosine"
-    flow_model_path: Optional[str] = None
-    freeze_flow_model: bool = True
+    encoder_path: Optional[str] = None
+    freeze_encoder: bool = True
 
 
 @register_model("latent_diffusion")
@@ -82,7 +83,7 @@ class LatentDiffusionModel(nn.Module):
     Implements the PolymerGenerativeModel protocol for interoperability.
 
     Combines:
-        - Pre-trained PolymerFlowModel for encoding/decoding coordinates
+        - Pre-trained PolymerModel (flow, VAE, or consolidated) for encoding/decoding
         - DiffusionProcess for forward/reverse diffusion
         - LatentDenoiser (transformer) for noise prediction
 
@@ -94,7 +95,7 @@ class LatentDiffusionModel(nn.Module):
 
     Example:
         >>> import ciffy
-        >>> config = LatentDiffusionConfig()
+        >>> config = LatentDiffusionConfig(encoder_path="outputs/models/flow")
         >>> model = LatentDiffusionModel(config)
         >>>
         >>> # Training
@@ -110,7 +111,7 @@ class LatentDiffusionModel(nn.Module):
     def __init__(
         self,
         config: LatentDiffusionConfig,
-        flow_model: Optional["PolymerFlowModel"] = None,
+        encoder_model: Optional["PolymerModel"] = None,
     ) -> None:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for LatentDiffusionModel")
@@ -119,25 +120,27 @@ class LatentDiffusionModel(nn.Module):
         self.config = config
 
         # Import here to avoid circular imports
-        from ciffy.nn.flow import PolymerFlowModel, load_pretrained
+        from ciffy.nn.polymer import PolymerModel
 
-        # Load or use provided flow model
-        if flow_model is not None:
-            self.flow_model = flow_model
-        elif config.flow_model_path is not None:
-            self.flow_model = PolymerFlowModel.load(config.flow_model_path)
+        # Load or use provided encoder model
+        if encoder_model is not None:
+            self.encoder_model = encoder_model
+        elif config.encoder_path is not None:
+            self.encoder_model = PolymerModel.load(config.encoder_path)
         else:
-            # Load default pretrained model
-            self.flow_model = load_pretrained("rna")
+            raise ValueError(
+                "Must provide either encoder_model or config.encoder_path. "
+                "Train a PolymerModel first using: python scripts/residue_models.py train"
+            )
 
-        # Freeze flow model if configured
-        if config.freeze_flow_model:
-            for model in self.flow_model.residue_models.values():
+        # Freeze encoder if configured
+        if config.freeze_encoder:
+            for model in self.encoder_model.residue_models.values():
                 for param in model.parameters():
                     param.requires_grad = False
 
-        # Ensure denoiser config matches flow model
-        config.denoiser.latent_dim = self.flow_model.latent_dim
+        # Ensure denoiser config matches encoder model
+        config.denoiser.latent_dim = self.encoder_model.latent_dim
         config.denoiser.num_timesteps = config.num_timesteps
 
         # Create denoiser
@@ -151,7 +154,7 @@ class LatentDiffusionModel(nn.Module):
         self.diffusion = DiffusionProcess(schedule)
 
         # Track latent dim for convenience
-        self.latent_dim = self.flow_model.latent_dim
+        self.latent_dim = self.encoder_model.latent_dim
 
     @property
     def device(self) -> "torch.device":
@@ -173,7 +176,7 @@ class LatentDiffusionModel(nn.Module):
             (n_residues, latent_dim) latent vectors.
         """
         with torch.no_grad():
-            return self.flow_model.encode(coords, sequence)
+            return self.encoder_model.encode(coords, sequence)
 
     def decode(
         self,
@@ -190,7 +193,7 @@ class LatentDiffusionModel(nn.Module):
             (N, 3) atom coordinates.
         """
         with torch.no_grad():
-            return self.flow_model.decode(latents, sequence)
+            return self.encoder_model.decode(latents, sequence)
 
     def training_step(
         self,
@@ -400,9 +403,9 @@ class LatentDiffusionModel(nn.Module):
         # Sample coordinates
         coords_list = self._sample_coords(sequence, n_samples, **kwargs)
 
-        # Check if template atom count matches flow model expectations
+        # Check if template atom count matches encoder model expectations
         expected_atoms = sum(
-            self.flow_model.residue_models[str(int(r))].n_atoms
+            self.encoder_model.residue_models[str(int(r))].n_atoms
             for r in sequence
         )
 
@@ -420,15 +423,15 @@ class LatentDiffusionModel(nn.Module):
             # Template has different atoms (e.g., missing atoms) - build fresh polymers
             from ciffy.polymer import from_sequence
 
-            # Create template with flow model's expected atoms
-            flow_template = from_sequence(
+            # Create template with encoder model's expected atoms
+            encoder_template = from_sequence(
                 template.sequence_str(),
-                atoms=self.flow_model.atom_filter,
+                atoms=self.encoder_model.atom_filter,
                 id=template.pdb_id,
             )
             if use_torch:
-                flow_template = flow_template.torch().to(template.coordinates.device)
-            return [flow_template.copy(coordinates=coords) for coords in coords_list]
+                encoder_template = encoder_template.torch().to(template.coordinates.device)
+            return [encoder_template.copy(coordinates=coords) for coords in coords_list]
 
     def sample_from_sequence(
         self,
@@ -459,10 +462,10 @@ class LatentDiffusionModel(nn.Module):
         """
         from ciffy.polymer import from_sequence
 
-        # Create template with correct atoms for the flow model
+        # Create template with correct atoms for the encoder model
         template = from_sequence(
             sequence,
-            atoms=self.flow_model.atom_filter,
+            atoms=self.encoder_model.atom_filter,
             id=id,
         )
 
@@ -534,18 +537,18 @@ class LatentDiffusionModel(nn.Module):
         for k, v in self.denoiser.state_dict().items():
             tensors[f"denoiser.{k}"] = v
 
-        # Flow model tensors (nested, with prefix)
-        flow_tensors, flow_config = self.flow_model.get_save_state()
-        for k, v in flow_tensors.items():
-            tensors[f"flow_model.{k}"] = v
+        # Encoder model tensors (nested, with prefix)
+        encoder_tensors, encoder_config = self.encoder_model.get_save_state()
+        for k, v in encoder_tensors.items():
+            tensors[f"encoder_model.{k}"] = v
 
         # Config
         config = {
             "num_timesteps": self.config.num_timesteps,
             "noise_schedule": self.config.noise_schedule,
-            "freeze_flow_model": self.config.freeze_flow_model,
+            "freeze_encoder": self.config.freeze_encoder,
             "denoiser": asdict(self.config.denoiser),
-            "flow_model": flow_config,
+            "encoder_model": encoder_config,
         }
 
         return tensors, config
@@ -567,16 +570,16 @@ class LatentDiffusionModel(nn.Module):
         Returns:
             Reconstructed LatentDiffusionModel.
         """
-        from ciffy.nn.flow import PolymerFlowModel
+        from ciffy.nn.polymer import PolymerModel
 
-        # Extract flow model tensors and reconstruct
-        flow_tensors = {
-            k[len("flow_model."):]: v
+        # Extract encoder model tensors and reconstruct
+        encoder_tensors = {
+            k[len("encoder_model."):]: v
             for k, v in tensors.items()
-            if k.startswith("flow_model.")
+            if k.startswith("encoder_model.")
         }
-        flow_model = PolymerFlowModel.from_save_state(
-            flow_tensors, config["flow_model"], device=device
+        encoder_model = PolymerModel.from_save_state(
+            encoder_tensors, config["encoder_model"], device=device
         )
 
         # Build config
@@ -585,11 +588,11 @@ class LatentDiffusionModel(nn.Module):
             denoiser=denoiser_config,
             num_timesteps=config["num_timesteps"],
             noise_schedule=config["noise_schedule"],
-            freeze_flow_model=config["freeze_flow_model"],
+            freeze_encoder=config["freeze_encoder"],
         )
 
         # Create model
-        model = cls(model_config, flow_model=flow_model)
+        model = cls(model_config, encoder_model=encoder_model)
 
         # Load denoiser weights
         denoiser_tensors = {

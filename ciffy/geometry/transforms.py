@@ -253,11 +253,20 @@ def apply_relative_transform(
 
 
 def _find_atom_index(atoms: Array, vals: np.ndarray) -> int:
-    """Find index of first atom matching any value in vals."""
+    """Find index of first atom matching any value in vals.
+
+    Raises:
+        ValueError: If no matching atom is found.
+    """
     vals_backend = to_backend(vals, atoms)
     mask = (atoms[:, None] == vals_backend).any(axis=1 if not is_torch(atoms) else -1)
     if is_torch(atoms):
-        return mask.nonzero(as_tuple=True)[0][0]
+        indices = mask.nonzero(as_tuple=True)[0]
+        if len(indices) == 0:
+            raise ValueError(f"No atom found matching values {vals.tolist()}")
+        return indices[0]
+    if not mask.any():
+        raise ValueError(f"No atom found matching values {vals.tolist()}")
     return mask.argmax()
 
 

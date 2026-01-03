@@ -19,6 +19,7 @@ import numpy as np
 
 import ciffy
 from ciffy.backend import Array, to_numpy, is_torch
+from ciffy.backend.ops import isin
 from ciffy.biochemistry import Scale
 from ciffy.operations.reduction import Reduction
 from ciffy.geometry import (
@@ -30,6 +31,44 @@ from ciffy.geometry import (
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
+    from ciffy.biochemistry.linking import FrameDefinition
+
+
+def filter_complete_residues(
+    polymer: "ciffy.Polymer",
+    frame_def: "FrameDefinition",
+) -> "ciffy.Polymer":
+    """
+    Filter polymer to keep only residues with all atoms required for frame computation.
+
+    Uses vectorized 2D lookup to find frame atoms, then reduces to count per residue.
+
+    Args:
+        polymer: Input polymer.
+        frame_def: Frame definition specifying required atoms.
+
+    Returns:
+        Polymer with only complete residues.
+    """
+    # Get all possible values for each frame atom position
+    all_frame_atoms = np.concatenate([
+        frame_def.origin.index(),
+        frame_def.axis_ref.index(),
+        frame_def.plane_ref.index(),
+    ])
+
+    # Find which atoms are frame atoms (vectorized)
+    is_frame_atom = isin(polymer.atoms, to_numpy(all_frame_atoms))
+
+    # Count frame atoms per residue
+    counts = polymer.reduce(is_frame_atom.astype(np.int64), Scale.RESIDUE, Reduction.SUM)
+
+    # Keep residues with all 3 frame atoms
+    complete_mask = to_numpy(counts) >= 3
+
+    if not complete_mask.all():
+        return polymer.select(complete_mask, Scale.RESIDUE)
+    return polymer
 
 
 # =============================================================================
@@ -288,27 +327,14 @@ def extract_residues_with_links(
     from ciffy.biochemistry import Residue
     from ciffy.biochemistry.linking import LINKING_BY_TYPE
 
-    # Get linking definition for required atoms
+    # Get linking definition
     link_def = LINKING_BY_TYPE.get(residue_type.molecule_type)
     if link_def is None:
         raise ValueError(f"No linking definition for {residue_type.molecule_type}")
 
-    # Pre-compute required atoms as numpy arrays for fast checking
-    required_atoms_1 = np.array(sorted(link_def.required_atoms(residue_type)), dtype=np.int64)
-    o3p_value = residue_type.O3p.value
-
-    # Cache required atoms for each residue type we encounter
-    required_atoms_cache: dict[int, np.ndarray] = {}
-    p_value_cache: dict[int, int] = {}
-
-    def get_required_atoms_array(res_type: "Residue") -> np.ndarray:
-        key = res_type.value
-        if key not in required_atoms_cache:
-            required_atoms_cache[key] = np.array(
-                sorted(link_def.required_atoms(res_type)), dtype=np.int64
-            )
-            p_value_cache[key] = res_type.P.value
-        return required_atoms_cache[key]
+    # Get linking atom values for bond length check
+    o3p_values = link_def.prev_atom.index()  # All O3' values
+    p_values = link_def.next_atom.index()  # All P values
 
     # Phase 1: Extract raw pairs with bond length filtering
     all_pairs = []
@@ -329,6 +355,10 @@ def extract_residues_with_links(
                     if verbose:
                         print("no matching molecule type")
                     continue
+
+            # Filter to residues with complete frame atoms (vectorized)
+            poly = filter_complete_residues(poly, link_def.prev_frame)
+            poly = filter_complete_residues(poly, link_def.next_frame)
 
             seq = to_numpy(poly.sequence)
             n_residues = len(seq)
@@ -358,23 +388,12 @@ def extract_residues_with_links(
                 start2, end2 = offsets[idx2], offsets[idx2 + 1]
                 atoms1 = atoms_flat[start1:end1]
                 atoms2 = atoms_flat[start2:end2]
-
-                # Check required atoms using numpy set operations
-                if not np.all(np.isin(required_atoms_1, atoms1)):
-                    continue
-
-                res_type_2 = Residue.from_index(int(seq[idx2]))
-                required_atoms_2 = get_required_atoms_array(res_type_2)
-                if not np.all(np.isin(required_atoms_2, atoms2)):
-                    continue
-
                 coords1 = coords_flat[start1:end1]
                 coords2 = coords_flat[start2:end2]
 
-                # Check bond length using numpy searchsorted for O(log n) lookup
-                o3p_mask = atoms1 == o3p_value
-                p_value = p_value_cache[res_type_2.value]
-                p_mask = atoms2 == p_value
+                # Check bond length between linking atoms
+                o3p_mask = np.isin(atoms1, o3p_values)
+                p_mask = np.isin(atoms2, p_values)
 
                 if not np.any(o3p_mask) or not np.any(p_mask):
                     continue

@@ -48,7 +48,7 @@ def _info_command(args):
                 if not polymers:  # First successful load
                     backend = polymer.backend
                 rows = polymer.chain_info()
-                polymers.append((polymer.pdb_id, filepath, rows))
+                polymers.append((polymer.pdb_id, polymer.date, filepath, rows))
             except FileNotFoundError:
                 print(f"Error: File not found: {filepath}", file=sys.stderr)
                 continue

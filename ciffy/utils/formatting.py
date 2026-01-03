@@ -110,14 +110,14 @@ def format_chain_table(
 
 
 def format_multi_polymer_table(
-    polymers: list[tuple[str, str, list[dict]]],
+    polymers: list[tuple[str, "date | None", str, list[dict]]],
     backend: str = "numpy",
 ) -> str:
     """
     Format chain info from multiple polymers as a unified table with summary.
 
     Args:
-        polymers: List of (pdb_id, filepath, rows) tuples where rows is from chain_info().
+        polymers: List of (pdb_id, date, filepath, rows) tuples where rows is from chain_info().
         backend: Backend name for the header.
 
     Returns:
@@ -130,7 +130,7 @@ def format_multi_polymer_table(
 
     # Collect all rows with their PDB IDs for column width calculation
     all_rows = []
-    for pdb_id, filepath, rows in polymers:
+    for pdb_id, date, filepath, rows in polymers:
         for r in rows:
             all_rows.append({**r, 'pdb': pdb_id})
 
@@ -138,69 +138,58 @@ def format_multi_polymer_table(
     total_res = sum(r['res'] for r in all_rows)
     total_atoms = sum(r['atoms'] for r in all_rows)
 
-    # Calculate column widths
-    pdb_w = max(4, max((len(r['pdb']) for r in all_rows), default=0))
+    # Calculate column widths (no PDB column - shown as section header instead)
     chain_w = max(5, max((len(r['chain']) for r in all_rows), default=0))
     type_w = max(4, max((len(r['type']) for r in all_rows), default=0))
     res_w = max(3, len(str(total_res)), max((len(str(r['res'])) for r in all_rows), default=0))
     atoms_w = max(5, len(str(total_atoms)), max((len(str(r['atoms'])) for r in all_rows), default=0))
 
     # Build header
-    header = f"{'PDB':<{pdb_w}}  {'Chain':<{chain_w}}  {'Type':<{type_w}}  {'Res':>{res_w}}  {'Atoms':>{atoms_w}}"
-    title = f"Polymer Summary ({backend})"
-    sep_width = max(len(header), len(title))
+    header = f"{'Chain':<{chain_w}}  {'Type':<{type_w}}  {'Res':>{res_w}}  {'Atoms':>{atoms_w}}"
+    sep_width = len(header)
     sep = "─" * sep_width
-    thin_sep = "┄" * sep_width
 
-    # Build title and header
-    lines = [
-        f"Polymer Summary {Colors.GREY}({backend}){Colors.RESET}",
-        sep,
-        header,
-        sep,
-    ]
+    lines = []
 
     # Build rows grouped by PDB
-    for idx, (pdb_id, filepath, rows) in enumerate(polymers):
-        # Add thin separator between files (not before first)
+    for idx, (pdb_id, date, filepath, rows) in enumerate(polymers):
+        # Add blank line between files (not before first)
         if idx > 0:
-            lines.append(thin_sep)
+            lines.append("")
+
+        # PDB header with date
+        date_str = f" {Colors.GREY}[{date}]{Colors.RESET}" if date is not None else ""
+        lines.append(f"{Colors.GREEN}{pdb_id}{Colors.RESET}{date_str}")
+        lines.append(sep)
 
         # Calculate per-file totals
         file_res = sum(r['res'] for r in rows)
         file_atoms = sum(r['atoms'] for r in rows)
 
-        for i, r in enumerate(rows):
+        for r in rows:
             res_str = "-" if r['res'] == 0 else str(r['res'])
-            # Show PDB ID only on first row of each file
-            pdb_str = f"{Colors.GREEN}{pdb_id}{Colors.RESET}" if i == 0 else ""
-            # Adjust width for color codes (they don't take up visual space)
-            pdb_display = pdb_id if i == 0 else ""
-            pdb_padding = pdb_w - len(pdb_display)
-
-            if i == 0:
-                lines.append(
-                    f"{Colors.GREEN}{pdb_id}{Colors.RESET}{' ' * pdb_padding}  {r['chain']:<{chain_w}}  {r['type']:<{type_w}}  {res_str:>{res_w}}  {r['atoms']:>{atoms_w}}"
-                )
-            else:
-                lines.append(
-                    f"{'':<{pdb_w}}  {r['chain']:<{chain_w}}  {r['type']:<{type_w}}  {res_str:>{res_w}}  {r['atoms']:>{atoms_w}}"
-                )
+            lines.append(
+                f"{r['chain']:<{chain_w}}  {r['type']:<{type_w}}  {res_str:>{res_w}}  {r['atoms']:>{atoms_w}}"
+            )
 
         # Add per-file subtotal if multiple chains
         if len(rows) > 1:
             file_chains = len(rows)
+            lines.append(sep)
             lines.append(
-                f"{'':<{pdb_w}}  {Colors.GREY}{'Σ':<{chain_w}}  {file_chains:<{type_w}}  {file_res:>{res_w}}  {file_atoms:>{atoms_w}}{Colors.RESET}"
+                f"{Colors.GREY}{'Σ':<{chain_w}}  {file_chains:<{type_w}}  {file_res:>{res_w}}  {file_atoms:>{atoms_w}}{Colors.RESET}"
             )
 
-    # Grand total
-    lines.append(sep)
-    total_chains = len(all_rows)
-    lines.append(
-        f"{Colors.BOLD}{'Σ':<{pdb_w}}  {'':<{chain_w}}  {total_chains:<{type_w}}  {total_res:>{res_w}}  {total_atoms:>{atoms_w}}{Colors.RESET}"
-    )
-    lines.append(sep)
+    # Grand total (only if multiple files)
+    if len(polymers) > 1:
+        total_chains = len(all_rows)
+        lines.append("")
+        lines.append(f"{Colors.BOLD}Total{Colors.RESET}")
+        lines.append(sep)
+        lines.append(
+            f"{Colors.BOLD}{'Σ':<{chain_w}}  {total_chains:<{type_w}}  {total_res:>{res_w}}  {total_atoms:>{atoms_w}}{Colors.RESET}"
+        )
+        lines.append(sep)
 
     # Build summary by molecule type
     type_stats = defaultdict(lambda: {'chains': 0, 'res': 0, 'atoms': 0})

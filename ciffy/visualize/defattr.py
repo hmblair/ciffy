@@ -53,12 +53,15 @@ def to_defattr(
     """
     values = np.asarray(values)
 
-    if scale == Scale.RESIDUE:
-        _write_residue_defattr(polymer, values, path, attr_name, chain)
-    elif scale == Scale.ATOM:
-        _write_atom_defattr(polymer, values, path, attr_name, chain)
-    else:
-        raise ValueError(f"Scale must be RESIDUE or ATOM, got {scale}")
+    try:
+        if scale == Scale.RESIDUE:
+            _write_residue_defattr(polymer, values, path, attr_name, chain)
+        elif scale == Scale.ATOM:
+            _write_atom_defattr(polymer, values, path, attr_name, chain)
+        else:
+            raise ValueError(f"Scale must be RESIDUE or ATOM, got {scale}")
+    except OSError as e:
+        raise OSError(f"Failed to write defattr file '{path}': {e}") from e
 
 
 def _write_residue_defattr(

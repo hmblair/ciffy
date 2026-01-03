@@ -48,14 +48,36 @@ def find_chimerax() -> str:
     Raises:
         FileNotFoundError: If ChimeraX is not found.
     """
-    # Common locations
+    import sys
+
+    # Platform-specific candidates
     candidates = [
-        "ChimeraX",  # In PATH
-        "chimerax",
-        "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX",  # macOS
-        "/usr/bin/chimerax",
-        "/usr/local/bin/chimerax",
+        "ChimeraX",  # In PATH (all platforms)
+        "chimerax",  # Lowercase variant
     ]
+
+    if sys.platform == "darwin":
+        # macOS
+        candidates.extend([
+            "/Applications/ChimeraX.app/Contents/MacOS/ChimeraX",
+            os.path.expanduser("~/Applications/ChimeraX.app/Contents/MacOS/ChimeraX"),
+        ])
+    elif sys.platform == "win32":
+        # Windows
+        candidates.extend([
+            r"C:\Program Files\ChimeraX\bin\ChimeraX.exe",
+            r"C:\Program Files (x86)\ChimeraX\bin\ChimeraX.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\ChimeraX\bin\ChimeraX.exe"),
+        ])
+    else:
+        # Linux
+        candidates.extend([
+            "/usr/bin/chimerax",
+            "/usr/local/bin/chimerax",
+            "/opt/UCSF/ChimeraX/bin/ChimeraX",
+            os.path.expanduser("~/.local/bin/chimerax"),
+            os.path.expanduser("~/ChimeraX/bin/ChimeraX"),
+        ])
 
     for path in candidates:
         try:
@@ -66,12 +88,13 @@ def find_chimerax() -> str:
             )
             if result.returncode == 0:
                 return path
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
 
     raise FileNotFoundError(
         "ChimeraX not found. Install ChimeraX or specify the path with "
-        "chimerax_path parameter."
+        "chimerax_path parameter. "
+        "See https://www.cgl.ucsf.edu/chimerax/download.html"
     )
 
 
@@ -221,7 +244,17 @@ def visualize(
 
     # Launch ChimeraX
     cmd = [chimerax_path, "--cmd", script]
-    subprocess.run(cmd)
+    try:
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            import warnings
+            warnings.warn(
+                f"ChimeraX exited with code {result.returncode}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    except OSError as e:
+        raise OSError(f"Failed to launch ChimeraX: {e}") from e
 
     # Note: Temp files are cleaned up via atexit handler when Python exits.
     # We don't delete immediately as ChimeraX may still be reading them.

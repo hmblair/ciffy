@@ -26,7 +26,8 @@ def _require_matplotlib():
     """Check matplotlib availability and apply styling."""
     try:
         import matplotlib.pyplot as plt
-        plt.rcParams['font.family'] = 'Helvetica'
+        # Use sans-serif family (available on all platforms)
+        plt.rcParams['font.family'] = 'sans-serif'
         return plt
     except ImportError:
         raise ImportError(
@@ -46,6 +47,7 @@ def plot_profile(
     xlabel: Union[str, None] = None,
     ylabel: Union[str, None] = None,
     title: Union[str, None] = None,
+    path: Union[str, None] = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -63,6 +65,7 @@ def plot_profile(
         xlabel: X-axis label. Defaults to scale name.
         ylabel: Y-axis label. Defaults to "Value".
         title: Plot title.
+        path: Path to save the figure. If None, figure is not saved.
         **kwargs: Additional arguments passed to plt.plot().
 
     Returns:
@@ -73,7 +76,7 @@ def plot_profile(
         >>> import numpy as np
         >>> polymer = ciffy.load("structure.cif")
         >>> values = np.random.rand(polymer.size(ciffy.RESIDUE))
-        >>> ax = ciffy.visualize.plot_profile(polymer, values)
+        >>> ax = ciffy.plot_profile(polymer, values, path="profile.png")
     """
     plt = _require_matplotlib()
 
@@ -119,6 +122,10 @@ def plot_profile(
 
     ax.tick_params(axis='both', labelsize=TICK_SIZE)
 
+    if path is not None:
+        plt.tight_layout()
+        plt.savefig(path, dpi=150, bbox_inches='tight')
+
     return ax
 
 
@@ -133,6 +140,7 @@ def contact_map(
     vmax: Union[float, None] = None,
     colorbar: bool = True,
     title: Union[str, None] = None,
+    path: Union[str, None] = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -152,6 +160,7 @@ def contact_map(
         vmax: Maximum value for color scaling.
         colorbar: Whether to add a colorbar.
         title: Plot title.
+        path: Path to save the figure. If None, figure is not saved.
         **kwargs: Additional arguments passed to plt.imshow().
 
     Returns:
@@ -160,7 +169,7 @@ def contact_map(
     Example:
         >>> import ciffy
         >>> polymer = ciffy.load("structure.cif")
-        >>> ax = ciffy.visualize.contact_map(polymer, scale=ciffy.RESIDUE)
+        >>> ax = ciffy.contact_map(polymer, path="contacts.png")
     """
     plt = _require_matplotlib()
 
@@ -209,5 +218,9 @@ def contact_map(
     ax.set_title(title, fontsize=TITLE_SIZE)
 
     ax.tick_params(axis='both', labelsize=TICK_SIZE)
+
+    if path is not None:
+        plt.tight_layout()
+        plt.savefig(path, dpi=150, bbox_inches='tight')
 
     return ax

@@ -26,7 +26,10 @@ def _require_matplotlib():
     """Check matplotlib availability and apply styling."""
     try:
         import matplotlib.pyplot as plt
-        # Use sans-serif family (available on all platforms)
+        import sys
+        # Prefer Helvetica on macOS, fall back to DejaVu Sans elsewhere
+        if sys.platform == "darwin":
+            plt.rcParams['font.sans-serif'] = ['Helvetica', 'DejaVu Sans']
         plt.rcParams['font.family'] = 'sans-serif'
         return plt
     except ImportError:

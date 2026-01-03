@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..backend import Array, get_backend, check_compatible, Dtype
+from ..backend import Array, get_backend, check_compatible
 from ..backend import ops
 from ..biochemistry import Scale
 from ..polymer import Field
@@ -179,15 +179,18 @@ def join(*polymers: "Polymer") -> "Polymer":
         ref=coordinates,
     )
 
-    return Polymer(
-        hierarchy,
-        coordinates=Field(coordinates, Scale.ATOM, Dtype.FLOAT),
-        atoms=Field(atoms, Scale.ATOM, Dtype.INT),
-        elements=Field(elements, Scale.ATOM, Dtype.INT),
-        sequence=Field(sequence, Scale.RESIDUE, Dtype.INT),
-        molecule_types=Field(molecule_types, Scale.CHAIN, Dtype.INT) if molecule_types is not None else Field(None, Scale.CHAIN, Dtype.INT),
+    # Build kwargs, only including molecule_types if present
+    kwargs = dict(
+        coordinates=Field(coordinates, Scale.ATOM),
+        atoms=Field(atoms, Scale.ATOM),
+        elements=Field(elements, Scale.ATOM),
+        sequence=Field(sequence, Scale.RESIDUE),
         pdb_id=pdb_id,
         names=names,
         strands=strands,
         descriptions=descriptions,
     )
+    if molecule_types is not None:
+        kwargs['molecule_types'] = Field(molecule_types, Scale.CHAIN)
+
+    return Polymer(hierarchy, **kwargs)

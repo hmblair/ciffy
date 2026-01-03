@@ -11,7 +11,7 @@ from typing import Generator, TYPE_CHECKING
 
 import numpy as np
 
-from ..backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy, Dtype
+from ..backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
 from ..backend import ops
 from ..biochemistry import Scale, Molecule
 from ..biochemistry._generated_molecule import molecule_type
@@ -32,64 +32,44 @@ from ..utils.formatting import format_chain_table
 
 UNKNOWN = "UNKNOWN"
 
-# Known field schemas for creating missing fields in copy()/_clone()
+# Known field scales for creating missing fields in copy()/_clone()
 # Only used when adding fields that don't yet exist on the instance
-_KNOWN_FIELDS: dict[str, tuple[Scale, Dtype]] = {
-    'coordinates': (Scale.ATOM, Dtype.FLOAT),
-    'atoms': (Scale.ATOM, Dtype.INT),
-    'elements': (Scale.ATOM, Dtype.INT),
-    'bfactors': (Scale.ATOM, Dtype.FLOAT),
-    'sequence': (Scale.RESIDUE, Dtype.INT),
-    'molecule_types': (Scale.CHAIN, Dtype.INT),
+_KNOWN_FIELDS: dict[str, Scale] = {
+    'coordinates': Scale.ATOM,
+    'atoms': Scale.ATOM,
+    'elements': Scale.ATOM,
+    'bfactors': Scale.ATOM,
+    'sequence': Scale.RESIDUE,
+    'molecule_types': Scale.CHAIN,
 }
-
-
-def _infer_dtype(data: Array) -> Dtype:
-    """Infer Dtype from array dtype."""
-    dtype_str = str(data.dtype)
-    if 'float' in dtype_str:
-        return Dtype.FLOAT
-    elif 'int' in dtype_str:
-        return Dtype.INT
-    else:
-        # Default to float for unknown types (e.g., complex)
-        return Dtype.FLOAT
 
 
 class Field:
     """
-    Container for Polymer array fields with scale and dtype metadata.
+    Container for Polymer array fields with scale metadata.
 
     Fields are stored as instance attributes on Polymer objects. Accessing a Field
     via attribute access returns its data (unwrapped by Polymer.__getattribute__).
     Setting a Field validates backend/device compatibility and size.
 
     Attributes:
-        data: The array data, or None if not available.
+        data: The array data.
         scale: Scale at which the field is defined (ATOM, RESIDUE, CHAIN).
-        dtype: Data type category (Dtype.FLOAT or Dtype.INT).
 
     Example:
-        >>> field = Field(data=coords_array, scale=Scale.ATOM, dtype=Dtype.FLOAT)
+        >>> field = Field(coords_array, Scale.ATOM)
         >>> field.data  # The raw array
         >>> field.scale  # Scale.ATOM
     """
 
-    __slots__ = ('data', 'scale', 'dtype')
+    __slots__ = ('data', 'scale')
 
-    def __init__(
-        self,
-        data: Array | None,
-        scale: Scale,
-        dtype: Dtype | None = None,
-    ):
+    def __init__(self, data: Array, scale: Scale):
         self.data = data
         self.scale = scale
-        self.dtype = dtype
 
     def __repr__(self):
-        shape = self.data.shape if self.data is not None else None
-        return f"Field({self.scale.name}, dtype={self.dtype}, shape={shape})"
+        return f"Field({self.scale.name}, shape={self.data.shape})"
 
 
 class _MetadataDescriptor:
@@ -326,7 +306,7 @@ class Polymer:
         # Check if this is a known field name that doesn't exist yet
         if name in _KNOWN_FIELDS and value is not None:
             hierarchy = object.__getattribute__(self, '_hierarchy')
-            scale, dtype = _KNOWN_FIELDS[name]
+            scale = _KNOWN_FIELDS[name]
             check_compatible(hierarchy._ref, value, name)
             expected = hierarchy.size(scale)
             actual = value.shape[0] if hasattr(value, 'shape') else len(value)
@@ -335,7 +315,7 @@ class Polymer:
                     f"Shape mismatch for '{name}': got {actual} elements, "
                     f"expected {expected} ({scale.name} scale)"
                 )
-            new_field = Field(value, scale, dtype)
+            new_field = Field(value, scale)
             object.__setattr__(self, name, new_field)
             return
 
@@ -351,7 +331,6 @@ class Polymer:
         name: str,
         data: Array,
         scale: Scale = Scale.RESIDUE,
-        dtype: Dtype | None = None,
     ) -> Polymer:
         """
         Register a new dynamic field on this polymer.
@@ -364,7 +343,6 @@ class Polymer:
             name: Field name. Must not conflict with existing attributes.
             data: Array data with first dimension matching scale size.
             scale: Scale at which the field is defined (default: RESIDUE).
-            dtype: Optional dtype hint for backend conversion.
 
         Returns:
             Self, for method chaining.
@@ -410,12 +388,8 @@ class Polymer:
                 f"expected {expected} ({scale.name} scale)"
             )
 
-        # Infer dtype from array if not provided
-        if dtype is None:
-            dtype = _infer_dtype(data)
-
         # Create and store Field
-        field = Field(data, scale, dtype)
+        field = Field(data, scale)
         object.__setattr__(self, name, field)
         return self
 
@@ -549,11 +523,11 @@ class Polymer:
             for reconstructing Field objects in _clone.
         """
         result = {}
-        field_meta = {}  # Store (scale, dtype) for each field
+        field_meta = {}  # Store scale for each field
 
         # Slice Field objects (only Fields with data exist on instance)
         for name, field in self._get_fields().items():
-            field_meta[name] = (field.scale, field.dtype)
+            field_meta[name] = field.scale
             if field.scale == Scale.ATOM:
                 result[name] = self._index_copy(field.data, atom_sel)
             elif field.scale == Scale.RESIDUE:
@@ -615,11 +589,11 @@ class Polymer:
             plus '_field_meta' for reconstructing Field objects in _clone.
         """
         result = {}
-        field_meta = {}  # Store (scale, dtype) for each field
+        field_meta = {}  # Store scale for each field
 
         # Convert Field arrays (only Fields with data exist on instance)
         for name, field in self._get_fields().items():
-            field_meta[name] = (field.scale, field.dtype)
+            field_meta[name] = field.scale
             result[name] = to_func(field.data)
 
         # Pass through Metadata unchanged (copy lists)
@@ -780,11 +754,11 @@ class Polymer:
         # Reconstruct Fields (only if data is not None)
         current_fields = self._get_fields()
         for name, field in current_fields.items():
-            # Get metadata from override or original
+            # Get scale from override metadata or original field
             if field_meta and name in field_meta:
-                scale, dtype = field_meta[name]
+                scale = field_meta[name]
             else:
-                scale, dtype = field.scale, field.dtype
+                scale = field.scale
 
             # Get data from override or original
             if name in overrides:
@@ -794,7 +768,7 @@ class Polymer:
 
             # Only set attribute if data exists
             if data is not None:
-                new_field = Field(data, scale, dtype)
+                new_field = Field(data, scale)
                 object.__setattr__(polymer, name, new_field)
 
         # Handle overrides for known fields that don't exist on source
@@ -803,8 +777,8 @@ class Polymer:
             if name in _KNOWN_FIELDS:
                 data = overrides.pop(name)
                 if data is not None:
-                    scale, dtype = _KNOWN_FIELDS[name]
-                    new_field = Field(data, scale, dtype)
+                    scale = _KNOWN_FIELDS[name]
+                    new_field = Field(data, scale)
                     object.__setattr__(polymer, name, new_field)
 
         # Copy Metadata descriptors
@@ -1863,11 +1837,11 @@ class Polymer:
 
         polymer = Polymer(
             hierarchy,
-            coordinates=Field(coords, Scale.ATOM, Dtype.FLOAT),
-            atoms=Field(atoms, Scale.ATOM, Dtype.INT),
-            elements=Field(elements, Scale.ATOM, Dtype.INT),
-            sequence=Field(np.array([residue.value], dtype=np.int64), Scale.RESIDUE, Dtype.INT),
-            molecule_types=Field(np.array([residue.molecule_type], dtype=np.int64), Scale.CHAIN, Dtype.INT),
+            coordinates=Field(coords, Scale.ATOM),
+            atoms=Field(atoms, Scale.ATOM),
+            elements=Field(elements, Scale.ATOM),
+            sequence=Field(np.array([residue.value], dtype=np.int64), Scale.RESIDUE),
+            molecule_types=Field(np.array([residue.molecule_type], dtype=np.int64), Scale.CHAIN),
             names=[name],
             strands=[""],
             descriptions=[""],
@@ -2256,22 +2230,16 @@ class Polymer:
         if device is None and dtype is None:
             return self
 
-        # Convert Fields based on their dtype (float vs int)
+        # Convert Fields based on array dtype (float vs int)
         converted = {}
         for name, field in self._get_fields().items():
-            if field.data is None:
-                converted[name] = None
-            elif field.dtype == Dtype.FLOAT:
-                # Float tensors: apply device and dtype
-                result = field.data
-                if device is not None:
-                    result = result.to(device)
-                if dtype is not None:
-                    result = result.to(dtype)
-                converted[name] = result
-            else:
-                # Int tensors: apply device only
-                converted[name] = field.data.to(device) if device is not None else field.data
+            result = field.data
+            if device is not None:
+                result = result.to(device)
+            # Only apply dtype conversion to float tensors
+            if dtype is not None and result.is_floating_point():
+                result = result.to(dtype)
+            converted[name] = result
 
         # Move hierarchy to device (int tensors only, no dtype change)
         hierarchy = object.__getattribute__(self, '_hierarchy')
@@ -2336,9 +2304,8 @@ class Polymer:
             >>> polymer.detach()
         """
         for name, field in self._get_fields().items():
-            if field.dtype == Dtype.FLOAT:
-                if field.data is not None and is_torch(field.data):
-                    field.data = field.data.detach()
+            if is_torch(field.data) and field.data.requires_grad:
+                field.data = field.data.detach()
         return self
 
     # ─────────────────────────────────────────────────────────────────────────

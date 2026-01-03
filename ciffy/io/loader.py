@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from ..biochemistry import Molecule
 
 from ..polymer import Field
-from ..backend import Dtype
 from ..biochemistry import Scale
 
 def load(
@@ -225,13 +224,13 @@ def load(
     # Create Polymer with Field objects
     polymer = Polymer(
         hierarchy,
-        # Field objects (arrays with scale and dtype)
-        coordinates=Field(coordinates, Scale.ATOM, Dtype.FLOAT),
-        atoms=Field(atoms, Scale.ATOM, Dtype.INT),
-        elements=Field(elements, Scale.ATOM, Dtype.INT),
-        sequence=Field(residues, Scale.RESIDUE, Dtype.INT),
-        molecule_types=Field(molecule_types, Scale.CHAIN, Dtype.INT),
-        bfactors=Field(bfactors, Scale.ATOM, Dtype.FLOAT),
+        # Field objects (arrays with scale)
+        coordinates=Field(coordinates, Scale.ATOM),
+        atoms=Field(atoms, Scale.ATOM),
+        elements=Field(elements, Scale.ATOM),
+        sequence=Field(residues, Scale.RESIDUE),
+        molecule_types=Field(molecule_types, Scale.CHAIN),
+        bfactors=Field(bfactors, Scale.ATOM),
         # Metadata (non-array values)
         pdb_id=id,
         names=chain_names,

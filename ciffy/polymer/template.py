@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 
 from .polymer import Polymer, Field
-from ..backend import Dtype
 from ..biochemistry import Scale, Molecule, Residue, atom_to_element
 
 if TYPE_CHECKING:
@@ -313,11 +312,11 @@ def from_sequence(
 
     polymer = Polymer(
         hierarchy,
-        coordinates=Field(None, Scale.ATOM, Dtype.FLOAT),
-        atoms=Field(atoms_arr, Scale.ATOM, Dtype.INT),
-        elements=Field(elements_arr, Scale.ATOM, Dtype.INT),
-        sequence=Field(np.array(all_residue_indices, dtype=np.int64), Scale.RESIDUE, Dtype.INT),
-        molecule_types=Field(np.array(molecule_types, dtype=np.int64), Scale.CHAIN, Dtype.INT),
+        # No coordinates for templates - added later via copy(coordinates=...)
+        atoms=Field(atoms_arr, Scale.ATOM),
+        elements=Field(elements_arr, Scale.ATOM),
+        sequence=Field(np.array(all_residue_indices, dtype=np.int64), Scale.RESIDUE),
+        molecule_types=Field(np.array(molecule_types, dtype=np.int64), Scale.CHAIN),
         pdb_id=id,
         names=chain_names,
         strands=chain_names,
@@ -413,10 +412,10 @@ def from_extract(
 
     polymer = Polymer(
         hierarchy,
-        coordinates=Field(flat_coords, Scale.ATOM, Dtype.FLOAT),
-        atoms=Field(all_atoms, Scale.ATOM, Dtype.INT),
-        elements=Field(all_elements, Scale.ATOM, Dtype.INT),
-        sequence=Field(sequence, Scale.RESIDUE, Dtype.INT),
+        coordinates=Field(flat_coords, Scale.ATOM),
+        atoms=Field(all_atoms, Scale.ATOM),
+        elements=Field(all_elements, Scale.ATOM),
+        sequence=Field(sequence, Scale.RESIDUE),
         pdb_id=id,
         names=["A"],
         strands=["A"],

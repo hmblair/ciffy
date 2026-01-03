@@ -258,7 +258,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--n-residues", type=int, default=20)
-    parser.add_argument("--output-dir", default="sampled_chains")
+    parser.add_argument("--output-dir", default="outputs/sampled_chains")
     args = parser.parse_args()
 
     output_path = Path(args.output_dir)

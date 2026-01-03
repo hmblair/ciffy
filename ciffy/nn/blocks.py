@@ -4,13 +4,70 @@ Shared neural network building blocks.
 This module provides reusable components for residue-level models:
 - InputNorm: Learnable input normalization (like ActNorm)
 - ResidualBlock: MLP block with skip connections
+- MLPEncoder: General MLP encoder to latent space
 - CoordinateDecoder: Decodes latents to coordinates + transforms
+- build_mlp_stack: Helper to construct MLP layers
 """
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
+
+
+def build_mlp_stack(
+    input_dim: int,
+    hidden_dims: list[int],
+    output_dim: int | None = None,
+    dropout: float = 0.0,
+    final_activation: bool = False,
+    zero_init_final: bool = True,
+) -> nn.Sequential:
+    """Build an MLP with LayerNorm and SiLU activations.
+
+    Standard architecture used across all residue models:
+    Linear -> LayerNorm -> SiLU -> [Dropout] -> repeat -> [Linear output]
+
+    Args:
+        input_dim: Input feature dimension.
+        hidden_dims: List of hidden layer dimensions.
+        output_dim: If provided, adds final linear layer to this dimension.
+        dropout: Dropout probability (0 to disable).
+        final_activation: If True, add activation after final layer.
+        zero_init_final: If True, initialize final layer weights to zero.
+
+    Returns:
+        nn.Sequential containing the MLP layers.
+
+    Example:
+        >>> # Encoder: 72 -> 256 -> 128 (no output projection)
+        >>> encoder = build_mlp_stack(72, [256, 128])
+        >>>
+        >>> # Decoder with output: 12 -> 128 -> 256 -> 75
+        >>> decoder = build_mlp_stack(12, [128, 256], output_dim=75)
+    """
+    layers: list[nn.Module] = []
+    in_dim = input_dim
+
+    for h_dim in hidden_dims:
+        layers.append(nn.Linear(in_dim, h_dim))
+        layers.append(nn.LayerNorm(h_dim))
+        layers.append(nn.SiLU())
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        in_dim = h_dim
+
+    if output_dim is not None:
+        final_layer = nn.Linear(in_dim, output_dim)
+        if zero_init_final:
+            nn.init.zeros_(final_layer.weight)
+            nn.init.zeros_(final_layer.bias)
+        layers.append(final_layer)
+
+        if final_activation:
+            layers.append(nn.SiLU())
+
+    return nn.Sequential(*layers)
 
 
 class InputNorm(nn.Module):
@@ -64,9 +121,74 @@ class ResidualBlock(nn.Module):
         return x + self.net(x)
 
 
-class CoordinateDecoder(nn.Module):
+class MLPEncoder(nn.Module):
+    """MLP encoder to latent space with mu/logvar heads.
+
+    Standard VAE encoder architecture used across residue models.
+    Outputs distribution parameters for reparameterization.
     """
-    MLP decoder from latent space to coordinates + SE(3) transform.
+
+    def __init__(
+        self,
+        input_dim: int,
+        latent_dim: int,
+        hidden_dims: list[int] | None = None,
+        dropout: float = 0.0,
+    ):
+        """Initialize encoder.
+
+        Args:
+            input_dim: Input feature dimension.
+            latent_dim: Latent space dimension.
+            hidden_dims: Hidden layer dimensions. Defaults to [256, 128].
+            dropout: Dropout probability.
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+
+        if hidden_dims is None:
+            hidden_dims = [256, 128]
+
+        # Shared encoder backbone
+        self.backbone = build_mlp_stack(
+            input_dim, hidden_dims, dropout=dropout, zero_init_final=False
+        )
+        self._hidden_dim = hidden_dims[-1]
+
+        # Latent projection heads
+        self.fc_mu = nn.Linear(self._hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(self._hidden_dim, latent_dim)
+
+    def forward(
+        self, x: torch.Tensor, return_distribution: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Encode input to latent space.
+
+        Args:
+            x: (batch, input_dim) input features.
+            return_distribution: If True, return (z, mu, logvar).
+
+        Returns:
+            z or (z, mu, logvar) depending on return_distribution.
+        """
+        h = self.backbone(x)
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+
+        if self.training:
+            std = torch.exp(0.5 * logvar)
+            z = mu + std * torch.randn_like(std)
+        else:
+            z = mu
+
+        if return_distribution:
+            return z, mu, logvar
+        return z
+
+
+class CoordinateDecoder(nn.Module):
+    """MLP decoder from latent space to coordinates + SE(3) transform.
 
     Outputs coordinates in a canonical frame plus a 6D transform
     (axis-angle rotation + translation) for positioning the next residue.
@@ -87,25 +209,14 @@ class CoordinateDecoder(nn.Module):
         if hidden_dims is None:
             hidden_dims = [256, 128]
 
-        # Build MLP
-        layers = []
-        in_dim = latent_dim
-        for h_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, h_dim),
-                nn.LayerNorm(h_dim),
-                nn.SiLU(),
-            ])
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
-            in_dim = h_dim
-
-        layers.append(nn.Linear(in_dim, self.output_dim))
-        self.net = nn.Sequential(*layers)
-
-        # Initialize final layer to output near-zero
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
+        # Build decoder MLP
+        self.net = build_mlp_stack(
+            latent_dim,
+            hidden_dims,
+            output_dim=self.output_dim,
+            dropout=dropout,
+            zero_init_final=True,
+        )
 
     def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Decode latent to coordinates and transform.
@@ -171,8 +282,10 @@ class RBFDistanceEncoder(nn.Module):
 
 
 __all__ = [
+    "build_mlp_stack",
     "InputNorm",
     "ResidualBlock",
+    "MLPEncoder",
     "CoordinateDecoder",
     "RBFDistanceEncoder",
 ]

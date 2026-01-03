@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from ciffy.geometry import FrameIndices
 
 from .invariant import InvariantAttentionEncoder
-from ciffy.nn.blocks import CoordinateDecoder
+from ciffy.nn.blocks import CoordinateDecoder, MLPEncoder
 
 
 @dataclass
@@ -54,6 +54,7 @@ class ConsolidatedVAEConfig:
     n_encoder_layers: int = 2
     decoder_hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.1
+    encoder_type: str = "flat"  # "flat" (MLP on padded data) or "invariant" (attention on distances)
 
 
 class ConsolidatedResidueVAE(nn.Module):
@@ -100,10 +101,14 @@ class ConsolidatedResidueVAE(nn.Module):
 
         self.config = config
         self.latent_dim = config.latent_dim
+        self.encoder_type = config.encoder_type
 
         # Store residue info
         self._residue_atoms = residue_atoms
         self._residues = list(residue_atoms.keys())
+
+        # Compute max atoms across all residues (for padding)
+        self.max_atoms = max(len(indices) for indices in residue_atoms.values())
 
         # Compute max atom type index across all residues
         all_atom_indices = []
@@ -111,19 +116,31 @@ class ConsolidatedResidueVAE(nn.Module):
             all_atom_indices.extend(indices)
         self.n_atom_types = max(all_atom_indices) + 1
 
-        # Shared encoder
-        self.encoder = InvariantAttentionEncoder(
-            n_atom_types=self.n_atom_types,
-            d_model=config.d_model,
-            d_dist=config.d_dist,
-            n_heads=config.n_heads,
-            n_layers=config.n_encoder_layers,
-            dropout=config.dropout,
-        )
-
-        # Latent projection (shared)
-        self.fc_mu = nn.Linear(config.d_model, config.latent_dim)
-        self.fc_logvar = nn.Linear(config.d_model, config.latent_dim)
+        # Build encoder based on type
+        if config.encoder_type == "flat":
+            # Flat MLP encoder on padded coords + transforms
+            # Input: (max_atoms * 3 + 6) for coords + transforms
+            flat_input_dim = self.max_atoms * 3 + 6
+            self.encoder = MLPEncoder(
+                input_dim=flat_input_dim,
+                latent_dim=config.latent_dim,
+                hidden_dims=config.decoder_hidden_dims,
+                dropout=config.dropout,
+            )
+            self._uses_mlp_encoder = True
+        else:
+            # Rotation-invariant attention encoder (separate mu/logvar projection)
+            self.encoder = InvariantAttentionEncoder(
+                n_atom_types=self.n_atom_types,
+                d_model=config.d_model,
+                d_dist=config.d_dist,
+                n_heads=config.n_heads,
+                n_layers=config.n_encoder_layers,
+                dropout=config.dropout,
+            )
+            self.fc_mu = nn.Linear(config.d_model, config.latent_dim)
+            self.fc_logvar = nn.Linear(config.d_model, config.latent_dim)
+            self._uses_mlp_encoder = False
 
         # Per-residue decoders
         self.decoders = nn.ModuleDict()
@@ -147,7 +164,11 @@ class ConsolidatedResidueVAE(nn.Module):
 
     @property
     def device(self) -> torch.device:
-        return self.fc_mu.weight.device
+        """Device where model parameters reside."""
+        if self._uses_mlp_encoder:
+            return self.encoder.fc_mu.weight.device
+        else:
+            return self.fc_mu.weight.device
 
     @property
     def residues(self) -> list["Residue"]:
@@ -163,33 +184,44 @@ class ConsolidatedResidueVAE(nn.Module):
         atom_types: torch.Tensor,
         coords: torch.Tensor,
         mask: torch.Tensor,
+        transforms: torch.Tensor | None = None,
         return_distribution: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode batched residues to latent space (internal method for training).
+        """Encode batched residues to latent space.
 
         Args:
-            atom_types: (batch, max_atoms) atom type indices.
+            atom_types: (batch, max_atoms) atom type indices (ignored for flat encoder).
             coords: (batch, max_atoms, 3) coordinates.
-            mask: (batch, max_atoms) boolean mask for present atoms.
+            mask: (batch, max_atoms) boolean mask (ignored for flat encoder).
+            transforms: (batch, 6) SE(3) transforms (required for flat encoder).
             return_distribution: If True, return (z, mu, logvar).
 
         Returns:
             z or (z, mu, logvar).
         """
-        h = self.encoder(atom_types, coords, mask)
-
-        mu = self.fc_mu(h)
-        logvar = self.fc_logvar(h)
-
-        if self.training:
-            std = torch.exp(0.5 * logvar)
-            z = mu + std * torch.randn_like(std)
+        if self._uses_mlp_encoder:
+            # Flat MLP encoder: concatenate coords + transforms
+            batch_size = coords.shape[0]
+            coords_flat = coords.reshape(batch_size, -1)
+            if transforms is None:
+                transforms = torch.zeros(batch_size, 6, device=coords.device)
+            x = torch.cat([coords_flat, transforms], dim=-1)
+            return self.encoder(x, return_distribution=return_distribution)
         else:
-            z = mu
+            # Invariant attention encoder: use atom types, coords, mask
+            h = self.encoder(atom_types, coords, mask)
+            mu = self.fc_mu(h)
+            logvar = self.fc_logvar(h)
 
-        if return_distribution:
-            return z, mu, logvar
-        return z
+            if self.training:
+                std = torch.exp(0.5 * logvar)
+                z = mu + std * torch.randn_like(std)
+            else:
+                z = mu
+
+            if return_distribution:
+                return z, mu, logvar
+            return z
 
     def decode(
         self, z: torch.Tensor, residue: "Residue"
@@ -286,6 +318,7 @@ class ConsolidatedResidueVAE(nn.Module):
             "n_encoder_layers": self.config.n_encoder_layers,
             "decoder_hidden_dims": self.config.decoder_hidden_dims,
             "dropout": self.config.dropout,
+            "encoder_type": self.config.encoder_type,
             "residue_atoms": {
                 res.name: indices for res, indices in self._residue_atoms.items()
             },
@@ -327,6 +360,7 @@ class ConsolidatedResidueVAE(nn.Module):
             n_encoder_layers=config_dict["n_encoder_layers"],
             decoder_hidden_dims=config_dict["decoder_hidden_dims"],
             dropout=config_dict["dropout"],
+            encoder_type=config_dict.get("encoder_type", "invariant"),  # Default to old behavior
         )
 
         # Create model and load state
@@ -431,12 +465,29 @@ class ConsolidatedResidueView(nn.Module):
         batch_size = coords.shape[0]
         device = coords.device
 
+        # For flat encoder, need to pad coords to max_atoms
+        if self._model.encoder_type == "flat":
+            max_atoms = self._model.max_atoms
+            padded_coords = torch.zeros(batch_size, max_atoms, 3, device=device)
+            padded_coords[:, :self.n_atoms, :] = coords
+            coords = padded_coords
+
         # Build atom types and mask
         atom_indices = self._model.get_atom_indices(self._residue).to(device)
         atom_types = atom_indices.unsqueeze(0).expand(batch_size, -1)
         mask = torch.ones(batch_size, self.n_atoms, dtype=torch.bool, device=device)
 
-        z = self._model.encode_batch(atom_types, coords, mask, return_distribution=False)
+        # Pad mask if needed for flat encoder
+        if self._model.encoder_type == "flat":
+            max_atoms = self._model.max_atoms
+            padded_mask = torch.zeros(batch_size, max_atoms, dtype=torch.bool, device=device)
+            padded_mask[:, :self.n_atoms] = mask
+            mask = padded_mask
+
+        # Zero transforms for encoding (flat encoder expects them)
+        transforms = torch.zeros(batch_size, 6, device=device)
+
+        z = self._model.encode_batch(atom_types, coords, mask, transforms=transforms, return_distribution=False)
 
         if single:
             return z.squeeze(0)
@@ -465,6 +516,14 @@ class ConsolidatedResidueView(nn.Module):
             transform: (n_samples, 6) sampled transforms.
         """
         return self._model.sample(self._residue, n_samples)
+
+    def save(self, path: "str | Path") -> None:
+        """No-op save - ConsolidatedResidueView shares underlying model.
+
+        The consolidated model is saved once, and views are reconstructed
+        via as_residue_models() on load.
+        """
+        pass  # Parent ConsolidatedResidueVAE handles saving
 
     def __repr__(self) -> str:
         return f"ConsolidatedResidueView(residue={self._residue.name}, n_atoms={self.n_atoms})"

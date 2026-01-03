@@ -30,6 +30,12 @@ from .attention_vae import (
     AttentionVAEModelConfig,
     AttentionResidueVAEModule,
 )
+from .consolidated_vae import (
+    ConsolidatedVAEDataConfig,
+    ConsolidatedVAEFullConfig,
+    ConsolidatedVAEModelConfig,
+    ConsolidatedVAEModule,
+)
 
 __all__ = [
     # Base
@@ -59,4 +65,9 @@ __all__ = [
     "AttentionVAEFullConfig",
     "AttentionVAEModelConfig",
     "AttentionResidueVAEModule",
+    # Consolidated VAE
+    "ConsolidatedVAEDataConfig",
+    "ConsolidatedVAEFullConfig",
+    "ConsolidatedVAEModelConfig",
+    "ConsolidatedVAEModule",
 ]

@@ -42,6 +42,31 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
+# Int-Key ModuleDict Wrapper
+# =============================================================================
+
+
+class _IntKeyModuleDict(nn.ModuleDict):
+    """ModuleDict that accepts int keys (converts to str internally).
+
+    PyTorch's ModuleDict requires string keys, but ciffy uses int indices
+    for residue types. This wrapper accepts both int and str keys.
+    """
+
+    def __getitem__(self, key):
+        return super().__getitem__(str(key))
+
+    def __contains__(self, key):
+        return super().__contains__(str(key))
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
+# =============================================================================
 # Protocol for Residue-Level Generative Models
 # =============================================================================
 
@@ -163,18 +188,14 @@ class PolymerModel(nn.Module, HubMixin):
         if not residue_models:
             raise ValueError("residue_models cannot be empty")
 
-        # Normalize keys to int and store mapping
-        # nn.ModuleDict requires string keys, so we store int->str mapping
-        self._key_to_str: dict[int, str] = {}
+        # Normalize keys to int, store as strings (required by ModuleDict)
         normalized = {}
         for k, v in residue_models.items():
             int_key = _normalize_key(k)
-            str_key = str(int_key)
-            self._key_to_str[int_key] = str_key
-            normalized[str_key] = v
+            normalized[str(int_key)] = v
 
-        # Use nn.ModuleDict for proper parameter tracking
-        self.residue_models = nn.ModuleDict(normalized)
+        # Use custom ModuleDict that accepts int keys
+        self.residue_models = _IntKeyModuleDict(normalized)
 
         # Validate all models have same latent dim
         latent_dims = [m.latent_dim for m in self.residue_models.values()]
@@ -192,7 +213,7 @@ class PolymerModel(nn.Module, HubMixin):
 
     def _get_model(self, res_type: int) -> "ResidueFlowModel":
         """Get residue model by int key."""
-        return self.residue_models[str(res_type)]
+        return self.residue_models[res_type]
 
     @property
     def supported_residues(self) -> set[int]:
@@ -336,7 +357,7 @@ class PolymerModel(nn.Module, HubMixin):
         self,
         latents: torch.Tensor,
         sequence: SequenceArray,
-        latent_bound: float | None = 5.0,
+        latent_bound: float | None = None,
     ) -> torch.Tensor:
         """
         Decode latent vectors to positioned polymer coordinates.
@@ -349,10 +370,10 @@ class PolymerModel(nn.Module, HubMixin):
         Args:
             latents: (n_residues, latent_dim) latent vectors.
             sequence: Int array of residue types (e.g., polymer.sequence).
-            latent_bound: Soft bound for latent values using tanh. Values are
-                bounded to [-bound, bound] range. Set to None to disable.
-                Default 5.0 prevents gradient explosion from out-of-distribution
-                latents during optimization.
+            latent_bound: Optional soft bound for latent values using tanh.
+                When set, values are bounded to [-bound, bound] range.
+                Useful during gradient-based optimization to prevent explosion
+                from out-of-distribution latents. Default None (no bounding).
 
         Returns:
             (N, 3) flat coordinate tensor with all residues positioned.
@@ -796,8 +817,8 @@ class PolymerModel(nn.Module, HubMixin):
         Encode a Polymer object directly to latent vectors.
 
         This is the recommended way to encode polymers. It automatically
-        aligns each residue to its canonical frame and filters to only
-        include atoms the model was trained on.
+        aligns each residue to its canonical frame, sorts atoms to canonical
+        order, and filters to only include atoms the model was trained on.
 
         Args:
             polymer: Polymer object to encode. Must have coordinates.
@@ -814,47 +835,43 @@ class PolymerModel(nn.Module, HubMixin):
             >>> latents = model.encode_polymer(polymer)
         """
         from ciffy.backend import to_numpy
-        from ciffy.biochemistry import Scale
-        from ciffy.operations.reduction import Reduction
+        from ciffy.backend.ops import isin
 
         # Validate sequence
         sequence = polymer.sequence
         seq_np = to_numpy(sequence)
         self._validate_sequence(seq_np)
 
-        # Get aligned per-residue coordinates
-        # align() returns list of (n_atoms, 3) arrays, one per residue
-        aligned_all = polymer.align()
-
-        # Get per-residue atoms for filtering
-        per_res_atoms = polymer.reduce(polymer.atoms, Scale.RESIDUE, Reduction.COLLATE)
+        # Align to canonical frames and sort atoms by enum value
+        # This ensures consistent ordering matching training data
+        canonical = polymer.align().sort_atoms()
 
         # Filter each residue to only include model's atoms
         filtered_coords = []
         for i, res_type in enumerate(seq_np):
             res_type = int(res_type)
 
-            # Get expected atoms for this residue type
-            expected_atoms = self.atom_filter[res_type]
-            atoms_i = to_numpy(per_res_atoms[i])
-            coords_i = aligned_all[i]
+            # Get expected atoms for this residue type (already sorted)
+            expected_atoms = np.array(self.atom_filter[res_type], dtype=np.int64)
 
-            # Build mapping from atom value to aligned coordinate index
-            atom_to_idx = {int(a): j for j, a in enumerate(atoms_i)}
+            # Get residue (atoms are sorted by enum value)
+            res = canonical.residue(i)
+            atoms_i = to_numpy(res.atoms)
 
-            # Extract coordinates in expected order
-            res_coords = []
-            for atom_val in expected_atoms:
-                if atom_val not in atom_to_idx:
-                    from ciffy.biochemistry import Residue
-                    res = Residue.from_index(res_type)
-                    raise ValueError(f"Missing atom {atom_val} in residue {i} ({res.name})")
-                idx = atom_to_idx[atom_val]
-                res_coords.append(coords_i[idx])
+            # Filter to expected atoms using boolean mask
+            mask = isin(atoms_i, expected_atoms)
+            res_coords = res.coordinates[mask]
 
-            # Stack to (n_atoms, 3) tensor
-            res_tensor = torch.stack([torch.as_tensor(c, dtype=torch.float32) for c in res_coords])
-            filtered_coords.append(res_tensor)
+            # Validate we got all expected atoms
+            if res_coords.shape[0] != len(expected_atoms):
+                from ciffy.biochemistry import Residue
+                res_name = Residue.from_index(res_type).name
+                missing = set(expected_atoms) - set(atoms_i[mask])
+                raise ValueError(
+                    f"Residue {i} ({res_name}): missing atoms {missing}"
+                )
+
+            filtered_coords.append(torch.as_tensor(res_coords, dtype=torch.float32))
 
         return self.encode(filtered_coords, seq_np)
 

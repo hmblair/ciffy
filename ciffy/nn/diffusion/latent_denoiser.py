@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 from ciffy.biochemistry import NUM_RESIDUES
 
-from ..layers.transformer import Transformer
+from ..layers.transformer import Transformer, AdaLNTransformer
 from .process import TimestepEmbedding
 
 
@@ -55,6 +55,8 @@ class LatentDenoiserConfig:
         max_seq_len: Maximum sequence length for RoPE.
         num_timesteps: Number of diffusion timesteps (for embedding).
         num_residue_types: Vocabulary size for residue embedding.
+        use_adaln: Use Adaptive Layer Normalization for timestep conditioning.
+            If True, uses AdaLN (DiT-style). If False, uses additive conditioning.
     """
 
     latent_dim: int = 12
@@ -66,6 +68,7 @@ class LatentDenoiserConfig:
     max_seq_len: int = 2048
     num_timesteps: int = 1000
     num_residue_types: int = field(default_factory=lambda: NUM_RESIDUES)
+    use_adaln: bool = True
 
 
 class LatentDenoiser(nn.Module):
@@ -96,6 +99,7 @@ class LatentDenoiser(nn.Module):
         super().__init__()
 
         self.config = config
+        self.use_adaln = config.use_adaln
 
         # Input projection: latent_dim -> d_model
         self.input_proj = nn.Linear(config.latent_dim, config.d_model)
@@ -109,15 +113,28 @@ class LatentDenoiser(nn.Module):
             embedding_dim=config.d_model,
         )
 
-        # Transformer backbone (reuse existing implementation)
-        self.transformer = Transformer(
-            d_model=config.d_model,
-            num_layers=config.num_layers,
-            num_heads=config.num_heads,
-            d_ff=config.d_ff,
-            dropout=config.dropout,
-            max_seq_len=config.max_seq_len,
-        )
+        # Transformer backbone - choose based on conditioning mode
+        if config.use_adaln:
+            # AdaLN conditioning: timestep modulates each layer's normalization
+            self.transformer = AdaLNTransformer(
+                d_model=config.d_model,
+                cond_dim=config.d_model,  # timestep embedding dim
+                num_layers=config.num_layers,
+                num_heads=config.num_heads,
+                d_ff=config.d_ff,
+                dropout=config.dropout,
+                max_seq_len=config.max_seq_len,
+            )
+        else:
+            # Additive conditioning: timestep added to input
+            self.transformer = Transformer(
+                d_model=config.d_model,
+                num_layers=config.num_layers,
+                num_heads=config.num_heads,
+                d_ff=config.d_ff,
+                dropout=config.dropout,
+                max_seq_len=config.max_seq_len,
+            )
 
         # Output projection: d_model -> latent_dim
         self.output_proj = nn.Linear(config.d_model, config.latent_dim)
@@ -149,16 +166,21 @@ class LatentDenoiser(nn.Module):
         # Project noisy latents
         h = self.input_proj(noisy_latents)  # (B, L, d_model)
 
-        # Add sequence embedding
+        # Get embeddings
         seq_emb = self.sequence_embed(sequence)  # (B, L, d_model)
-        h = h + seq_emb
-
-        # Add timestep embedding (broadcast across sequence)
         t_emb = self.timestep_embed(timestep)  # (B, d_model)
-        h = h + t_emb.unsqueeze(1)  # (B, L, d_model)
 
-        # Apply transformer
-        h = self.transformer(h, mask=mask)  # (B, L, d_model)
+        # Apply transformer with appropriate conditioning
+        if self.use_adaln:
+            # Per-position AdaLN: combine timestep (global) + sequence (per-position)
+            # This gives each layer both "what timestep" and "what residue type" info
+            cond = t_emb.unsqueeze(1) + seq_emb  # (B, L, d_model)
+            h = self.transformer(h, cond, mask=mask)  # (B, L, d_model)
+        else:
+            # Additive: add both embeddings to input
+            h = h + seq_emb
+            h = h + t_emb.unsqueeze(1)  # (B, L, d_model)
+            h = self.transformer(h, mask=mask)  # (B, L, d_model)
 
         # Project to noise prediction
         noise_pred = self.output_proj(h)  # (B, L, latent_dim)

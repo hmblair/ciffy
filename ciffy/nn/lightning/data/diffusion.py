@@ -29,6 +29,9 @@ class LatentEncodingDataset(Dataset):
     Wraps a PolymerDataset and uses an encoder model (any PolymerModel)
     to encode coordinates to latents. This avoids caching all latents in memory.
 
+    Automatically filters out incomplete residues (e.g., terminal residues
+    missing phosphate atoms) before encoding.
+
     Note: This dataset performs GPU encoding in __getitem__, so it must
     be used with num_workers=0 in the DataLoader.
     """
@@ -38,13 +41,42 @@ class LatentEncodingDataset(Dataset):
         polymer_dataset: "PolymerDataset",
         encoder_model: "PolymerModel",
         device: str = "cpu",
+        min_residues: int = 5,
     ) -> None:
         self.polymer_dataset = polymer_dataset
         self.encoder_model = encoder_model
         self.device = device
+        self.min_residues = min_residues
+
+        # Cache atom filter info for fast filtering
+        atom_filter = encoder_model.atom_filter
+        self._all_atoms = sorted(set(a for atoms in atom_filter.values() for a in atoms))
+        self._expected_sizes = {int(k): len(v) for k, v in atom_filter.items()}
 
     def __len__(self) -> int:
         return len(self.polymer_dataset)
+
+    def _filter_complete_residues(self, polymer):
+        """Filter to only residues with all expected atoms."""
+        from ciffy import Scale
+        from ciffy.backend import ops, to_numpy
+
+        # Filter to only expected atom types
+        filtered = polymer.by_atom(self._all_atoms)
+
+        # Compute expected sizes per residue (backend-agnostic)
+        seq = filtered.sequence
+        expected_sizes = ops.array(
+            [self._expected_sizes[int(r)] for r in to_numpy(seq)],
+            like=seq,
+        )
+
+        # Get actual sizes and create mask
+        actual_sizes = filtered.counts(Scale.RESIDUE)
+        mask = actual_sizes == expected_sizes
+
+        # Select only complete residues
+        return filtered.select(mask, Scale.RESIDUE)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor] | None:
         """Get encoded latents and sequence for a sample.
@@ -54,28 +86,31 @@ class LatentEncodingDataset(Dataset):
             - latents: (n_residues, latent_dim)
             - sequence: (n_residues,) long tensor
         """
+        from ciffy import Scale
+
         polymer = self.polymer_dataset[idx]
         if polymer is None:
             return None
 
         try:
-            coords = polymer.coordinates
-            sequence = polymer.sequence
+            # Filter to complete residues only
+            polymer = self._filter_complete_residues(polymer)
 
-            # Convert to tensors
-            if not isinstance(coords, torch.Tensor):
-                coords = torch.from_numpy(coords).float()
+            # Skip if too few residues remain
+            if polymer.size(Scale.RESIDUE) < self.min_residues:
+                return None
+
+            # Encode using encode_polymer (handles alignment + filtering)
+            with torch.no_grad():
+                latents = self.encoder_model.encode_polymer(polymer)
+
+            sequence = polymer.sequence
             if not isinstance(sequence, torch.Tensor):
                 sequence = torch.tensor(sequence, dtype=torch.long)
 
-            # Encode to latent space
-            with torch.no_grad():
-                coords = coords.to(self.device)
-                latents = self.encoder_model.encode(coords, sequence.numpy())
-
             return latents.cpu(), sequence
         except Exception:
-            # Encoder model encoding failed (incompatible structure)
+            # Encoding failed
             return None
 
 
@@ -150,6 +185,7 @@ class LatentDiffusionDataModule(LightningDataModule):
         max_residues: int = 500,
         val_fraction: float = 0.1,
         num_workers: int = 0,
+        max_files: int | None = None,
     ) -> None:
         """Initialize the data module.
 
@@ -163,6 +199,7 @@ class LatentDiffusionDataModule(LightningDataModule):
             val_fraction: Fraction of data for validation.
             num_workers: Number of DataLoader workers. Must be 0 for latent
                 encoding (GPU operations in __getitem__).
+            max_files: Maximum number of CIF files to use. None = use all.
         """
         super().__init__()
         self.save_hyperparameters(ignore=["encoder_model"])
@@ -175,6 +212,7 @@ class LatentDiffusionDataModule(LightningDataModule):
         self.max_residues = max_residues
         self.val_fraction = val_fraction
         self.num_workers = num_workers
+        self.max_files = max_files
 
         # Set in setup()
         self.train_dataset: Dataset | None = None
@@ -202,6 +240,7 @@ class LatentDiffusionDataModule(LightningDataModule):
             max_residues=self.max_residues,
             molecule_types=mol_types,
             backend="torch",
+            limit=self.max_files,
         )
 
         if len(polymer_dataset) == 0:

@@ -19,10 +19,6 @@ Example:
     >>>
     >>> # Decode gives coords + link transform to next residue
     >>> coords, transform = model.decode(z)
-    >>>
-    >>> # Position next residue
-    >>> from ciffy.nn.flow.residue import position_next_residue
-    >>> coords2 = position_next_residue(coords1, coords2, transform, atoms, residue)
 """
 
 from .model import (
@@ -31,20 +27,9 @@ from .model import (
     ResidueFlowConfig,
 )
 from .data import (
-    # Data extraction
     extract_residues,
     extract_residues_with_links,
     ResidueDataset,
-)
-
-# Frame computation functions from geometry
-from ciffy.geometry import (
-    compute_glycosidic_frame,
-    align_to_frame,
-    align_and_compute_transform,
-    position_next_residue,
-    compute_relative_transform,
-    apply_relative_transform,
 )
 
 __all__ = [
@@ -52,14 +37,6 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    # Frame computation
-    "compute_glycosidic_frame",
-    "align_to_frame",
-    "align_and_compute_transform",
-    "position_next_residue",
-    # SE(3) transforms
-    "compute_relative_transform",
-    "apply_relative_transform",
     # Data extraction
     "extract_residues",
     "extract_residues_with_links",

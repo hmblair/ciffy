@@ -58,6 +58,8 @@ def main():
     parser.add_argument("--sample", action="store_true", help="Sample after training")
     parser.add_argument("--n-samples", type=int, default=5)
     parser.add_argument("--sample-steps", type=int, default=50)
+    parser.add_argument("--val-every", type=int, default=10, help="Compute coord metrics every N epochs")
+    parser.add_argument("--val-samples", type=int, default=3, help="Number of samples for coord validation")
     args = parser.parse_args()
 
     output_path = Path(args.output_dir)
@@ -112,12 +114,13 @@ def main():
         model=model_config,
         data=data_config,
         training=training_config,
+        val_every=args.val_every,
+        val_samples=args.val_samples,
     )
 
     # Create data module
     print(f"\nLoading data from {args.data_dir}...")
-    cif_files = sorted(Path(args.data_dir).glob("*.cif"))[:args.max_files]
-    print(f"  Found {len(cif_files)} CIF files")
+    print(f"  Max files: {args.max_files}")
 
     dm = LatentDiffusionDataModule(
         data_dir=args.data_dir,
@@ -126,6 +129,8 @@ def main():
         molecule_types=("RNA",),
         min_residues=10,
         max_residues=200,
+        val_fraction=0.1,
+        max_files=args.max_files,
     )
 
     # Create module
@@ -137,6 +142,8 @@ def main():
 
     # Train
     print(f"\nTraining for {args.epochs} epochs...")
+    print(f"  Coord metrics every {args.val_every} epochs ({args.val_samples} samples)\n")
+
     trainer = L.Trainer(
         max_epochs=args.epochs,
         accelerator=args.accelerator,
@@ -144,6 +151,7 @@ def main():
         enable_progress_bar=True,
         enable_checkpointing=False,
         logger=False,
+        check_val_every_n_epoch=1,
     )
 
     trainer.fit(module, dm)

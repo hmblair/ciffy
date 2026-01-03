@@ -375,6 +375,7 @@ class DiffusionProcess(nn.Module):
         self,
         num_steps: int,
         spacing: str = "uniform",
+        max_t: int | None = None,
     ) -> torch.Tensor:
         """Get a subset of timesteps for accelerated sampling.
 
@@ -387,15 +388,23 @@ class DiffusionProcess(nn.Module):
                 - "uniform": Evenly spaced (default)
                 - "trailing": More steps at the end (near t=0)
                 - "leading": More steps at the start (near t=T)
+            max_t: Maximum starting timestep. If None, uses total_steps - 1.
+                Set lower (e.g., 980) to avoid numerical issues with cosine
+                schedule where alphabar approaches 0 at high timesteps.
 
         Returns:
             Tensor of timestep indices in descending order.
 
         Example:
             >>> process.get_sampling_timesteps(50)  # 50 evenly spaced steps
-            tensor([999, 979, 959, ..., 39, 19, 0])
+            tensor([980, 960, 940, ..., 40, 20, 0])
         """
         total_steps = len(self.schedule)
+        # Default to 980 for cosine schedule to avoid alphabar ≈ 0 issues
+        if max_t is None:
+            max_t = min(total_steps - 1, 980)
+        max_t = min(max_t, total_steps - 1)
+
         if num_steps > total_steps:
             raise ValueError(
                 f"num_steps ({num_steps}) cannot exceed total timesteps ({total_steps})"
@@ -404,20 +413,20 @@ class DiffusionProcess(nn.Module):
             raise ValueError("num_steps must be positive")
 
         if spacing == "uniform":
-            # Evenly spaced indices
-            step_ratio = total_steps / num_steps
+            # Evenly spaced indices from 0 to max_t
+            step_ratio = (max_t + 1) / num_steps
             timesteps = torch.arange(num_steps, device=self.schedule._beta.device)
             timesteps = (timesteps * step_ratio).long()
-            timesteps = torch.clamp(timesteps, 0, total_steps - 1)
+            timesteps = torch.clamp(timesteps, 0, max_t)
             timesteps = timesteps.flip(0)  # Reverse order
         elif spacing == "trailing":
             # More steps near t=0 (quadratic spacing)
             t = torch.linspace(0, 1, num_steps, device=self.schedule._beta.device)
-            timesteps = ((1 - t**2) * (total_steps - 1)).long()
+            timesteps = ((1 - t**2) * max_t).long()
         elif spacing == "leading":
             # More steps near t=T (quadratic spacing)
             t = torch.linspace(0, 1, num_steps, device=self.schedule._beta.device)
-            timesteps = ((t**2) * (total_steps - 1)).long()
+            timesteps = ((t**2) * max_t).long()
             timesteps = timesteps.flip(0)
         else:
             raise ValueError(f"Unknown spacing: {spacing}. Use 'uniform', 'trailing', or 'leading'")
@@ -533,6 +542,7 @@ class DiffusionProcess(nn.Module):
         timestep: int | torch.Tensor,
         timestep_prev: int | torch.Tensor,
         eta: float = 0.0,
+        clip_x0: tuple[float, float] | None = None,
     ) -> torch.Tensor:
         """Apply one step of DDIM reverse diffusion.
 
@@ -545,6 +555,8 @@ class DiffusionProcess(nn.Module):
             timestep: Current timestep t.
             timestep_prev: Previous timestep t-1 (can skip steps, e.g., t=100, t_prev=80).
             eta: Stochasticity parameter. 0 = deterministic, 1 = DDPM-like.
+            clip_x0: Optional (min, max) bounds to clip the x0 prediction for stability.
+                Use (-1, 1) for normalized data, None for latent space (no clipping).
 
         Returns:
             Sample at timestep t_prev.
@@ -576,8 +588,9 @@ class DiffusionProcess(nn.Module):
         # Predict x_0 from x_t and predicted noise
         x0_pred = self._predict_x0(x, predicted_noise, t)
 
-        # Optionally clip x0 prediction to [-1, 1] for stability
-        # x0_pred = torch.clamp(x0_pred, -1, 1)
+        # Optionally clip x0 prediction for stability
+        if clip_x0 is not None:
+            x0_pred = torch.clamp(x0_pred, clip_x0[0], clip_x0[1])
 
         # Compute sigma for stochasticity
         # sigma_t = eta * sqrt((1 - alphabar_{t-1}) / (1 - alphabar_t)) * sqrt(1 - alphabar_t / alphabar_{t-1})

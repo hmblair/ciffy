@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ciffy.backend import Array, is_torch, zeros_nd
-from .primitives import normalize, cross, clone
 from .transforms import (
     extract_frame_positions,
     frame_from_positions,
@@ -42,11 +41,11 @@ def compute_glycosidic_frame(
     """
     Compute the glycosidic frame for residue alignment.
 
-    Frame definition:
+    Frame definition (Z-primary convention):
     - Origin: C1' atom
-    - X-axis: Toward N9 (purines) or N1 (pyrimidines)
-    - Z-axis: Normal to the C1'-N9-C4 plane
-    - Y-axis: Completes right-handed system
+    - Z-axis: Toward N9 (purines) or N1 (pyrimidines)
+    - X-axis: Derived toward C4/C2 via Gram-Schmidt
+    - Y-axis: Completes right-handed system (Y = Z × X)
 
     Args:
         coords: (n_atoms, 3) or (batch, n_atoms, 3) coordinates.
@@ -65,30 +64,9 @@ def compute_glycosidic_frame(
     # Select frame based on residue type
     frame_def = PURINE_GLYCOSIDIC_FRAME if is_purine(residue) else PYRIMIDINE_GLYCOSIDIC_FRAME
 
-    # Extract positions and compute frame
+    # Extract positions and compute frame using canonical Z-primary convention
     positions = extract_frame_positions(coords, atoms, frame_def)
-
-    # Glycosidic frame uses X-primary convention (X toward base)
-    # while frame_from_positions uses Z-primary
-    # So we compute manually here for the X-primary convention
-    origin = clone(positions[..., 0, :])
-    n_pos = positions[..., 1, :]
-    c4_pos = positions[..., 2, :]
-
-    x_axis = normalize(n_pos - origin)
-    y_temp = c4_pos - origin
-    z_axis = normalize(cross(x_axis, y_temp))
-    y_axis = cross(z_axis, x_axis)
-
-    # Build rotation matrix
-    if is_torch(coords):
-        import torch
-        R = torch.stack([x_axis, y_axis, z_axis], dim=-1)
-    else:
-        R = np.stack([x_axis, y_axis, z_axis], axis=-1).astype(np.float32)
-        origin = origin.astype(np.float32)
-
-    return origin, R
+    return frame_from_positions(positions)
 
 
 def align_to_frame(

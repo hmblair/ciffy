@@ -63,16 +63,15 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
 class TestResidueAlign:
     """Tests for Polymer.align() - residue-to-local-frame alignment."""
 
-    def test_align_rna_returns_list(self):
-        """align() returns list of coordinate arrays, one per residue."""
+    def test_align_rna_returns_polymer(self):
+        """align() returns a Polymer with aligned coordinates."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
         aligned = p.align()
 
-        assert isinstance(aligned, list)
-        assert len(aligned) == 3
-        for coords in aligned:
-            assert coords.ndim == 2
-            assert coords.shape[1] == 3
+        assert isinstance(aligned, ciffy.Polymer)
+        assert aligned.size(Scale.RESIDUE) == 3
+        assert aligned.coordinates.ndim == 2
+        assert aligned.coordinates.shape[1] == 3
 
     def test_align_rna_preserves_atom_count(self):
         """Each aligned residue has correct number of atoms."""
@@ -80,8 +79,9 @@ class TestResidueAlign:
         atom_counts = p.counts(Scale.RESIDUE)
         aligned = p.align()
 
-        for i, coords in enumerate(aligned):
-            assert coords.shape[0] == atom_counts[i]
+        for i in range(aligned.size(Scale.RESIDUE)):
+            res = aligned.residue(i)
+            assert res.size() == atom_counts[i]
 
     def test_align_rna_centers_origin(self):
         """Aligned residues have frame origin near coordinate origin."""
@@ -89,8 +89,8 @@ class TestResidueAlign:
         aligned = p.align()
 
         # The C1' atom (origin of glycosidic frame) should be at origin
-        # For RNA, C1' is typically around index 12 in the atom list
-        for coords in aligned:
+        for i in range(aligned.size(Scale.RESIDUE)):
+            coords = aligned.residue(i).coordinates
             # Check that coordinates are centered (mean should be near origin)
             centroid = coords.mean(axis=0)
             # Centroid won't be exactly at origin since origin is C1', not centroid
@@ -102,8 +102,8 @@ class TestResidueAlign:
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
         aligned = p.align()
 
-        assert len(aligned) == 1
-        assert aligned[0].shape[0] == p.size()
+        assert aligned.size(Scale.RESIDUE) == 1
+        assert aligned.size() == p.size()
 
     def test_align_purine_and_pyrimidine(self):
         """align() handles both purines (A, G) and pyrimidines (C, U)."""
@@ -114,7 +114,7 @@ class TestResidueAlign:
         aligned = p.align()
 
         # Should succeed for all residues
-        assert len(aligned) == p.size(Scale.RESIDUE)
+        assert aligned.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
 
     def test_align_consistent_frame(self):
         """Same residue type aligned multiple times gives consistent frames."""
@@ -131,8 +131,8 @@ class TestResidueAlign:
         p1 = p.residue(a_indices[0])
         p2 = p.residue(a_indices[1])
 
-        aligned1 = p1.align()[0]
-        aligned2 = p2.align()[0]
+        aligned1 = p1.align().residue(0).coordinates
+        aligned2 = p2.align().residue(0).coordinates
 
         # Both should have same shape (same residue type)
         assert aligned1.shape == aligned2.shape
@@ -152,9 +152,9 @@ class TestResidueAlign:
         # Check output type matches backend
         if backend == "torch":
             import torch
-            assert all(isinstance(c, torch.Tensor) for c in aligned)
+            assert isinstance(aligned.coordinates, torch.Tensor)
         else:
-            assert all(isinstance(c, np.ndarray) for c in aligned)
+            assert isinstance(aligned.coordinates, np.ndarray)
 
 
 class TestAlignBatch:
@@ -256,6 +256,94 @@ class TestCopyFieldDeletion:
 
         # Copy should be unchanged
         assert p2.coordinates[0, 0] != 999.0
+
+
+# =============================================================================
+# Polymer.sort_atoms() Tests
+# =============================================================================
+
+class TestSortAtoms:
+    """Tests for Polymer.sort_atoms() - canonical atom ordering."""
+
+    def test_sort_atoms_returns_polymer(self):
+        """sort_atoms() returns a Polymer."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        sorted_p = p.sort_atoms()
+
+        assert isinstance(sorted_p, ciffy.Polymer)
+        assert sorted_p.size(Scale.RESIDUE) == 3
+
+    def test_sort_atoms_preserves_size(self):
+        """sort_atoms() preserves atom count."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        sorted_p = p.sort_atoms()
+
+        assert sorted_p.size() == p.size()
+        np.testing.assert_array_equal(
+            np.asarray(sorted_p.counts(Scale.RESIDUE)),
+            np.asarray(p.counts(Scale.RESIDUE))
+        )
+
+    def test_sort_atoms_orders_by_enum_value(self):
+        """Atoms within each residue are sorted by enum value."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        sorted_p = p.sort_atoms()
+
+        for i in range(sorted_p.size(Scale.RESIDUE)):
+            res = sorted_p.residue(i)
+            atoms = np.asarray(res.atoms)
+            # Check atoms are sorted
+            assert np.all(atoms[:-1] <= atoms[1:]), f"Residue {i} not sorted"
+
+    def test_sort_atoms_sorts_all_fields(self):
+        """sort_atoms() reorders all atom-level fields."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+
+        # Get original atoms and their corresponding coords
+        orig_atoms = np.asarray(p.atoms).copy()
+        orig_coords = np.asarray(p.coordinates).copy()
+
+        sorted_p = p.sort_atoms()
+        sorted_atoms = np.asarray(sorted_p.atoms)
+        sorted_coords = np.asarray(sorted_p.coordinates)
+
+        # Verify atoms are sorted
+        expected_order = np.argsort(orig_atoms)
+        np.testing.assert_array_equal(sorted_atoms, orig_atoms[expected_order])
+        np.testing.assert_array_equal(sorted_coords, orig_coords[expected_order])
+
+    def test_sort_atoms_idempotent(self):
+        """Calling sort_atoms() twice gives same result."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        sorted_once = p.sort_atoms()
+        sorted_twice = sorted_once.sort_atoms()
+
+        np.testing.assert_array_equal(
+            np.asarray(sorted_once.atoms),
+            np.asarray(sorted_twice.atoms)
+        )
+        np.testing.assert_array_equal(
+            np.asarray(sorted_once.coordinates),
+            np.asarray(sorted_twice.coordinates)
+        )
+
+    def test_align_then_sort_canonical(self):
+        """align().sort_atoms() produces canonical representation."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        canonical = p.align().sort_atoms()
+
+        # Each residue should have sorted atoms and aligned coords
+        for i in range(canonical.size(Scale.RESIDUE)):
+            res = canonical.residue(i)
+            atoms = np.asarray(res.atoms)
+            coords = np.asarray(res.coordinates)
+
+            # Atoms sorted
+            assert np.all(atoms[:-1] <= atoms[1:])
+
+            # Coords are centered (roughly, since origin is C1' not centroid)
+            centroid = coords.mean(axis=0)
+            assert np.linalg.norm(centroid) < 5.0
 
 
 # =============================================================================

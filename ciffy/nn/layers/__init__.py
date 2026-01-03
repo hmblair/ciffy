@@ -19,6 +19,9 @@ from .embedding import PolymerEmbedding
 from .transformer import (
     Transformer,
     TransformerBlock,
+    AdaLNTransformer,
+    AdaLNTransformerBlock,
+    AdaLN,
     MultiHeadAttention,
     RMSNorm,
     RotaryPositionEmbedding,
@@ -42,6 +45,9 @@ __all__ = [
     # Transformer components
     "Transformer",
     "TransformerBlock",
+    "AdaLNTransformer",
+    "AdaLNTransformerBlock",
+    "AdaLN",
     "MultiHeadAttention",
     "RMSNorm",
     "RotaryPositionEmbedding",

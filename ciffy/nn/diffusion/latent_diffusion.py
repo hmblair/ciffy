@@ -67,6 +67,10 @@ class LatentDiffusionConfig:
         noise_schedule: Type of noise schedule ('cosine' or 'linear').
         encoder_path: Path to pre-trained PolymerModel (flow, vae, or consolidated).
         freeze_encoder: Whether to freeze the encoder/decoder weights.
+        loss_weighting: Timestep loss weighting strategy:
+            - "none": No weighting (default, all timesteps equal).
+            - "snr": Weight by signal-to-noise ratio (alphabar/(1-alphabar)).
+            - "min_snr_5": Min-SNR weighting capped at 5 (recommended).
     """
 
     denoiser: LatentDenoiserConfig = field(default_factory=LatentDenoiserConfig)
@@ -74,6 +78,7 @@ class LatentDiffusionConfig:
     noise_schedule: str = "cosine"
     encoder_path: Optional[str] = None
     freeze_encoder: bool = True
+    loss_weighting: str = "none"
 
 
 @register_model("latent_diffusion")
@@ -155,6 +160,37 @@ class LatentDiffusionModel(nn.Module):
 
         # Track latent dim for convenience
         self.latent_dim = self.encoder_model.latent_dim
+
+        # Store loss weighting strategy
+        self._loss_weighting = config.loss_weighting
+
+    def _get_loss_weights(self, t: "torch.Tensor") -> "torch.Tensor":
+        """Compute loss weights for each timestep.
+
+        Args:
+            t: (batch,) timestep indices.
+
+        Returns:
+            (batch,) loss weights.
+        """
+        if self._loss_weighting == "none":
+            return torch.ones_like(t, dtype=torch.float32)
+
+        # Get SNR = alphabar / (1 - alphabar)
+        alphabar = self.diffusion.schedule.alphabar(t)
+        snr = alphabar / (1 - alphabar + 1e-8)
+
+        if self._loss_weighting == "snr":
+            # Weight proportional to SNR
+            return snr
+        elif self._loss_weighting == "min_snr_5":
+            # Min-SNR weighting: min(SNR, gamma) / SNR where gamma=5
+            # This reduces weight on low-noise (high-SNR) timesteps
+            gamma = 5.0
+            return torch.minimum(snr, torch.tensor(gamma, device=t.device)) / (snr + 1e-8)
+        else:
+            # Unknown weighting, fall back to uniform
+            return torch.ones_like(t, dtype=torch.float32)
 
     @property
     def device(self) -> "torch.device":
@@ -274,18 +310,26 @@ class LatentDiffusionModel(nn.Module):
         # Predict noise
         pred_noise = self.denoiser(noisy_latents, t, sequence_batch, mask)
 
+        # Get loss weights for each sample based on timestep
+        weights = self._get_loss_weights(t)  # (batch,)
+
         # MSE loss (optionally mask padded positions)
         if mask is not None:
             # Expand mask to latent dimension
             mask_expanded = mask.unsqueeze(-1).expand_as(pred_noise)
-            # Zero out padded positions
-            pred_noise_masked = pred_noise.masked_fill(mask_expanded, 0.0)
-            noise_masked = noise.masked_fill(mask_expanded, 0.0)
-            # Count non-padded positions
-            n_valid = (~mask).sum() * pred_noise.shape[-1]
-            loss = (pred_noise_masked - noise_masked).pow(2).sum() / n_valid
+            # Compute per-sample MSE
+            sq_error = (pred_noise - noise).pow(2)
+            sq_error = sq_error.masked_fill(mask_expanded, 0.0)
+            # Sum over residues and latent dim, divide by valid count per sample
+            n_valid_per_sample = (~mask).sum(dim=1, keepdim=True) * pred_noise.shape[-1]
+            sample_loss = sq_error.sum(dim=(1, 2)) / n_valid_per_sample.squeeze()
+            # Apply timestep weights and average
+            loss = (sample_loss * weights).mean()
         else:
-            loss = F.mse_loss(pred_noise, noise)
+            # Compute per-sample MSE
+            sample_loss = (pred_noise - noise).pow(2).mean(dim=(1, 2))
+            # Apply timestep weights and average
+            loss = (sample_loss * weights).mean()
 
         metrics = {
             "loss": loss.item(),

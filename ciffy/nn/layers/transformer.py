@@ -119,6 +119,73 @@ class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
         return x / rms * self.weight
 
 
+class AdaLN(nn.Module if TORCH_AVAILABLE else object):
+    """Adaptive Layer Normalization (AdaLN) for conditioning.
+
+    Modulates normalized features based on a conditioning vector.
+    Used in DiT, SDXL, and other modern diffusion transformers.
+
+    Supports both:
+    - Global conditioning: cond shape (batch, cond_dim) - same modulation for all positions
+    - Per-position conditioning: cond shape (batch, seq_len, cond_dim) - different per position
+
+    Formula:
+        y = norm(x) * (1 + scale) + shift
+        where (scale, shift) = linear(cond)
+
+    Reference: Peebles & Xie (2023) "Scalable Diffusion Models with Transformers"
+    """
+
+    def __init__(self, dim: int, cond_dim: int, eps: float = 1e-6):
+        """Initialize AdaLN.
+
+        Args:
+            dim: Hidden dimension to normalize.
+            cond_dim: Dimension of conditioning vector.
+            eps: Small constant for numerical stability.
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required")
+        super().__init__()
+        self.eps = eps
+        self.norm = RMSNorm(dim, eps)
+
+        # Project conditioning to scale and shift
+        self.proj = nn.Linear(cond_dim, 2 * dim)
+
+        # Initialize to identity transform (scale=0, shift=0)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(
+        self, x: "torch.Tensor", cond: "torch.Tensor"
+    ) -> "torch.Tensor":
+        """Apply adaptive normalization.
+
+        Args:
+            x: Input tensor of shape (batch, seq_len, dim).
+            cond: Conditioning tensor of shape (batch, cond_dim) for global conditioning,
+                or (batch, seq_len, cond_dim) for per-position conditioning.
+
+        Returns:
+            Modulated tensor of shape (batch, seq_len, dim).
+        """
+        # Get scale and shift from conditioning
+        scale_shift = self.proj(cond)  # (batch, 2*dim) or (batch, seq_len, 2*dim)
+        scale, shift = scale_shift.chunk(2, dim=-1)
+
+        # Apply normalization
+        x_norm = self.norm(x)
+
+        # Handle global vs per-position conditioning
+        if cond.dim() == 2:
+            # Global: (batch, cond_dim) -> unsqueeze for broadcasting
+            return x_norm * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+        else:
+            # Per-position: (batch, seq_len, cond_dim) -> already correct shape
+            return x_norm * (1 + scale) + shift
+
+
 class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
     """
     Rotary Position Embeddings (RoPE).
@@ -393,6 +460,127 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         x = x + self.dropout(self.attn(self.norm1(x), mask=mask))
         x = x + self.dropout(self.ffn(self.norm2(x)))
         return x
+
+
+class AdaLNTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
+    """Transformer block with Adaptive Layer Normalization (AdaLN).
+
+    Uses AdaLN for conditioning on timestep (or other signals) instead of
+    fixed normalization. This is the key innovation from DiT for diffusion.
+
+    Architecture:
+        x = x + Attention(AdaLN(x, cond))
+        x = x + SwiGLU(AdaLN(x, cond))
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        cond_dim: int,
+        num_heads: int,
+        d_ff: Optional[int] = None,
+        dropout: float = 0.0,
+        max_seq_len: int = 2048,
+    ):
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required")
+        super().__init__()
+
+        self.adaln1 = AdaLN(d_model, cond_dim)
+        self.adaln2 = AdaLN(d_model, cond_dim)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len)
+        self.ffn = SwiGLU(d_model, d_ff, dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        x: "torch.Tensor",
+        cond: "torch.Tensor",
+        mask: Optional["torch.Tensor"] = None,
+    ) -> "torch.Tensor":
+        """Forward pass with conditioning.
+
+        Args:
+            x: Input tensor (batch, seq, d_model).
+            cond: Conditioning tensor (batch, cond_dim).
+            mask: Optional padding mask (batch, seq).
+
+        Returns:
+            Output tensor (batch, seq, d_model).
+        """
+        x = x + self.dropout(self.attn(self.adaln1(x, cond), mask=mask))
+        x = x + self.dropout(self.ffn(self.adaln2(x, cond)))
+        return x
+
+
+class AdaLNTransformer(nn.Module if TORCH_AVAILABLE else object):
+    """Transformer with Adaptive Layer Normalization conditioning.
+
+    Like the standard Transformer but each layer receives a conditioning
+    vector that modulates the normalization. Used in DiT and modern
+    diffusion transformers.
+
+    Args:
+        d_model: Model dimension.
+        cond_dim: Conditioning vector dimension.
+        num_layers: Number of transformer blocks.
+        num_heads: Number of attention heads.
+        d_ff: Feedforward hidden dimension (default: auto-computed for SwiGLU).
+        dropout: Dropout probability.
+        max_seq_len: Maximum sequence length for RoPE.
+
+    Example:
+        >>> model = AdaLNTransformer(d_model=256, cond_dim=256, num_layers=4, num_heads=8)
+        >>> x = torch.randn(2, 100, 256)
+        >>> cond = torch.randn(2, 256)  # e.g., timestep embedding
+        >>> out = model(x, cond)  # (2, 100, 256)
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        cond_dim: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: Optional[int] = None,
+        dropout: float = 0.0,
+        max_seq_len: int = 2048,
+    ):
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required")
+        super().__init__()
+
+        self.d_model = d_model
+        self.cond_dim = cond_dim
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+
+        self.layers = nn.ModuleList([
+            AdaLNTransformerBlock(d_model, cond_dim, num_heads, d_ff, dropout, max_seq_len)
+            for _ in range(num_layers)
+        ])
+        # Final norm also uses AdaLN for consistency
+        self.final_adaln = AdaLN(d_model, cond_dim)
+
+    def forward(
+        self,
+        x: "torch.Tensor",
+        cond: "torch.Tensor",
+        mask: Optional["torch.Tensor"] = None,
+    ) -> "torch.Tensor":
+        """Process input through transformer layers with conditioning.
+
+        Args:
+            x: Input tensor (batch, seq, d_model).
+            cond: Conditioning tensor (batch, cond_dim).
+            mask: Padding mask (batch, seq) where True = masked/ignored.
+
+        Returns:
+            Output tensor (batch, seq, d_model).
+        """
+        for layer in self.layers:
+            x = layer(x, cond, mask=mask)
+        return self.final_adaln(x, cond)
 
 
 class Transformer(nn.Module if TORCH_AVAILABLE else object):

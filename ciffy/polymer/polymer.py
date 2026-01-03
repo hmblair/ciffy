@@ -699,7 +699,7 @@ class Polymer:
 
         return coords, atoms, residue
 
-    def align(self: Polymer) -> list[Array]:
+    def align(self: Polymer) -> Polymer:
         """
         Align all residues to their canonical local frames.
 
@@ -710,15 +710,19 @@ class Polymer:
         each residue in a consistent local frame independent of global position.
 
         Returns:
-            List of (n_atoms, 3) aligned coordinate arrays, one per residue.
+            New Polymer with aligned coordinates. Use .residue(i) to get
+            per-residue coords and atoms (guaranteed to be in sync).
 
         Raises:
             ValueError: If required frame atoms are missing from any residue.
 
         Example:
-            >>> aligned_coords = polymer.align()
-            >>> # aligned_coords[i] is the i-th residue in its local frame
+            >>> aligned = polymer.align()
+            >>> for i in range(aligned.size(Scale.RESIDUE)):
+            ...     res = aligned.residue(i)
+            ...     coords, atoms = res.coordinates, res.atoms
         """
+        from ..backend import cat
         from ..biochemistry.linking import (
             PURINE_GLYCOSIDIC_FRAME,
             PYRIMIDINE_GLYCOSIDIC_FRAME,
@@ -731,6 +735,15 @@ class Polymer:
 
         for i in range(n_residues):
             coords, atoms, residue = self._residue_coords(i)
+
+            # Check for unresolved residues (no atoms)
+            if len(atoms) == 0:
+                raise ValueError(
+                    f"Residue {i} ({residue.name}) has no atoms - "
+                    f"likely unresolved in the structure. "
+                    f"Use polymer.strip() to remove zero-atom residues before align()."
+                )
+
             mol_type = residue.molecule_type
 
             # Select appropriate frame definition
@@ -749,7 +762,59 @@ class Polymer:
             aligned = (coords - origin) @ R
             aligned_list.append(aligned)
 
-        return aligned_list
+        # Concatenate and return new Polymer with aligned coordinates
+        aligned_coords = cat(aligned_list, axis=0)
+        return self.copy(coordinates=aligned_coords)
+
+    def sort_atoms(self: Polymer) -> Polymer:
+        """
+        Sort atoms within each residue by atom type enum value.
+
+        This creates a canonical atom ordering that is consistent regardless
+        of the original CIF file ordering. Useful for ensuring training and
+        inference use the same atom order.
+
+        Returns:
+            New Polymer with all atom-level fields reordered so atoms within
+            each residue are sorted by their enum value.
+
+        Example:
+            >>> # Canonical encoding: align then sort
+            >>> canonical = polymer.align().sort_atoms()
+            >>> for i in range(canonical.size(Scale.RESIDUE)):
+            ...     res = canonical.residue(i)
+            ...     # atoms are now in sorted order
+        """
+        from ..backend import cat, to_numpy
+        from ..backend.ops import argsort
+
+        n_residues = self.size(Scale.RESIDUE)
+        counts = to_numpy(self.counts(Scale.RESIDUE))
+        offsets = np.zeros(n_residues + 1, dtype=np.int64)
+        offsets[1:] = np.cumsum(counts)
+
+        # Build global sort indices from per-residue argsort
+        atoms_np = to_numpy(self.atoms)
+        sort_indices_list = []
+
+        for i in range(n_residues):
+            start, end = offsets[i], offsets[i + 1]
+            residue_atoms = atoms_np[start:end]
+            # argsort gives indices that would sort the array
+            local_sort = np.argsort(residue_atoms)
+            # Convert to global indices
+            global_sort = local_sort + start
+            sort_indices_list.append(global_sort)
+
+        sort_indices = np.concatenate(sort_indices_list)
+
+        # Build overrides for all atom-level fields
+        overrides = {}
+        for name, field in self._get_fields().items():
+            if field.scale == Scale.ATOM:
+                overrides[name] = field.data[sort_indices]
+
+        return self.copy(**overrides)
 
     def align_batch(self: Polymer) -> tuple[Array, Array]:
         """
@@ -765,26 +830,31 @@ class Polymer:
             >>> coords, mask = polymer.align_batch()
             >>> # Use with model: output = model(coords, mask)
         """
-        aligned_list = self.align()
+        aligned = self.align()
+        n_residues = aligned.size(Scale.RESIDUE)
 
         # Find max atoms for padding
-        max_atoms = max(a.shape[0] for a in aligned_list)
-        n_residues = len(aligned_list)
+        res_sizes = aligned._sizes[Scale.RESIDUE]
+        max_atoms = int(res_sizes.max())
 
         # Create padded output
-        if is_torch(aligned_list[0]):
+        if is_torch(aligned.coordinates):
             import torch
-            coords = torch.zeros(n_residues, max_atoms, 3, dtype=aligned_list[0].dtype)
+            coords = torch.zeros(n_residues, max_atoms, 3, dtype=aligned.coordinates.dtype)
             mask = torch.zeros(n_residues, max_atoms, dtype=torch.bool)
-            for i, a in enumerate(aligned_list):
-                coords[i, :a.shape[0]] = a
-                mask[i, :a.shape[0]] = True
+            for i in range(n_residues):
+                res = aligned.residue(i)
+                n = res.size()
+                coords[i, :n] = torch.as_tensor(res.coordinates)
+                mask[i, :n] = True
         else:
             coords = np.zeros((n_residues, max_atoms, 3), dtype=np.float32)
             mask = np.zeros((n_residues, max_atoms), dtype=bool)
-            for i, a in enumerate(aligned_list):
-                coords[i, :a.shape[0]] = a
-                mask[i, :a.shape[0]] = True
+            for i in range(n_residues):
+                res = aligned.residue(i)
+                n = res.size()
+                coords[i, :n] = res.coordinates
+                mask[i, :n] = True
 
         return coords, mask
 

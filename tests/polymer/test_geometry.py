@@ -286,7 +286,7 @@ class TestAlign:
         else:
             chain.coordinates = np.random.randn(chain.size(), 3).astype(np.float32) * 10
 
-        aligned, Q = chain.align(Scale.CHAIN)
+        aligned, Q = chain.pca(Scale.CHAIN)
 
         # Rotation matrix should be 3x3
         assert Q.shape[-2:] == (3, 3)
@@ -296,8 +296,8 @@ class TestAlign:
         tol = get_tolerances()
         assert np.allclose(mean, 0, atol=tol.center_origin)
 
-    def test_align_returns_rotation_matrix(self, backend):
-        """align returns valid rotation matrices."""
+    def test_pca_returns_rotation_matrix(self, backend):
+        """pca returns valid rotation matrices."""
         import ciffy
         from ciffy import Scale
 
@@ -312,7 +312,7 @@ class TestAlign:
         else:
             p.coordinates = np.random.randn(p.size(), 3).astype(np.float32) * 10
 
-        _, Q = p.align(Scale.MOLECULE)
+        _, Q = p.pca(Scale.MOLECULE)
 
         Q_np = np.asarray(Q).squeeze()
 

@@ -121,7 +121,7 @@ def extract(
 
     # Apply transformations at residue level (each implies centering)
     if align:
-        sub, _ = sub.align(Scale.RESIDUE)
+        sub, _ = sub.pca(Scale.RESIDUE)
     if scale:
         sub, _ = sub.scale(Scale.RESIDUE)
     if center and not align and not scale:

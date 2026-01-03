@@ -106,7 +106,7 @@ sequence = polymer.sequence_str()  # Sequence string
 
 # Geometric operations
 centered, means = polymer.center(ciffy.MOLECULE)
-aligned, Q = polymer.align(ciffy.CHAIN)
+aligned, Q = polymer.pca(ciffy.CHAIN)
 distances = polymer.pairwise_distances(ciffy.RESIDUE)
 
 # Selection

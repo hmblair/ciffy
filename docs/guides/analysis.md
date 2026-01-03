@@ -93,11 +93,11 @@ print(f"TM-score: {tm:.3f}")
 
 ## Aligning to Principal Axes
 
-Use `polymer.align()` to align a single structure to its principal axes:
+Use `polymer.pca()` to align a single structure to its principal axes:
 
 ```python
 # Align to principal components
-aligned, rotation_matrices = polymer.align(ciffy.MOLECULE)
+aligned, rotation_matrices = polymer.pca(ciffy.MOLECULE)
 
 # The aligned structure has:
 # - Centered coordinates

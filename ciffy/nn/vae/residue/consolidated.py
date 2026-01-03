@@ -526,8 +526,9 @@ class ConsolidatedResidueView(nn.Module):
     @property
     def atoms(self) -> "AtomGroup":
         """AtomGroup subset containing the atoms used by this residue."""
-        from ciffy.biochemistry import AtomGroup
-        return AtomGroup(self._atom_indices)
+        if not hasattr(self, '_atoms_group') or self._atoms_group is None:
+            self._atoms_group = self._residue.subset(set(self._atom_indices))
+        return self._atoms_group
 
     def encode(
         self,

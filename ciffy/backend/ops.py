@@ -221,6 +221,43 @@ def nonzero(condition: Array) -> tuple[Array, ...]:
     return np.where(condition)
 
 
+def argmax(arr: Array, axis: int | None = None) -> Array:
+    """
+    Return indices of maximum values along an axis.
+
+    Args:
+        arr: Input array.
+        axis: Axis along which to find argmax. If None, returns index
+              into flattened array.
+
+    Returns:
+        Array of indices.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.argmax(arr, dim=axis)
+    return np.argmax(arr, axis=axis)
+
+
+def any(arr: Array, axis: int | None = None) -> Array:
+    """
+    Test whether any element along an axis is True.
+
+    Args:
+        arr: Input array.
+        axis: Axis along which to test. If None, tests all elements.
+
+    Returns:
+        Boolean array (or scalar if axis is None).
+    """
+    if is_torch(arr):
+        import torch
+        if axis is None:
+            return torch.any(arr)
+        return torch.any(arr, dim=axis)
+    return np.any(arr, axis=axis)
+
+
 def multiply(a: Array, b: Array) -> Array:
     """
     Element-wise multiplication.

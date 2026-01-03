@@ -361,46 +361,54 @@ def compute_frame_from_indices(
     return origin, R
 
 
-def find_atom(atoms: Array, atom_name: str, residue=None) -> int:
+def find_frame_atoms(
+    atoms: Array,
+    frame_def: "FrameDefinition",
+) -> tuple[int, int, int]:
     """
-    Find column index of an atom by name in an atoms array.
+    Find column indices for all frame atoms in one vectorized operation.
+
+    Instead of 3 sequential scans, does a single broadcasted comparison:
+    matches = (atoms[:, None] == frame_values[None, :])
 
     Args:
         atoms: (n_atoms,) atom type value array.
-        atom_name: Atom name (e.g., "O3p", "P", "CA", "N9").
-        residue: Optional residue enum to look up residue-specific atoms.
-                 If not provided, only backbone atoms can be found.
+        frame_def: FrameDefinition specifying origin, z_ref, perp_ref atoms.
 
     Returns:
-        Column index of the atom, or -1 if not found.
+        Tuple of (origin_col, z_ref_col, perp_ref_col).
+        Each is -1 if the corresponding atom was not found.
     """
-    from ..biochemistry.linking import BACKBONE_ATOM_VALUES
     from ..backend import ops
 
-    atom_value = None
+    # Get atom values from frame definition
+    frame_values = ops.array(frame_def.atom_values(), like=atoms)
 
-    # First try backbone atoms (shared across residue types)
-    if atom_name in BACKBONE_ATOM_VALUES:
-        atom_value = BACKBONE_ATOM_VALUES[atom_name]
-    # Then try residue-specific atoms
-    elif residue is not None:
-        atom_enum = getattr(residue, atom_name, None)
-        if atom_enum is not None:
-            atom_value = atom_enum.value
+    # Vectorized comparison: (n_atoms, 3) boolean matrix
+    matches = (atoms[:, None] == frame_values[None, :])
 
-    if atom_value is None:
-        return -1
+    # Find first match in each column using argmax
+    # argmax returns 0 if no match, so we check with any()
+    # Cast to int for torch compatibility (argmax not implemented for bool)
+    if is_torch(matches):
+        matches_int = matches.int()
+    else:
+        matches_int = matches.astype(np.int32)
+    cols = ops.argmax(matches_int, axis=0)  # (3,)
+    has_match = ops.any(matches, axis=0)  # (3,)
 
-    # Search for atom in array
-    matches = ops.nonzero(atoms == atom_value)[0]
-    return int(matches[0]) if len(matches) > 0 else -1
+    # Convert to Python ints, using -1 for not found
+    origin_col = int(cols[0]) if has_match[0] else -1
+    z_ref_col = int(cols[1]) if has_match[1] else -1
+    perp_ref_col = int(cols[2]) if has_match[2] else -1
+
+    return origin_col, z_ref_col, perp_ref_col
 
 
 def compute_frame_from_atoms(
     coords: Array,
     atoms: Array,
     frame_def: "FrameDefinition",
-    residue=None,
 ) -> tuple[Array, Array]:
     """
     Compute coordinate frame using a FrameDefinition by looking up atoms by name.
@@ -412,7 +420,6 @@ def compute_frame_from_atoms(
         coords: (n_atoms, 3) coordinates.
         atoms: (n_atoms,) atom type values.
         frame_def: FrameDefinition specifying origin, z_ref, perp_ref atoms.
-        residue: Optional residue enum for looking up residue-specific atoms.
 
     Returns:
         origin: (3,) frame origin position.
@@ -421,10 +428,8 @@ def compute_frame_from_atoms(
     Raises:
         ValueError: If required atoms are not found.
     """
-    # Find atom positions
-    origin_col = find_atom(atoms, frame_def.origin, residue)
-    z_ref_col = find_atom(atoms, frame_def.z_ref, residue)
-    perp_ref_col = find_atom(atoms, frame_def.perp_ref, residue) if frame_def.perp_ref else -1
+    # Find all frame atoms in one vectorized operation
+    origin_col, z_ref_col, perp_ref_col = find_frame_atoms(atoms, frame_def)
 
     if origin_col < 0:
         raise ValueError(f"Origin atom '{frame_def.origin}' not found in residue")

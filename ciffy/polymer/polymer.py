@@ -701,45 +701,10 @@ class Polymer:
         return coords, atoms, residue
 
     @staticmethod
-    def _find_atom(atoms: Array, atom_name: str, residue=None) -> int:
-        """
-        Find column index of an atom by name in an atoms array.
-
-        Args:
-            atoms: (n_atoms,) atom type value array.
-            atom_name: Atom name (e.g., "O3p", "P", "CA", "N9").
-            residue: Optional residue enum to look up residue-specific atoms.
-                     If not provided, only backbone atoms can be found.
-
-        Returns:
-            Column index of the atom, or -1 if not found.
-        """
-        from ..biochemistry.linking import BACKBONE_ATOM_VALUES
-
-        atom_value = None
-
-        # First try backbone atoms (shared across residue types)
-        if atom_name in BACKBONE_ATOM_VALUES:
-            atom_value = BACKBONE_ATOM_VALUES[atom_name]
-        # Then try residue-specific atoms
-        elif residue is not None:
-            atom_enum = getattr(residue, atom_name, None)
-            if atom_enum is not None:
-                atom_value = atom_enum.value
-
-        if atom_value is None:
-            return -1
-
-        # Search for atom in array
-        matches = ops.nonzero(atoms == atom_value)[0]
-        return int(matches[0]) if len(matches) > 0 else -1
-
-    @staticmethod
     def _compute_frame(
         coords: Array,
         atoms: Array,
         frame_def: "FrameDefinition",
-        residue=None,
     ) -> tuple[Array, Array]:
         """
         Compute coordinate frame using a FrameDefinition.
@@ -751,7 +716,6 @@ class Polymer:
             coords: (n_atoms, 3) coordinates.
             atoms: (n_atoms,) atom type values.
             frame_def: FrameDefinition specifying origin, z_ref, perp_ref atoms.
-            residue: Optional residue enum for looking up residue-specific atoms.
 
         Returns:
             origin: (3,) frame origin position.
@@ -761,7 +725,7 @@ class Polymer:
             ValueError: If required atoms are not found.
         """
         from ..geometry.transforms import compute_frame_from_atoms
-        return compute_frame_from_atoms(coords, atoms, frame_def, residue)
+        return compute_frame_from_atoms(coords, atoms, frame_def)
 
     @staticmethod
     def _align_to_target(

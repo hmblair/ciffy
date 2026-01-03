@@ -133,6 +133,19 @@ class FrameDefinition:
 
         return origin_col, z_ref_col, perp_ref_col
 
+    def atom_values(self) -> tuple[int, int, int]:
+        """
+        Get atom type values for frame atoms as an ordered tuple.
+
+        Returns:
+            (origin_val, z_ref_val, perp_ref_val) where perp_ref_val is -1
+            if perp_ref is None.
+        """
+        origin_val = BACKBONE_ATOM_VALUES[self.origin]
+        z_ref_val = BACKBONE_ATOM_VALUES[self.z_ref]
+        perp_ref_val = BACKBONE_ATOM_VALUES[self.perp_ref] if self.perp_ref else -1
+        return origin_val, z_ref_val, perp_ref_val
+
     def required_backbone_values(self) -> set[int]:
         """
         Get the set of backbone atom values required for this frame.

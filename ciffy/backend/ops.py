@@ -7,14 +7,10 @@ if/else, while complex operations use a dispatch table to numpy_ops/torch_ops.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .core import get_backend, is_torch, Backend, Array
-
-if TYPE_CHECKING:
-    import torch
 
 
 # =============================================================================

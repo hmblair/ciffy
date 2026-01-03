@@ -11,7 +11,7 @@ from typing import Generator, TYPE_CHECKING
 
 import numpy as np
 
-from ..backend import Array, is_torch, get_backend, size as arr_size, check_compatible, to_numpy
+from ..backend import Array, is_torch, size as arr_size, check_compatible, to_numpy
 from ..backend import ops
 from ..biochemistry import Scale, Molecule
 from ..biochemistry._generated_molecule import molecule_type
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     import torch
     from ..hetero import HeteroAtoms
     from ..biochemistry.linking import FrameDefinition
-from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
+from ..operations.reduction import Reduction, ReductionResult
 from .hierarchy import _Hierarchy
 from ..biochemistry import (
     Residue,
@@ -2086,9 +2086,6 @@ class Polymer:
             >>> coords2, transform = model.predict(...)
             >>> poly = poly.extend(Residue.C, coords2, transform, atoms=atoms2, elements=elements2)
         """
-        from ..biochemistry.linking import LINKING_BY_TYPE
-        from ..geometry.transforms import apply_relative_transform
-
         # Handle empty polymer case
         if self.empty():
             return self._extend_from_empty(residue, coordinates, name, **fields)

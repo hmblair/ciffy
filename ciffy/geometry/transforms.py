@@ -658,10 +658,7 @@ def compute_n_frame(
 
     # Z points from N toward CA (incoming direction from previous C)
     z_axis = normalize(ca - n)
-    # Use CA for perpendicular direction
-    y_temp = ca - n
-    # Need a different reference - use the H on N if available, else use CA
-    # For simplicity, construct perpendicular from arbitrary vector
+    # Construct perpendicular from arbitrary vector
     if is_torch(n):
         import torch
         ref = torch.tensor([1.0, 0.0, 0.0], dtype=n.dtype, device=n.device)

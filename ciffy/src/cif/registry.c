@@ -583,7 +583,7 @@ static const FieldDef FIELDS[] = {
       ATTR_DEPOSIT_DATE, NULL, _parse_deposit_date, false, NULL,
       offsetof(mmCIF, deposit_date), STORAGE_NONE,
       SIZE_NONE, 0, 0,
-      PY_STRING, NULL },
+      PY_STRING, "date" },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,

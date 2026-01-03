@@ -199,6 +199,28 @@ def stack(arrays: list, axis: int = 0) -> Array:
     return np.stack(arrays, axis=axis)
 
 
+def nonzero(condition: Array) -> tuple[Array, ...]:
+    """
+    Return indices where condition is True (nonzero).
+
+    Args:
+        condition: Boolean array.
+
+    Returns:
+        Tuple of arrays, one per dimension, containing indices where
+        condition is True. For 1D input, returns a single-element tuple.
+
+    Note:
+        This is equivalent to numpy.where(condition) with a single argument,
+        or torch.where(condition). For the ternary version that selects
+        between two arrays, use where(condition, x, y).
+    """
+    if is_torch(condition):
+        import torch
+        return torch.where(condition)
+    return np.where(condition)
+
+
 def multiply(a: Array, b: Array) -> Array:
     """
     Element-wise multiplication.

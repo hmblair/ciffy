@@ -731,13 +731,8 @@ class Polymer:
             return -1
 
         # Search for atom in array
-        if is_torch(atoms):
-            import torch
-            matches = torch.where(atoms == atom_value)[0]
-            return int(matches[0].item()) if len(matches) > 0 else -1
-        else:
-            matches = np.where(atoms == atom_value)[0]
-            return int(matches[0]) if len(matches) > 0 else -1
+        matches = ops.nonzero(atoms == atom_value)[0]
+        return int(matches[0]) if len(matches) > 0 else -1
 
     @staticmethod
     def _compute_frame(

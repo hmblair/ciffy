@@ -1010,20 +1010,6 @@ def _cluster_command(args):
 
 def main():
     """Main entry point for the ciffy CLI."""
-    # Check if first argument is a subcommand
-    subcommands = {"map", "info", "split", "template", "train", "predict", "download", "cluster"}
-
-    # If no args or first arg starts with - or is not a subcommand,
-    # treat as the info command (deprecated)
-    if len(sys.argv) > 1 and sys.argv[1] not in subcommands and not sys.argv[1].startswith('-'):
-        # Show deprecation warning
-        print(
-            f"Warning: 'ciffy <file>' is deprecated. Use 'ciffy info <file>' instead.",
-            file=sys.stderr,
-        )
-        # Insert 'info' as the subcommand
-        sys.argv.insert(1, "info")
-
     parser = argparse.ArgumentParser(
         prog="ciffy",
         description="Load and inspect CIF files.",

@@ -641,6 +641,8 @@ class TestRMSDEdgeCases:
         """
         from ciffy import Polymer, Scale
         from ciffy.polymer.hierarchy import _Hierarchy
+        from ciffy.polymer import Field
+        from ciffy.backend import Dtype
 
         # Random coordinates with fixed seed for reproducibility
         rng = np.random.RandomState(seed)
@@ -667,10 +669,10 @@ class TestRMSDEdgeCases:
 
         polymer = Polymer(
             hierarchy,
-            coordinates=coords,
-            atoms=atoms,
-            elements=elements,
-            sequence=sequence,
+            coordinates=Field(coords, Scale.ATOM, Dtype.FLOAT),
+            atoms=Field(atoms, Scale.ATOM, Dtype.INT),
+            elements=Field(elements, Scale.ATOM, Dtype.INT),
+            sequence=Field(sequence, Scale.RESIDUE, Dtype.INT),
             pdb_id="test",
             names=["A"],
             strands=["A"],

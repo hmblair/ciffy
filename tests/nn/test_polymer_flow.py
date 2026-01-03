@@ -198,7 +198,7 @@ class TestPolymerFlowModel:
     def test_repr(self, polymer_model):
         """Test string representation."""
         repr_str = repr(polymer_model)
-        assert "PolymerFlowModel" in repr_str
+        assert "PolymerModel" in repr_str
         assert "latent_dim=6" in repr_str
 
 

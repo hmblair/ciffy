@@ -18,19 +18,19 @@ class TestSkipNone:
         """skip=None should load all fields."""
         polymer = ciffy.load(test_file)
 
-        # All fields should be present
-        assert polymer.coordinates is not None
-        assert polymer._bfactors is not None
-        assert polymer._atoms is not None
-        assert polymer._elements is not None
-        assert polymer._sequence is not None
+        # All fields should be present (use _get_field_data for checking availability)
+        assert polymer._get_field_data('coordinates') is not None
+        assert polymer._get_field_data('bfactors') is not None
+        assert polymer._get_field_data('atoms') is not None
+        assert polymer._get_field_data('elements') is not None
+        assert polymer._get_field_data('sequence') is not None
 
     def test_skip_empty_list_loads_all(self, test_file):
         """skip=[] should load all fields."""
         polymer = ciffy.load(test_file, skip=[])
 
-        assert polymer.coordinates is not None
-        assert polymer._bfactors is not None
+        assert polymer._get_field_data('coordinates') is not None
+        assert polymer._get_field_data('bfactors') is not None
 
 
 class TestSkipSingleField:
@@ -40,15 +40,15 @@ class TestSkipSingleField:
         """skip='bfactors' should skip B-factors."""
         polymer = ciffy.load(test_file, skip='bfactors')
 
-        assert polymer.coordinates is not None
-        assert polymer._bfactors is None
+        assert polymer._get_field_data('coordinates') is not None
+        assert polymer._get_field_data('bfactors') is None
 
     def test_skip_resolution(self, test_file):
         """skip='resolution' should skip resolution."""
         polymer = ciffy.load(test_file, skip='resolution')
 
-        assert polymer.coordinates is not None
-        assert polymer._resolution is None
+        assert polymer._get_field_data('coordinates') is not None
+        assert polymer.resolution is None
 
 
 class TestSkipMultipleFields:
@@ -58,9 +58,9 @@ class TestSkipMultipleFields:
         """skip=['bfactors', 'resolution'] should skip both."""
         polymer = ciffy.load(test_file, skip=['bfactors', 'resolution'])
 
-        assert polymer.coordinates is not None
-        assert polymer._bfactors is None
-        assert polymer._resolution is None
+        assert polymer._get_field_data('coordinates') is not None
+        assert polymer._get_field_data('bfactors') is None
+        assert polymer.resolution is None
 
 
 class TestSkipMetadataPreset:

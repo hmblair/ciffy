@@ -68,11 +68,12 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
         return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
 
     pc = polymer.polymer_count
+    bfactors_data = polymer._get_field_data('bfactors')
     return HeteroAtoms(
         coordinates=polymer.coordinates[pc:],
         atoms=polymer.atoms[pc:],
         elements=polymer.elements[pc:],
-        bfactors=polymer._bfactors[pc:] if polymer._bfactors is not None else None,
+        bfactors=bfactors_data[pc:] if bfactors_data is not None else None,
         pdb_id=polymer.pdb_id,
     )
 

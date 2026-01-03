@@ -8,6 +8,7 @@ Classes:
     Polymer: Main structure class representing molecular assemblies.
     Field: Descriptor for Polymer array fields with dtype information.
     Metadata: Descriptor for Polymer metadata (non-array values).
+    Annotations: Dict-like container for per-scale polymer annotations.
 
 Factory Functions:
     from_sequence: Create Polymer from sequence string (e.g., "acgu").

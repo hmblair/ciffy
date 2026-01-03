@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..biochemistry import Molecule
 
+from ..polymer import Field
+from ..backend import Dtype
+from ..biochemistry import Scale
+
 def load(
     file: str | Path,
     backend: str | None = None,
@@ -218,21 +222,24 @@ def load(
         ref=coordinates,
     )
 
-    # Create Polymer with NumPy arrays (C extension returns int64 directly)
+    # Create Polymer with Field objects
     polymer = Polymer(
         hierarchy,
-        coordinates=coordinates,
-        atoms=atoms,
-        elements=elements,
-        sequence=residues,
+        # Field objects (arrays with scale and dtype)
+        coordinates=Field(coordinates, Scale.ATOM, Dtype.FLOAT),
+        atoms=Field(atoms, Scale.ATOM, Dtype.INT),
+        elements=Field(elements, Scale.ATOM, Dtype.INT),
+        sequence=Field(residues, Scale.RESIDUE, Dtype.INT),
+        molecule_types=Field(molecule_types, Scale.CHAIN, Dtype.INT),
+        bfactors=Field(bfactors, Scale.ATOM, Dtype.FLOAT),
+        # Metadata (non-array values)
         pdb_id=id,
         names=chain_names,
         strands=strand_names,
-        molecule_types=molecule_types,
         descriptions=descriptions,
-        bfactors=bfactors,
         resolution=resolution,
         date=deposition_date,
+        # Internal state
         connections=connections,
         connection_types=connection_types,
     )

@@ -50,16 +50,18 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
     atoms_per_chain = np.ascontiguousarray(polymer._sizes[Scale.CHAIN].astype(np.int32))
     res_per_chain = np.ascontiguousarray(polymer.lengths.astype(np.int32))
     # molecule_types: use stored values or default to UNKNOWN
-    if polymer._molecule_types is not None:
-        molecule_types = np.ascontiguousarray(polymer._molecule_types.astype(np.int32))
+    mol_types_data = polymer._get_field_data('molecule_types')
+    if mol_types_data is not None:
+        molecule_types = np.ascontiguousarray(mol_types_data.astype(np.int32))
     else:
         from ..biochemistry import Molecule
         molecule_types = np.full(polymer.size(Scale.CHAIN), Molecule.UNKNOWN.value, dtype=np.int32)
 
     # B-factors are optional - pass None if not available
     bfactors = None
-    if polymer._bfactors is not None:
-        bfactors = np.ascontiguousarray(polymer._bfactors.astype(np.float32))
+    bfactors_data = polymer._get_field_data('bfactors')
+    if bfactors_data is not None:
+        bfactors = np.ascontiguousarray(bfactors_data.astype(np.float32))
 
     _save(
         filename,

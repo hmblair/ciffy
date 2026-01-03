@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..backend import Array, get_backend, check_compatible
+from ..backend import Array, get_backend, check_compatible, Dtype
 from ..backend import ops
 from ..biochemistry import Scale
+from ..polymer import Field
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -107,6 +108,7 @@ def join(*polymers: "Polymer") -> "Polymer":
     # Single polymer case - return a copy using _clone
     if len(non_empty) == 1:
         p = non_empty[0]
+        mol_types_data = p._get_field_data('molecule_types')
         return p._clone(
             coordinates=ops.clone(p.coordinates),
             atoms=ops.clone(p.atoms),
@@ -114,7 +116,7 @@ def join(*polymers: "Polymer") -> "Polymer":
             sequence=ops.clone(p.sequence),
             names=list(p.names),
             strands=list(p.strands),
-            molecule_types=ops.clone(p._molecule_types) if p._molecule_types is not None else None,
+            molecule_types=ops.clone(mol_types_data) if mol_types_data is not None else None,
             descriptions=list(p.descriptions) if p.descriptions else None,
         )
 
@@ -147,8 +149,9 @@ def join(*polymers: "Polymer") -> "Polymer":
 
     # Handle molecule types - only include if all polymers have them
     molecule_types = None
-    if all(p._molecule_types is not None for p in non_empty):
-        molecule_types = ops.cat([p._molecule_types for p in non_empty], axis=0)
+    mol_types_list = [p._get_field_data('molecule_types') for p in non_empty]
+    if all(mt is not None for mt in mol_types_list):
+        molecule_types = ops.cat(mol_types_list, axis=0)
 
     # Handle descriptions
     descriptions = None
@@ -178,13 +181,13 @@ def join(*polymers: "Polymer") -> "Polymer":
 
     return Polymer(
         hierarchy,
-        coordinates=coordinates,
-        atoms=atoms,
-        elements=elements,
-        sequence=sequence,
+        coordinates=Field(coordinates, Scale.ATOM, Dtype.FLOAT),
+        atoms=Field(atoms, Scale.ATOM, Dtype.INT),
+        elements=Field(elements, Scale.ATOM, Dtype.INT),
+        sequence=Field(sequence, Scale.RESIDUE, Dtype.INT),
+        molecule_types=Field(molecule_types, Scale.CHAIN, Dtype.INT) if molecule_types is not None else Field(None, Scale.CHAIN, Dtype.INT),
         pdb_id=pdb_id,
         names=names,
         strands=strands,
-        molecule_types=molecule_types,
         descriptions=descriptions,
     )

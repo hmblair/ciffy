@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
-from .polymer import Polymer
+from .polymer import Polymer, Field
+from ..backend import Dtype
 from ..biochemistry import Scale, Molecule, Residue, atom_to_element
 
 if TYPE_CHECKING:
@@ -312,14 +313,14 @@ def from_sequence(
 
     polymer = Polymer(
         hierarchy,
-        coordinates=None,
-        atoms=atoms_arr,
-        elements=elements_arr,
-        sequence=np.array(all_residue_indices, dtype=np.int64),
+        coordinates=Field(None, Scale.ATOM, Dtype.FLOAT),
+        atoms=Field(atoms_arr, Scale.ATOM, Dtype.INT),
+        elements=Field(elements_arr, Scale.ATOM, Dtype.INT),
+        sequence=Field(np.array(all_residue_indices, dtype=np.int64), Scale.RESIDUE, Dtype.INT),
+        molecule_types=Field(np.array(molecule_types, dtype=np.int64), Scale.CHAIN, Dtype.INT),
         pdb_id=id,
         names=chain_names,
         strands=chain_names,
-        molecule_types=np.array(molecule_types, dtype=np.int64),
     )
 
     return polymer.torch() if backend == "torch" else polymer
@@ -412,10 +413,10 @@ def from_extract(
 
     polymer = Polymer(
         hierarchy,
-        coordinates=flat_coords,
-        atoms=all_atoms,
-        elements=all_elements,
-        sequence=sequence,
+        coordinates=Field(flat_coords, Scale.ATOM, Dtype.FLOAT),
+        atoms=Field(all_atoms, Scale.ATOM, Dtype.INT),
+        elements=Field(all_elements, Scale.ATOM, Dtype.INT),
+        sequence=Field(sequence, Scale.RESIDUE, Dtype.INT),
         pdb_id=id,
         names=["A"],
         strands=["A"],

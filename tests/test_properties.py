@@ -46,8 +46,8 @@ class TestBfactors:
         with pytest.raises(AttributeError, match="bfactors"):
             _ = polymer.bfactors
 
-        # But the private attribute returns None
-        assert polymer._bfactors is None
+        # Use _get_field_data to check availability without raising
+        assert polymer._get_field_data('bfactors') is None
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_bfactors_preserved_after_selection(self, cif_file, backend):

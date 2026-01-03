@@ -15,7 +15,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
-from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup
+from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup, GeometrySamplingLoss
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -38,6 +38,8 @@ class ConsolidatedVAEModelConfig:
     free_bits: float = 0.5
     use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
     use_residual: bool = True  # Residual connections in decoder
+    gamma: float = 0.0  # Geometry sampling loss weight (0 = disabled)
+    n_geom_samples: int = 16  # Number of samples for geometry loss
 
 
 @dataclass
@@ -105,6 +107,9 @@ class ConsolidatedVAEModule(LightningModule):
         # Model created in setup()
         self._model: "ConsolidatedResidueVAE | None" = None
 
+        # Geometry sampling loss (set in setup if gamma > 0)
+        self._geometry_loss: GeometrySamplingLoss | None = None
+
     def get_model(self) -> "ConsolidatedResidueVAE":
         """Get the trained ConsolidatedResidueVAE.
 
@@ -150,6 +155,10 @@ class ConsolidatedVAEModule(LightningModule):
         )
 
         self._model = ConsolidatedResidueVAE(residue_atoms, config)
+
+        # Set up geometry sampling loss if gamma > 0
+        if model_cfg.gamma > 0:
+            self._geometry_loss = GeometrySamplingLoss.from_residue_atoms(residue_atoms)
 
     def get_beta(self) -> float:
         """Get current beta value with warmup."""
@@ -242,6 +251,14 @@ class ConsolidatedVAEModule(LightningModule):
         kl_loss = self.compute_kl(mu, logvar)
         beta = self.get_beta()
         loss = recon_loss + beta * kl_loss
+
+        # Geometry sampling loss
+        gamma = self.config.model.gamma
+        if gamma > 0 and self._geometry_loss is not None:
+            n_samples = self.config.model.n_geom_samples
+            geom_loss = self._geometry_loss.compute(self._model, n_samples)
+            loss = loss + gamma * geom_loss
+            self.log("train/geom", geom_loss, on_step=True, on_epoch=True)
 
         # Logging
         self.log("train/coord_loss", coord_loss, on_step=True, on_epoch=True)

@@ -30,6 +30,10 @@ class ResidueVAEModelConfig:
 
     The free_bits parameter helps balance this by only applying KL penalty
     above a threshold per dimension, allowing minimum information usage.
+
+    The gamma parameter controls geometry sampling loss - sampling from the
+    prior and penalizing invalid geometry (bond lengths, angles). This helps
+    the model generate chemically valid structures.
     """
 
     latent_dim: int = 12
@@ -41,6 +45,8 @@ class ResidueVAEModelConfig:
     use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
     use_residual: bool = True  # Residual connections in decoder
     separate_heads: bool = True  # Separate output heads for coords vs transforms
+    gamma: float = 0.0  # Geometry sampling loss weight (0 = disabled)
+    n_geom_samples: int = 16  # Number of samples for geometry loss
 
 
 @dataclass
@@ -156,18 +162,23 @@ class ResidueVAEModule(BaseVAEModule):
 
         config = self.config.model
 
+        atom_indices = atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms)
+
         # Create ResidueVAE
         self._residue_model = ResidueVAE(
             input_dim=n_features,
             latent_dim=config.latent_dim,
             hidden_dims=config.hidden_dims,
             residue=self.residue,
-            atom_indices=atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms),
+            atom_indices=atom_indices,
             dropout=config.dropout,
             use_input_norm=config.use_input_norm,
             use_residual=config.use_residual,
             separate_heads=config.separate_heads,
         )
+
+        # Set up geometry sampling loss if gamma > 0
+        self._setup_geometry_loss(atom_indices)
 
     def _forward_batch(
         self, batch: tuple[torch.Tensor], batch_idx: int

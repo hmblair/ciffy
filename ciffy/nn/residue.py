@@ -440,6 +440,8 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             free_bits=kwargs.get("free_bits", 0.5),
             use_input_norm=kwargs.get("use_input_norm", True),
             use_residual=kwargs.get("use_residual", True),
+            gamma=kwargs.get("gamma", 0.0),
+            n_geom_samples=kwargs.get("n_geom_samples", 16),
         )
         data_config = ConsolidatedVAEDataConfig(batch_size=batch_size)
         return config_cls(
@@ -459,6 +461,8 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             beta=kwargs.get("beta", 1.0),
             free_bits=kwargs.get("free_bits", 0.5),
             use_residual=kwargs.get("use_residual", True),
+            gamma=kwargs.get("gamma", 0.0),
+            n_geom_samples=kwargs.get("n_geom_samples", 16),
         )
         data_config = ResidueVAEDataConfig(batch_size=batch_size)
         return config_cls(

@@ -20,7 +20,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
-from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup
+from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup, GeometrySamplingLoss
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -46,6 +46,8 @@ class BaseVAEModelConfig:
     beta: float = 1.0
     beta_warmup_epochs: int = 50
     free_bits: float = 0.5
+    gamma: float = 0.0  # Weight for geometry sampling loss (0 = disabled)
+    n_geom_samples: int = 16  # Number of samples for geometry loss
 
 
 class BaseVAEModule(LightningModule):
@@ -82,6 +84,9 @@ class BaseVAEModule(LightningModule):
         self.model_config = model_config
         self.training_config = training_config
         self.residue = residue
+
+        # Geometry sampling loss (set in setup if gamma > 0)
+        self._geometry_loss: GeometrySamplingLoss | None = None
 
     @abstractmethod
     def setup(self, stage: str) -> None:
@@ -126,6 +131,20 @@ class BaseVAEModule(LightningModule):
             free_bits=self.model_config.free_bits,
         )
 
+    def _setup_geometry_loss(self, atom_indices: list[int]) -> None:
+        """Set up geometry sampling loss for this residue.
+
+        Call this in setup() after model creation if gamma > 0.
+
+        Args:
+            atom_indices: List of atom indices in model ordering.
+        """
+        gamma = getattr(self.model_config, "gamma", 0.0)
+        if gamma > 0:
+            self._geometry_loss = GeometrySamplingLoss.from_residue(
+                self.residue, atom_indices
+            )
+
     def training_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute ELBO loss for training."""
         recon, target, mu, logvar = self._forward_batch(batch, batch_idx)
@@ -135,6 +154,15 @@ class BaseVAEModule(LightningModule):
         kl_loss = self.compute_kl(mu, logvar)
         beta = self.get_beta()
         loss = recon_loss + beta * kl_loss
+
+        # Geometry sampling loss
+        gamma = getattr(self.model_config, "gamma", 0.0)
+        if gamma > 0 and self._geometry_loss is not None:
+            model = self.get_model()
+            n_samples = getattr(self.model_config, "n_geom_samples", 16)
+            geom_loss = self._geometry_loss.compute(model, n_samples)
+            loss = loss + gamma * geom_loss
+            self.log("train/geom", geom_loss, on_step=True, on_epoch=True)
 
         # Logging
         self.log("train/recon", recon_loss, prog_bar=True, on_step=True, on_epoch=True)

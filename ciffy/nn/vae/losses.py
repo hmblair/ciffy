@@ -170,9 +170,175 @@ class VAELossTracker:
         self.log_fn(f"{p}/logvar_mean", logvar.mean(), on_step=False, on_epoch=epoch)
 
 
+class GeometrySamplingLoss:
+    """Compute geometry loss on samples from the VAE prior.
+
+    Samples latent vectors from N(0,1), decodes them, and penalizes
+    invalid geometry (bond lengths, angles, inter-residue distances).
+    This regularizes the latent space to produce valid structures.
+
+    Works with both per-residue VAEs (single residue type) and
+    consolidated VAEs (multiple residue types).
+
+    Example (per-residue VAE):
+        >>> from ciffy.geometry import GeometryConstraints
+        >>> constraints = GeometryConstraints.from_residue(Residue.A, atom_indices)
+        >>> geom_loss = GeometrySamplingLoss({Residue.A: constraints})
+        >>>
+        >>> # In training loop:
+        >>> loss = geom_loss.compute(model, n_samples=16)
+
+    Example (consolidated VAE):
+        >>> constraints = {
+        ...     Residue.A: GeometryConstraints.from_residue(Residue.A, atoms_a),
+        ...     Residue.C: GeometryConstraints.from_residue(Residue.C, atoms_c),
+        ...     ...
+        ... }
+        >>> geom_loss = GeometrySamplingLoss(constraints)
+    """
+
+    def __init__(
+        self,
+        constraints: "dict[Residue, GeometryConstraints]",
+        weights: dict[str, float] | None = None,
+    ):
+        """Initialize geometry sampling loss.
+
+        Args:
+            constraints: Dict mapping Residue to GeometryConstraints.
+            weights: Optional weights for loss components.
+                Defaults to {"bond": 1.0, "angle": 1.0, "inter": 1.0}.
+        """
+        from ciffy.geometry import GeometryConstraints as GC  # Avoid circular import
+
+        self.constraints = constraints
+        self.weights = weights or {"bond": 1.0, "angle": 1.0, "inter": 1.0}
+        self._residues = list(constraints.keys())
+
+    def to(self, device: "str | torch.device") -> "GeometrySamplingLoss":
+        """Move constraints to device."""
+        return GeometrySamplingLoss(
+            {res: c.to(device) for res, c in self.constraints.items()},
+            self.weights,
+        )
+
+    def compute(
+        self,
+        model: "torch.nn.Module",
+        n_samples: int = 16,
+        device: "torch.device | None" = None,
+    ) -> torch.Tensor:
+        """Compute geometry loss on samples from prior.
+
+        Supports two model interfaces:
+        1. Per-residue: model.sample(n_samples) -> (coords, transforms)
+        2. Consolidated: model.sample(residue, n_samples) -> (coords, transforms)
+
+        Args:
+            model: VAE model with sample() method.
+            n_samples: Number of samples per residue type.
+            device: Device for sampling. Defaults to model.device.
+
+        Returns:
+            Scalar geometry loss averaged over all residue types.
+        """
+        if device is None:
+            device = model.device
+
+        total_loss = torch.tensor(0.0, device=device)
+        n_residues = 0
+
+        for residue in self._residues:
+            constraints = self.constraints[residue].to(device)
+
+            # Try consolidated interface first, then per-residue
+            try:
+                coords, transforms = model.sample(residue, n_samples)
+            except TypeError:
+                # Per-residue model - sample() takes only n_samples
+                coords, transforms = model.sample(n_samples)
+
+            # Compute geometry loss for this residue type
+            loss = constraints.total_loss(coords, transforms, self.weights)
+            total_loss = total_loss + loss
+            n_residues += 1
+
+        if n_residues > 0:
+            total_loss = total_loss / n_residues
+
+        return total_loss
+
+    @classmethod
+    def from_residue(
+        cls,
+        residue: "Residue",
+        atom_indices: list[int],
+        device: str = "cpu",
+        **kwargs,
+    ) -> "GeometrySamplingLoss":
+        """Create for a single residue type.
+
+        Convenience factory for per-residue VAEs.
+
+        Args:
+            residue: Residue type.
+            atom_indices: List of atom indices in model ordering.
+            device: Device for constraints.
+            **kwargs: Additional arguments for GeometryConstraints.
+
+        Returns:
+            GeometrySamplingLoss for the residue.
+        """
+        from ciffy.geometry import GeometryConstraints
+
+        constraints = GeometryConstraints.from_residue(
+            residue, atom_indices, device=device, **kwargs
+        )
+        return cls({residue: constraints})
+
+    @classmethod
+    def from_residue_atoms(
+        cls,
+        residue_atoms: "dict[Residue, list[int]]",
+        device: str = "cpu",
+        **kwargs,
+    ) -> "GeometrySamplingLoss":
+        """Create for multiple residue types.
+
+        Convenience factory for consolidated VAEs.
+
+        Args:
+            residue_atoms: Dict mapping Residue to atom indices.
+            device: Device for constraints.
+            **kwargs: Additional arguments for GeometryConstraints.
+
+        Returns:
+            GeometrySamplingLoss for all residue types.
+        """
+        from ciffy.geometry import GeometryConstraints
+
+        constraints = {
+            res: GeometryConstraints.from_residue(res, atoms, device=device, **kwargs)
+            for res, atoms in residue_atoms.items()
+        }
+        return cls(constraints)
+
+    def __repr__(self) -> str:
+        residue_names = [r.name for r in self._residues]
+        return f"GeometrySamplingLoss(residues={residue_names})"
+
+
+# Type hint imports at module level cause circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ciffy.biochemistry import Residue
+    from ciffy.geometry import GeometryConstraints
+
+
 __all__ = [
     "compute_kl_divergence",
     "get_beta_with_warmup",
     "compute_elbo_loss",
     "VAELossTracker",
+    "GeometrySamplingLoss",
 ]

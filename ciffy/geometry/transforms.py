@@ -17,6 +17,7 @@ from ..backend import Array, is_torch
 
 if TYPE_CHECKING:
     from ..biochemistry import Residue
+    from ..biochemistry.linking import FrameDefinition
 from .primitives import cross, dot, norm, normalize, clone, to_scalar
 
 
@@ -368,8 +369,9 @@ def find_frame_atoms(
     """
     Find column indices for all frame atoms in one vectorized operation.
 
-    Instead of 3 sequential scans, does a single broadcasted comparison:
-    matches = (atoms[:, None] == frame_values[None, :])
+    Uses atom_value_variants() to get all possible values for each position,
+    enabling lookup of non-backbone atoms (e.g., N9, N1 in glycosidic frames)
+    without needing a specific residue type.
 
     Args:
         atoms: (n_atoms,) atom type value array.
@@ -381,26 +383,39 @@ def find_frame_atoms(
     """
     from ..backend import ops
 
-    # Get atom values from frame definition
-    frame_values = ops.array(frame_def.atom_values(), like=atoms)
+    # Get all possible atom values for each position
+    origin_vals, z_ref_vals, perp_ref_vals = frame_def.atom_value_variants()
 
-    # Vectorized comparison: (n_atoms, 3) boolean matrix
-    matches = (atoms[:, None] == frame_values[None, :])
+    # Concatenate all values and track boundaries
+    all_vals = origin_vals + z_ref_vals + perp_ref_vals
+    n_origin = len(origin_vals)
+    n_z_ref = len(z_ref_vals)
 
-    # Find first match in each column using argmax
-    # argmax returns 0 if no match, so we check with any()
+    # Vectorized comparison: (n_atoms, n_candidates) boolean matrix
+    all_vals_arr = ops.array(all_vals, like=atoms)
+    matches = (atoms[:, None] == all_vals_arr[None, :])
+
+    # For each position group, find if any candidate matched and where
+    # Slice the matches matrix by group and reduce
+    origin_matches = matches[:, :n_origin]
+    z_ref_matches = matches[:, n_origin:n_origin + n_z_ref]
+    perp_ref_matches = matches[:, n_origin + n_z_ref:]
+
+    # Reduce each group: any match across candidates -> per-atom bool
+    origin_any = ops.any(origin_matches, axis=1)  # (n_atoms,)
+    z_ref_any = ops.any(z_ref_matches, axis=1)
+    perp_ref_any = ops.any(perp_ref_matches, axis=1)
+
+    # Find first matching atom index for each position
     # Cast to int for torch compatibility (argmax not implemented for bool)
-    if is_torch(matches):
-        matches_int = matches.int()
+    if is_torch(origin_any):
+        origin_col = int(origin_any.int().argmax()) if origin_any.any() else -1
+        z_ref_col = int(z_ref_any.int().argmax()) if z_ref_any.any() else -1
+        perp_ref_col = int(perp_ref_any.int().argmax()) if perp_ref_any.any() else -1
     else:
-        matches_int = matches.astype(np.int32)
-    cols = ops.argmax(matches_int, axis=0)  # (3,)
-    has_match = ops.any(matches, axis=0)  # (3,)
-
-    # Convert to Python ints, using -1 for not found
-    origin_col = int(cols[0]) if has_match[0] else -1
-    z_ref_col = int(cols[1]) if has_match[1] else -1
-    perp_ref_col = int(cols[2]) if has_match[2] else -1
+        origin_col = int(np.argmax(origin_any)) if np.any(origin_any) else -1
+        z_ref_col = int(np.argmax(z_ref_any)) if np.any(z_ref_any) else -1
+        perp_ref_col = int(np.argmax(perp_ref_any)) if np.any(perp_ref_any) else -1
 
     return origin_col, z_ref_col, perp_ref_col
 
@@ -416,6 +431,10 @@ def compute_frame_from_atoms(
     This version finds atoms dynamically from the atoms array, unlike
     compute_frame_from_indices which requires pre-computed column indices.
 
+    For frames with non-backbone atoms (e.g., glycosidic frames), the
+    FrameDefinition must have a source AtomGroup set to enable vectorized
+    lookup of all possible atom values.
+
     Args:
         coords: (n_atoms, 3) coordinates.
         atoms: (n_atoms,) atom type values.
@@ -428,7 +447,7 @@ def compute_frame_from_atoms(
     Raises:
         ValueError: If required atoms are not found.
     """
-    # Find all frame atoms in one vectorized operation
+    # Find frame atoms using vectorized lookup
     origin_col, z_ref_col, perp_ref_col = find_frame_atoms(atoms, frame_def)
 
     if origin_col < 0:

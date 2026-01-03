@@ -24,9 +24,11 @@ from ._generated_linking import (
     NUCLEIC_ACID_LINK_GEOMETRY,
     PEPTIDE_LINK_GEOMETRY,
 )
+from .constants import PurineBase, PyrimidineBase
 
 if TYPE_CHECKING:
     from . import Residue
+    from .atom import AtomGroup
 
 
 # Unified backbone atom values (from codegen/config.py)
@@ -55,6 +57,10 @@ class FrameDefinition:
 
     Atom names use Python naming convention (apostrophe -> p, e.g., "O3p" for O3').
 
+    For non-backbone atoms (e.g., N9, N1 in glycosidic frames), set `source` to
+    the AtomGroup containing those atoms (e.g., PurineBase, PyrimidineBase).
+    This enables vectorized lookup via atom_value_variants().
+
     Example:
         O3' frame for RNA outgoing link:
         - Origin at O3'
@@ -66,6 +72,7 @@ class FrameDefinition:
     z_ref: str               # Atom for Z-axis reference
     perp_ref: str | None     # Atom for perpendicular reference (None = arbitrary)
     z_toward_origin: bool    # True if Z points from z_ref toward origin
+    source: "AtomGroup | None" = None  # AtomGroup for non-backbone atom lookup
 
     def resolve(
         self,
@@ -137,6 +144,9 @@ class FrameDefinition:
         """
         Get atom type values for frame atoms as an ordered tuple.
 
+        Only works for backbone atoms. Raises KeyError for non-backbone atoms.
+        Use atom_value_variants() for frames with non-backbone atoms.
+
         Returns:
             (origin_val, z_ref_val, perp_ref_val) where perp_ref_val is -1
             if perp_ref is None.
@@ -145,6 +155,44 @@ class FrameDefinition:
         z_ref_val = BACKBONE_ATOM_VALUES[self.z_ref]
         perp_ref_val = BACKBONE_ATOM_VALUES[self.perp_ref] if self.perp_ref else -1
         return origin_val, z_ref_val, perp_ref_val
+
+    def atom_value_variants(self) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        """
+        Get all possible atom values for each frame position.
+
+        For backbone atoms, returns single-element tuple with the unified value.
+        For non-backbone atoms (when source is set), returns all values from the
+        source AtomGroup for that atom name.
+
+        This enables vectorized frame lookup without needing a specific residue type.
+
+        Returns:
+            (origin_vals, z_ref_vals, perp_ref_vals) where each is a tuple of
+            possible atom values. perp_ref_vals is (-1,) if perp_ref is None.
+
+        Raises:
+            ValueError: If source is needed but not set.
+        """
+        def get_values(name: str) -> tuple[int, ...]:
+            # Try backbone lookup first
+            if name in BACKBONE_ATOM_VALUES:
+                return (BACKBONE_ATOM_VALUES[name],)
+            # For non-backbone atoms, use source AtomGroup
+            if self.source is None:
+                raise ValueError(
+                    f"Atom '{name}' is not a backbone atom and no source AtomGroup is set. "
+                    f"Set source= when constructing the FrameDefinition."
+                )
+            atom_group = getattr(self.source, name, None)
+            if atom_group is None:
+                raise ValueError(f"Atom '{name}' not found in source AtomGroup")
+            return tuple(atom_group.index().tolist())
+
+        origin_vals = get_values(self.origin)
+        z_ref_vals = get_values(self.z_ref)
+        perp_ref_vals = get_values(self.perp_ref) if self.perp_ref else (-1,)
+
+        return origin_vals, z_ref_vals, perp_ref_vals
 
     def required_backbone_values(self) -> set[int]:
         """
@@ -316,6 +364,7 @@ PURINE_GLYCOSIDIC_FRAME = FrameDefinition(
     z_ref="N9",
     perp_ref="C4",
     z_toward_origin=False,  # Z from C1' toward N9
+    source=PurineBase,
 )
 
 # Glycosidic frame for pyrimidines (C, U, T): C1' origin, X toward N1
@@ -324,6 +373,7 @@ PYRIMIDINE_GLYCOSIDIC_FRAME = FrameDefinition(
     z_ref="N1",
     perp_ref="C2",
     z_toward_origin=False,  # Z from C1' toward N1
+    source=PyrimidineBase,
 )
 
 # Backbone frame for proteins: CA origin, X toward N

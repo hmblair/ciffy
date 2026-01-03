@@ -4,7 +4,6 @@ Chain building utilities for polymer construction and generative models.
 This module provides functions for:
 
 - **Residue expansion**: Get atom data with terminal filtering (expand_residue)
-- **Frame resolution**: Resolve linking frames for positioning (_resolve_frame_indices)
 - **Linear extension**: Calculate SE(3) transform for linear chain extension (linear_extend_transform)
 """
 
@@ -12,17 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..biochemistry import Molecule, Residue, atom_to_element
-from ..biochemistry.linking import LINKING_BY_TYPE, LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
+from ..biochemistry.linking import LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
 from ..backend import Array
 from ..utils import atoms_to_col_map
-
-if TYPE_CHECKING:
-    pass
 
 
 # =============================================================================
@@ -39,29 +34,6 @@ class MoleculeConfig:
     linking: LinkingDefinition | None
     start_terminal_atoms: frozenset[str]  # 5'/N-terminal only
     end_terminal_atoms: frozenset[str]    # 3'/C-terminal only
-
-
-@dataclass
-class FrameIndices:
-    """
-    Pre-resolved frame column indices for a residue type.
-
-    Uses arrays with -1 sentinel for missing perp_ref, following ciffy's
-    philosophy of arrays over Python data types. This enables efficient
-    frame computation without Python attribute lookups.
-
-    Attributes:
-        prev_cols: shape (3,) int32 array [origin, z_ref, perp_ref] for outgoing frame.
-            -1 indicates missing perp_ref.
-        prev_z_toward: If True, Z points from z_ref toward origin.
-        next_cols: shape (3,) int32 array [origin, z_ref, perp_ref] for incoming frame.
-            -1 indicates missing perp_ref.
-        next_z_toward: If True, Z points from z_ref toward origin.
-    """
-    prev_cols: np.ndarray   # shape (3,), dtype=int32, -1 = no perp_ref
-    prev_z_toward: bool
-    next_cols: np.ndarray   # shape (3,), dtype=int32, -1 = no perp_ref
-    next_z_toward: bool
 
 
 # =============================================================================
@@ -85,13 +57,6 @@ _MOLECULE_CONFIGS: dict[Molecule, MoleculeConfig] = {
         end_terminal_atoms=frozenset({'OXT', 'HXT'}),
     ),
 }
-
-
-def get_molecule_config(mol_type: Molecule) -> MoleculeConfig:
-    """Get configuration for a molecule type."""
-    if mol_type not in _MOLECULE_CONFIGS:
-        raise ValueError(f"Unsupported molecule type: {mol_type.name}")
-    return _MOLECULE_CONFIGS[mol_type]
 
 
 # =============================================================================
@@ -238,16 +203,14 @@ def linear_extend_transform(
         # No linking definition - use default spacing
         spacing = 6.0
     else:
-        # Build atom_to_col mappings
+        # Build atom_to_col mapping for previous residue
         prev_atom_to_col = atoms_to_col_map(tuple(int(a) for a in prev_atoms))
-        next_atom_to_col = atoms_to_col_map(tuple(int(a) for a in next_atoms))
 
-        # Get linking atoms
+        # Get linking atom on previous residue
         prev_link_atom = getattr(prev_residue, link_def.prev_atom)  # e.g., O3' for RNA
-        next_link_atom = getattr(next_residue, link_def.next_atom)  # e.g., P for RNA
 
         # Get P position of previous residue to calculate backbone span
-        prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom
+        prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom (start of current residue)
 
         if prev_link_atom.value in prev_atom_to_col and prev_p_atom.value in prev_atom_to_col:
             prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
@@ -261,118 +224,4 @@ def linear_extend_transform(
 
     # Return identity rotation + Z-axis translation
     return np.array([0.0, 0.0, 0.0, 0.0, 0.0, spacing], dtype=np.float32)
-
-
-# =============================================================================
-# FRAME RESOLUTION (cached for fast positioning)
-# =============================================================================
-
-def _infer_link_definition(atom_set: set[int]) -> LinkingDefinition | None:
-    """
-    Infer the linking definition from present backbone atoms.
-
-    This enables robust frame resolution for modified residues by detecting
-    the polymer type from which backbone atoms are present.
-
-    Args:
-        atom_set: Set of atom type values present in the residue.
-
-    Returns:
-        LinkingDefinition for nucleic acid or peptide, or None if neither.
-    """
-    from ..biochemistry.linking import BACKBONE_ATOM_VALUES
-
-    # Check for nucleic acid backbone (P, O3', C3', etc.)
-    nucleic_required = {
-        BACKBONE_ATOM_VALUES["P"],
-        BACKBONE_ATOM_VALUES["O3p"],
-        BACKBONE_ATOM_VALUES["C3p"],
-    }
-    if nucleic_required.issubset(atom_set):
-        return NUCLEIC_ACID_LINK
-
-    # Check for protein backbone (N, CA, C)
-    protein_required = {
-        BACKBONE_ATOM_VALUES["N"],
-        BACKBONE_ATOM_VALUES["CA"],
-        BACKBONE_ATOM_VALUES["C"],
-    }
-    if protein_required.issubset(atom_set):
-        return PEPTIDE_LINK
-
-    return None
-
-
-@lru_cache(maxsize=256)
-def _resolve_frame_indices(residue_idx: int, atom_indices: tuple[int, ...]) -> FrameIndices:
-    """
-    Resolve frame column indices for a (residue_type, atom_subset) pair.
-
-    This function uses unified backbone atom values to resolve frames,
-    making it robust to modified residues with standard backbones.
-    The residue_idx is used as a cache key and for fallback lookup,
-    but frame resolution uses the fixed backbone values directly.
-
-    Args:
-        residue_idx: Residue enum value (int), used for caching and fallback.
-        atom_indices: Tuple of atom type values in the residue's coordinate array.
-
-    Returns:
-        FrameIndices with pre-resolved column indices for both incoming and
-        outgoing frames.
-
-    Raises:
-        ValueError: If required linking atoms are missing from atom_indices.
-    """
-    atom_to_col = atoms_to_col_map(atom_indices)
-    atom_set = set(atom_indices)
-
-    # First, try to infer linking type from backbone atoms present
-    # This works for modified residues not in the whitelist
-    link_def = _infer_link_definition(atom_set)
-
-    # Fallback: use residue enum if inference failed
-    if link_def is None:
-        try:
-            residue = Residue.from_index(residue_idx)
-            link_def = LINKING_BY_TYPE.get(residue.molecule_type)
-        except (ValueError, KeyError):
-            pass  # Modified residue not in whitelist
-
-    if link_def is None:
-        # Non-polymer residue (ligand, etc.) - no linking frames
-        return FrameIndices(
-            prev_cols=np.array([-1, -1, -1], dtype=np.int32),
-            prev_z_toward=True,
-            next_cols=np.array([-1, -1, -1], dtype=np.int32),
-            next_z_toward=True,
-        )
-
-    # Use value-based resolution (works for any residue with standard backbone)
-    try:
-        prev_tuple = link_def.prev_frame.resolve_by_value(atom_to_col)
-        next_tuple = link_def.next_frame.resolve_by_value(atom_to_col)
-    except KeyError as e:
-        raise ValueError(f"Missing backbone atom for frame resolution: {e}")
-
-    prev_cols = np.array([
-        prev_tuple[0],
-        prev_tuple[1],
-        prev_tuple[2] if prev_tuple[2] is not None else -1,
-    ], dtype=np.int32)
-
-    next_cols = np.array([
-        next_tuple[0],
-        next_tuple[1],
-        next_tuple[2] if next_tuple[2] is not None else -1,
-    ], dtype=np.int32)
-
-    return FrameIndices(
-        prev_cols=prev_cols,
-        prev_z_toward=link_def.prev_frame.z_toward_origin,
-        next_cols=next_cols,
-        next_z_toward=link_def.next_frame.z_toward_origin,
-    )
-
-
 

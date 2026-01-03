@@ -19,20 +19,12 @@ from ..backend.ops import to_backend, stack, unsqueeze
 if TYPE_CHECKING:
     from ..biochemistry import Residue
     from ..biochemistry.linking import FrameDefinition
-from .primitives import cross, dot, norm, normalize, clone, to_scalar
+from .primitives import cross, dot, normalize, clone, to_scalar
 
 
 # =============================================================================
 # SE(3) Transform Operations
 # =============================================================================
-
-
-def _stack_columns(x: Array, y: Array, z: Array) -> Array:
-    """Stack three vectors as columns of a matrix."""
-    if is_torch(x):
-        import torch
-        return torch.stack([x, y, z], dim=1)
-    return np.column_stack([x, y, z])
 
 
 def _eye3(like: Array) -> Array:
@@ -332,38 +324,6 @@ def frame_from_positions(positions: Array) -> tuple[Array, Array]:
     R = stack([x_axis, y_axis, z_axis], axis=-1)
 
     return origin, R
-
-
-def _arbitrary_perpendicular(z_axis: Array) -> Array:
-    """
-    Compute an arbitrary unit vector perpendicular to z_axis.
-
-    Used when no perpendicular reference atom is available (e.g., N frame in proteins).
-
-    Args:
-        z_axis: (3,) or (..., 3) normalized vector(s).
-
-    Returns:
-        Unit vector(s) perpendicular to z_axis, same shape as input.
-    """
-    if is_torch(z_axis):
-        import torch
-        # Choose reference that's not parallel to z_axis
-        ref = torch.zeros_like(z_axis)
-        ref[..., 0] = 1.0
-        # If too parallel, use y-axis instead
-        parallel = (dot(z_axis, ref).abs() > 0.9) if z_axis.ndim == 1 else None
-        if parallel is not None and parallel:
-            ref = torch.zeros_like(z_axis)
-            ref[..., 1] = 1.0
-    else:
-        ref = np.zeros_like(z_axis)
-        ref[..., 0] = 1.0
-        if abs(dot(z_axis, ref)) > 0.9:
-            ref = np.zeros_like(z_axis)
-            ref[..., 1] = 1.0
-
-    return normalize(cross(ref, z_axis))
 
 
 def rigid_align(

@@ -394,14 +394,14 @@ class TestFromSequenceTemplate:
         assert len(template.atoms) == template.size()
         assert len(template.elements) == template.size()
 
-    def test_template_with_coordinates(self):
-        """Can add coordinates to template with with_coordinates()."""
+    def test_template_copy_coordinates(self):
+        """Can add coordinates to template with copy(coordinates=...)."""
         template = from_sequence("acgu")
 
         # Create dummy coordinates
         coords = np.zeros((template.size(), 3), dtype=np.float32)
 
-        polymer = template.with_coordinates(coords)
+        polymer = template.copy(coordinates=coords)
 
         assert polymer.coordinates is not None
         assert np.allclose(polymer.coordinates, coords)

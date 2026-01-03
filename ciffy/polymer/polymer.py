@@ -330,15 +330,25 @@ class Polymer:
         }
 
     def _validate_sizes(self) -> None:
-        """Validate that field sizes match hierarchy sizes.
+        """Validate that field sizes and devices match hierarchy.
 
         Raises:
             ValueError: If any field size doesn't match the hierarchy.
+            TypeError: If any field backend doesn't match.
+            ValueError: If any field device doesn't match.
         """
+        from ..backend import check_compatible
+
+        ref = self._hierarchy._ref
+
         for name, desc in self._get_descriptors().items():
             value = getattr(self, desc.private_name, None)
             if value is None:
                 continue
+
+            # Validate device/backend for Field arrays (not Metadata)
+            if isinstance(desc, Field) and ref is not None:
+                check_compatible(ref, value, name)
 
             # Skip molecule-scale (no size constraint)
             if desc.scale == Scale.MOLECULE:
@@ -726,20 +736,50 @@ class Polymer:
         """Return the number of atoms."""
         return self.size()
 
-    def copy(self: Polymer) -> Polymer:
-        """Return a deep copy of this Polymer."""
+    def copy(self: Polymer, **overrides) -> Polymer:
+        """
+        Return a copy of this Polymer, optionally with field overrides.
+
+        When called with no arguments, returns a deep copy with all arrays
+        cloned. When called with keyword arguments, those fields use the
+        provided values instead of being cloned.
+
+        Args:
+            **overrides: Field values to override. Can be any descriptor name:
+                coordinates, atoms, elements, sequence, bfactors, pdb_id,
+                resolution, date, names, strands, descriptions, molecule_types.
+
+        Returns:
+            New Polymer with specified fields overridden (or all cloned if none).
+
+        Examples:
+            >>> # Deep copy
+            >>> copy = polymer.copy()
+
+            >>> # Replace coordinates (e.g., after prediction)
+            >>> result = template.copy(coordinates=predicted_coords)
+
+            >>> # Replace multiple fields
+            >>> modified = polymer.copy(coordinates=new_coords, bfactors=new_bfactors)
+        """
         from ..backend import ops
 
         def _clone_if_present(arr):
             return ops.clone(arr) if arr is not None else None
 
-        return self._clone(
-            coordinates=_clone_if_present(self.coordinates),
-            atoms=_clone_if_present(self.atoms),
-            elements=_clone_if_present(self.elements),
-            sequence=_clone_if_present(self.sequence),
-            bfactors=_clone_if_present(self.bfactors),
-        )
+        # Build base cloned values for array fields
+        cloned = {
+            'coordinates': _clone_if_present(self._coordinates),
+            'atoms': _clone_if_present(self._atoms),
+            'elements': _clone_if_present(self._elements),
+            'sequence': _clone_if_present(self._sequence),
+            'bfactors': _clone_if_present(self._bfactors),
+        }
+
+        # Override with user-provided values
+        cloned.update(overrides)
+
+        return self._clone(**cloned)
 
     def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:
         """
@@ -1651,7 +1691,7 @@ class Polymer:
         the last residue using the provided transform.
 
         Note: This method requires the polymer to have coordinates. For templates
-        (from from_sequence()), use with_coordinates() first.
+        (from from_sequence()), use copy(coordinates=...) first.
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
@@ -2117,11 +2157,16 @@ class Polymer:
             >>> polymer = ciffy.load("structure.cif", backend="numpy")
             >>> polymer.write("output.cif")
         """
-        if self.empty():
-            raise ValueError("Cannot write empty polymer to CIF file")
         if not filename.lower().endswith('.cif'):
             raise ValueError(
                 f"Output file must have .cif extension, got: {filename!r}"
+            )
+        if self.empty():
+            raise ValueError("Cannot write empty polymer to CIF file")
+        if self._coordinates is None:
+            raise ValueError(
+                "Cannot write polymer without coordinates. "
+                "Use copy(coordinates=...) to add coordinates to a template."
             )
         from ..io.writer import write_cif
         write_cif(self, filename)
@@ -2134,34 +2179,19 @@ class Polymer:
         """
         Create a copy with new coordinates.
 
-        Can be used to add coordinates to a template (from from_sequence())
-        or to replace coordinates on an existing polymer.
+        .. deprecated::
+            Use :meth:`copy(coordinates=...)` instead.
 
         Args:
-            coordinates: New coordinate tensor. Must match the polymer's
-                backend and device.
+            coordinates: New coordinate tensor.
 
         Returns:
             New Polymer with updated coordinates.
-
-        Raises:
-            TypeError: If backend doesn't match.
-            ValueError: If device doesn't match (for PyTorch tensors).
         """
-        # Validate backend and device compatibility
-        # Use atoms as reference if coordinates is None (template case)
-        ref = self._coordinates if self._coordinates is not None else self.atoms
-        check_compatible(ref, coordinates, "coordinates")
-
-        # Validate shape
-        expected = self.size()
-        actual = coordinates.shape[0] if hasattr(coordinates, 'shape') else len(coordinates)
-        if actual != expected:
-            raise ValueError(
-                f"Shape mismatch for coordinates: got {actual} atoms, expected {expected}"
-            )
-
-        result = copy(self)
-        result._coordinates = coordinates
-        result._bonds = None  # Clear cached bonds
-        return result
+        import warnings
+        warnings.warn(
+            "with_coordinates() is deprecated, use copy(coordinates=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.copy(coordinates=coordinates)

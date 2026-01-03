@@ -135,13 +135,13 @@ def sample(
     if n_samples == 1:
         if hasattr(coords, 'cpu'):
             coords = coords.cpu().numpy()
-        return template.with_coordinates(coords)
+        return template.copy(coordinates=coords)
     else:
         results = []
         for c in coords:
             if hasattr(c, 'cpu'):
                 c = c.cpu().numpy()
-            results.append(template.with_coordinates(c))
+            results.append(template.copy(coordinates=c))
         return results
 
 

@@ -226,7 +226,7 @@ import numpy as np
 
 # Translate the structure
 translated_coords = polymer.coordinates + np.array([10.0, 0.0, 0.0])
-translated = polymer.with_coordinates(translated_coords)
+translated = polymer.copy(coordinates=translated_coords)
 
 # Center at origin
 centered, centroid = polymer.center(ciffy.MOLECULE)

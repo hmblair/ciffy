@@ -333,7 +333,7 @@ class TestRmsdFunction:
 
         p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
         # Create a perturbed copy
-        p2 = p1.with_coordinates(p1.coordinates + 0.1)
+        p2 = p1.copy(coordinates=p1.coordinates + 0.1)
 
         rmsd_ab = rmsd(p1, p2)
         rmsd_ba = rmsd(p2, p1)
@@ -394,7 +394,7 @@ class TestRmsdFunction:
         if backend == "torch":
             import torch
             noise = torch.from_numpy(noise)
-        p2 = p1.with_coordinates(p1.coordinates + noise)
+        p2 = p1.copy(coordinates=p1.coordinates + noise)
 
         rmsd_val = rmsd(p1, p2)
 

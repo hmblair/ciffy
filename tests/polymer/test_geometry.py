@@ -322,11 +322,11 @@ class TestAlign:
         assert np.allclose(QQt, np.eye(3), atol=tol.orthogonality)
 
 
-class TestWithCoordinates:
-    """Test with_coordinates() edge cases."""
+class TestCopyWithCoordinates:
+    """Test copy(coordinates=...) edge cases."""
 
-    def test_with_coordinates_creates_copy(self, backend):
-        """with_coordinates creates new polymer with new coords."""
+    def test_copy_coordinates_creates_copy(self, backend):
+        """copy(coordinates=...) creates new polymer with new coords."""
         import ciffy
 
         p = get_single_chain_poly(backend)
@@ -340,15 +340,15 @@ class TestWithCoordinates:
         else:
             new_coords = np.random.randn(p.size(), 3).astype(np.float32)
 
-        p2 = p.with_coordinates(new_coords)
+        p2 = p.copy(coordinates=new_coords)
 
         # Original unchanged
         assert np.allclose(np.asarray(p.coordinates), original_coords)
         # New polymer has new coords
         assert np.allclose(np.asarray(p2.coordinates), np.asarray(new_coords))
 
-    def test_with_coordinates_preserves_structure(self, backend):
-        """with_coordinates preserves other polymer attributes."""
+    def test_copy_coordinates_preserves_structure(self, backend):
+        """copy(coordinates=...) preserves other polymer attributes."""
         import ciffy
         from ciffy import Scale
 
@@ -362,7 +362,7 @@ class TestWithCoordinates:
         else:
             new_coords = np.random.randn(p.size(), 3).astype(np.float32)
 
-        p2 = p.with_coordinates(new_coords)
+        p2 = p.copy(coordinates=new_coords)
 
         # Structure should be preserved
         assert p2.size() == p.size()

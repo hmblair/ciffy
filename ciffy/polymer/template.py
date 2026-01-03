@@ -2,7 +2,7 @@
 Template polymer generation from sequences.
 
 Generates Polymer templates with correct atom types, elements, and residue
-sequences, but without coordinates. Use Polymer.with_coordinates() to add
+sequences, but without coordinates. Use Polymer.copy(coordinates=...) to add
 predicted coordinates.
 """
 
@@ -225,7 +225,7 @@ def from_sequence(
     Generate a template Polymer from a sequence string or list of sequences.
 
     Creates a Polymer template with correct atom types, elements, and residue
-    sequence, but without coordinates. Use Polymer.with_coordinates() to add
+    sequence, but without coordinates. Use Polymer.copy(coordinates=...) to add
     predicted coordinates.
 
     Args:
@@ -241,14 +241,14 @@ def from_sequence(
         atoms: Optional dict mapping residue type (int) to atom values to include.
 
     Returns:
-        Polymer template (coordinates=None). Use with_coordinates() to add coords.
+        Polymer template (coordinates=None). Use copy(coordinates=...) to add coords.
 
     Examples:
         >>> template = from_sequence("acgu")
         >>> template.size(Scale.RESIDUE)
         4
         >>> template.coordinates  # None - template has no coordinates
-        >>> polymer = template.with_coordinates(predicted_coords)
+        >>> polymer = template.copy(coordinates=predicted_coords)
 
         >>> protein = from_sequence("MGKLF")
         >>> protein.size(Scale.RESIDUE)

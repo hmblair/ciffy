@@ -137,7 +137,7 @@ polymer = polymer.to("cuda")
 
 # Coordinates with gradients
 coords = polymer.coordinates.requires_grad_(True)
-polymer = polymer.with_coordinates(coords)
+polymer = polymer.copy(coordinates=coords)
 
 # Compute per-residue centroids (differentiable)
 centroids = polymer.reduce(polymer.coordinates, ciffy.RESIDUE)
@@ -158,7 +158,7 @@ p2 = ciffy.load("target.cif", backend="torch")
 
 # Enable gradients on predicted coordinates
 coords = p1.coordinates.requires_grad_(True)
-p1 = p1.with_coordinates(coords)
+p1 = p1.copy(coordinates=coords)
 
 # RMSD is differentiable
 rmsd_sq = ciffy.rmsd(p1, p2)
@@ -316,7 +316,7 @@ for epoch in range(100):
 
     # Forward
     pred_coords = model(polymer)
-    pred = polymer.with_coordinates(pred_coords)
+    pred = polymer.copy(coordinates=pred_coords)
 
     # RMSD loss
     loss = ciffy.rmsd(pred, target)
@@ -353,7 +353,7 @@ print(template.atoms)  # Atom type indices
 predicted_coords = model(template)  # Shape: (N, 3)
 
 # Attach predicted coordinates
-result = template.with_coordinates(predicted_coords)
+result = template.copy(coordinates=predicted_coords)
 
 # Save the predicted structure
 result.write("predicted.cif")
@@ -411,7 +411,7 @@ for sequence, target_cif in dataset:
 
     # Predict coordinates
     pred_coords = model(template)
-    pred = template.with_coordinates(pred_coords)
+    pred = template.copy(coordinates=pred_coords)
 
     # RMSD loss
     loss = ciffy.rmsd(pred, target)

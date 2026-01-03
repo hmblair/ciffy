@@ -183,4 +183,4 @@ def get_single_chain_poly(backend: str = "numpy", sequence: str = "acgu"):
 
     template = ciffy.from_sequence(sequence, backend=backend)
     coords = random_coordinates(template.size(), backend, scale=10.0)
-    return template.with_coordinates(coords)
+    return template.copy(coordinates=coords)

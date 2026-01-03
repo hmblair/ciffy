@@ -740,7 +740,7 @@ class PolymerModel(nn.Module, HubMixin):
         self._validate_sequence(sequence)
 
         if len(sequence) == 0:
-            return [template.with_coordinates(np.empty((0, 3)))]
+            return [template.copy(coordinates=np.empty((0, 3)))]
 
         # Create output template with only atoms this model knows about
         # This ensures the output polymer matches the sampled coordinates
@@ -756,7 +756,7 @@ class PolymerModel(nn.Module, HubMixin):
 
         # Convert to Polymers with correct atom structure
         return [
-            output_template.with_coordinates(coords.detach().cpu().numpy())
+            output_template.copy(coordinates=coords.detach().cpu().numpy())
             for coords in coords_list
         ]
 
@@ -1100,7 +1100,7 @@ class PolymerModel(nn.Module, HubMixin):
         else:
             coords_np = np.asarray(coords)
 
-        return template.with_coordinates(coords_np)
+        return template.copy(coordinates=coords_np)
 
     def interpolate(
         self,

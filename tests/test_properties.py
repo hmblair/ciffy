@@ -216,8 +216,8 @@ class TestBonds:
         bonds2 = centered.bonds
         assert bonds2 is not bonds1  # Different objects
 
-    def test_bonds_cleared_after_with_coordinates(self, backend):
-        """bonds cache cleared after with_coordinates()."""
+    def test_bonds_cleared_after_copy_coordinates(self, backend):
+        """bonds cache cleared after copy(coordinates=...)."""
         from ciffy import load
 
         cif = get_test_cif("3SKW")
@@ -227,7 +227,7 @@ class TestBonds:
         bonds1 = polymer.bonds
 
         # Create new polymer with same coordinates
-        new_polymer = polymer.with_coordinates(polymer.coordinates)
+        new_polymer = polymer.copy(coordinates=polymer.coordinates)
 
         # New polymer should have fresh bond calculation
         bonds2 = new_polymer.bonds

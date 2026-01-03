@@ -414,8 +414,8 @@ class LatentDiffusionModel(nn.Module):
             coords_list = [coords.cpu().numpy() for coords in coords_list]
 
         if template.size() == expected_atoms:
-            # Template matches - use with_coordinates for efficiency
-            return [template.with_coordinates(coords) for coords in coords_list]
+            # Template matches - use copy for efficiency
+            return [template.copy(coordinates=coords) for coords in coords_list]
         else:
             # Template has different atoms (e.g., missing atoms) - build fresh polymers
             from ciffy.polymer import from_sequence
@@ -428,7 +428,7 @@ class LatentDiffusionModel(nn.Module):
             )
             if use_torch:
                 flow_template = flow_template.torch().to(template.coordinates.device)
-            return [flow_template.with_coordinates(coords) for coords in coords_list]
+            return [flow_template.copy(coordinates=coords) for coords in coords_list]
 
     def sample_from_sequence(
         self,

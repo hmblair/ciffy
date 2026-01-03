@@ -198,7 +198,7 @@ template = from_extract(polymer, chains=[0, 1])
 
 # Use with predicted coordinates
 predicted_coords = model(template)
-result = template.with_coordinates(predicted_coords)
+result = template.copy(coordinates=predicted_coords)
 ```
 
 ## File Format Details

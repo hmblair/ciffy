@@ -336,7 +336,7 @@ class CoordinateDiffusionModel(nn.Module):
         # Convert to numpy Polymers with template metadata
         template_np = template.numpy()
         return [
-            template_np.with_coordinates(coords.cpu().numpy())
+            template_np.copy(coordinates=coords.cpu().numpy())
             for coords in coords_list
         ]
 

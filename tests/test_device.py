@@ -147,15 +147,15 @@ class TestMixedDeviceHandling:
         assert index.device.type == "cpu"
 
     @pytest.mark.parametrize("device", GPU_DEVICES)
-    def test_with_coordinates_rejects_cross_device(self, any_polymer_torch, device):
-        """Test with_coordinates rejects GPU coords on CPU polymer."""
+    def test_copy_coordinates_rejects_cross_device(self, any_polymer_torch, device):
+        """Test copy(coordinates=...) rejects GPU coords on CPU polymer."""
         skip_if_no_device(device)
         import torch
 
         # CPU polymer should reject GPU coordinates
         gpu_coords = any_polymer_torch.coordinates.to(device)
         with pytest.raises(ValueError, match="device"):
-            any_polymer_torch.with_coordinates(gpu_coords)
+            any_polymer_torch.copy(coordinates=gpu_coords)
 
 
 class TestDifferentiability:
@@ -177,7 +177,7 @@ class TestDifferentiability:
 
         # Add small perturbation to make them different
         coords2_perturbed = coords2 + torch.randn_like(coords2) * 0.1
-        p2 = p1.with_coordinates(coords2_perturbed)
+        p2 = p1.copy(coordinates=coords2_perturbed)
 
         # Compute RMSD
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
@@ -201,7 +201,7 @@ class TestDifferentiability:
         torch.manual_seed(42)
         noise = torch.randn_like(p1.coordinates) * 1.0
         coords2 = (p1.coordinates + noise).requires_grad_(True)
-        p2 = p1.with_coordinates(coords2)
+        p2 = p1.copy(coordinates=coords2)
 
         # Compute RMSD
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
@@ -219,7 +219,7 @@ class TestDifferentiability:
         from ciffy import Scale
 
         coords = any_polymer_torch.coordinates.clone().detach().requires_grad_(True)
-        p = any_polymer_torch.with_coordinates(coords)
+        p = any_polymer_torch.copy(coordinates=coords)
 
         centered, means = p.center(Scale.MOLECULE)
 
@@ -235,7 +235,7 @@ class TestDifferentiability:
         from ciffy import Scale
 
         coords = any_polymer_torch.coordinates.clone().detach().requires_grad_(True)
-        p = any_polymer_torch.with_coordinates(coords)
+        p = any_polymer_torch.copy(coordinates=coords)
 
         # Reduce to chain level
         chain_means = p.reduce(coords, Scale.CHAIN)
@@ -255,7 +255,7 @@ class TestDifferentiability:
 
         p1 = any_polymer_torch.to("cuda")
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
-        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
+        p2 = p1.copy(coordinates=coords2 + torch.randn_like(coords2) * 0.1)
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
         rmsd_sq.sum().backward()
@@ -279,7 +279,7 @@ class TestDifferentiability:
         # Very small perturbation - this is the challenging case for SVD gradients
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         perturbation = torch.randn_like(coords2) * 1e-6
-        p2 = p1.with_coordinates(coords2 + perturbation)
+        p2 = p1.copy(coordinates=coords2 + perturbation)
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
         rmsd_sq.sum().backward()
@@ -299,7 +299,7 @@ class TestDifferentiability:
 
         p1 = any_polymer_torch
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
-        p2 = p1.with_coordinates(coords2)
+        p2 = p1.copy(coordinates=coords2)
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
 
@@ -326,7 +326,7 @@ class TestDifferentiability:
         p1 = any_polymer_torch
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
         # Moderate perturbation
-        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.5)
+        p2 = p1.copy(coordinates=coords2 + torch.randn_like(coords2) * 0.5)
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
         rmsd_sq.sum().backward()
@@ -346,7 +346,7 @@ class TestDifferentiability:
         # Select single chain
         p1 = any_polymer_torch.chain(0)
         coords2 = p1.coordinates.clone().detach().requires_grad_(True)
-        p2 = p1.with_coordinates(coords2 + torch.randn_like(coords2) * 0.1)
+        p2 = p1.copy(coordinates=coords2 + torch.randn_like(coords2) * 0.1)
 
         rmsd_sq = ciffy.rmsd(p1, p2, ciffy.MOLECULE)
         rmsd_sq.sum().backward()

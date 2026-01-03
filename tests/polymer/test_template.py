@@ -203,7 +203,7 @@ class TestFromSequenceIntegration:
         template = from_sequence("acgu", id="test_rna")
         # Add coordinates to template
         coords = np.random.randn(template.size(), 3).astype(np.float32)
-        polymer = template.with_coordinates(coords)
+        polymer = template.copy(coordinates=coords)
         output_path = tmp_path / "test.cif"
 
         # Should not raise
@@ -228,7 +228,7 @@ class TestFromSequenceIntegration:
         # Verify
         assert np.allclose(polymer.coordinates, new_coords)
 
-    def test_round_trip_with_coordinates(self, tmp_path):
+    def test_round_trip_copy_coordinates(self, tmp_path):
         """Test write and reload with attached coordinates."""
         from ciffy import from_sequence, load
 

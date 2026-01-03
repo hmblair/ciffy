@@ -55,35 +55,16 @@ from .transforms import (
     apply_relative_transform,
 )
 
-# Frame computation (fast path with pre-resolved indices)
-from .transforms import compute_frame_from_indices
-
-# Frame computation (convenience wrappers)
+# Frame computation (new unified API)
 from .transforms import (
-    compute_o3p_frame,
-    compute_p_frame,
-    compute_c_frame,
-    compute_n_frame,
-    compute_prev_frame,
-    compute_next_frame,
+    extract_frame_positions,
+    frame_from_positions,
+    is_purine,
 )
 
-# Glycosidic frame (nucleotide-specific)
-from .transforms import compute_glycosidic_frame
-
-# Residue type detection
-from .transforms import is_purine
-
-# Residue linking
-from .transforms import (
-    position_residue,
-    position_residue_fast,
-)
-
-# Frame computation with precomputed indices (fast path)
+# Frame computation functions
 from .frames import (
-    FrameIndices,
-    compute_glycosidic_frame_indexed,
+    compute_glycosidic_frame,
     align_to_frame,
     align_and_compute_transform,
     position_next_residue,
@@ -123,25 +104,12 @@ __all__ = [
     "axis_angle_to_rotation",
     "compute_relative_transform",
     "apply_relative_transform",
-    # Frame computation (fast path with pre-resolved indices)
-    "compute_frame_from_indices",
-    # Frame computation (convenience wrappers)
-    "compute_o3p_frame",
-    "compute_p_frame",
-    "compute_c_frame",
-    "compute_n_frame",
-    "compute_prev_frame",
-    "compute_next_frame",
-    # Glycosidic frame (nucleotide-specific)
-    "compute_glycosidic_frame",
-    # Residue type detection
+    # Frame computation (new unified API)
+    "extract_frame_positions",
+    "frame_from_positions",
     "is_purine",
-    # Residue linking
-    "position_residue",
-    "position_residue_fast",
-    # Frame computation with precomputed indices
-    "FrameIndices",
-    "compute_glycosidic_frame_indexed",
+    # Frame computation functions
+    "compute_glycosidic_frame",
     "align_to_frame",
     "align_and_compute_transform",
     "position_next_residue",

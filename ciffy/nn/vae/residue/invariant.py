@@ -25,7 +25,6 @@ import torch.nn.functional as F
 if TYPE_CHECKING:
     from ciffy import Polymer
     from ciffy.biochemistry import AtomGroup, Residue
-    from ciffy.geometry import FrameIndices
 
 
 # =============================================================================
@@ -390,18 +389,6 @@ class InvariantResidueVAE(nn.Module):
         if not hasattr(self, '_atoms_group') or self._atoms_group is None:
             self._atoms_group = self.residue.subset(set(self._atom_indices))
         return self._atoms_group
-
-    @property
-    def frame_indices(self) -> "FrameIndices | None":
-        """FrameIndices for glycosidic frame alignment (cached)."""
-        if not hasattr(self, '_frame_indices'):
-            from ciffy.geometry import FrameIndices
-            try:
-                atoms_array = np.array(self._atom_indices, dtype=np.int64)
-                self._frame_indices = FrameIndices.from_atoms(atoms_array, self.residue)
-            except ValueError:
-                self._frame_indices = None
-        return self._frame_indices
 
     # ─────────────────────────────────────────────────────────────────────────
     # Core VAE methods

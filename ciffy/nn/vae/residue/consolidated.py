@@ -37,7 +37,6 @@ import torch.nn as nn
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
-    from ciffy.geometry import FrameIndices
 
 from .invariant import InvariantAttentionEncoder
 from ciffy.nn.blocks import InputNorm, ResidualBlock, build_mlp_stack
@@ -504,23 +503,6 @@ class ConsolidatedResidueView(nn.Module):
         self._model = model
         self._residue = residue
         self._atom_indices = model._residue_atoms[residue]
-        self._frame_indices: "FrameIndices | None" = None
-
-        # Build frame indices lazily
-        self._frame_indices_built = False
-
-    def _ensure_frame_indices(self) -> None:
-        """Build frame indices if not already done."""
-        if not self._frame_indices_built:
-            from ciffy.geometry import FrameIndices
-            atom_tensor = self._model.get_atom_indices(self._residue)
-            try:
-                self._frame_indices = FrameIndices.from_atoms(atom_tensor, self._residue)
-            except ValueError:
-                # Atoms don't include required frame atoms (e.g., test data)
-                self._frame_indices = None
-            self._frame_indices_built = True
-
     @property
     def latent_dim(self) -> int:
         """Latent space dimension."""
@@ -546,12 +528,6 @@ class ConsolidatedResidueView(nn.Module):
         """AtomGroup subset containing the atoms used by this residue."""
         from ciffy.biochemistry import AtomGroup
         return AtomGroup(self._atom_indices)
-
-    @property
-    def frame_indices(self) -> "FrameIndices | None":
-        """FrameIndices for positioning in chain assembly."""
-        self._ensure_frame_indices()
-        return self._frame_indices
 
     def encode(
         self,

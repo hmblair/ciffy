@@ -668,6 +668,41 @@ class AtomGroup:
         """Map global atom value -> local position."""
         return {int(a): a.local for a in self}
 
+    def for_residue(self, residue: "AtomGroup") -> int:
+        """
+        Get the atom value for a specific residue type.
+
+        For hierarchical AtomGroups (like Sugar.C1p or PurineBase.N9), this
+        returns the atom value for the specified residue.
+
+        Args:
+            residue: A residue AtomGroup (e.g., Residue.A).
+
+        Returns:
+            The integer atom value for this residue.
+
+        Raises:
+            AttributeError: If this atom is not present in the residue.
+
+        Example:
+            >>> Sugar.C1p.for_residue(Residue.A)
+            13  # C1' atom value for adenine
+            >>> PurineBase.N9.for_residue(Residue.G)
+            97  # N9 atom value for guanine
+        """
+        self._ensure_loaded()
+        residue_name = residue.name
+        if residue_name in self._members:
+            member = self._members[residue_name]
+            if isinstance(member, Atom):
+                return int(member)
+            elif isinstance(member, AtomGroup):
+                # Nested group - shouldn't happen for atom positions
+                raise TypeError(f"Expected Atom, got AtomGroup for {residue_name}")
+        raise AttributeError(
+            f"'{self.name}' has no atom for residue '{residue_name}'"
+        )
+
 
 def build_atom_group(
     name: str,

@@ -5,7 +5,7 @@ This module provides tools for learning low-dimensional representations
 of RNA residue conformations that enable valid sampling.
 
 Example:
-    >>> from ciffy.nn.flow.residue import ResidueFlowModel, FrameIndices
+    >>> from ciffy.nn.flow.residue import ResidueFlowModel
     >>> from ciffy.biochemistry import Residue
     >>> from ciffy.nn.lightning import ResidueFlowModule, FlowDataModule
     >>> import lightning as L
@@ -20,10 +20,9 @@ Example:
     >>> # Decode gives coords + link transform to next residue
     >>> coords, transform = model.decode(z)
     >>>
-    >>> # Position next residue using precomputed frame indices
+    >>> # Position next residue
     >>> from ciffy.nn.flow.residue import position_next_residue
-    >>> indices = FrameIndices.from_atoms(model.atoms.index(), Residue.A)
-    >>> coords2 = position_next_residue(coords1, coords2, transform, indices)
+    >>> coords2 = position_next_residue(coords1, coords2, transform, atoms, residue)
 """
 
 from .model import (
@@ -32,22 +31,18 @@ from .model import (
     ResidueFlowConfig,
 )
 from .data import (
-    # Frame indices (precomputed for fast frame computation)
-    FrameIndices,
-    # Frame computation
-    compute_glycosidic_frame,
-    align_and_compute_transform,
     # Data extraction
     extract_residues,
-    align_to_frame,
     extract_residues_with_links,
-    position_next_residue,
     ResidueDataset,
 )
 
-# Re-export from geometry for convenience
+# Frame computation functions from geometry
 from ciffy.geometry import (
-    compute_frame_from_indices,
+    compute_glycosidic_frame,
+    align_to_frame,
+    align_and_compute_transform,
+    position_next_residue,
     compute_relative_transform,
     apply_relative_transform,
 )
@@ -57,19 +52,16 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    # Frame indices
-    "FrameIndices",
-    "compute_frame_from_indices",
     # Frame computation
     "compute_glycosidic_frame",
+    "align_to_frame",
     "align_and_compute_transform",
+    "position_next_residue",
     # SE(3) transforms
     "compute_relative_transform",
     "apply_relative_transform",
     # Data extraction
     "extract_residues",
-    "align_to_frame",
     "extract_residues_with_links",
-    "position_next_residue",
     "ResidueDataset",
 ]

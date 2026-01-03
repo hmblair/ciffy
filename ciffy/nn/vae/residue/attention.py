@@ -22,7 +22,6 @@ from ciffy.nn.hub import HubMixin
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
-    from ciffy.geometry import FrameIndices
 
 
 # =============================================================================
@@ -334,7 +333,6 @@ class AttentionResidueVAE(nn.Module, HubMixin):
 
         # Cached properties
         self._atoms_group: "AtomGroup | None" = None
-        self._frame_indices: "FrameIndices | None" = None
 
         # Encoder
         self.encoder = AttentionEncoder(
@@ -414,19 +412,6 @@ class AttentionResidueVAE(nn.Module, HubMixin):
         if self._atoms_group is None:
             self._atoms_group = self.residue.subset(set(self._atom_indices))
         return self._atoms_group
-
-    @property
-    def frame_indices(self) -> "FrameIndices | None":
-        """FrameIndices for glycosidic frame alignment (cached)."""
-        if self._frame_indices is None:
-            from ciffy.geometry import FrameIndices
-
-            atoms_array = np.array(self._atom_indices, dtype=np.int64)
-            try:
-                self._frame_indices = FrameIndices.from_atoms(atoms_array, self.residue)
-            except ValueError:
-                return None
-        return self._frame_indices
 
     # ─────────────────────────────────────────────────────────────────────────
     # Encoding Methods

@@ -342,7 +342,7 @@ class PolymerModel(nn.Module, HubMixin):
         Decode latent vectors to positioned polymer coordinates.
 
         Uses Polymer.extend() for chain assembly, which handles frame computation
-        internally without requiring precomputed FrameIndices.
+        internally.
 
         Returns a PyTorch tensor. Call .numpy() if NumPy array is needed.
 

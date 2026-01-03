@@ -44,18 +44,17 @@ from .residue import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    # Frame indices and computation
-    FrameIndices,
-    compute_frame_from_indices,
+    # Frame computation
     compute_glycosidic_frame,
+    align_to_frame,
+    align_and_compute_transform,
+    position_next_residue,
     # SE(3) transforms
     compute_relative_transform,
     apply_relative_transform,
     # Data extraction
     extract_residues,
-    align_to_frame,
     extract_residues_with_links,
-    position_next_residue,
     ResidueDataset,
 )
 
@@ -79,18 +78,17 @@ __all__ = [
     "PCAFlow",
     "ResidueFlowModel",
     "ResidueFlowConfig",
-    # Frame indices and computation
-    "FrameIndices",
-    "compute_frame_from_indices",
+    # Frame computation
     "compute_glycosidic_frame",
+    "align_to_frame",
+    "align_and_compute_transform",
+    "position_next_residue",
     # SE(3) transforms
     "compute_relative_transform",
     "apply_relative_transform",
     # Data extraction
     "extract_residues",
-    "align_to_frame",
     "extract_residues_with_links",
-    "position_next_residue",
     "ResidueDataset",
     # Metrics
     "LatentMoments",

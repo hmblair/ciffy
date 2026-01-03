@@ -24,11 +24,14 @@ from ._generated_linking import (
     NUCLEIC_ACID_LINK_GEOMETRY,
     PEPTIDE_LINK_GEOMETRY,
 )
-from .constants import PurineBase, PyrimidineBase
+from .constants import (
+    Sugar, PhosphateGroup, ProteinBackbone,
+    PurineBase, PyrimidineBase,
+)
+from .atom import AtomGroup
 
 if TYPE_CHECKING:
-    from . import Residue
-    from .atom import AtomGroup
+    pass
 
 
 # Unified backbone atom values (from codegen/config.py)
@@ -47,181 +50,28 @@ BACKBONE_ATOM_VALUES: dict[str, int] = {
 @dataclass
 class FrameDefinition:
     """
-    Definition for computing a local coordinate frame at a linking atom.
+    Definition for computing a local coordinate frame from 3 atoms.
 
-    Frame construction:
-    - Origin at `origin` atom
-    - Z-axis from `z_ref` toward `origin` (if z_toward_origin=True) or vice versa
-    - X-axis perpendicular, toward `perp_ref` (or arbitrary if None)
-    - Y-axis completes right-handed system
+    Frame convention:
+    - Z-axis points FROM origin TOWARD axis_ref
+    - X-axis is perpendicular to Z, toward plane_ref (via Gram-Schmidt)
+    - Y-axis completes right-handed system (Y = Z × X)
 
-    Atom names use Python naming convention (apostrophe -> p, e.g., "O3p" for O3').
-
-    For non-backbone atoms (e.g., N9, N1 in glycosidic frames), set `source` to
-    the AtomGroup containing those atoms (e.g., PurineBase, PyrimidineBase).
-    This enables vectorized lookup via atom_value_variants().
+    Atoms are specified as AtomGroups (e.g., Sugar.O3p, PurineBase.N9).
+    For residue-specific atom values, use AtomGroup.for_residue(residue).
 
     Example:
-        O3' frame for RNA outgoing link:
-        - Origin at O3'
-        - Z-axis along C3'->O3' bond (outward)
-        - X-axis perpendicular, in C4'-C3'-O3' plane
+        O3' frame for RNA:
+        - Origin at O3', Z points toward C3' (into residue)
+        - X perpendicular in C4'-O3'-C3' plane
+
+        >>> positions = O3P_FRAME.extract(coords, atoms, Residue.A)
+        >>> origin, R = frame_from_positions(positions)
     """
 
-    origin: str              # Atom at frame origin (Python name, e.g., "O3p")
-    z_ref: str               # Atom for Z-axis reference
-    perp_ref: str | None     # Atom for perpendicular reference (None = arbitrary)
-    z_toward_origin: bool    # True if Z points from z_ref toward origin
-    source: "AtomGroup | None" = None  # AtomGroup for non-backbone atom lookup
-
-    def resolve(
-        self,
-        residue: "Residue",
-        atom_to_col: dict[int, int],
-    ) -> tuple[int, int, int | None]:
-        """
-        Convert atom names to column indices for a specific residue.
-
-        This should be called once at model initialization and cached.
-        The resulting indices can be used with compute_frame_from_indices()
-        for fast, vectorizable frame computation.
-
-        Args:
-            residue: Residue enum (e.g., Residue.A) providing atom lookups.
-            atom_to_col: Dict mapping atom type values to column indices.
-
-        Returns:
-            Tuple of (origin_col, z_ref_col, perp_ref_col) where perp_ref_col
-            may be None if perp_ref is None.
-
-        Raises:
-            KeyError: If required atoms are not in atom_to_col.
-            AttributeError: If residue doesn't have the specified atom.
-        """
-        origin_col = atom_to_col[getattr(residue, self.origin).value]
-        z_ref_col = atom_to_col[getattr(residue, self.z_ref).value]
-        perp_ref_col = (
-            atom_to_col[getattr(residue, self.perp_ref).value]
-            if self.perp_ref else None
-        )
-        return origin_col, z_ref_col, perp_ref_col
-
-    def resolve_by_value(
-        self,
-        atom_to_col: dict[int, int],
-    ) -> tuple[int, int, int | None]:
-        """
-        Resolve frame using unified backbone atom values.
-
-        This method uses the fixed backbone atom values (BACKBONE_ATOM_VALUES)
-        instead of looking up atoms via a Residue enum. This enables robust
-        frame resolution for modified residues with standard backbones.
-
-        Args:
-            atom_to_col: Dict mapping atom type values to column indices.
-
-        Returns:
-            Tuple of (origin_col, z_ref_col, perp_ref_col) where perp_ref_col
-            may be None if perp_ref is None.
-
-        Raises:
-            KeyError: If required backbone atoms are not in atom_to_col,
-                or if atom names are not in BACKBONE_ATOM_VALUES.
-        """
-        origin_val = BACKBONE_ATOM_VALUES[self.origin]
-        z_ref_val = BACKBONE_ATOM_VALUES[self.z_ref]
-
-        origin_col = atom_to_col[origin_val]
-        z_ref_col = atom_to_col[z_ref_val]
-        perp_ref_col = None
-        if self.perp_ref:
-            perp_ref_val = BACKBONE_ATOM_VALUES[self.perp_ref]
-            perp_ref_col = atom_to_col[perp_ref_val]
-
-        return origin_col, z_ref_col, perp_ref_col
-
-    def atom_values(self) -> tuple[int, int, int]:
-        """
-        Get atom type values for frame atoms as an ordered tuple.
-
-        Only works for backbone atoms. Raises KeyError for non-backbone atoms.
-        Use atom_value_variants() for frames with non-backbone atoms.
-
-        Returns:
-            (origin_val, z_ref_val, perp_ref_val) where perp_ref_val is -1
-            if perp_ref is None.
-        """
-        origin_val = BACKBONE_ATOM_VALUES[self.origin]
-        z_ref_val = BACKBONE_ATOM_VALUES[self.z_ref]
-        perp_ref_val = BACKBONE_ATOM_VALUES[self.perp_ref] if self.perp_ref else -1
-        return origin_val, z_ref_val, perp_ref_val
-
-    def atom_value_variants(self) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
-        """
-        Get all possible atom values for each frame position.
-
-        For backbone atoms, returns single-element tuple with the unified value.
-        For non-backbone atoms (when source is set), returns all values from the
-        source AtomGroup for that atom name.
-
-        This enables vectorized frame lookup without needing a specific residue type.
-
-        Returns:
-            (origin_vals, z_ref_vals, perp_ref_vals) where each is a tuple of
-            possible atom values. perp_ref_vals is (-1,) if perp_ref is None.
-
-        Raises:
-            ValueError: If source is needed but not set.
-        """
-        def get_values(name: str) -> tuple[int, ...]:
-            # Try backbone lookup first
-            if name in BACKBONE_ATOM_VALUES:
-                return (BACKBONE_ATOM_VALUES[name],)
-            # For non-backbone atoms, use source AtomGroup
-            if self.source is None:
-                raise ValueError(
-                    f"Atom '{name}' is not a backbone atom and no source AtomGroup is set. "
-                    f"Set source= when constructing the FrameDefinition."
-                )
-            atom_group = getattr(self.source, name, None)
-            if atom_group is None:
-                raise ValueError(f"Atom '{name}' not found in source AtomGroup")
-            return tuple(atom_group.index().tolist())
-
-        origin_vals = get_values(self.origin)
-        z_ref_vals = get_values(self.z_ref)
-        perp_ref_vals = get_values(self.perp_ref) if self.perp_ref else (-1,)
-
-        return origin_vals, z_ref_vals, perp_ref_vals
-
-    def required_backbone_values(self) -> set[int]:
-        """
-        Get the set of backbone atom values required for this frame.
-
-        Returns:
-            Set of unified backbone atom values needed to compute this frame.
-        """
-        required = {BACKBONE_ATOM_VALUES[self.origin]}
-        required.add(BACKBONE_ATOM_VALUES[self.z_ref])
-        if self.perp_ref:
-            required.add(BACKBONE_ATOM_VALUES[self.perp_ref])
-        return required
-
-    def required_atoms(self, residue: "Residue") -> set[int]:
-        """
-        Get the set of atom values required for this frame.
-
-        Args:
-            residue: Residue type (e.g., Residue.A).
-
-        Returns:
-            Set of atom type values needed to compute this frame.
-        """
-        required = {getattr(residue, self.origin).value}
-        required.add(getattr(residue, self.z_ref).value)
-        if self.perp_ref:
-            required.add(getattr(residue, self.perp_ref).value)
-        return required
+    origin: AtomGroup      # Frame location, Z-axis starts here
+    axis_ref: AtomGroup    # Z-axis points toward here
+    plane_ref: AtomGroup   # X-axis derived toward here (perpendicular to Z)
 
 
 @dataclass
@@ -230,9 +80,8 @@ class LinkingDefinition:
     Definition for inter-residue bonding and coordinate frames.
 
     Attributes:
-        prev_atom: Atom name on residue N that forms the bond (e.g., "O3p", "C").
-                   Uses Python naming convention (apostrophe -> p).
-        next_atom: Atom name on residue N+1 that forms the bond (e.g., "P", "N").
+        prev_atom: AtomGroup for the atom on residue N that forms the bond.
+        next_atom: AtomGroup for the atom on residue N+1 that forms the bond.
         bond_length: Standard bond length in Angstroms.
         prev_frame: Frame definition for outgoing link (at prev_atom).
         next_frame: Frame definition for incoming link (at next_atom).
@@ -242,104 +91,75 @@ class LinkingDefinition:
         The O3' frame defines the outgoing direction, P frame the incoming.
     """
 
-    prev_atom: str
-    next_atom: str
+    prev_atom: AtomGroup
+    next_atom: AtomGroup
     bond_length: float
     prev_frame: FrameDefinition
     next_frame: FrameDefinition
 
-    def required_atoms(self, residue: "Residue") -> set[int]:
-        """
-        Get all atoms required for link computation (both frames).
 
-        Args:
-            residue: Residue type.
+# =============================================================================
+# Nucleic Acid Linking Frames
+# =============================================================================
+# All frames use Z-primary convention: Z points origin → axis_ref
 
-        Returns:
-            Set of atom type values needed for linking.
-        """
-        return self.prev_frame.required_atoms(residue) | self.next_frame.required_atoms(residue)
+# O3' frame: Z points O3'→C3' (into residue)
+O3P_FRAME = FrameDefinition(
+    origin=Sugar.O3p,
+    axis_ref=Sugar.C3p,
+    plane_ref=Sugar.C4p,
+)
 
-    def validate_atoms(
-        self,
-        residue: "Residue",
-        available_atoms: set[int],
-        which: str = "both",
-    ) -> list[str]:
-        """
-        Validate that required atoms are available for frame computation.
-
-        Args:
-            residue: Residue type.
-            available_atoms: Set of available atom type values.
-            which: "prev", "next", or "both" to check specific frames.
-
-        Returns:
-            List of missing atom names (empty if all present).
-        """
-        if which == "prev":
-            required = self.prev_frame.required_atoms(residue)
-        elif which == "next":
-            required = self.next_frame.required_atoms(residue)
-        else:
-            required = self.required_atoms(residue)
-
-        missing_values = required - available_atoms
-        if not missing_values:
-            return []
-
-        # Convert values back to names for error messages
-        value_to_name = {int(a): a.name for a in residue}
-        return [value_to_name.get(v, f"atom_{v}") for v in missing_values]
-
+# P frame: Z points P→O5' (toward 5' end)
+P_FRAME = FrameDefinition(
+    origin=PhosphateGroup.P,
+    axis_ref=Sugar.O5p,
+    plane_ref=PhosphateGroup.OP1,
+)
 
 # Phosphodiester bond: O3' of residue N to P of residue N+1
-# O3' frame: origin at O3', Z along C3'->O3', X toward C4'
-# P frame: origin at P, Z along O5'->P, X toward OP1
-# Bond length from MonomerLibrary (links_and_mods.cif)
 NUCLEIC_ACID_LINK = LinkingDefinition(
-    prev_atom="O3p",
-    next_atom="P",
+    prev_atom=Sugar.O3p,
+    next_atom=PhosphateGroup.P,
     bond_length=NUCLEIC_ACID_LINK_GEOMETRY.bond_length,
-    prev_frame=FrameDefinition(
-        origin="O3p",
-        z_ref="C3p",
-        perp_ref="C4p",
-        z_toward_origin=True,
-    ),
-    next_frame=FrameDefinition(
-        origin="P",
-        z_ref="O5p",
-        perp_ref="OP1",
-        z_toward_origin=True,
-    ),
+    prev_frame=O3P_FRAME,
+    next_frame=P_FRAME,
+)
+
+
+# =============================================================================
+# Protein Linking Frames
+# =============================================================================
+
+# C frame: Z points C→CA (into residue)
+C_FRAME = FrameDefinition(
+    origin=ProteinBackbone.C,
+    axis_ref=ProteinBackbone.CA,
+    plane_ref=ProteinBackbone.O,
+)
+
+# N frame: Z points N→CA (along backbone)
+# Note: plane_ref uses O from same residue for now (arbitrary perpendicular)
+N_FRAME = FrameDefinition(
+    origin=ProteinBackbone.N,
+    axis_ref=ProteinBackbone.CA,
+    plane_ref=ProteinBackbone.C,  # Using C as plane_ref (within same residue)
 )
 
 # Peptide bond: C of residue N to N of residue N+1
-# C frame: origin at C, Z along CA->C, X toward O
-# N frame: origin at N, Z along N->CA (inverted), no perpendicular ref
-# Bond length from MonomerLibrary (links_and_mods.cif)
 PEPTIDE_LINK = LinkingDefinition(
-    prev_atom="C",
-    next_atom="N",
+    prev_atom=ProteinBackbone.C,
+    next_atom=ProteinBackbone.N,
     bond_length=PEPTIDE_LINK_GEOMETRY.bond_length,
-    prev_frame=FrameDefinition(
-        origin="C",
-        z_ref="CA",
-        perp_ref="O",
-        z_toward_origin=True,
-    ),
-    next_frame=FrameDefinition(
-        origin="N",
-        z_ref="CA",
-        perp_ref=None,
-        z_toward_origin=False,
-    ),
+    prev_frame=C_FRAME,
+    next_frame=N_FRAME,
 )
 
-# Map molecule type to linking definition
-# Only polymer types with well-defined inter-residue linkages are included
-# Keys are molecule type int values for easy lookup from residue.molecule_type
+
+# =============================================================================
+# Molecule Type → Linking Definition Map
+# =============================================================================
+
 LINKING_BY_TYPE: dict[int, LinkingDefinition] = {
     # Nucleic acids (phosphodiester linkage)
     Molecule.RNA.value: NUCLEIC_ACID_LINK,
@@ -353,33 +173,28 @@ LINKING_BY_TYPE: dict[int, LinkingDefinition] = {
 
 
 # =============================================================================
-# Alignment Frames
+# Alignment Frames (for residue encoding)
 # =============================================================================
 # Frame definitions for aligning residues to a canonical local frame.
 # Used by Polymer.align() to put residues in consistent orientations.
 
-# Glycosidic frame for purines (A, G): C1' origin, X toward N9
+# Purine glycosidic: Z points C1'→N9 (toward base)
 PURINE_GLYCOSIDIC_FRAME = FrameDefinition(
-    origin="C1p",
-    z_ref="N9",
-    perp_ref="C4",
-    z_toward_origin=False,  # Z from C1' toward N9
-    source=PurineBase,
+    origin=Sugar.C1p,
+    axis_ref=PurineBase.N9,
+    plane_ref=PurineBase.C4,
 )
 
-# Glycosidic frame for pyrimidines (C, U, T): C1' origin, X toward N1
+# Pyrimidine glycosidic: Z points C1'→N1 (toward base)
 PYRIMIDINE_GLYCOSIDIC_FRAME = FrameDefinition(
-    origin="C1p",
-    z_ref="N1",
-    perp_ref="C2",
-    z_toward_origin=False,  # Z from C1' toward N1
-    source=PyrimidineBase,
+    origin=Sugar.C1p,
+    axis_ref=PyrimidineBase.N1,
+    plane_ref=PyrimidineBase.C2,
 )
 
-# Backbone frame for proteins: CA origin, X toward N
+# Protein backbone: Z points CA→N
 PROTEIN_BACKBONE_FRAME = FrameDefinition(
-    origin="CA",
-    z_ref="N",
-    perp_ref="C",
-    z_toward_origin=False,  # Z from CA toward N
+    origin=ProteinBackbone.CA,
+    axis_ref=ProteinBackbone.N,
+    plane_ref=ProteinBackbone.C,
 )

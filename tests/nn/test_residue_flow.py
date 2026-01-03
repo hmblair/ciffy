@@ -428,40 +428,45 @@ class TestResidueFlowModel:
 
     def test_position_next_residue(self):
         """Test positioning next residue using transform."""
-        from ciffy.nn.flow.residue.data import (
-            position_next_residue,
-            FrameIndices,
-        )
         from ciffy.geometry import (
-            compute_frame_from_indices,
+            position_next_residue,
+            extract_frame_positions,
+            frame_from_positions,
             compute_relative_transform,
             apply_relative_transform,
         )
         from ciffy.biochemistry import Residue
+        from ciffy.biochemistry.linking import LINKING_BY_TYPE
 
         np.random.seed(42)
 
-        # Use all atoms from Residue.A (FrameIndices needs C4 for glycosidic frame)
+        # Use all atoms from Residue.A
         atoms = np.array(list(Residue.A.index()), dtype=np.int64)
         n_atoms = len(atoms)
+        residue = Residue.A
 
-        # Precompute frame indices once
-        indices = FrameIndices.from_atoms(atoms, Residue.A)
+        # Get linking definition
+        link_def = LINKING_BY_TYPE[residue.molecule_type]
 
         # Random coordinates (just for testing transform logic)
         coords1 = np.random.randn(n_atoms, 3).astype(np.float32)
         coords2 = np.random.randn(n_atoms, 3).astype(np.float32)
 
-        # Compute transform from coords1 to coords2 using precomputed indices
-        o1, R1 = compute_frame_from_indices(coords1, indices.prev_cols, indices.prev_z_toward)
-        o2, R2 = compute_frame_from_indices(coords2, indices.next_cols, indices.next_z_toward)
+        # Compute transform from coords1 to coords2 using new frame API
+        prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame, residue)
+        o1, R1 = frame_from_positions(prev_positions)
+
+        next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame, residue)
+        o2, R2 = frame_from_positions(next_positions)
+
         transform = compute_relative_transform(o1, R1, o2, R2)
 
         # Position coords2 using the transform (should recover original positions)
-        coords2_positioned = position_next_residue(coords1, coords2, transform, indices)
+        coords2_positioned = position_next_residue(coords1, coords2, transform, atoms, residue)
 
         # The P atom should be at the target position
-        p_idx = int(indices.next_cols[0])  # P is the origin of next frame
+        p_value = residue.P.value
+        p_idx = np.where(atoms == p_value)[0][0]
 
         # P position from original coords2 after positioning
         p_positioned = coords2_positioned[p_idx]

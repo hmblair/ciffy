@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from ciffy.geometry import FrameIndices
 from ciffy.geometry import GeometryConstraints
 
 
@@ -278,8 +277,6 @@ def main():
         )
         # Create GeometryConstraints for bond/angle losses
         constraints = GeometryConstraints.from_residue(residue, atoms.tolist())
-        # Create FrameIndices for chain assembly (still needed for sampling)
-        frame_indices = FrameIndices.from_atoms(atoms, residue)
 
         residue_data[res_name] = {
             "data": data,
@@ -291,7 +288,6 @@ def main():
             "n_features": data.shape[1],
             "atom_indices": atoms.tolist(),
             "constraints": constraints,
-            "frame_indices": frame_indices,
         }
         print(f"{len(data)} samples, {len(atoms)} atoms, {constraints.n_bonds} bonds, {constraints.n_angles} angles")
 
@@ -415,7 +411,7 @@ def main():
         coords_i = gt_coords_list[i]
         residue_i = gt_residues[i]
         rd = residue_data[residue_i.name]
-        indices = FrameIndices.from_atoms(rd["atoms"], residue_i)
+        atoms_i = rd["atoms"]
 
         if i == 0:
             positioned_coords.append(coords_i)
@@ -423,9 +419,9 @@ def main():
             prev_transform = gt_transforms_list[i - 1]
             prev_residue = gt_residues[i - 1]
             prev_rd = residue_data[prev_residue.name]
-            prev_indices = FrameIndices.from_atoms(prev_rd["atoms"], prev_residue)
+            prev_atoms = prev_rd["atoms"]
             positioned = position_next_residue(
-                positioned_coords[-1], coords_i, prev_transform, prev_indices
+                positioned_coords[-1], coords_i, prev_transform, prev_atoms, prev_residue
             )
             positioned_coords.append(positioned)
 

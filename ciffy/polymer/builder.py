@@ -206,15 +206,13 @@ def linear_extend_transform(
         # Build atom_to_col mapping for previous residue
         prev_atom_to_col = atoms_to_col_map(tuple(int(a) for a in prev_atoms))
 
-        # Get linking atom on previous residue
-        prev_link_atom = getattr(prev_residue, link_def.prev_atom)  # e.g., O3' for RNA
+        # Get linking atom values for previous residue using AtomGroup.for_residue()
+        prev_link_val = link_def.prev_atom.for_residue(prev_residue)  # e.g., O3' for RNA
+        prev_p_val = link_def.next_atom.for_residue(prev_residue)  # P atom (start of current residue)
 
-        # Get P position of previous residue to calculate backbone span
-        prev_p_atom = getattr(prev_residue, link_def.next_atom)  # P atom (start of current residue)
-
-        if prev_link_atom.value in prev_atom_to_col and prev_p_atom.value in prev_atom_to_col:
-            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_atom.value]]
-            prev_p_pos = prev_coords[prev_atom_to_col[prev_p_atom.value]]
+        if prev_link_val in prev_atom_to_col and prev_p_val in prev_atom_to_col:
+            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_val]]
+            prev_p_pos = prev_coords[prev_atom_to_col[prev_p_val]]
             # Backbone span is distance from P to O3' plus bond length
             backbone_span = float(np.linalg.norm(prev_link_pos - prev_p_pos))
             spacing = backbone_span + link_def.bond_length

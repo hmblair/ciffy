@@ -22,8 +22,7 @@ from ciffy.backend import Array, to_numpy, is_torch
 from ciffy.biochemistry import Scale
 from ciffy.operations.reduction import Reduction
 from ciffy.geometry import (
-    FrameIndices,
-    compute_glycosidic_frame_indexed as compute_glycosidic_frame,
+    compute_glycosidic_frame,
     align_to_frame,
     align_and_compute_transform,
     position_next_residue,
@@ -272,8 +271,7 @@ def extract_residues_with_links(
     2. Extract adjacent residue pairs from structures
     3. Filter by O3'-P bond length to ensure true connectivity
     4. Find common atoms across all instances
-    5. Build FrameIndices once for the common atom ordering
-    6. For each pair: align, compute link transform
+    5. For each pair: align, compute link transform
 
     Args:
         cif_paths: List of paths to CIF files (can contain mixed molecule types).
@@ -433,9 +431,8 @@ def extract_residues_with_links(
     if verbose:
         print(f"Pairs with all common atoms: {len(filtered_pairs)}")
 
-    # Phase 4: Build FrameIndices once for the common atom ordering
+    # Phase 4: Prepare atom array for the common atom ordering
     atoms_array = np.array(common_atoms, dtype=np.int64)
-    indices = FrameIndices.from_atoms(atoms_array, residue_type)
 
     # Phase 5: Remap, align, and compute transforms
     n_pairs = len(filtered_pairs)
@@ -451,7 +448,7 @@ def extract_residues_with_links(
 
         # Use shared alignment function
         coords_out[i], transforms_out[i] = align_and_compute_transform(
-            coords1, coords2, indices
+            coords1, coords2, atoms_array, residue_type
         )
 
     return coords_out, transforms_out, atoms_array
@@ -473,7 +470,7 @@ class ResidueDataset:
         coords: (n_instances, n_atoms, 3) aligned coordinates.
         transforms: (n_instances, 6) SE(3) link transforms.
         atoms: (n_atoms,) atom type indices.
-        indices: Precomputed FrameIndices for frame computation.
+        residue: Residue type.
 
     Example:
         >>> from ciffy.nn.flow.residue import ResidueDataset
@@ -515,9 +512,6 @@ class ResidueDataset:
         self.transforms = transforms  # (n_instances, 6)
         self.atoms = atoms  # (n_atoms,) atom type indices
         self.n_atoms = len(atoms)
-
-        # Precompute frame indices for later use
-        self.indices = FrameIndices.from_atoms(atoms, residue)
 
         # Create extended representation (flattened coords + transforms)
         n_instances = len(coords)

@@ -724,7 +724,7 @@ class Polymer:
             PYRIMIDINE_GLYCOSIDIC_FRAME,
             PROTEIN_BACKBONE_FRAME,
         )
-        from ..geometry.transforms import compute_frame_from_atoms, is_purine
+        from ..geometry.transforms import extract_frame_positions, frame_from_positions, is_purine
 
         aligned_list = []
         n_residues = self.size(Scale.RESIDUE)
@@ -744,7 +744,8 @@ class Polymer:
                 )
 
             # Compute frame and align
-            origin, R = compute_frame_from_atoms(coords, atoms, frame_def)
+            positions = extract_frame_positions(coords, atoms, frame_def, residue)
+            origin, R = frame_from_positions(positions)
             aligned = (coords - origin) @ R
             aligned_list.append(aligned)
 
@@ -2057,7 +2058,7 @@ class Polymer:
 
         # Position the new residue's coordinates and add to fields
         fields['coordinates'] = self._position_new_residue(
-            coordinates, transform, fields.get('atoms')
+            coordinates, transform, residue, fields.get('atoms')
         )
         fields['sequence'] = ops.array([residue.value], like=ref, dtype='int64')
 
@@ -2085,13 +2086,15 @@ class Polymer:
         self: Polymer,
         coords: Array,
         transform: Array,
+        new_residue: "Residue",
         atoms: Array | None,
     ) -> Array:
         """Position a new residue relative to the last residue using transform."""
         from ..biochemistry.linking import LINKING_BY_TYPE
         from ..geometry.transforms import (
             apply_relative_transform,
-            compute_frame_from_atoms,
+            extract_frame_positions,
+            frame_from_positions,
             rigid_align,
         )
 
@@ -2107,7 +2110,10 @@ class Polymer:
             )
 
         # Compute prev frame (e.g., O3' for RNA) from last residue
-        prev_origin, prev_R = compute_frame_from_atoms(last_coords, last_atoms, link_def.prev_frame)
+        prev_positions = extract_frame_positions(
+            last_coords, last_atoms, link_def.prev_frame, last_res_type
+        )
+        prev_origin, prev_R = frame_from_positions(prev_positions)
 
         # Apply transform to get target next frame position
         target_origin, target_R = apply_relative_transform(prev_origin, prev_R, transform)
@@ -2115,7 +2121,10 @@ class Polymer:
         # Position the new residue
         if atoms is not None:
             # Compute next frame (e.g., P for RNA) from new residue
-            next_origin, next_R = compute_frame_from_atoms(coords, atoms, link_def.next_frame)
+            next_positions = extract_frame_positions(
+                coords, atoms, link_def.next_frame, new_residue
+            )
+            next_origin, next_R = frame_from_positions(next_positions)
             # Align new residue so its next frame matches target
             return rigid_align(coords, next_origin, next_R, target_origin, target_R)
         else:

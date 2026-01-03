@@ -38,20 +38,25 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
                 residue, start_terminal=is_first, end_terminal=is_last
             )
 
+            # Convert to torch if needed
+            if backend == "torch":
+                import torch
+                coords = torch.from_numpy(coords)
+                atoms = torch.from_numpy(atoms)
+                elements = torch.from_numpy(elements)
+
             if poly.empty():
                 poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
             else:
                 last_res_coords, last_res_atoms, _, last_res_type = poly._residue_slice(-1)
                 transform = linear_extend_transform(
-                    last_res_coords, last_res_atoms, last_res_type, atoms, residue
+                    last_res_coords, last_res_atoms, last_res_type,
+                    atoms.numpy() if backend == "torch" else atoms,
+                    residue
                 )
                 if backend == "torch":
-                    import torch
-                    coords = torch.from_numpy(coords)
                     transform = torch.from_numpy(transform)
-                    atoms = torch.from_numpy(atoms)
-                    elements = torch.from_numpy(elements)
-                poly = poly.extend(residue, coords, transform, atoms, elements)
+                poly = poly.extend(residue, coords, transform, atoms=atoms, elements=elements)
 
     return poly
 
@@ -77,7 +82,7 @@ def extend_with_linear(poly, residue):
         atoms = torch.from_numpy(atoms)
         elements = torch.from_numpy(elements)
 
-    return poly.extend(residue, coords, transform, atoms, elements)
+    return poly.extend(residue, coords, transform, atoms=atoms, elements=elements)
 
 
 class TestJoin:
@@ -267,7 +272,7 @@ class TestExtend:
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(ValueError, match="single-chain"):
-            p.extend(Residue.A, coords, transform, atoms, elements)
+            p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
 
     def test_extend_hetatm_error(self):
         """Extend fails on polymer with HETATM."""
@@ -281,7 +286,7 @@ class TestExtend:
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(ValueError, match="poly-only"):
-            p.extend(Residue.A, coords, transform, atoms, elements)
+            p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
 
     def test_extend_template_error(self):
         """Extend fails on template (no coordinates)."""
@@ -290,7 +295,7 @@ class TestExtend:
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(AttributeError, match="coordinates"):
-            template.extend(Residue.G, coords, transform, atoms, elements)
+            template.extend(Residue.G, coords, transform, atoms=atoms, elements=elements)
 
     def test_extend_with_custom_coords(self):
         """Extend with explicit coordinates."""
@@ -305,7 +310,7 @@ class TestExtend:
             last_res_coords, last_res_atoms, last_res_type, atoms, Residue.G
         )
 
-        extended = p.extend(Residue.G, coords, transform, atoms, elements)
+        extended = p.extend(Residue.G, coords, transform, atoms=atoms, elements=elements)
 
         assert extended.size(Scale.RESIDUE) == 3
         assert extended.sequence_str() == "acg"

@@ -112,22 +112,26 @@ class TestPolymerFlowModel:
             polymer_model._get_atom_counts(sequence)
 
     def test_encode_shape(self, polymer_model):
-        """Test encode output shape."""
+        """Test encode output shape with pre-aligned per-residue coords."""
         sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
-        n_atoms = 10 + 12 + 10
-        coords = torch.randn(n_atoms, 3)
+        # encode() expects list of (n_atoms, 3) tensors, one per residue
+        aligned_coords = [
+            torch.randn(10, 3),  # A has 10 atoms
+            torch.randn(12, 3),  # G has 12 atoms
+            torch.randn(10, 3),  # A has 10 atoms
+        ]
 
-        latents = polymer_model.encode(coords, sequence)
+        latents = polymer_model.encode(aligned_coords, sequence)
 
         assert latents.shape == (3, 6)  # 3 residues, 6 latent dims
 
-    def test_encode_validates_coords_shape(self, polymer_model):
-        """Test encode validates coordinate shape."""
-        sequence = np.array([Residue.A.value])
-        coords = torch.randn(5, 3)  # Wrong number of atoms
+    def test_encode_validates_list_length(self, polymer_model):
+        """Test encode validates aligned_coords list length matches sequence."""
+        sequence = np.array([Residue.A.value, Residue.G.value])  # 2 residues
+        aligned_coords = [torch.randn(10, 3)]  # Only 1 tensor
 
-        with pytest.raises(ValueError, match="atoms but sequence expects"):
-            polymer_model.encode(coords, sequence)
+        with pytest.raises(ValueError, match="coordinate tensors but sequence"):
+            polymer_model.encode(aligned_coords, sequence)
 
     def test_decode_shape(self, polymer_model):
         """Test decode output shape."""
@@ -210,14 +214,15 @@ class TestPolymerFlowModelRoundtrip:
         # Single residue (no positioning needed)
         sequence = np.array([Residue.A.value])
         n_atoms = 10
-        coords = torch.randn(n_atoms, 3)
+        # encode() expects list of (n_atoms, 3) tensors, one per residue
+        aligned_coords = [torch.randn(n_atoms, 3)]
 
-        latents = polymer_model.encode(coords, sequence)
+        latents = polymer_model.encode(aligned_coords, sequence)
         coords_recon = polymer_model.decode(latents, sequence)
 
         # Should be close for single residue (only PCA truncation error)
         # Note: The synthetic data doesn't have real structure, so we just check shapes
-        assert coords_recon.shape == coords.shape
+        assert coords_recon.shape == (n_atoms, 3)
 
     def test_multi_residue_decode(self, polymer_model):
         """Test decoding multi-residue sequence produces valid output."""
@@ -274,230 +279,6 @@ class TestPolymerFlowModelSaveLoad:
             coords2 = loaded.decode(latents, sequence)
 
         assert torch.allclose(coords1, coords2, atol=1e-5)
-
-
-class TestPolymerFlowModelLazyComputation:
-    """Tests for stateful lazy computation API."""
-
-    def test_initial_state_unbound(self, polymer_model):
-        """Test model starts unbound."""
-        assert not polymer_model.is_bound
-        assert polymer_model.sequence is None
-
-    def test_bind_sets_sequence(self, polymer_model):
-        """Test bind sets the sequence."""
-        sequence = np.array([Residue.A.value, Residue.G.value])
-        polymer_model.bind(sequence)
-
-        assert polymer_model.is_bound
-        assert np.array_equal(polymer_model.sequence, sequence)
-
-    def test_bind_returns_self(self, polymer_model):
-        """Test bind returns self for method chaining."""
-        sequence = np.array([Residue.A.value])
-        result = polymer_model.bind(sequence)
-        assert result is polymer_model
-
-    def test_bind_validates_residue_types(self, polymer_model):
-        """Test bind validates all residue types are supported."""
-        with pytest.raises(ValueError, match="Unsupported residue types"):
-            polymer_model.bind(np.array([Residue.A.value, Residue.C.value]))  # C not in models
-
-    def test_unbind_clears_state(self, polymer_model):
-        """Test unbind clears all cached state."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-        polymer_model.coordinates = torch.randn(10, 3)
-        _ = polymer_model.latents  # Compute latents
-
-        polymer_model.unbind()
-
-        assert not polymer_model.is_bound
-        assert polymer_model.sequence is None
-
-    def test_latents_property_requires_bound(self, polymer_model):
-        """Test latents property raises if not bound."""
-        with pytest.raises(RuntimeError, match="No sequence bound"):
-            _ = polymer_model.latents
-
-    def test_coordinates_property_requires_bound(self, polymer_model):
-        """Test coordinates property raises if not bound."""
-        with pytest.raises(RuntimeError, match="No sequence bound"):
-            _ = polymer_model.coordinates
-
-    def test_latents_setter_requires_bound(self, polymer_model):
-        """Test latents setter raises if not bound."""
-        with pytest.raises(RuntimeError, match="No sequence bound"):
-            polymer_model.latents = torch.randn(1, 6)
-
-    def test_coordinates_setter_requires_bound(self, polymer_model):
-        """Test coordinates setter raises if not bound."""
-        with pytest.raises(RuntimeError, match="No sequence bound"):
-            polymer_model.coordinates = torch.randn(10, 3)
-
-    def test_set_coordinates_marks_latents_dirty(self, polymer_model):
-        """Test setting coordinates marks latents as needing recomputation."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        # Set coordinates
-        coords = torch.randn(10, 3)
-        polymer_model.coordinates = coords
-
-        # Internal state should show latents dirty
-        assert polymer_model._latents_dirty
-        assert not polymer_model._coords_dirty
-
-    def test_set_latents_marks_coords_dirty(self, polymer_model):
-        """Test setting latents marks coordinates as needing recomputation."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        # Set latents
-        latents = torch.randn(1, 6)
-        polymer_model.latents = latents
-
-        # Internal state should show coords dirty
-        assert polymer_model._coords_dirty
-        assert not polymer_model._latents_dirty
-
-    def test_lazy_latents_computation(self, polymer_model):
-        """Test latents are computed lazily from coordinates."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        coords = torch.randn(10, 3)
-        polymer_model.coordinates = coords
-
-        # First access computes latents
-        latents = polymer_model.latents
-
-        assert latents.shape == (1, 6)
-        assert not polymer_model._latents_dirty
-
-    def test_lazy_coords_computation(self, polymer_model):
-        """Test coordinates are computed lazily from latents."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        latents = torch.randn(1, 6)
-        polymer_model.latents = latents
-
-        # First access computes coordinates
-        coords = polymer_model.coordinates
-
-        assert coords.shape == (10, 3)
-        assert not polymer_model._coords_dirty
-
-    def test_cached_latents_not_recomputed(self, polymer_model):
-        """Test cached latents are returned without recomputation."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        coords = torch.randn(10, 3)
-        polymer_model.coordinates = coords
-
-        # First access computes
-        latents1 = polymer_model.latents
-
-        # Second access returns cached
-        latents2 = polymer_model.latents
-
-        assert latents1 is latents2  # Same object
-
-    def test_cached_coords_not_recomputed(self, polymer_model):
-        """Test cached coordinates are returned without recomputation."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        latents = torch.randn(1, 6)
-        polymer_model.latents = latents
-
-        # First access computes
-        coords1 = polymer_model.coordinates
-
-        # Second access returns cached
-        coords2 = polymer_model.coordinates
-
-        assert coords1 is coords2  # Same object
-
-    def test_latents_error_when_no_coords(self, polymer_model):
-        """Test accessing latents without coordinates raises error."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        with pytest.raises(RuntimeError, match="no coordinates set"):
-            _ = polymer_model.latents
-
-    def test_coords_error_when_no_latents(self, polymer_model):
-        """Test accessing coordinates without latents raises error."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        with pytest.raises(RuntimeError, match="no latents set"):
-            _ = polymer_model.coordinates
-
-    def test_latents_setter_validates_shape(self, polymer_model):
-        """Test latents setter validates shape matches sequence."""
-        sequence = np.array([Residue.A.value, Residue.G.value])  # 2 residues
-        polymer_model.bind(sequence)
-
-        with pytest.raises(ValueError, match="rows but sequence has"):
-            polymer_model.latents = torch.randn(3, 6)  # 3 rows, wrong
-
-    def test_latents_setter_validates_dim(self, polymer_model):
-        """Test latents setter validates latent dimension."""
-        sequence = np.array([Residue.A.value])
-        polymer_model.bind(sequence)
-
-        with pytest.raises(ValueError, match="dim .* but model expects"):
-            polymer_model.latents = torch.randn(1, 8)  # Wrong dim
-
-    def test_coordinates_setter_validates_shape(self, polymer_model):
-        """Test coordinates setter validates shape matches sequence."""
-        sequence = np.array([Residue.A.value])  # 10 atoms
-        polymer_model.bind(sequence)
-
-        with pytest.raises(ValueError, match="atoms but sequence expects"):
-            polymer_model.coordinates = torch.randn(15, 3)  # Wrong atoms
-
-    def test_rebind_clears_cache(self, polymer_model):
-        """Test rebinding clears cached values."""
-        sequence1 = np.array([Residue.A.value])
-        polymer_model.bind(sequence1)
-        polymer_model.coordinates = torch.randn(10, 3)
-        _ = polymer_model.latents
-
-        # Rebind to different sequence
-        sequence2 = np.array([Residue.G.value])
-        polymer_model.bind(sequence2)
-
-        assert polymer_model._cached_latents is None
-        assert polymer_model._cached_coordinates is None
-        assert polymer_model._latents_dirty
-        assert polymer_model._coords_dirty
-
-    def test_multi_residue_lazy_roundtrip(self, polymer_model):
-        """Test lazy computation with multi-residue sequence."""
-        sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
-        n_atoms = 10 + 12 + 10
-        polymer_model.bind(sequence)
-
-        # Set coordinates
-        coords = torch.randn(n_atoms, 3)
-        polymer_model.coordinates = coords
-
-        # Get latents (lazy computed)
-        latents = polymer_model.latents
-        assert latents.shape == (3, 6)
-
-        # Modify latents
-        modified = latents + 0.1
-        polymer_model.latents = modified
-
-        # Get coordinates (lazy recomputed)
-        new_coords = polymer_model.coordinates
-        assert new_coords.shape == (n_atoms, 3)
 
 
 class TestPolymerFlowModelDevice:

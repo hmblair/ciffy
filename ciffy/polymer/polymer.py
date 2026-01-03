@@ -19,6 +19,7 @@ from ..biochemistry._generated_molecule import molecule_type
 if TYPE_CHECKING:
     import torch
     from ..hetero import HeteroAtoms
+    from ..biochemistry.linking import FrameDefinition
 from ..operations.reduction import Reduction, REDUCTIONS, ReductionResult, create_reduction_index
 from .hierarchy import _Hierarchy
 from ..biochemistry import (
@@ -660,6 +661,311 @@ class Polymer:
         residue = Residue.from_index(self.sequence[idx].item())
 
         return coords, atoms, atom_to_col, residue
+
+    def _residue_coords(
+        self: Polymer,
+        idx: int,
+    ) -> tuple[Array, Array, Residue]:
+        """
+        Extract coordinates and atoms for a residue (simplified _residue_slice).
+
+        Args:
+            idx: Residue index. Negative indices are supported (e.g., -1 for last).
+
+        Returns:
+            Tuple of:
+            - coords: (n_atoms, 3) coordinates for this residue
+            - atoms: (n_atoms,) atom type indices
+            - residue: Residue enum for this residue type
+        """
+        n_residues = self.size(Scale.RESIDUE)
+
+        # Handle negative indices
+        if idx < 0:
+            idx = n_residues + idx
+        if idx < 0 or idx >= n_residues:
+            raise IndexError(
+                f"Residue index {idx} out of range for Polymer with {n_residues} residues"
+            )
+
+        # Compute atom offset and size for this residue
+        res_sizes = self._sizes[Scale.RESIDUE]
+        atom_offset = res_sizes[:idx].sum().item() if idx > 0 else 0
+        n_atoms = res_sizes[idx].item()
+
+        # Extract data
+        coords = self.coordinates[atom_offset:atom_offset + n_atoms]
+        atoms = self.atoms[atom_offset:atom_offset + n_atoms]
+        residue = Residue.from_index(self.sequence[idx].item())
+
+        return coords, atoms, residue
+
+    @staticmethod
+    def _find_atom(atoms: Array, atom_name: str, residue=None) -> int:
+        """
+        Find column index of an atom by name in an atoms array.
+
+        Args:
+            atoms: (n_atoms,) atom type value array.
+            atom_name: Atom name (e.g., "O3p", "P", "CA", "N9").
+            residue: Optional residue enum to look up residue-specific atoms.
+                     If not provided, only backbone atoms can be found.
+
+        Returns:
+            Column index of the atom, or -1 if not found.
+        """
+        from ..biochemistry.linking import BACKBONE_ATOM_VALUES
+
+        atom_value = None
+
+        # First try backbone atoms (shared across residue types)
+        if atom_name in BACKBONE_ATOM_VALUES:
+            atom_value = BACKBONE_ATOM_VALUES[atom_name]
+        # Then try residue-specific atoms
+        elif residue is not None:
+            atom_enum = getattr(residue, atom_name, None)
+            if atom_enum is not None:
+                atom_value = atom_enum.value
+
+        if atom_value is None:
+            return -1
+
+        # Search for atom in array
+        if is_torch(atoms):
+            import torch
+            matches = torch.where(atoms == atom_value)[0]
+            return int(matches[0].item()) if len(matches) > 0 else -1
+        else:
+            matches = np.where(atoms == atom_value)[0]
+            return int(matches[0]) if len(matches) > 0 else -1
+
+    @staticmethod
+    def _compute_frame(
+        coords: Array,
+        atoms: Array,
+        frame_def: "FrameDefinition",
+        residue=None,
+    ) -> tuple[Array, Array]:
+        """
+        Compute coordinate frame using a FrameDefinition.
+
+        Finds atoms by name in the atoms array and computes the frame.
+        No pre-computed indices needed.
+
+        Args:
+            coords: (n_atoms, 3) coordinates.
+            atoms: (n_atoms,) atom type values.
+            frame_def: FrameDefinition specifying origin, z_ref, perp_ref atoms.
+            residue: Optional residue enum for looking up residue-specific atoms.
+
+        Returns:
+            origin: (3,) frame origin position.
+            R: (3, 3) rotation matrix with [x, y, z] as columns.
+
+        Raises:
+            ValueError: If required atoms are not found.
+        """
+        from ..geometry.primitives import normalize, cross, clone
+
+        # Find atom positions (pass residue for non-backbone atoms)
+        origin_col = Polymer._find_atom(atoms, frame_def.origin, residue)
+        z_ref_col = Polymer._find_atom(atoms, frame_def.z_ref, residue)
+        perp_ref_col = Polymer._find_atom(atoms, frame_def.perp_ref, residue) if frame_def.perp_ref else -1
+
+        if origin_col < 0:
+            raise ValueError(f"Origin atom '{frame_def.origin}' not found in residue")
+        if z_ref_col < 0:
+            raise ValueError(f"Z-ref atom '{frame_def.z_ref}' not found in residue")
+
+        origin_pos = coords[origin_col]
+        z_ref_pos = coords[z_ref_col]
+
+        # Compute Z-axis
+        if frame_def.z_toward_origin:
+            z_axis = normalize(origin_pos - z_ref_pos)
+        else:
+            z_axis = normalize(z_ref_pos - origin_pos)
+
+        # Compute X-axis (perpendicular to Z)
+        if perp_ref_col >= 0:
+            perp_pos = coords[perp_ref_col]
+            perp_dir = perp_pos - z_ref_pos
+            x_axis = normalize(cross(perp_dir, z_axis))
+        else:
+            # Arbitrary perpendicular
+            x_axis = Polymer._arbitrary_perpendicular(z_axis)
+
+        # Y-axis completes right-handed system
+        y_axis = cross(z_axis, x_axis)
+
+        # Stack into rotation matrix
+        origin = clone(origin_pos)
+        if is_torch(coords):
+            import torch
+            R = torch.stack([x_axis, y_axis, z_axis], dim=-1)
+        else:
+            R = np.stack([x_axis, y_axis, z_axis], axis=-1)
+
+        return origin, R
+
+    @staticmethod
+    def _arbitrary_perpendicular(z_axis: Array) -> Array:
+        """Find an arbitrary vector perpendicular to z_axis."""
+        from ..geometry.primitives import normalize, cross
+
+        # Find component with smallest absolute value
+        if is_torch(z_axis):
+            import torch
+            abs_z = torch.abs(z_axis)
+            min_idx = torch.argmin(abs_z).item()
+            perp = torch.zeros_like(z_axis)
+            perp[min_idx] = 1.0
+        else:
+            abs_z = np.abs(z_axis)
+            min_idx = int(np.argmin(abs_z))
+            perp = np.zeros_like(z_axis)
+            perp[min_idx] = 1.0
+
+        # Gram-Schmidt orthogonalization
+        if is_torch(z_axis):
+            import torch
+            dot = torch.sum(perp * z_axis)
+        else:
+            dot = np.sum(perp * z_axis)
+        x_axis = perp - dot * z_axis
+        return normalize(x_axis)
+
+    @staticmethod
+    def _align_to_target(
+        coords: Array,
+        current_origin: Array,
+        current_R: Array,
+        target_origin: Array,
+        target_R: Array,
+    ) -> Array:
+        """
+        Align coordinates so current frame matches target frame.
+
+        Computes rigid transformation to move current_origin/current_R
+        to target_origin/target_R, then applies to coords.
+
+        Args:
+            coords: (n_atoms, 3) coordinates to transform.
+            current_origin: (3,) current frame origin.
+            current_R: (3, 3) current frame rotation.
+            target_origin: (3,) target frame origin.
+            target_R: (3, 3) target frame rotation.
+
+        Returns:
+            (n_atoms, 3) transformed coordinates.
+        """
+        # R_correction @ current_R = target_R
+        # => R_correction = target_R @ current_R.T
+        if is_torch(coords):
+            import torch
+            R_correction = target_R @ current_R.T
+            # After rotation, current_origin moves to R_correction @ current_origin
+            # We want this to equal target_origin
+            rotated_origin = R_correction @ current_origin
+            t_correction = target_origin - rotated_origin
+            # Apply: coords_new = R_correction @ coords.T + t_correction
+            positioned = (R_correction @ coords.T).T + t_correction
+        else:
+            R_correction = target_R @ current_R.T
+            rotated_origin = R_correction @ current_origin
+            t_correction = target_origin - rotated_origin
+            positioned = (R_correction @ coords.T).T + t_correction
+            positioned = positioned.astype(np.float32)
+
+        return positioned
+
+    def align(self: Polymer) -> list[Array]:
+        """
+        Align all residues to their canonical local frames.
+
+        For nucleotides: glycosidic frame (C1' origin, Z toward N9/N1)
+        For proteins: backbone frame (CA origin, Z toward N)
+
+        This is the preprocessing step for training generative models - it puts
+        each residue in a consistent local frame independent of global position.
+
+        Returns:
+            List of (n_atoms, 3) aligned coordinate arrays, one per residue.
+
+        Raises:
+            ValueError: If required frame atoms are missing from any residue.
+
+        Example:
+            >>> aligned_coords = polymer.align()
+            >>> # aligned_coords[i] is the i-th residue in its local frame
+        """
+        from ..biochemistry.linking import (
+            PURINE_GLYCOSIDIC_FRAME,
+            PYRIMIDINE_GLYCOSIDIC_FRAME,
+            PROTEIN_BACKBONE_FRAME,
+        )
+        from ..geometry.transforms import is_purine
+
+        aligned_list = []
+        n_residues = self.size(Scale.RESIDUE)
+
+        for i in range(n_residues):
+            coords, atoms, residue = self._residue_coords(i)
+            mol_type = residue.molecule_type
+
+            # Select appropriate frame definition
+            if mol_type in (1, 2, 3):  # RNA, DNA, HYBRID
+                frame_def = PURINE_GLYCOSIDIC_FRAME if is_purine(residue) else PYRIMIDINE_GLYCOSIDIC_FRAME
+            elif mol_type in (4, 5, 6):  # PROTEIN, PROTEIN_D, CYCLIC_PEPTIDE
+                frame_def = PROTEIN_BACKBONE_FRAME
+            else:
+                raise ValueError(
+                    f"Residue {i} ({residue.name}) has unsupported molecule type {mol_type}"
+                )
+
+            # Compute frame and align
+            origin, R = self._compute_frame(coords, atoms, frame_def, residue)
+            aligned = (coords - origin) @ R
+            aligned_list.append(aligned)
+
+        return aligned_list
+
+    def align_batch(self: Polymer) -> tuple[Array, Array]:
+        """
+        Align all residues and return as padded batch tensors.
+
+        Same as align() but returns results suitable for batched model input.
+
+        Returns:
+            coords: (n_residues, max_atoms, 3) padded coordinate array.
+            mask: (n_residues, max_atoms) boolean mask (True = valid atom).
+
+        Example:
+            >>> coords, mask = polymer.align_batch()
+            >>> # Use with model: output = model(coords, mask)
+        """
+        aligned_list = self.align()
+
+        # Find max atoms for padding
+        max_atoms = max(a.shape[0] for a in aligned_list)
+        n_residues = len(aligned_list)
+
+        # Create padded output
+        if is_torch(aligned_list[0]):
+            import torch
+            coords = torch.zeros(n_residues, max_atoms, 3, dtype=aligned_list[0].dtype)
+            mask = torch.zeros(n_residues, max_atoms, dtype=torch.bool)
+            for i, a in enumerate(aligned_list):
+                coords[i, :a.shape[0]] = a
+                mask[i, :a.shape[0]] = True
+        else:
+            coords = np.zeros((n_residues, max_atoms, 3), dtype=np.float32)
+            mask = np.zeros((n_residues, max_atoms), dtype=bool)
+            for i, a in enumerate(aligned_list):
+                coords[i, :a.shape[0]] = a
+                mask[i, :a.shape[0]] = True
+
+        return coords, mask
 
     @property
     def _sizes(self) -> dict[Scale, Array]:
@@ -1323,7 +1629,7 @@ class Polymer:
         cov = self.reduce(cov, scale)
         return ops.eigh(cov)
 
-    def align(
+    def pca(
         self: Polymer,
         scale: Scale,
     ) -> tuple[Polymer, Array]:
@@ -1810,54 +2116,60 @@ class Polymer:
         self: Polymer,
         residue: Residue,
         coords: Array,
-        atoms: Array | None,
-        elements: Array | None,
         name: str,
+        **fields,
     ) -> Polymer:
         """Create first residue when extending from empty polymer."""
-        # Ensure numpy arrays
-        coords = np.asarray(coords, dtype=np.float32)
-        if atoms is not None:
-            atoms = np.asarray(atoms, dtype=np.int64)
-        if elements is not None:
-            elements = np.asarray(elements, dtype=np.int64)
-
         n_atoms = coords.shape[0]
 
+        # Create hierarchy arrays in same backend as coords
+        sizes = {
+            Scale.RESIDUE: ops.array([n_atoms], like=coords, dtype='int64'),
+            Scale.CHAIN: ops.array([n_atoms], like=coords, dtype='int64'),
+            Scale.MOLECULE: ops.array([n_atoms], like=coords, dtype='int64'),
+        }
+        lengths = ops.array([1], like=coords, dtype='int64')
+
         hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes={
-                Scale.RESIDUE: np.array([n_atoms], dtype=np.int64),
-                Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
-                Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
-            },
-            lengths=np.array([1], dtype=np.int64),
+            sizes=sizes,
+            lengths=lengths,
             polymer_count=n_atoms,
             ref=coords,
         )
 
-        polymer = Polymer(
+        # Create sequence/molecule_type arrays in same backend
+        sequence_arr = ops.array([residue.value], like=coords, dtype='int64')
+        mol_type_arr = ops.array([residue.molecule_type], like=coords, dtype='int64')
+
+        # Build fields dict for Polymer constructor
+        init_fields = {
+            'coordinates': Field(coords, Scale.ATOM),
+            'sequence': Field(sequence_arr, Scale.RESIDUE),
+            'molecule_types': Field(mol_type_arr, Scale.CHAIN),
+        }
+
+        # Add all user-provided fields (atoms, elements, etc.)
+        for field_name, data in fields.items():
+            if field_name in _KNOWN_FIELDS:
+                scale = _KNOWN_FIELDS[field_name]
+                init_fields[field_name] = Field(data, scale)
+
+        return Polymer(
             hierarchy,
-            coordinates=Field(coords, Scale.ATOM),
-            atoms=Field(atoms, Scale.ATOM),
-            elements=Field(elements, Scale.ATOM),
-            sequence=Field(np.array([residue.value], dtype=np.int64), Scale.RESIDUE),
-            molecule_types=Field(np.array([residue.molecule_type], dtype=np.int64), Scale.CHAIN),
+            **init_fields,
             names=[name],
             strands=[""],
             descriptions=[""],
             pdb_id=self.pdb_id,
         )
 
-        return polymer.torch() if self.backend == "torch" else polymer
-
     def extend(
         self: Polymer,
         residue: Residue,
-        coords: Array,
+        coordinates: Array,
         transform: Array | None = None,
-        atoms: Array | None = None,
-        elements: Array | None = None,
         name: str = "A",
+        **fields,
     ) -> Polymer:
         """
         Append a residue to the end of a polymer (for autoregressive generation).
@@ -1866,26 +2178,24 @@ class Polymer:
         creates the first residue. Otherwise, positions the residue relative to
         the last residue using the provided transform.
 
-        Note: This method requires the polymer to have coordinates. For templates
-        (from from_sequence()), use copy(coordinates=...) first.
+        The caller must provide the same atom/residue-level fields that exist on
+        this polymer (e.g., atoms, elements). These are concatenated automatically.
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
-            coords: (n_atoms, 3) coordinates of the residue in its local frame.
+            coordinates: (n_atoms, 3) coordinates of the residue in its local frame.
             transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
-                Typically predicted by a generative model.
                 Required when extending a non-empty polymer, ignored for empty.
-            atoms: Atom type indices. Required for non-empty polymers with atom data.
-            elements: Element indices. Required for non-empty polymers with element data.
             name: Chain name (only used when extending from empty polymer).
+            **fields: Field arrays to concatenate (atoms, elements, etc.).
+                Must match fields on this polymer at ATOM/RESIDUE scale.
 
         Returns:
             New Polymer with the residue appended.
 
         Raises:
-            AttributeError: If polymer has no coordinates.
             ValueError: If polymer has multiple chains, has HETATM atoms,
-                or required parameters are missing.
+                or required fields are missing.
 
         Example:
             >>> from ciffy import Residue, Polymer
@@ -1898,18 +2208,17 @@ class Polymer:
             >>>
             >>> # Extend with model-predicted coordinates and transform
             >>> atoms2, elements2, _ = expand_residue(Residue.C, start_terminal=False)
-            >>> predicted_coords, predicted_transform = model.predict(...)
-            >>> poly = poly.extend(Residue.C, predicted_coords, predicted_transform, atoms2, elements2)
+            >>> coords2, transform = model.predict(...)
+            >>> poly = poly.extend(Residue.C, coords2, transform, atoms=atoms2, elements=elements2)
         """
-        from ..geometry import position_residue_fast
         from ..biochemistry.linking import LINKING_BY_TYPE
-        from .builder import _resolve_frame_indices
+        from ..geometry.transforms import apply_relative_transform
 
-        # Handle empty polymer case - create first residue
+        # Handle empty polymer case
         if self.empty():
-            return self._extend_from_empty(residue, coords, atoms, elements, name)
+            return self._extend_from_empty(residue, coordinates, name, **fields)
 
-        # Validate single chain and poly-only for non-empty
+        # Validate single chain and poly-only
         if self.size(Scale.CHAIN) != 1:
             raise ValueError(
                 f"extend() requires a single-chain polymer. "
@@ -1927,24 +2236,46 @@ class Polymer:
                 "transform is required when extending a non-empty polymer."
             )
 
-        # Validate atoms/elements are provided when required
-        if self.atoms is not None and atoms is None:
-            raise ValueError(
-                "atoms parameter is required because this Polymer has atom data. "
-                "Use expand_residue() to get atom indices."
-            )
-        if self.elements is not None and elements is None:
-            raise ValueError(
-                "elements parameter is required because this Polymer has element data. "
-                "Use expand_residue() to get element indices."
-            )
+        ref = self._hierarchy._ref
 
-        # Validate backend compatibility
-        check_compatible(self.coordinates, coords, "coords")
-        check_compatible(self.coordinates, transform, "transform")
+        # Position the new residue's coordinates and add to fields
+        fields['coordinates'] = self._position_new_residue(
+            coordinates, transform, fields.get('atoms')
+        )
+        fields['sequence'] = ops.array([residue.value], like=ref, dtype='int64')
+
+        # Concatenate all fields
+        n_new_atoms = coordinates.shape[0]
+        new_fields = {}
+
+        for field_name, field in self._get_fields().items():
+            if field.scale in (Scale.ATOM, Scale.RESIDUE):
+                if field_name in fields:
+                    new_fields[field_name] = ops.cat([field.data, fields[field_name]])
+                else:
+                    raise ValueError(
+                        f"Field '{field_name}' required but not provided. "
+                        f"This polymer has {field_name} data."
+                    )
+            # Chain/molecule level fields are not extended per-residue
+
+        # Build new hierarchy
+        new_hierarchy = self._hierarchy.extend_residue(n_new_atoms)
+
+        return self._clone(hierarchy=new_hierarchy, **new_fields)
+
+    def _position_new_residue(
+        self: Polymer,
+        coords: Array,
+        transform: Array,
+        atoms: Array | None,
+    ) -> Array:
+        """Position a new residue relative to the last residue using transform."""
+        from ..biochemistry.linking import LINKING_BY_TYPE
+        from ..geometry.transforms import apply_relative_transform
 
         # Get last residue's state
-        last_res_coords, last_res_atoms_arr, _, last_res_type = self._residue_slice(-1)
+        last_coords, last_atoms, last_res_type = self._residue_coords(-1)
 
         # Get linking definition
         link_def = LINKING_BY_TYPE.get(last_res_type.molecule_type)
@@ -1954,104 +2285,24 @@ class Polymer:
                 f"Cannot extend chains of this type."
             )
 
-        # Convert atoms to tuples for frame resolution
-        last_res_atoms = tuple(int(a) for a in last_res_atoms_arr)
-        new_res_atoms = tuple(int(a) for a in atoms) if atoms is not None else ()
+        # Compute prev frame (e.g., O3' for RNA) from last residue
+        prev_origin, prev_R = self._compute_frame(last_coords, last_atoms, link_def.prev_frame)
 
-        # Position the new residue using fast path
-        prev_frame = _resolve_frame_indices(last_res_type.value, last_res_atoms)
-        next_frame = _resolve_frame_indices(residue.value, new_res_atoms) if new_res_atoms else None
+        # Apply transform to get target next frame position
+        target_origin, target_R = apply_relative_transform(prev_origin, prev_R, transform)
 
-        if next_frame is not None:
-            positioned_coords = position_residue_fast(
-                last_res_coords,
-                coords,
-                transform,
-                prev_frame.prev_cols,
-                prev_frame.prev_z_toward,
-                next_frame.next_cols,
-                next_frame.next_z_toward,
+        # Position the new residue
+        if atoms is not None:
+            # Compute next frame (e.g., P for RNA) from new residue
+            next_origin, next_R = self._compute_frame(coords, atoms, link_def.next_frame)
+            # Align new residue so its next frame matches target
+            return self._align_to_target(
+                coords, next_origin, next_R, target_origin, target_R
             )
         else:
-            # No atoms provided - just apply transform without frame alignment
-            from ..geometry import apply_relative_transform, compute_frame_from_indices
-            prev_origin, prev_R = compute_frame_from_indices(
-                last_res_coords, prev_frame.prev_cols, prev_frame.prev_z_toward
-            )
-            target_origin, target_R = apply_relative_transform(prev_origin, prev_R, transform)
-            # Simple translation to target origin
+            # No atoms provided - just translate to target origin
             centroid = coords.mean(axis=0)
-            positioned_coords = coords + (target_origin - centroid)
-
-        # Concatenate arrays
-        new_coords = ops.cat([self.coordinates, positioned_coords], axis=0)
-        n_new_atoms = coords.shape[0]
-
-        # Update atoms if present
-        if self.atoms is not None and atoms is not None:
-            new_atoms_arr = ops.cat([
-                self.atoms,
-                ops.to_backend(np.asarray(atoms, dtype=np.int64), self.atoms)
-            ], axis=0)
-        else:
-            new_atoms_arr = None
-
-        # Update elements if present
-        if self.elements is not None and elements is not None:
-            new_elements_arr = ops.cat([
-                self.elements,
-                ops.to_backend(np.asarray(elements, dtype=np.int64), self.elements)
-            ], axis=0)
-        else:
-            new_elements_arr = None
-
-        # Update sequence
-        new_sequence = ops.cat([
-            self.sequence,
-            ops.to_backend(np.array([residue.value], dtype=np.int64), self.sequence)
-        ], axis=0)
-
-        # Update sizes
-        new_res_sizes = ops.cat([
-            self._sizes[Scale.RESIDUE],
-            ops.to_backend(np.array([n_new_atoms], dtype=np.int64), self._sizes[Scale.RESIDUE])
-        ], axis=0)
-        # Chain size increases by new atoms
-        new_chn_sizes = ops.to_backend(
-            np.array([self._sizes[Scale.CHAIN][0].item() + n_new_atoms], dtype=np.int64),
-            self._sizes[Scale.CHAIN]
-        )
-        new_mol_sizes = ops.to_backend(
-            np.array([self.size() + n_new_atoms], dtype=np.int64),
-            self._sizes[Scale.MOLECULE]
-        )
-        new_lengths = ops.to_backend(
-            np.array([self.lengths[0].item() + 1], dtype=np.int64),
-            self.lengths
-        )
-
-        # Create new hierarchy
-        sizes = {
-            Scale.RESIDUE: new_res_sizes,
-            Scale.CHAIN: new_chn_sizes,
-            Scale.MOLECULE: new_mol_sizes,
-        }
-        new_hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes=sizes,
-            lengths=new_lengths,
-            polymer_count=self.polymer_count + n_new_atoms,
-            ref=new_coords,
-        )
-
-        return self._clone(
-            coordinates=new_coords,
-            atoms=new_atoms_arr,
-            elements=new_elements_arr,
-            sequence=new_sequence,
-            hierarchy=new_hierarchy,
-            # bfactors not preserved - new atoms don't have experimental B-factors
-            bfactors=None,
-        )
+            return coords + (target_origin - centroid)
 
     # ─────────────────────────────────────────────────────────────────────────
     # String Representations

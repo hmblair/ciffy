@@ -3,49 +3,24 @@ PolymerModel: Orchestrates per-residue generative models for full polymer encodi
 
 This module provides a wrapper around residue-level models (ResidueFlowModel, ResidueVAE)
 that handles:
-- Partitioning flat coordinate arrays by residue
-- Encoding each residue with its appropriate model
-- Decoding and positioning residues using SE(3) transforms
-- Lazy computation with dirty-flag caching for efficient coordinate/latent access
+- Encoding each residue with its appropriate model (after alignment)
+- Decoding and positioning residues using SE(3) transforms via Polymer.extend()
 
 Works with any model implementing ResidueGenerativeCore protocol (Flow, VAE, etc.).
 
-Example (stateless API):
-    >>> from ciffy.nn import PolymerModel
-    >>> from ciffy.nn.flow.residue import ResidueFlowModel
-    >>> from ciffy.biochemistry import Residue
-    >>> import numpy as np
-    >>>
-    >>> # Load pre-trained per-residue models
-    >>> models = {
-    ...     Residue.A: ResidueFlowModel.load("models/A"),
-    ...     Residue.G: ResidueFlowModel.load("models/G"),
-    ... }
-    >>> polymer_model = PolymerModel(models)
-    >>>
-    >>> # Encode polymer coordinates (sequence as int array)
-    >>> sequence = np.array([Residue.A.value, Residue.G.value, Residue.A.value])
-    >>> latents = polymer_model.encode(coords, sequence)  # (3, k)
-    >>>
-    >>> # Decode back to positioned coordinates
-    >>> coords_recon = polymer_model.decode(latents, sequence)  # (N, 3)
-
 Example (with Polymer objects - recommended):
+    >>> from ciffy.nn import PolymerModel
+    >>> import ciffy
+    >>>
+    >>> # Load pre-trained polymer model
+    >>> polymer_model = PolymerModel.load("models/rna")
+    >>>
+    >>> # Encode polymer to latents (handles alignment automatically)
     >>> polymer = ciffy.load("structure.cif").poly()
-    >>> latents = polymer_model.encode_polymer(polymer)  # Uses polymer.sequence directly
+    >>> latents = polymer_model.encode_polymer(polymer)
+    >>>
+    >>> # Decode latents back to polymer
     >>> new_polymer = polymer_model.decode_to_polymer(latents, polymer)
-
-Example (stateful lazy API):
-    >>> # Bind to a sequence for lazy computation
-    >>> polymer_model.bind(polymer.sequence)
-    >>>
-    >>> # Set coordinates - latents computed lazily
-    >>> polymer_model.coordinates = coords
-    >>> z = polymer_model.latents  # Computed on first access
-    >>>
-    >>> # Modify latents - coordinates recomputed lazily
-    >>> polymer_model.latents = modified_z
-    >>> new_coords = polymer_model.coordinates  # Recomputed on access
 """
 
 from __future__ import annotations
@@ -57,13 +32,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Frame-based positioning for chain assembly
-from ciffy.geometry import FrameIndices, position_next_residue, align_to_frame
+from ciffy.polymer import Polymer
 from ciffy.nn.hub import HubMixin
 from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:
-    from ciffy.biochemistry import Residue, AtomGroup
+    from ciffy.biochemistry import AtomGroup
     from ciffy.nn.flow.residue import ResidueFlowModel
 
 
@@ -88,10 +62,9 @@ class ResidueGenerativeCore(Protocol):
 
     Required properties:
         atoms: AtomGroup subset containing the atoms used.
-        frame_indices: FrameIndices for positioning (or None).
 
     Required methods:
-        encode: Encode coordinates to latent space.
+        encode: Encode pre-aligned coordinates to latent space.
         decode: Decode latents to (coords, transforms).
         sample: Sample new conformations from prior.
     """
@@ -103,11 +76,6 @@ class ResidueGenerativeCore(Protocol):
     @property
     def atoms(self) -> "AtomGroup":
         """AtomGroup subset containing the atoms used by this model."""
-        ...
-
-    @property
-    def frame_indices(self) -> FrameIndices | None:
-        """FrameIndices for positioning, or None if not available."""
         ...
 
     def encode(
@@ -155,38 +123,21 @@ class PolymerModel(nn.Module, HubMixin):
     and provides encode/decode methods that work on entire polymers.
     Works with any model implementing ResidueGenerativeCore (Flow, VAE, etc.).
 
-    The encode method partitions a flat (N, 3) coordinate array by residue
-    and encodes each residue independently. The decode method reconstructs
-    coordinates and chains them together using the SE(3) transforms that
-    each residue model outputs.
-
-    Supports two usage patterns:
-
-    1. **Stateless API**: Pass coordinates/latents and sequence to encode()/decode().
-       Each call is independent with no state. Sequence is an int array.
-
-    2. **Stateful Lazy API**: Call bind(sequence), then use coordinates/latents
-       properties. Values are cached and lazily recomputed only when needed.
+    Encoding aligns each residue to its canonical frame (glycosidic for RNA,
+    backbone for protein) via Polymer.align(), then encodes to latent space.
+    Decoding reconstructs coordinates and chains residues together using
+    SE(3) transforms via Polymer.extend().
 
     Attributes:
         latent_dim: Dimension of per-residue latent space.
         supported_residues: Set of supported residue type indices.
         atom_counts: Dict mapping residue type (int) to atom count.
 
-    Example (with Polymer - recommended):
-        >>> polymer_model = PolymerModel(models)
+    Example:
+        >>> polymer_model = PolymerModel.load("models/rna")
+        >>> polymer = ciffy.load("structure.cif").poly()
         >>> latents = polymer_model.encode_polymer(polymer)
         >>> new_polymer = polymer_model.decode_to_polymer(latents, polymer)
-
-    Example (stateless with int array):
-        >>> seq = np.array([Residue.A.value, Residue.G.value])
-        >>> latents = polymer_model.encode(coords, seq)
-        >>> coords_recon = polymer_model.decode(latents, seq)
-
-    Example (stateful):
-        >>> polymer_model.bind(polymer.sequence)
-        >>> polymer_model.coordinates = coords
-        >>> z = polymer_model.latents  # Lazily computed
     """
 
     _hub_model_type = "polymer"
@@ -239,13 +190,6 @@ class PolymerModel(nn.Module, HubMixin):
         }
         self._supported_types_set: set[int] = set(self._atom_counts.keys())
 
-        # Stateful lazy computation attributes (not parameters, just cache)
-        self._sequence: np.ndarray | None = None
-        self._cached_latents: torch.Tensor | None = None
-        self._cached_coordinates: torch.Tensor | None = None
-        self._latents_dirty: bool = True
-        self._coords_dirty: bool = True
-
     def _get_model(self, res_type: int) -> "ResidueFlowModel":
         """Get residue model by int key."""
         return self.residue_models[str(res_type)]
@@ -296,35 +240,8 @@ class PolymerModel(nn.Module, HubMixin):
             )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Stateful Lazy API
+    # Encoding / Decoding
     # ─────────────────────────────────────────────────────────────────────────
-
-    def bind(self, sequence: SequenceArray) -> "PolymerModel":
-        """
-        Bind the model to a specific sequence for stateful lazy computation.
-
-        After binding, you can use the `coordinates` and `latents` properties
-        for lazy get/set access with automatic cache invalidation.
-
-        Args:
-            sequence: Int array of residue types (e.g., polymer.sequence).
-
-        Returns:
-            Self for method chaining.
-
-        Example:
-            >>> polymer_model.bind(polymer.sequence).coordinates = coords
-            >>> z = polymer_model.latents  # Lazily computed
-        """
-        sequence = _to_numpy_int64(sequence)
-        self._validate_sequence(sequence)
-
-        self._sequence = sequence
-        self._cached_latents = None
-        self._cached_coordinates = None
-        self._latents_dirty = True
-        self._coords_dirty = True
-        return self
 
     def _validate_sequence(self, sequence: np.ndarray) -> None:
         """Validate sequence contains only supported residue types."""
@@ -339,128 +256,6 @@ class PolymerModel(nn.Module, HubMixin):
                 f"Unsupported residue types: {names}. "
                 f"Available: {available}"
             )
-
-    @property
-    def sequence(self) -> np.ndarray | None:
-        """The currently bound sequence (int array), or None if unbound."""
-        return self._sequence
-
-    @property
-    def is_bound(self) -> bool:
-        """Whether a sequence is currently bound."""
-        return self._sequence is not None
-
-    def _ensure_bound(self) -> None:
-        """Raise if no sequence is bound."""
-        if not self.is_bound:
-            raise RuntimeError(
-                "No sequence bound. Call bind(sequence) first, or use "
-                "the stateless encode()/decode() methods."
-            )
-
-    @property
-    def latents(self) -> torch.Tensor:
-        """
-        (n_residues, latent_dim) latent representation.
-
-        Lazily recomputed from coordinates when dirty.
-
-        Raises:
-            RuntimeError: If no sequence is bound.
-            RuntimeError: If latents are dirty and no coordinates are set.
-        """
-        self._ensure_bound()
-
-        if self._latents_dirty:
-            if self._cached_coordinates is None:
-                raise RuntimeError(
-                    "Cannot compute latents: no coordinates set. "
-                    "Set coordinates first via the coordinates property."
-                )
-            self._cached_latents = self.encode(self._cached_coordinates, self._sequence)
-            self._latents_dirty = False
-
-        return self._cached_latents
-
-    @latents.setter
-    def latents(self, value: torch.Tensor) -> None:
-        """
-        Set latent representation, marks coordinates as dirty.
-
-        Args:
-            value: (n_residues, latent_dim) latent vectors.
-        """
-        self._ensure_bound()
-
-        if value.shape[0] != len(self._sequence):
-            raise ValueError(
-                f"latents has {value.shape[0]} rows but sequence has "
-                f"{len(self._sequence)} residues"
-            )
-        if value.shape[1] != self.latent_dim:
-            raise ValueError(
-                f"latents has dim {value.shape[1]} but model expects {self.latent_dim}"
-            )
-
-        self._cached_latents = value
-        self._latents_dirty = False
-        self._coords_dirty = True  # Coordinates need recomputation
-
-    @property
-    def coordinates(self) -> torch.Tensor:
-        """
-        (N, 3) Cartesian coordinates.
-
-        Lazily recomputed from latents when dirty.
-
-        Raises:
-            RuntimeError: If no sequence is bound.
-            RuntimeError: If coordinates are dirty and no latents are set.
-        """
-        self._ensure_bound()
-
-        if self._coords_dirty:
-            if self._cached_latents is None:
-                raise RuntimeError(
-                    "Cannot compute coordinates: no latents set. "
-                    "Set latents first via the latents property."
-                )
-            self._cached_coordinates = self.decode(self._cached_latents, self._sequence)
-            self._coords_dirty = False
-
-        return self._cached_coordinates
-
-    @coordinates.setter
-    def coordinates(self, value: torch.Tensor) -> None:
-        """
-        Set Cartesian coordinates, marks latents as dirty.
-
-        Args:
-            value: (N, 3) coordinate array.
-        """
-        self._ensure_bound()
-        self._validate_coords_shape(value, self._sequence)
-
-        self._cached_coordinates = value
-        self._coords_dirty = False
-        self._latents_dirty = True  # Latents need recomputation
-
-    def unbind(self) -> None:
-        """
-        Unbind from current sequence and clear cached state.
-
-        After unbinding, the stateful properties will raise RuntimeError
-        until bind() is called again.
-        """
-        self._sequence = None
-        self._cached_latents = None
-        self._cached_coordinates = None
-        self._latents_dirty = True
-        self._coords_dirty = True
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Stateless API
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _get_atom_counts(self, sequence: np.ndarray) -> list[int]:
         """Get atom counts for each residue in sequence."""
@@ -483,58 +278,57 @@ class PolymerModel(nn.Module, HubMixin):
 
     def encode(
         self,
-        coords: "torch.Tensor | np.ndarray",
+        aligned_coords: list[torch.Tensor],
         sequence: SequenceArray,
     ) -> torch.Tensor:
         """
-        Encode polymer coordinates to per-residue latent vectors.
+        Encode pre-aligned per-residue coordinates to latent vectors.
 
-        Handles alignment automatically for frame-dependent models (ResidueFlowModel,
-        ResidueVAE). Invariant models (InvariantResidueVAE) don't require alignment.
-
-        Accepts both NumPy arrays and PyTorch tensors. NumPy arrays are
-        converted to tensors internally.
+        This is the low-level encoding method that expects coordinates already
+        aligned to canonical frames (e.g., glycosidic frame for RNA). Use
+        encode_from_polymer() for automatic alignment.
 
         Args:
-            coords: (N, 3) flat coordinate array for all atoms (NumPy or Tensor).
+            aligned_coords: List of (n_atoms, 3) tensors, one per residue,
+                already aligned to canonical frames via Polymer.align().
             sequence: Int array of residue types (e.g., polymer.sequence).
 
         Returns:
-            (n_residues, latent_dim) latent vectors (always Tensor).
+            (n_residues, latent_dim) latent vectors.
+
+        See Also:
+            encode_from_polymer: Handles alignment automatically.
         """
-        # Convert sequence to numpy
         sequence = _to_numpy_int64(sequence)
         self._validate_sequence(sequence)
 
-        # Convert numpy coords to tensor if needed
-        if isinstance(coords, np.ndarray):
-            coords = torch.from_numpy(coords).float()
-
-        self._validate_coords_shape(coords, sequence)
+        if len(aligned_coords) != len(sequence):
+            raise ValueError(
+                f"Got {len(aligned_coords)} coordinate tensors but sequence "
+                f"has {len(sequence)} residues"
+            )
 
         latents = []
-        offset = 0
 
-        for res_type in sequence:
+        for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
-            n_atoms = model.n_atoms
+            res_coords = aligned_coords[i]
 
-            # Extract this residue's coordinates
-            res_coords = coords[offset:offset + n_atoms]
+            # Validate shape
+            if res_coords.shape[0] != model.n_atoms:
+                from ciffy.biochemistry import Residue
+                res_name = Residue.from_index(int(res_type)).name
+                raise ValueError(
+                    f"Residue {i} ({res_name}): expected {model.n_atoms} atoms, "
+                    f"got {res_coords.shape[0]}"
+                )
 
-            # Reshape to (1, n_atoms, 3) for alignment and model.encode()
+            # Reshape to (1, n_atoms, 3) for model.encode()
             res_coords = res_coords.unsqueeze(0)
-
-            # Align if model has frame indices (frame-dependent model)
-            frame_indices = model.frame_indices
-            if frame_indices is not None:
-                res_coords = align_to_frame(res_coords, frame_indices)
 
             # Encode (models expect aligned input)
             z = model.encode(res_coords)  # (1, k)
             latents.append(z.squeeze(0))  # (k,)
-
-            offset += n_atoms
 
         return torch.stack(latents)  # (n_residues, k)
 
@@ -546,6 +340,9 @@ class PolymerModel(nn.Module, HubMixin):
     ) -> torch.Tensor:
         """
         Decode latent vectors to positioned polymer coordinates.
+
+        Uses Polymer.extend() for chain assembly, which handles frame computation
+        internally without requiring precomputed FrameIndices.
 
         Returns a PyTorch tensor. Call .numpy() if NumPy array is needed.
 
@@ -574,13 +371,9 @@ class PolymerModel(nn.Module, HubMixin):
         if latent_bound is not None:
             latents = latent_bound * torch.tanh(latents / latent_bound)
 
-        # Decode and position residues iteratively using frame-based positioning
-        # Each residue is positioned relative to the previous using the transform
-        # from the previous residue (transform[i-1] positions residue[i])
-        positioned_coords = []
-        prev_coords = None
+        # Build polymer using extend() - handles frame computation internally
+        poly = Polymer()
         prev_transform = None
-        prev_indices = None
 
         for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
@@ -593,29 +386,19 @@ class PolymerModel(nn.Module, HubMixin):
             coords_i = coords_i.squeeze(0)
             transform_i = transform_i.squeeze(0)
 
+            # Get atoms array for frame computation
+            atoms_i = torch.tensor(model.atoms.index(), dtype=torch.int64, device=coords_i.device)
+
             if i == 0:
-                # First residue stays at origin
-                positioned_coords.append(coords_i)
-            elif prev_indices is None:
-                # No frame indices available (e.g., test models with partial atoms)
-                # Fall back to simple concatenation without positioning
-                positioned_coords.append(coords_i)
+                # First residue - no transform needed
+                poly = poly.extend(model.residue, coords_i, atoms=atoms_i)
             else:
-                # Position this residue using previous residue's transform
-                # This aligns current residue's P frame to target derived from
-                # previous residue's O3' frame + transform
-                positioned = position_next_residue(
-                    prev_coords, coords_i, prev_transform, prev_indices
-                )
-                positioned_coords.append(positioned)
+                # Position using PREVIOUS residue's transform
+                poly = poly.extend(model.residue, coords_i, prev_transform, atoms=atoms_i)
 
-            # Store for next iteration
-            prev_coords = positioned_coords[-1]
             prev_transform = transform_i
-            prev_indices = model.frame_indices
 
-        # Concatenate all positioned coordinates
-        return torch.cat(positioned_coords, dim=0)
+        return poly.coordinates
 
     def _sample_coords(
         self,
@@ -1004,67 +787,68 @@ class PolymerModel(nn.Module, HubMixin):
         """
         Encode a Polymer object directly to latent vectors.
 
-        This is the recommended way to encode polymers, as it uses the
-        polymer's sequence directly without conversion. Automatically filters
-        to only include the atoms the model was trained on.
+        This is the recommended way to encode polymers. It automatically
+        aligns each residue to its canonical frame and filters to only
+        include atoms the model was trained on.
 
         Args:
-            polymer: Polymer object to encode.
+            polymer: Polymer object to encode. Must have coordinates.
 
         Returns:
             (n_residues, latent_dim) latent vectors.
 
         Raises:
             ValueError: If the polymer contains unsupported residue types.
+            AttributeError: If polymer has no coordinates.
 
         Example:
             >>> polymer = ciffy.load("structure.cif").poly()
             >>> latents = model.encode_polymer(polymer)
         """
+        from ciffy.backend import to_numpy
         from ciffy.biochemistry import Scale
         from ciffy.operations.reduction import Reduction
-        from ciffy.backend import to_numpy
 
-        # Get per-residue data
+        # Validate sequence
         sequence = polymer.sequence
         seq_np = to_numpy(sequence)
-        n_residues = len(seq_np)
+        self._validate_sequence(seq_np)
 
+        # Get aligned per-residue coordinates
+        # align() returns list of (n_atoms, 3) arrays, one per residue
+        aligned_all = polymer.align()
+
+        # Get per-residue atoms for filtering
         per_res_atoms = polymer.reduce(polymer.atoms, Scale.RESIDUE, Reduction.COLLATE)
-        per_res_coords = polymer.reduce(polymer.coordinates, Scale.RESIDUE, Reduction.COLLATE)
 
-        # Extract and filter coordinates per residue
+        # Filter each residue to only include model's atoms
         filtered_coords = []
-        for i in range(n_residues):
-            res_type = int(seq_np[i])
-            if res_type not in self._supported_types_set:
-                from ciffy.biochemistry import Residue
-                res_name = Residue.from_index(res_type).name
-                raise ValueError(f"Unsupported residue type: {res_name}")
+        for i, res_type in enumerate(seq_np):
+            res_type = int(res_type)
 
             # Get expected atoms for this residue type
             expected_atoms = self.atom_filter[res_type]
             atoms_i = to_numpy(per_res_atoms[i])
-            coords_i = to_numpy(per_res_coords[i])
+            coords_i = aligned_all[i]
 
-            # Build mapping from atom value to coordinate
-            atom_to_coord = {int(a): c for a, c in zip(atoms_i, coords_i)}
+            # Build mapping from atom value to aligned coordinate index
+            atom_to_idx = {int(a): j for j, a in enumerate(atoms_i)}
 
             # Extract coordinates in expected order
             res_coords = []
             for atom_val in expected_atoms:
-                if atom_val not in atom_to_coord:
+                if atom_val not in atom_to_idx:
                     from ciffy.biochemistry import Residue
                     res = Residue.from_index(res_type)
                     raise ValueError(f"Missing atom {atom_val} in residue {i} ({res.name})")
-                res_coords.append(atom_to_coord[atom_val])
+                idx = atom_to_idx[atom_val]
+                res_coords.append(coords_i[idx])
 
-            filtered_coords.extend(res_coords)
+            # Stack to (n_atoms, 3) tensor
+            res_tensor = torch.stack([torch.as_tensor(c, dtype=torch.float32) for c in res_coords])
+            filtered_coords.append(res_tensor)
 
-        # Convert to tensor
-        coords = torch.tensor(filtered_coords, dtype=torch.float32)
-
-        return self.encode(coords, sequence)
+        return self.encode(filtered_coords, seq_np)
 
     def decode_to_polymer(
         self,

@@ -66,7 +66,7 @@ def compute_glycosidic_frame(
     frame_def = PURINE_GLYCOSIDIC_FRAME if is_purine(residue) else PYRIMIDINE_GLYCOSIDIC_FRAME
 
     # Extract positions and compute frame
-    positions = extract_frame_positions(coords, atoms, frame_def, residue)
+    positions = extract_frame_positions(coords, atoms, frame_def)
 
     # Glycosidic frame uses X-primary convention (X toward base)
     # while frame_from_positions uses Z-primary
@@ -159,11 +159,11 @@ def align_and_compute_transform(
         if link_def is None:
             raise ValueError(f"No linking definition for molecule type {residue.molecule_type}")
 
-        # Compute link frames using new API
-        prev_positions = extract_frame_positions(aligned_coords, atoms, link_def.prev_frame, residue)
+        # Compute link frames
+        prev_positions = extract_frame_positions(aligned_coords, atoms, link_def.prev_frame)
         o3p_origin, o3p_R = frame_from_positions(prev_positions)
 
-        next_positions = extract_frame_positions(aligned_next, atoms, link_def.next_frame, residue)
+        next_positions = extract_frame_positions(aligned_next, atoms, link_def.next_frame)
         p_origin, p_R = frame_from_positions(next_positions)
 
         transform = compute_relative_transform(o3p_origin, o3p_R, p_origin, p_R)
@@ -205,14 +205,14 @@ def position_next_residue(
         raise ValueError(f"No linking definition for molecule type {residue.molecule_type}")
 
     # Compute O3' frame from coords1
-    prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame, residue)
+    prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame)
     o3p_origin, o3p_R = frame_from_positions(prev_positions)
 
     # Apply transform to get target P frame
     target_p_origin, target_p_R = apply_relative_transform(o3p_origin, o3p_R, rel_transform)
 
     # Compute current P frame from coords2
-    next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame, residue)
+    next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame)
     current_p_origin, current_p_R = frame_from_positions(next_positions)
 
     # Compute rigid transformation to align current P frame to target P frame

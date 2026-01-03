@@ -744,7 +744,7 @@ class Polymer:
                 )
 
             # Compute frame and align
-            positions = extract_frame_positions(coords, atoms, frame_def, residue)
+            positions = extract_frame_positions(coords, atoms, frame_def)
             origin, R = frame_from_positions(positions)
             aligned = (coords - origin) @ R
             aligned_list.append(aligned)
@@ -2111,7 +2111,7 @@ class Polymer:
 
         # Compute prev frame (e.g., O3' for RNA) from last residue
         prev_positions = extract_frame_positions(
-            last_coords, last_atoms, link_def.prev_frame, last_res_type
+            last_coords, last_atoms, link_def.prev_frame
         )
         prev_origin, prev_R = frame_from_positions(prev_positions)
 
@@ -2122,7 +2122,7 @@ class Polymer:
         if atoms is not None:
             # Compute next frame (e.g., P for RNA) from new residue
             next_positions = extract_frame_positions(
-                coords, atoms, link_def.next_frame, new_residue
+                coords, atoms, link_def.next_frame
             )
             next_origin, next_R = frame_from_positions(next_positions)
             # Align new residue so its next frame matches target

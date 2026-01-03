@@ -453,10 +453,10 @@ class TestResidueFlowModel:
         coords2 = np.random.randn(n_atoms, 3).astype(np.float32)
 
         # Compute transform from coords1 to coords2 using new frame API
-        prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame, residue)
+        prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame)
         o1, R1 = frame_from_positions(prev_positions)
 
-        next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame, residue)
+        next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame)
         o2, R2 = frame_from_positions(next_positions)
 
         transform = compute_relative_transform(o1, R1, o2, R2)

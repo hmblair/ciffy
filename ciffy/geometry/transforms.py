@@ -263,40 +263,47 @@ def extract_frame_positions(
     coords: Array,
     atoms: Array,
     frame_def: "FrameDefinition",
-    residue: "Residue",
 ) -> Array:
     """
     Extract the 3 atom positions needed for frame computation.
+
+    Uses vectorized 2D comparison to find atoms matching any value in each
+    AtomGroup, removing the need to specify a specific residue type.
 
     Args:
         coords: (N, 3) or (..., N, 3) coordinates.
         atoms: (N,) atom type values.
         frame_def: Frame definition with AtomGroups.
-        residue: Residue type for AtomGroup resolution.
 
     Returns:
         (3, 3) or (..., 3, 3) positions [origin, axis_ref, plane_ref].
     """
-    # Get atom values for this residue
-    origin_val = frame_def.origin.for_residue(residue)
-    axis_ref_val = frame_def.axis_ref.for_residue(residue)
-    plane_ref_val = frame_def.plane_ref.for_residue(residue)
+    # Get all possible atom values for each frame position
+    origin_vals = np.array(list(frame_def.origin.index()), dtype=np.int64)
+    axis_ref_vals = np.array(list(frame_def.axis_ref.index()), dtype=np.int64)
+    plane_ref_vals = np.array(list(frame_def.plane_ref.index()), dtype=np.int64)
 
-    # Find indices where atoms match
+    # Find indices using 2D comparison: atoms[:, None] == vals[None, :]
     if is_torch(atoms):
         import torch
-        origin_idx = (atoms == origin_val).nonzero(as_tuple=True)[0][0]
-        axis_ref_idx = (atoms == axis_ref_val).nonzero(as_tuple=True)[0][0]
-        plane_ref_idx = (atoms == plane_ref_val).nonzero(as_tuple=True)[0][0]
+        origin_vals_t = torch.tensor(origin_vals, device=atoms.device)
+        axis_ref_vals_t = torch.tensor(axis_ref_vals, device=atoms.device)
+        plane_ref_vals_t = torch.tensor(plane_ref_vals, device=atoms.device)
+
+        origin_idx = (atoms[:, None] == origin_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
+        axis_ref_idx = (atoms[:, None] == axis_ref_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
+        plane_ref_idx = (atoms[:, None] == plane_ref_vals_t).any(dim=1).nonzero(as_tuple=True)[0][0]
+
         return torch.stack([
             coords[..., origin_idx, :],
             coords[..., axis_ref_idx, :],
             coords[..., plane_ref_idx, :],
         ], dim=-2)
     else:
-        origin_idx = np.nonzero(atoms == origin_val)[0][0]
-        axis_ref_idx = np.nonzero(atoms == axis_ref_val)[0][0]
-        plane_ref_idx = np.nonzero(atoms == plane_ref_val)[0][0]
+        origin_idx = (atoms[:, None] == origin_vals).any(axis=1).argmax()
+        axis_ref_idx = (atoms[:, None] == axis_ref_vals).any(axis=1).argmax()
+        plane_ref_idx = (atoms[:, None] == plane_ref_vals).any(axis=1).argmax()
+
         return np.stack([
             coords[..., origin_idx, :],
             coords[..., axis_ref_idx, :],

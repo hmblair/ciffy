@@ -44,6 +44,18 @@ _KNOWN_FIELDS: dict[str, tuple[Scale, Dtype]] = {
 }
 
 
+def _infer_dtype(data: Array) -> Dtype:
+    """Infer Dtype from array dtype."""
+    dtype_str = str(data.dtype)
+    if 'float' in dtype_str:
+        return Dtype.FLOAT
+    elif 'int' in dtype_str:
+        return Dtype.INT
+    else:
+        # Default to float for unknown types (e.g., complex)
+        return Dtype.FLOAT
+
+
 class Field:
     """
     Container for Polymer array fields with scale and dtype metadata.
@@ -397,6 +409,10 @@ class Polymer:
                 f"Shape mismatch for '{name}': got {actual} elements, "
                 f"expected {expected} ({scale.name} scale)"
             )
+
+        # Infer dtype from array if not provided
+        if dtype is None:
+            dtype = _infer_dtype(data)
 
         # Create and store Field
         field = Field(data, scale, dtype)

@@ -2171,27 +2171,3 @@ class Polymer:
         from ..io.writer import write_cif
         write_cif(self, filename)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Utilities
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def with_coordinates(self: Polymer, coordinates: Array) -> Polymer:
-        """
-        Create a copy with new coordinates.
-
-        .. deprecated::
-            Use :meth:`copy(coordinates=...)` instead.
-
-        Args:
-            coordinates: New coordinate tensor.
-
-        Returns:
-            New Polymer with updated coordinates.
-        """
-        import warnings
-        warnings.warn(
-            "with_coordinates() is deprecated, use copy(coordinates=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.copy(coordinates=coordinates)

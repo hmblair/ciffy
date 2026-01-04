@@ -1656,7 +1656,8 @@ class Polymer:
         """
         Fast path for selecting a single contiguous unit (chain or residue).
 
-        Uses slice indexing instead of boolean masks for ~10x speedup.
+        Uses slice indexing for Polymer arrays (~10x speedup) but delegates
+        to Hierarchy.select() for correct count recalculation.
 
         Args:
             ix: Index of the unit to select.
@@ -1668,10 +1669,13 @@ class Polymer:
         # Get slice bounds from hierarchy
         atom_slice, res_slice, chain_slice = self._hierarchy.bounds(ix, scale)
 
-        # Get new hierarchy first (for annotations slicing)
-        new_hierarchy = self._hierarchy.select_contiguous(ix, scale)
+        # Build mask for hierarchy (small arrays, correctness matters more than speed)
+        n_units = self._hierarchy.size(scale)
+        mask = ops.zeros(n_units, like=self._hierarchy._ref, dtype='bool')
+        mask[ix] = True
+        new_hierarchy = self._hierarchy.select(mask, scale)
 
-        # Slice all fields and annotations using slices (fast path)
+        # Slice all fields and annotations using slices (fast path for large arrays)
         sliced = self._slice_all(atom_slice, res_slice, chain_slice, new_hierarchy)
         sliced['hierarchy'] = new_hierarchy
 

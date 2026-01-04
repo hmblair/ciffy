@@ -137,13 +137,17 @@ class TestBonds:
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_bonds_returns_2d_array(self, cif_file, backend):
-        """bonds property returns 2D numpy array."""
+        """bonds property returns 2D array matching backend."""
         from ciffy import load
 
         polymer = load(cif_file, backend=backend)
         bonds = polymer.bonds
 
-        assert isinstance(bonds, np.ndarray)
+        if backend == "torch":
+            import torch
+            assert isinstance(bonds, torch.Tensor)
+        else:
+            assert isinstance(bonds, np.ndarray)
         assert bonds.ndim == 2
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
@@ -166,22 +170,24 @@ class TestBonds:
         n_atoms = polymer.size()
 
         # All indices should be valid atom indices
-        assert np.all(bonds >= 0)
-        assert np.all(bonds < n_atoms)
+        assert (bonds >= 0).all()
+        assert (bonds < n_atoms).all()
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_bonds_are_unique_pairs(self, cif_file, backend):
         """bonds are stored with i < j (no duplicates)."""
         from ciffy import load
+        from ciffy.backend import to_numpy
 
         polymer = load(cif_file, backend=backend)
         bonds = polymer.bonds
 
         # i < j for all bonds (as documented)
-        assert np.all(bonds[:, 0] < bonds[:, 1])
+        assert (bonds[:, 0] < bonds[:, 1]).all()
 
         # No duplicate pairs
-        bond_tuples = set(map(tuple, bonds))
+        bonds_np = to_numpy(bonds)
+        bond_tuples = set(map(tuple, bonds_np))
         assert len(bond_tuples) == len(bonds)
 
     def test_bonds_cached(self, backend):
@@ -241,7 +247,11 @@ class TestBonds:
         bonds = polymer.bonds
 
         # Should have bonds (nucleotides have internal bonds)
-        assert isinstance(bonds, np.ndarray)
+        if backend == "torch":
+            import torch
+            assert isinstance(bonds, torch.Tensor)
+        else:
+            assert isinstance(bonds, np.ndarray)
         assert len(bonds) > 0
 
     def test_bonds_empty_polymer(self, backend):
@@ -252,7 +262,11 @@ class TestBonds:
         empty = template[template.atoms < 0]
 
         bonds = empty.bonds
-        assert isinstance(bonds, np.ndarray)
+        if backend == "torch":
+            import torch
+            assert isinstance(bonds, torch.Tensor)
+        else:
+            assert isinstance(bonds, np.ndarray)
         assert len(bonds) == 0
 
 

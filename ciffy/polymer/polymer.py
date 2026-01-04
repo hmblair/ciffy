@@ -1225,7 +1225,7 @@ class Polymer:
             # Use for attention masking (same-residue attention)
             >>> mask = res_idx[:, None] == res_idx[None, :]
         """
-        return self._hierarchy.index(scale)
+        return self._hierarchy.membership(scale)
 
     def gather(
         self: Polymer,

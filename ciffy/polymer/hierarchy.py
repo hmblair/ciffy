@@ -387,22 +387,25 @@ class _Hierarchy:
         """
         return self.reduce(ops.to_int64(mask), scale, Reduction.SUM, in_scale=Scale.ATOM)
 
-    def index(self, scale: Scale) -> Array:
+    def membership(self, scale: Scale) -> Array:
         """
-        Get the index of each atom within units at the specified scale.
+        Get which unit each atom belongs to at the specified scale.
 
         Creates an integer array where each atom is labeled with its
         containing unit's index at the given scale.
 
         Args:
-            scale: Scale at which to compute indices.
+            scale: Scale at which to compute membership.
 
         Returns:
-            Integer array of shape (num_atoms,) with indices.
+            Integer array of shape (num_atoms,) with unit indices.
         """
         n = self.size(scale)
         idx = ops.arange(n, like=self._ref)
         return self.expand(idx, scale, Scale.ATOM)
+
+    # Alias for backwards compatibility
+    index = membership
 
     # ─────────────────────────────────────────────────────────────────────────
     # Mask Operations

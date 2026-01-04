@@ -497,18 +497,19 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     CifErrorContext ctx = CIF_ERROR_INIT;
 
     /* Parse arguments: filename (required) + optional keywords */
-    static char *kwlist[] = {"filename", "skip", "molecule_types", "chains", "connections", "alt_loc", NULL};
+    static char *kwlist[] = {"filename", "skip", "molecule_types", "chains", "connections", "alt_loc", "model", NULL};
     const char *file = NULL;
     PyObject *py_skip = NULL;   /* Default: None - load all fields */
     PyObject *py_mol_types = NULL;  /* Optional list of molecule type ints */
     PyObject *py_chains = NULL;     /* Optional list of chain name strings */
     int py_connections = 0;         /* Default: False - don't load connections */
     const char *py_alt_loc = NULL;  /* Optional alt conformation to keep */
+    int py_model = 1;               /* Default: model 1 */
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|OOOpz", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|OOOpzi", kwlist,
                                       &file, &py_skip,
                                       &py_mol_types, &py_chains, &py_connections,
-                                      &py_alt_loc)) {
+                                      &py_alt_loc, &py_model)) {
         return NULL;
     }
 
@@ -521,6 +522,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     /* Build LoadFilter from Python arguments */
     LoadFilter filter = {0};
     filter.connections = (bool)py_connections;
+    filter.model = py_model;
 
     /* Set alt_loc filter (first character of string, or '\0' if NULL) */
     if (py_alt_loc != NULL && py_alt_loc[0] != '\0') {

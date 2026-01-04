@@ -41,7 +41,8 @@ def load(
             Can be a single chain name (e.g., "A") or a list of chain names.
             If None, all chains are loaded. Can be combined with molecule_types.
         model: Model number to load for multi-model structures (e.g., NMR
-            ensembles). Currently only model 1 is supported. Default is 1.
+            ensembles). Default is 1. For structures with multiple models,
+            each model may have a different number of atoms.
         skip: Fields to skip loading. Can be:
             - A tuple/list of field names (default: ["descriptions", "connections"])
             - "metadata": Skip heavy atom-level fields (coordinates, bfactors,
@@ -62,9 +63,9 @@ def load(
     Raises:
         OSError: If the file does not exist.
         RuntimeError: If parsing fails.
-        ValueError: If backend is not "numpy" or "torch", or if skip contains
-            invalid or core field names.
-        NotImplementedError: If model is not 1.
+        ValueError: If backend is not "numpy" or "torch", if skip contains
+            invalid or core field names, if model < 1, or if the requested
+            model does not exist in the structure.
 
     Example:
         >>> polymer = load("1abc.cif", backend="numpy")
@@ -114,11 +115,8 @@ def load(
     if backend not in ("numpy", "torch"):
         raise ValueError(f"backend must be 'numpy' or 'torch', got {backend!r}")
 
-    if model != 1:
-        raise NotImplementedError(
-            f"Only model 1 is currently supported, got model={model}. "
-            "Multi-model support may be added in a future version."
-        )
+    if model < 1:
+        raise ValueError(f"model must be >= 1, got {model}")
 
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')
@@ -164,7 +162,7 @@ def load(
 
     # Load returns a dict with all parsed data
     data = _load(file, skip=skip_for_c, molecule_types=mol_type_filter, chains=chain_filter,
-                 connections=load_connections, alt_loc=alt_loc)
+                 connections=load_connections, alt_loc=alt_loc, model=model)
 
     # Extract fields from dict
     id = data["id"]

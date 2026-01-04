@@ -89,6 +89,7 @@ typedef struct mmCIF {
     int excluded_count;     /**< Count of excluded atoms */
     int original_chains;    /**< Original chain count before filtering */
     int original_atoms;     /**< Original atom count before filtering */
+    int target_model;       /**< Target model to load (1-indexed), set from filter */
 
     /* Connection data from _struct_conn (optional, requires connections=true) */
     int *connections;       /**< Atom index pairs [n_connections * 2] as (atom1, atom2) */

@@ -42,6 +42,8 @@ static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 
 
 /* Forward declarations for partial loading support */
+static int _prescan_model_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                 const LoadFilter *filter, CifErrorContext *ctx);
 static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
                                  const LoadFilter *filter, CifErrorContext *ctx);
 static int _prescan_alt_loc_filter(mmCIF *cif, mmBlock *block, int atoms,
@@ -100,6 +102,11 @@ typedef struct {
 } AtomFilter;
 
 /* Filter activation checks */
+static bool _model_filter_active(const mmCIF *cif, const LoadFilter *filter) {
+    /* Model filter is active for any multi-model structure */
+    return cif->models > 1 && filter != NULL && filter->model >= 1;
+}
+
 static bool _chain_filter_active(const mmCIF *cif, const LoadFilter *filter) {
     (void)filter;
     return cif->chain_mask != NULL;
@@ -111,9 +118,10 @@ static bool _alt_loc_filter_active(const mmCIF *cif, const LoadFilter *filter) {
 }
 
 /**
- * @brief Filter registry - order matters (chain filter runs before alt_loc).
+ * @brief Filter registry - order matters (model filter runs first).
  */
 static const AtomFilter ATOM_FILTERS[] = {
+    {"model",   _prescan_model_filter,   _model_filter_active},
     {"chain",   _prescan_chain_filter,   _chain_filter_active},
     {"alt_loc", _prescan_alt_loc_filter, _alt_loc_filter_active},
     {NULL, NULL, NULL}  /* Sentinel */
@@ -688,6 +696,9 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         return err;
     }
 
+    /* Set target model for _op_compute_atoms */
+    cif->target_model = (filter && filter->model > 0) ? filter->model : 1;
+
     err = _execute_plan(cif, blocks, &plan, ctx);
     if (err != CIF_OK) {
         _free_lines(&blocks->b[BLOCK_ATOM]);
@@ -990,6 +1001,43 @@ static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
         }
     }
 
+    return excluded;
+}
+
+/**
+ * @brief Model filter: mark atoms not belonging to the target model.
+ *
+ * @param cif Structure with is_excluded already set and target_model set
+ * @param block Atom block with precomputed lines
+ * @param atoms Total atom count (original, before filtering)
+ * @param filter Filter options (uses filter->model)
+ * @param ctx Error context
+ * @return Number of excluded atoms, or -1 on error
+ */
+static int _prescan_model_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                 const LoadFilter *filter, CifErrorContext *ctx) {
+    int target_model = filter->model > 0 ? filter->model : 1;
+
+    /* Get pdbx_PDB_model_num attribute index */
+    int model_idx = _get_attr_index(block, "pdbx_PDB_model_num", ctx);
+    if (model_idx == BAD_IX) {
+        /* No model column - single model structure, nothing to filter */
+        LOG_DEBUG("No pdbx_PDB_model_num column, treating as single-model");
+        return 0;
+    }
+
+    int excluded = 0;
+    for (int row = 0; row < atoms; row++) {
+        if (cif->is_excluded[row]) continue;  /* Already excluded */
+
+        int model_num = _parse_int_inline(block, row, model_idx);
+        if (model_num != target_model) {
+            cif->is_excluded[row] = 1;
+            excluded++;
+        }
+    }
+
+    LOG_DEBUG("Model filter: excluded %d atoms (keeping model %d)", excluded, target_model);
     return excluded;
 }
 

@@ -879,9 +879,9 @@ static CifError _op_lookup(mmCIF *cif, mmBlock *block, const FieldDef *def,
 /**
  * OP_COMPUTE: Custom computation for atoms field.
  *
- * For multi-model structures, we load only model 1. Instead of assuming
- * equal atoms per model (total/models), we scan to find where model 1 ends.
+ * For multi-model structures, we count atoms for the target model by scanning.
  * This correctly handles cases where models have different atom counts.
+ * The model filter will handle exclusion of non-target atoms.
  */
 static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
                                    const FieldDef *def, CifErrorContext *ctx) {
@@ -892,34 +892,54 @@ static CifError _op_compute_atoms(mmCIF *cif, mmBlock *block,
         return CIF_ERR_BLOCK;
     }
 
-    /* For single-model structures, use all atoms */
-    int atom_count = block->size;
     int total_atoms = block->size;
+    int atom_count = total_atoms;
+    int target_model = cif->target_model > 0 ? cif->target_model : 1;
 
-    /* For multi-model structures, find where model 1 ends */
+    /* Validate target model doesn't exceed model count */
+    if (target_model > cif->models) {
+        LOG_ERROR("Model %d not found (structure has %d models)",
+                  target_model, cif->models);
+        CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+            "Model %d not found (structure has %d models)",
+            target_model, cif->models);
+        return CIF_ERR_PARSE;
+    }
+
+    /* For multi-model structures, validate target model exists but DON'T reduce atom_count.
+     * The model filter system will handle exclusion and count reduction.
+     * We store total_atoms so is_excluded array is properly sized. */
     if (cif->models > 1) {
         int model_idx = _get_attr_index(block, "pdbx_PDB_model_num", ctx);
 
         if (model_idx >= 0) {
-            /* Scan to find first row where model != 1 */
-            for (int row = 0; row < block->size; row++) {
+            /* Validate target model exists by counting its atoms */
+            int target_count = 0;
+            for (int row = 0; row < total_atoms; row++) {
                 int model_num = _parse_int_inline(block, row, model_idx);
-                if (model_num != 1) {
-                    atom_count = row;
-                    break;
+                if (model_num == target_model) {
+                    target_count++;
                 }
             }
-            LOG_DEBUG("[%s] Model 1 has %d atoms (total %d across %d models)",
-                      cif->id ? cif->id : "unknown", atom_count, total_atoms, cif->models);
+
+            if (target_count == 0) {
+                LOG_ERROR("Model %d not found in structure with %d models",
+                          target_model, cif->models);
+                CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                    "Model %d not found (structure has %d models)",
+                    target_model, cif->models);
+                return CIF_ERR_PARSE;
+            }
+
+            LOG_DEBUG("[%s] Model %d has %d atoms (total %d across %d models)",
+                      cif->id ? cif->id : "unknown", target_model, target_count,
+                      total_atoms, cif->models);
         } else {
-            /* No model column - fall back to division (legacy behavior) */
-            atom_count = block->size / cif->models;
-            LOG_DEBUG("[%s] No model column, assuming %d atoms per model",
-                      cif->id ? cif->id : "unknown", atom_count);
+            LOG_DEBUG("[%s] No model column, assuming single model",
+                      cif->id ? cif->id : "unknown");
         }
 
-        /* Truncate block to model 1 atoms for subsequent operations */
-        block->size = atom_count;
+        /* Store total_atoms - model filter will reduce via is_excluded */
     }
 
     _store_int(cif, def, atom_count);

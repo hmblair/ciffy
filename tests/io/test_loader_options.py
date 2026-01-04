@@ -375,3 +375,133 @@ class TestAltLocFiltering:
 
         # Both filters should be applied
         assert polymer.size() <= polymer_all.size()
+
+
+class TestMultiModelSupport:
+    """Test load() with model parameter for multi-model structures."""
+
+    def test_load_model_1_default(self, backend):
+        """Default model=1 loads first model."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")  # 4 models
+        polymer = load(cif, backend=backend)
+
+        # 406D model 1 has 760 atoms
+        assert polymer.size() == 760
+
+    def test_load_model_1_explicit(self, backend):
+        """Explicit model=1 works same as default."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+        polymer_default = load(cif, backend=backend)
+        polymer_explicit = load(cif, backend=backend, model=1)
+
+        assert polymer_default.size() == polymer_explicit.size()
+        assert np.allclose(polymer_default.coordinates, polymer_explicit.coordinates)
+
+    def test_load_model_2(self, backend):
+        """Loading model 2 returns different coordinates."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+        # Note: 406D uses alt_loc to encode model (A=1, B=2, etc.), so disable alt_loc filter
+        p1 = load(cif, backend=backend, model=1, alt_loc=None)
+        p2 = load(cif, backend=backend, model=2, alt_loc=None)
+
+        # Models have different atom counts (760 vs 726)
+        assert p1.size() == 760
+        assert p2.size() == 726
+
+    def test_load_model_3(self, backend):
+        """Loading model 3 works correctly."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+        p3 = load(cif, backend=backend, model=3, alt_loc=None)
+
+        # Model 3 has 782 atoms
+        assert p3.size() == 782
+
+    def test_load_model_4(self, backend):
+        """Loading model 4 works correctly."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+        p4 = load(cif, backend=backend, model=4, alt_loc=None)
+
+        # Model 4 has 726 atoms
+        assert p4.size() == 726
+
+    def test_different_models_different_coordinates(self, backend):
+        """Different models have different coordinates."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+        p1 = load(cif, backend=backend, model=1, alt_loc=None)
+        p2 = load(cif, backend=backend, model=2, alt_loc=None)
+
+        # Even if we compare matching atoms, coords should differ
+        # (NMR models have different conformations)
+        # Just verify they're not identical
+        assert p1.size() != p2.size() or not np.allclose(p1.coordinates, p2.coordinates)
+
+    def test_model_not_found(self, backend):
+        """Invalid model number raises ValueError."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")  # Has 4 models
+
+        with pytest.raises(ValueError, match="not found"):
+            load(cif, backend=backend, model=999)
+
+    def test_model_not_found_single_model(self, backend):
+        """model>1 on single-model file raises ValueError."""
+        from ciffy import load
+
+        cif = get_test_cif("9MDS")  # Single model
+
+        with pytest.raises(ValueError, match="not found"):
+            load(cif, backend=backend, model=2)
+
+    def test_invalid_model_zero(self, backend):
+        """model=0 raises ValueError."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+
+        with pytest.raises(ValueError, match="model must be >= 1"):
+            load(cif, backend=backend, model=0)
+
+    def test_invalid_model_negative(self, backend):
+        """Negative model raises ValueError."""
+        from ciffy import load
+
+        cif = get_test_cif("406D")
+
+        with pytest.raises(ValueError, match="model must be >= 1"):
+            load(cif, backend=backend, model=-1)
+
+    def test_model_with_chain_filter(self, backend):
+        """Model selection works with chain filtering."""
+        from ciffy import load, Scale
+
+        cif = get_test_cif("406D")
+
+        # Load model 2 with chain filter (disable alt_loc due to 406D quirk)
+        polymer = load(cif, backend=backend, model=2, chains=["A"], alt_loc=None)
+
+        assert polymer.size() > 0
+        assert polymer.size(Scale.CHAIN) == 1
+
+    def test_model_preserves_structure(self, backend):
+        """Loading different models preserves chain structure."""
+        from ciffy import load, Scale
+
+        cif = get_test_cif("406D")
+        p1 = load(cif, backend=backend, model=1, alt_loc=None)
+        p2 = load(cif, backend=backend, model=2, alt_loc=None)
+
+        # Same number of chains (structure is same, just different atoms per model)
+        assert p1.size(Scale.CHAIN) == p2.size(Scale.CHAIN)

@@ -650,6 +650,40 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
                   cif->atoms, cif->polymer, cif->nonpoly, excluded);
     }
 
+    /* Pre-scan for alternate conformations */
+    if (filter && filter->alt_loc != '\0') {
+        /* Allocate is_excluded if not already done by chain filter */
+        if (cif->is_excluded == NULL) {
+            cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
+            if (!cif->is_excluded) {
+                free(cif->is_nonpoly);
+                _free_lines(&blocks->b[BLOCK_ATOM]);
+                _free_lines(&blocks->b[BLOCK_POLY]);
+                _free_lines(&blocks->b[BLOCK_CHAIN]);
+                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded for alt locs");
+                return CIF_ERR_ALLOC;
+            }
+        }
+
+        int alt_excluded = _prescan_alt_locs(&blocks->b[BLOCK_ATOM], original_atoms,
+                                              cif->is_excluded, filter->alt_loc, ctx);
+        if (alt_excluded > 0) {
+            cif->atoms -= alt_excluded;
+            cif->excluded_count += alt_excluded;
+            /* Recount polymer/nonpoly */
+            int adjusted_polymer = 0;
+            for (int i = 0; i < original_atoms; i++) {
+                if (!cif->is_excluded[i] && !cif->is_nonpoly[i]) {
+                    adjusted_polymer++;
+                }
+            }
+            cif->polymer = adjusted_polymer;
+            cif->nonpoly = cif->atoms - adjusted_polymer;
+            LOG_DEBUG("After alt loc filtering: %d atoms (%d polymer, %d non-polymer)",
+                      cif->atoms, cif->polymer, cif->nonpoly);
+        }
+    }
+
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
     /* NOTE: cif->atoms is now the FILTERED count */
     err = _allocate_field_arrays(cif, skip_mask, ctx);

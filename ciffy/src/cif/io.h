@@ -382,6 +382,19 @@ int _prescan_group_pdb(mmBlock *block, int atoms, int *is_nonpoly,
                        CifErrorContext *ctx);
 
 /**
+ * @brief Pre-scan label_alt_id to filter alternate conformations.
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_excluded Exclusion mask to update (modified in place)
+ * @param keep_alt Alt conformation to keep ('A', 'B', etc.), '\0' = keep all
+ * @param ctx Error context
+ * @return Number of atoms excluded, or -1 on error
+ */
+int _prescan_alt_locs(mmBlock *block, int atoms, int *is_excluded,
+                      char keep_alt, CifErrorContext *ctx);
+
+/**
  * @brief Fast element lookup optimized for batch processing.
  *
  * @param block Block containing atom data

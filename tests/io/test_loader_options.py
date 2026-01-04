@@ -65,7 +65,8 @@ class TestLoadMetadata:
         from ciffy import load, load_metadata, Scale
 
         meta = load_metadata(cif_file)
-        polymer = load(cif_file, backend="numpy")
+        # Use alt_loc=None since load_metadata doesn't filter alt conformations
+        polymer = load(cif_file, backend="numpy", alt_loc=None)
 
         assert meta["atoms"] == polymer.size()
         assert meta["chains"] == polymer.size(Scale.CHAIN)
@@ -297,3 +298,80 @@ class TestLoadDescriptions:
             # Chain should still have descriptions
             assert chain.descriptions is not None
             assert len(chain.descriptions) == 1
+
+
+class TestAltLocFiltering:
+    """Test load() alt_loc parameter for alternate conformation filtering."""
+
+    def test_alt_loc_default_filters_alternates(self, backend):
+        """Default alt_loc='A' filters out B/C/etc alternates."""
+        from ciffy import load
+
+        # 1C9S has 120 atoms with A/B alternates (60 A, 60 B)
+        cif = get_test_cif("1C9S")
+        polymer_default = load(cif, backend=backend)
+        polymer_all = load(cif, backend=backend, alt_loc=None)
+
+        # Default should have fewer atoms than alt_loc=None
+        assert polymer_default.size() < polymer_all.size()
+
+    def test_alt_loc_none_keeps_all(self, backend):
+        """alt_loc=None keeps all atoms including alternates."""
+        from ciffy import load
+
+        cif = get_test_cif("1C9S")
+        polymer_a = load(cif, backend=backend, alt_loc="A")
+        polymer_all = load(cif, backend=backend, alt_loc=None)
+
+        # alt_loc=None should have more atoms
+        assert polymer_all.size() > polymer_a.size()
+        # Difference should be 60 (the B alternates)
+        assert polymer_all.size() - polymer_a.size() == 60
+
+    def test_alt_loc_a_equals_b_count(self, backend):
+        """alt_loc='A' and alt_loc='B' give same atom count."""
+        from ciffy import load
+
+        cif = get_test_cif("1C9S")
+        polymer_a = load(cif, backend=backend, alt_loc="A")
+        polymer_b = load(cif, backend=backend, alt_loc="B")
+
+        # Same number of atoms, just different positions
+        assert polymer_a.size() == polymer_b.size()
+
+    def test_alt_loc_no_alternates_unchanged(self, backend):
+        """Files without alternates are unaffected by alt_loc."""
+        from ciffy import load
+
+        # 9MDS has no alternate conformations (all atoms have '.')
+        cif = get_test_cif("9MDS")
+        polymer_a = load(cif, backend=backend, alt_loc="A")
+        polymer_none = load(cif, backend=backend, alt_loc=None)
+
+        # Should have same atom count
+        assert polymer_a.size() == polymer_none.size()
+
+    def test_alt_loc_preserves_structure(self, backend):
+        """alt_loc filtering preserves chain/residue structure."""
+        from ciffy import load, Scale
+
+        cif = get_test_cif("1C9S")
+        polymer_a = load(cif, backend=backend, alt_loc="A")
+        polymer_all = load(cif, backend=backend, alt_loc=None)
+
+        # Same number of chains and residues
+        assert polymer_a.size(Scale.CHAIN) == polymer_all.size(Scale.CHAIN)
+        assert polymer_a.size(Scale.RESIDUE) == polymer_all.size(Scale.RESIDUE)
+
+    def test_alt_loc_combined_with_chain_filter(self, backend):
+        """alt_loc works correctly with chain filter."""
+        from ciffy import load
+
+        cif = get_test_cif("1C9S")
+
+        # Load chain A with alt_loc filtering
+        polymer = load(cif, backend=backend, chains=["A"], alt_loc="A")
+        polymer_all = load(cif, backend=backend, chains=["A"], alt_loc=None)
+
+        # Both filters should be applied
+        assert polymer.size() <= polymer_all.size()

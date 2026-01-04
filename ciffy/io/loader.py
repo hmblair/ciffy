@@ -23,6 +23,7 @@ def load(
     chains: Union[str, List[str], None] = None,
     model: int = 1,
     skip: Union[str, List[str], None] = ("descriptions", "connections"),
+    alt_loc: str | None = "A",
 ) -> "Polymer":
     """
     Load a molecular structure from a CIF file.
@@ -52,6 +53,9 @@ def load(
             sequence (residues), res_per_chain, atoms_per_res, resolution,
             descriptions, connections. Core fields (chains, names, etc.)
             cannot be skipped.
+        alt_loc: Which alternate conformation to keep for atoms with multiple
+            positions. Default is "A". Set to None to keep all conformations
+            (may result in duplicate atoms per residue).
 
     Returns:
         Polymer object containing the parsed structure.
@@ -161,7 +165,7 @@ def load(
 
     # Load returns a dict with all parsed data
     data = _load(file, skip=skip_for_c, molecule_types=mol_type_filter, chains=chain_filter,
-                 connections=load_connections)
+                 connections=load_connections, alt_loc=alt_loc)
 
     # Extract fields from dict
     id = data["id"]

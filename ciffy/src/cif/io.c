@@ -797,3 +797,48 @@ int _prescan_group_pdb(mmBlock *block, int atoms, int *is_nonpoly,
 
     return atoms - nonpoly_count;
 }
+
+/**
+ * @brief Pre-scan label_alt_id to filter alternate conformations.
+ *
+ * Marks atoms for exclusion if their alt_id doesn't match the desired
+ * conformation. Atoms with '.' (no alternate) are always kept.
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_excluded Exclusion mask to update (modified in place)
+ * @param keep_alt Alt conformation to keep ('A', 'B', etc.), '\0' = keep all
+ * @param ctx Error context
+ * @return Number of atoms excluded, or -1 on error
+ */
+int _prescan_alt_locs(mmBlock *block, int atoms, int *is_excluded,
+                      char keep_alt, CifErrorContext *ctx) {
+    /* If no alt filtering requested, skip */
+    if (keep_alt == '\0') {
+        return 0;
+    }
+
+    /* Get label_alt_id attribute index */
+    int alt_idx = _get_attr_index(block, "label_alt_id", ctx);
+    if (alt_idx == BAD_IX) {
+        /* No alt_id column - nothing to filter */
+        return 0;
+    }
+
+    int excluded = 0;
+    for (int row = 0; row < atoms; row++) {
+        if (is_excluded[row]) continue;
+
+        size_t alt_len;
+        char *alt = _get_field_ptr(block, row, alt_idx, &alt_len);
+
+        /* Keep '.' (no alternate) and matching alt_id */
+        if (alt_len == 1 && alt[0] != '.' && alt[0] != keep_alt) {
+            is_excluded[row] = 1;
+            excluded++;
+        }
+    }
+
+    LOG_DEBUG("Alt loc filtering: excluded %d atoms (keeping '%c')", excluded, keep_alt);
+    return excluded;
+}

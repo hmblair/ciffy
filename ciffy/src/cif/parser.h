@@ -30,6 +30,7 @@ typedef struct LoadFilter {
     int chain_count;        /**< Number of chain names in filter */
     int model;              /**< Model number to load (1-indexed), 0 = default (first) */
     bool connections;       /**< If true, parse _struct_conn for hydrogen bonds etc. */
+    char alt_loc;           /**< Alt conformation to keep ('A', 'B', etc.), '\0' = keep all */
 } LoadFilter;
 
 /**

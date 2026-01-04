@@ -578,21 +578,30 @@ def array(data: list, *, like: Array, dtype: str = 'int64') -> Array:
     return np.array(data, dtype=np_dtype)
 
 
-def empty(size: int | tuple, *, like: Array) -> Array:
+def empty(size: int | tuple, *, like: Array, dtype: str | None = None) -> Array:
     """
-    Create an empty (uninitialized) array matching dtype/device of 'like'.
+    Create an empty (uninitialized) array matching backend/device of 'like'.
 
     Args:
         size: Shape of the array (int for 1D, tuple for nD).
-        like: Template array to match dtype and device.
+        like: Template array to match backend and device.
+        dtype: Data type ('int64', 'float32', 'bool'). If None, uses like's dtype.
 
     Returns:
-        Empty array in the same backend/dtype/device as 'like'.
+        Empty array in the same backend/device as 'like'.
     """
     if is_torch(like):
         import torch
-        return torch.empty(size, dtype=like.dtype, device=getattr(like, 'device', None))
-    return np.empty(size, dtype=like.dtype)
+        if dtype is None:
+            torch_dtype = like.dtype
+        else:
+            torch_dtype = {'int64': torch.long, 'float32': torch.float32, 'bool': torch.bool}[dtype]
+        return torch.empty(size, dtype=torch_dtype, device=getattr(like, 'device', None))
+    if dtype is None:
+        np_dtype = like.dtype
+    else:
+        np_dtype = {'int64': np.int64, 'float32': np.float32, 'bool': bool}[dtype]
+    return np.empty(size, dtype=np_dtype)
 
 
 def empty_like(arr: Array) -> Array:

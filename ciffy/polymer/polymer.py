@@ -1255,15 +1255,7 @@ class Polymer:
         n_residues = self.size(Scale.RESIDUE)
         membership = self.membership(Scale.RESIDUE)
 
-        if is_torch(self.atoms):
-            import torch
-            indices = torch.empty(
-                (n_residues, n_groups),
-                dtype=torch.long,
-                device=self.atoms.device,
-            )
-        else:
-            indices = np.empty((n_residues, n_groups), dtype=np.int64)
+        indices = ops.empty((n_residues, n_groups), like=self.atoms, dtype='int64')
 
         for i, group in enumerate(groups):
             values = ops.to_backend(group.index(), self.atoms)

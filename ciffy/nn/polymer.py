@@ -358,6 +358,7 @@ class PolymerModel(nn.Module, HubMixin):
         latents: torch.Tensor,
         sequence: SequenceArray,
         latent_bound: float | None = None,
+        project: bool = False,
     ) -> torch.Tensor:
         """
         Decode latent vectors to positioned polymer coordinates.
@@ -374,6 +375,7 @@ class PolymerModel(nn.Module, HubMixin):
                 When set, values are bounded to [-bound, bound] range.
                 Useful during gradient-based optimization to prevent explosion
                 from out-of-distribution latents. Default None (no bounding).
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             (N, 3) flat coordinate tensor with all residues positioned.
@@ -400,7 +402,7 @@ class PolymerModel(nn.Module, HubMixin):
             model = self._get_model(int(res_type))
 
             # Decode this residue (keep gradients for optimization)
-            coords_i, transform_i = model.decode(latents[i:i + 1])
+            coords_i, transform_i = model.decode(latents[i:i + 1], project=project)
 
             # coords_i is (1, n_atoms, 3), squeeze to (n_atoms, 3)
             # transform_i is (1, 6), squeeze to (6,)
@@ -426,6 +428,7 @@ class PolymerModel(nn.Module, HubMixin):
         sequence: SequenceArray,
         n_samples: int = 1,
         temperature: float = 1.0,
+        project: bool = False,
     ) -> list[torch.Tensor]:
         """
         Sample coordinate tensors from sequence (internal method).
@@ -434,6 +437,7 @@ class PolymerModel(nn.Module, HubMixin):
             sequence: Int array of residue types.
             n_samples: Number of samples to generate.
             temperature: Scales latent noise (higher = more diverse).
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             List of (N, 3) coordinate tensors.
@@ -447,7 +451,7 @@ class PolymerModel(nn.Module, HubMixin):
         for _ in range(n_samples):
             latents = torch.randn(len(sequence), self.latent_dim, device=self.device)
             latents = latents * temperature
-            coords = self.decode(latents, sequence)
+            coords = self.decode(latents, sequence, project=project)
             samples.append(coords)
 
         return samples
@@ -458,6 +462,7 @@ class PolymerModel(nn.Module, HubMixin):
         n_samples: int = 1,
         temperature: float = 1.0,
         id: str = "sampled",
+        project: bool = False,
     ) -> "Polymer | list[Polymer]":
         """
         Sample polymer conformations directly from a sequence string.
@@ -471,6 +476,7 @@ class PolymerModel(nn.Module, HubMixin):
             n_samples: Number of conformations to generate.
             temperature: Sampling temperature (higher = more diverse).
             id: PDB ID for the generated polymers.
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             If n_samples=1: Single Polymer with generated coordinates.
@@ -492,7 +498,9 @@ class PolymerModel(nn.Module, HubMixin):
         template = from_sequence(sequence, atoms=self.atom_filter, id=id)
 
         # Use protocol-compliant sample method
-        samples = self.sample(template, n_samples=n_samples, temperature=temperature)
+        samples = self.sample(
+            template, n_samples=n_samples, temperature=temperature, project=project
+        )
 
         if n_samples == 1:
             return samples[0]
@@ -503,6 +511,7 @@ class PolymerModel(nn.Module, HubMixin):
         template: "Polymer",
         n_samples: int = 1,
         temperature: float = 1.0,
+        project: bool = False,
         **kwargs,
     ) -> list["Polymer"]:
         """
@@ -517,6 +526,7 @@ class PolymerModel(nn.Module, HubMixin):
             n_samples: Number of independent conformations to generate.
             temperature: Sampling temperature. Scales the latent noise
                 (higher = more diverse). Default 1.0.
+            project: If True, project coordinates to satisfy bond constraints.
             **kwargs: Additional keyword arguments (ignored).
 
         Returns:
@@ -556,7 +566,7 @@ class PolymerModel(nn.Module, HubMixin):
         )
 
         # Sample coordinates
-        coords_list = self._sample_coords(sequence, n_samples, temperature)
+        coords_list = self._sample_coords(sequence, n_samples, temperature, project)
 
         # Convert to Polymers with correct atom structure
         return [
@@ -706,12 +716,11 @@ class PolymerModel(nn.Module, HubMixin):
         if model_type == "residue-flow":
             from ciffy.nn.flow.residue import ResidueFlowModel
             return ResidueFlowModel.load(path, device=device, jit=jit)
-        elif model_type == "residue-vae":
-            from ciffy.nn.vae.residue import ResidueVAE
-            return ResidueVAE.load(path, device=device)
-        elif model_type == "residue-invariant-vae":
-            from ciffy.nn.vae.residue import InvariantResidueVAE
-            return InvariantResidueVAE.load(path, device=device)
+        elif model_type in ("residue-vae", "residue-invariant-vae", "attention-residue-vae"):
+            raise ValueError(
+                f"Model type '{model_type}' is no longer supported. "
+                "Please retrain using model_type='consolidated'."
+            )
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 

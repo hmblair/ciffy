@@ -38,8 +38,7 @@ import torch.nn as nn
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup
 
-from .invariant import InvariantAttentionEncoder
-from ciffy.nn.blocks import InputNorm, ResidualBlock, build_mlp_stack
+from ciffy.nn.blocks import InputNorm, ResidualBlock, build_mlp_stack, InvariantAttentionEncoder
 
 
 @dataclass
@@ -54,7 +53,7 @@ class ConsolidatedVAEConfig:
     hidden_dims: list[int] = field(default_factory=lambda: [256, 128])
     dropout: float = 0.1
     encoder_type: str = "flat"  # "flat" (MLP on padded data) or "invariant" (attention on distances)
-    use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
+    use_input_norm: bool = False  # Disabled by default (causes bugs with variable atom counts)
     use_residual: bool = True  # Residual connections in decoder
 
 
@@ -299,13 +298,14 @@ class ConsolidatedResidueVAE(nn.Module):
             return z
 
     def decode(
-        self, z: torch.Tensor, residue: "Residue"
+        self, z: torch.Tensor, residue: "Residue", project: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Decode latent to coordinates for a specific residue type.
 
         Args:
             z: (batch, latent_dim) latent vectors.
             residue: Target residue type.
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             coords: (batch, n_atoms, 3) in canonical frame.
@@ -341,6 +341,17 @@ class ConsolidatedResidueVAE(nn.Module):
 
         n_atoms = len(self._residue_atoms[residue])
         coords = coords_flat.reshape(-1, n_atoms, 3)
+
+        # Project to satisfy bond constraints if requested
+        if project:
+            from ciffy.geometry import project_bond_lengths
+            from ciffy.geometry.constraints import GeometryConstraints
+
+            gc = GeometryConstraints.from_residue(
+                residue, list(self._residue_atoms[residue])
+            ).to(coords.device)
+            coords = project_bond_lengths(coords, gc.bond_indices, gc.bond_targets)
+
         return coords, transform
 
     def forward(
@@ -580,17 +591,18 @@ class ConsolidatedResidueView(nn.Module):
             return z.squeeze(0)
         return z
 
-    def decode(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def decode(self, z: torch.Tensor, project: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Decode latents to coordinates and transform.
 
         Args:
             z: (batch, latent_dim) latent vectors.
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             coords: (batch, n_atoms, 3) coordinates.
             transform: (batch, 6) SE(3) transform parameters.
         """
-        return self._model.decode(z, self._residue)
+        return self._model.decode(z, self._residue, project=project)
 
     def sample(self, n_samples: int = 1) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample from prior.

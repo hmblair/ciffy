@@ -5,6 +5,7 @@ Trains a ConsolidatedResidueVAE with shared encoder and per-residue decoders.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
 from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup, GeometrySamplingLoss
+from ciffy.geometry.constraints import GeometryConstraints
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -36,7 +38,7 @@ class ConsolidatedVAEModelConfig:
     beta: float = 1.0
     beta_warmup_epochs: int = 50
     free_bits: float = 0.5
-    use_input_norm: bool = True  # Learn input normalization (improves reconstruction)
+    use_input_norm: bool = False  # Disabled by default (causes bugs with variable atom counts)
     use_residual: bool = True  # Residual connections in decoder
     gamma: float = 0.0  # Geometry sampling loss weight (0 = disabled)
     n_geom_samples: int = 16  # Number of samples for geometry loss
@@ -110,6 +112,9 @@ class ConsolidatedVAEModule(LightningModule):
         # Geometry sampling loss (set in setup if gamma > 0)
         self._geometry_loss: GeometrySamplingLoss | None = None
 
+        # Geometry constraints per residue (for validation metrics)
+        self._geometry_constraints: dict["Residue", GeometryConstraints] = {}
+
     def get_model(self) -> "ConsolidatedResidueVAE":
         """Get the trained ConsolidatedResidueVAE.
 
@@ -159,6 +164,10 @@ class ConsolidatedVAEModule(LightningModule):
         # Set up geometry sampling loss if gamma > 0
         if model_cfg.gamma > 0:
             self._geometry_loss = GeometrySamplingLoss.from_residue_atoms(residue_atoms)
+
+        # Create geometry constraints for each residue type
+        for res, atoms in residue_atoms.items():
+            self._geometry_constraints[res] = GeometryConstraints.from_residue(res, atoms)
 
     def get_beta(self) -> float:
         """Get current beta value with warmup."""
@@ -240,6 +249,50 @@ class ConsolidatedVAEModule(LightningModule):
 
         return coord_loss, transform_loss, mu, logvar
 
+    def _log_gaussianity_metrics(self, mu: torch.Tensor, logvar: torch.Tensor, prefix: str) -> None:
+        """Log comprehensive Gaussianity metrics for latent space.
+
+        For a VAE with well-matched posterior to prior N(0,1):
+        - mu mean should be ~0
+        - mu std should be <1 (posterior means spread)
+        - exp(0.5*logvar) mean should be ~1 (posterior stds)
+        - skewness and kurtosis of samples should be ~0
+        """
+        # Posterior mean statistics
+        mu_mean = mu.mean()
+        mu_std = mu.std()
+
+        # Posterior std statistics
+        posterior_std = torch.exp(0.5 * logvar)
+        std_mean = posterior_std.mean()
+        std_std = posterior_std.std()
+
+        # Per-dimension statistics (detect collapsed dimensions)
+        mu_dim_std = mu.std(dim=0)
+        mu_std_min = mu_dim_std.min()
+        mu_std_max = mu_dim_std.max()
+
+        # Sample from posterior for Gaussianity check
+        z = mu + posterior_std * torch.randn_like(mu)
+
+        # Skewness of samples: E[(x - μ)³] / σ³
+        z_centered = z - z.mean(dim=0, keepdim=True)
+        z_normalized = z_centered / (z.std(dim=0, keepdim=True) + 1e-8)
+        skewness = (z_normalized ** 3).mean()
+
+        # Excess kurtosis of samples: E[(x - μ)⁴] / σ⁴ - 3
+        kurtosis = (z_normalized ** 4).mean() - 3.0
+
+        # Log metrics
+        self.log(f"{prefix}/mu_mean", mu_mean, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/mu_std", mu_std, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/mu_std_min", mu_std_min, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/mu_std_max", mu_std_max, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/posterior_std_mean", std_mean, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/posterior_std_std", std_std, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_skewness", skewness, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_kurtosis", kurtosis, on_step=False, on_epoch=True)
+
     def training_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         """Compute ELBO loss for training."""
         coord_loss, transform_loss, mu, logvar = self._forward_batch(batch)
@@ -268,6 +321,9 @@ class ConsolidatedVAEModule(LightningModule):
         self.log("train/beta", beta, on_step=False, on_epoch=True)
         self.log("train/loss", loss, on_step=False, on_epoch=True)
 
+        # Log Gaussianity metrics
+        self._log_gaussianity_metrics(mu, logvar, prefix="train")
+
         return loss
 
     def validation_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
@@ -287,7 +343,79 @@ class ConsolidatedVAEModule(LightningModule):
         self.log("val/kl", kl_loss, sync_dist=True)
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
 
+        # Log Gaussianity metrics
+        self._log_gaussianity_metrics(mu, logvar, prefix="val")
+
+        # Log geometry metrics on decoded samples
+        self._log_geometry_metrics(prefix="val")
+
         return loss
+
+    def _log_geometry_metrics(self, prefix: str, n_samples: int = 50) -> None:
+        """Log geometry violation metrics for sampled structures.
+
+        Samples from prior and measures bond/angle violations per residue type.
+        """
+        if not self._geometry_constraints:
+            return
+
+        all_bond_errors = []
+        all_angle_errors = []
+        all_inter_errors = []
+
+        for res in self.residues:
+            if res not in self._geometry_constraints:
+                continue
+
+            gc = self._geometry_constraints[res]
+
+            # Sample from prior and decode
+            z = torch.randn(n_samples, self._model.latent_dim, device=self.device)
+            with torch.no_grad():
+                coords, transforms = self._model.decode(z, res)
+
+            gc = gc.to(coords.device)
+
+            # Bond length errors
+            if gc.n_bonds > 0:
+                a1 = coords[:, gc.bond_indices[:, 0]]
+                a2 = coords[:, gc.bond_indices[:, 1]]
+                lengths = torch.norm(a2 - a1, dim=-1)
+                bond_errors = (lengths - gc.bond_targets).abs()
+                all_bond_errors.append(bond_errors.flatten())
+
+            # Angle errors (in degrees)
+            if gc.n_angles > 0:
+                a = coords[:, gc.angle_indices[:, 0]]
+                b = coords[:, gc.angle_indices[:, 1]]
+                c = coords[:, gc.angle_indices[:, 2]]
+                v1 = a - b
+                v2 = c - b
+                cos_angles = (v1 * v2).sum(-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8)
+                angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
+                angle_errors = (angles - gc.angle_targets).abs() * (180 / math.pi)
+                all_angle_errors.append(angle_errors.flatten())
+
+            # Inter-residue bond error
+            inter_lengths = torch.norm(transforms[:, 3:], dim=-1)
+            inter_errors = (inter_lengths - gc.inter_bond_target).abs()
+            all_inter_errors.append(inter_errors)
+
+        # Aggregate and log
+        if all_bond_errors:
+            bond_errors = torch.cat(all_bond_errors)
+            self.log(f"{prefix}/bond_mae", bond_errors.mean(), on_step=False, on_epoch=True)
+            self.log(f"{prefix}/bond_max", bond_errors.max(), on_step=False, on_epoch=True)
+
+        if all_angle_errors:
+            angle_errors = torch.cat(all_angle_errors)
+            self.log(f"{prefix}/angle_mae", angle_errors.mean(), on_step=False, on_epoch=True)
+            self.log(f"{prefix}/angle_max", angle_errors.max(), on_step=False, on_epoch=True)
+
+        if all_inter_errors:
+            inter_errors = torch.cat(all_inter_errors)
+            self.log(f"{prefix}/inter_bond_mae", inter_errors.mean(), on_step=False, on_epoch=True)
+            self.log(f"{prefix}/inter_bond_max", inter_errors.max(), on_step=False, on_epoch=True)
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Configure optimizer and scheduler."""

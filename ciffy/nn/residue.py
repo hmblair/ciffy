@@ -3,7 +3,6 @@ Unified API for residue-level generative models.
 
 This module provides a single entry point for training any residue-level model:
 - ResidueFlowModel (PCA + normalizing flow)
-- ResidueVAE (MLP encoder/decoder)
 - ConsolidatedResidueVAE (shared encoder, per-residue decoders)
 - More model types can be registered
 
@@ -12,9 +11,6 @@ Example usage:
     >>>
     >>> # Train flow models (default)
     >>> model = residue.train(["data/*.cif"], residues="ACGU", model_type="flow")
-    >>>
-    >>> # Train VAE models
-    >>> model = residue.train(["data/*.cif"], residues="ACGU", model_type="vae")
     >>>
     >>> # Train consolidated VAE (shared encoder)
     >>> model = residue.train(["data/*.cif"], residues="ACGU", model_type="consolidated")
@@ -81,16 +77,11 @@ def _register_builtin_models():
         ResidueFlowModule,
         ResidueFlowFullConfig,
     )
-    from .lightning.modules.residue_vae import (
-        ResidueVAEModule,
-        ResidueVAEFullConfig,
-    )
     from .lightning.modules.consolidated_vae import (
         ConsolidatedVAEModule,
         ConsolidatedVAEFullConfig,
     )
     from .flow.residue.model import ResidueFlowModel
-    from .vae.residue.model import ResidueVAE
     from .vae.residue.consolidated import ConsolidatedResidueVAE
 
     register_model_type(
@@ -102,19 +93,21 @@ def _register_builtin_models():
     )
 
     register_model_type(
-        "vae",
-        ResidueVAEModule,
-        ResidueVAEFullConfig,
-        ResidueVAE,
-        "Variational autoencoder (learned compression, better reconstruction)",
-    )
-
-    register_model_type(
         "consolidated",
         ConsolidatedVAEModule,
         ConsolidatedVAEFullConfig,
         ConsolidatedResidueVAE,
         "Consolidated VAE (shared encoder, per-residue decoders, 4x data efficiency)",
+        consolidated=True,
+    )
+
+    # Alias for backward compatibility
+    register_model_type(
+        "vae",
+        ConsolidatedVAEModule,
+        ConsolidatedVAEFullConfig,
+        ConsolidatedResidueVAE,
+        "Alias for 'consolidated' (shared encoder VAE)",
         consolidated=True,
     )
 
@@ -203,7 +196,7 @@ def train(
         accelerator: Device for training ("auto", "cpu", "gpu", "mps").
         verbose: Whether to show progress bars.
         **kwargs: Model-specific arguments:
-            - flow: n_layers, hidden_dim, use_rotation
+            - flow: n_layers, hidden_dim, use_rotation, transform_scale
             - vae: hidden_dims, beta, free_bits, use_residual
 
     Returns:
@@ -275,10 +268,13 @@ def train(
 
         try:
             # Create data module (shared across model types)
+            # Get transform_scale from config if it's a flow model
+            transform_scale = getattr(config.model, "transform_scale", 1.0)
             dm = ResidueDataModule(
                 cif_paths=list(resolved_paths),
                 residue=res,
                 batch_size=batch_size,
+                transform_scale=transform_scale,
             )
 
             # Create Lightning module
@@ -414,6 +410,8 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             n_layers=kwargs.get("n_layers", 6),
             hidden_dim=kwargs.get("hidden_dim", 64),
             use_rotation=kwargs.get("use_rotation", True),
+            transform_scale=kwargs.get("transform_scale", 1.0),
+            latent_reg=kwargs.get("latent_reg", 0.01),  # Prevent Jacobian exploitation
         )
         data_config = ResidueFlowDataConfig(batch_size=batch_size)
         return config_cls(
@@ -438,33 +436,12 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             beta=kwargs.get("beta", 1.0),
             beta_warmup_epochs=kwargs.get("beta_warmup_epochs", 50),
             free_bits=kwargs.get("free_bits", 0.5),
-            use_input_norm=kwargs.get("use_input_norm", True),
+            use_input_norm=kwargs.get("use_input_norm", False),
             use_residual=kwargs.get("use_residual", True),
             gamma=kwargs.get("gamma", 0.0),
             n_geom_samples=kwargs.get("n_geom_samples", 16),
         )
         data_config = ConsolidatedVAEDataConfig(batch_size=batch_size)
-        return config_cls(
-            model=model_config,
-            data=data_config,
-            training=TrainingConfig(lr=lr, epochs=n_epochs),
-        )
-
-    elif "VAE" in config_cls_name:
-        from .lightning.modules.residue_vae import (
-            ResidueVAEModelConfig,
-            ResidueVAEDataConfig,
-        )
-        model_config = ResidueVAEModelConfig(
-            latent_dim=latent_dim,
-            hidden_dims=kwargs.get("hidden_dims", [256, 128]),
-            beta=kwargs.get("beta", 1.0),
-            free_bits=kwargs.get("free_bits", 0.5),
-            use_residual=kwargs.get("use_residual", True),
-            gamma=kwargs.get("gamma", 0.0),
-            n_geom_samples=kwargs.get("n_geom_samples", 16),
-        )
-        data_config = ResidueVAEDataConfig(batch_size=batch_size)
         return config_cls(
             model=model_config,
             data=data_config,

@@ -48,6 +48,7 @@ class ResidueDataModule(LightningDataModule):
         min_coverage: float = 0.9,
         batch_size: int = 256,
         seed: int = 42,
+        transform_scale: float = 1.0,
     ) -> None:
         """Initialize the residue data module.
 
@@ -58,6 +59,9 @@ class ResidueDataModule(LightningDataModule):
             min_coverage: Minimum atom coverage for extraction.
             batch_size: Training batch size.
             seed: Random seed for splitting.
+            transform_scale: Scale factor for transforms to balance PCA.
+                Higher values give transforms more weight in PCA components.
+                Recommended: 4.0 for better helix geometry.
         """
         super().__init__()
         self.save_hyperparameters(ignore=["cif_paths", "residue"])
@@ -68,6 +72,7 @@ class ResidueDataModule(LightningDataModule):
         self.min_coverage = min_coverage
         self.batch_size = batch_size
         self.seed = seed
+        self.transform_scale = transform_scale
 
         # Set in setup()
         self.train_data: np.ndarray | None = None
@@ -75,6 +80,7 @@ class ResidueDataModule(LightningDataModule):
         self.train_dataset: TensorDataset | None = None
         self.val_dataset: TensorDataset | None = None
         self.atoms: np.ndarray | None = None
+        self.n_coord_dims: int | None = None
 
     def setup(self, stage: str) -> None:
         """Extract residue data and split by structure.
@@ -103,9 +109,11 @@ class ResidueDataModule(LightningDataModule):
             verbose=False,
         )
 
-        # Create extended representation: [coords_flat, transforms]
+        # Create extended representation: [coords_flat, scaled_transforms]
         train_coords_flat = train_coords.reshape(len(train_coords), -1)
-        self.train_data = np.concatenate([train_coords_flat, train_transforms], axis=1)
+        self.n_coord_dims = train_coords_flat.shape[1]
+        train_transforms_scaled = train_transforms * self.transform_scale
+        self.train_data = np.concatenate([train_coords_flat, train_transforms_scaled], axis=1)
 
         # Extract test data
         if len(test_paths) > 0:
@@ -117,7 +125,8 @@ class ResidueDataModule(LightningDataModule):
             )
             if len(test_coords) > 0:
                 test_coords_flat = test_coords.reshape(len(test_coords), -1)
-                self.test_data = np.concatenate([test_coords_flat, test_transforms], axis=1)
+                test_transforms_scaled = test_transforms * self.transform_scale
+                self.test_data = np.concatenate([test_coords_flat, test_transforms_scaled], axis=1)
             else:
                 self.test_data = self.train_data  # Use train as val if no test samples
         else:

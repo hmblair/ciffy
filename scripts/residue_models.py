@@ -2,9 +2,8 @@
 """
 Unified script for training and sampling residue-level generative models.
 
-Supports three model types via ciffy.nn.residue:
+Supports two model types via ciffy.nn.residue:
 - flow: PCA + normalizing flow (exact density, fast)
-- vae: MLP encoder/decoder VAE
 - consolidated: Shared encoder VAE (4x more training data)
 
 Examples:
@@ -51,7 +50,7 @@ def train(args):
     print(f"  Accelerator: {args.accelerator}")
     print()
 
-    model_types = args.model_type.split(",") if args.model_type != "all" else ["flow", "vae", "consolidated"]
+    model_types = args.model_type.split(",") if args.model_type != "all" else ["flow", "consolidated"]
     models = {}
 
     for model_type in model_types:
@@ -60,6 +59,11 @@ def train(args):
         print("=" * 60)
 
         output_dir = Path(args.output_dir) / model_type
+
+        # Only pass transform_scale for flow models
+        extra_kwargs = {}
+        if model_type == "flow":
+            extra_kwargs["transform_scale"] = args.transform_scale
 
         model = residue.train(
             cif_paths=cif_paths,
@@ -71,6 +75,7 @@ def train(args):
             accelerator=args.accelerator,
             output_dir=output_dir,
             verbose=True,
+            **extra_kwargs,
         )
         models[model_type] = model
 
@@ -91,7 +96,7 @@ def train(args):
 
         for model_type, model in models.items():
             for i in range(args.n_samples):
-                polymer = model.sample_from_sequence(sequence)
+                polymer = model.sample_from_sequence(sequence, id=model_type)
                 output_file = chains_dir / f"{model_type}_{i}.cif"
                 polymer.write(str(output_file))
                 print(f"  Saved: {output_file.name} ({polymer.size()} atoms)")
@@ -109,7 +114,9 @@ def sample(args):
     print("Chain Sampling")
     print("=" * 60)
 
-    model = residue.load(args.model_dir)
+    model_path = Path(args.model_dir)
+    model = residue.load(model_path)
+    model_type = model_path.name  # e.g., "flow" or "consolidated"
     print(f"  Loaded model from {args.model_dir}")
 
     np.random.seed(args.seed)
@@ -120,10 +127,10 @@ def sample(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for i in range(args.n_samples):
-        polymer = model.sample_from_sequence(sequence)
+        polymer = model.sample_from_sequence(sequence, id=model_type)
         output_file = output_dir / f"chain_{i}.cif"
         polymer.write(str(output_file))
-        print(f"  Saved: {output_file.name} ({polymer.size()} atoms)")
+        print(f"  Saved: {output_file.name} ({polymer.size()} atoms, id={model_type})")
 
     # Verify geometry
     if args.verify:
@@ -131,7 +138,7 @@ def sample(args):
         import torch
         from ciffy.biochemistry import Sugar, PhosphateGroup
 
-        polymer = model.sample_from_sequence(sequence)
+        polymer = model.sample_from_sequence(sequence, id=model_type)
         coords = torch.tensor(polymer.coordinates, dtype=torch.float32)
         atoms = torch.tensor(polymer.atoms, dtype=torch.long)
 
@@ -494,11 +501,12 @@ def main():
     train_parser = subparsers.add_parser("train", help="Train residue models")
     train_parser.add_argument("--data-dir", default="/Users/hmblair/academic/data/structures/rna")
     train_parser.add_argument("--max-files", type=int, default=500)
-    train_parser.add_argument("--model-type", default="all", help="flow, vae, consolidated, or all")
+    train_parser.add_argument("--model-type", default="all", help="flow, consolidated, or all")
     train_parser.add_argument("--residues", default="ACGU")
     train_parser.add_argument("--epochs", type=int, default=100)
     train_parser.add_argument("--latent-dim", type=int, default=12)
     train_parser.add_argument("--batch-size", type=int, default=256)
+    train_parser.add_argument("--transform-scale", type=float, default=1.0, help="Scale transforms for flow models (4.0 for better helix geometry)")
     train_parser.add_argument("--accelerator", default="cpu")
     train_parser.add_argument("--output-dir", default="outputs/models")
     train_parser.add_argument("--sample", action="store_true", help="Sample chains after training")

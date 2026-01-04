@@ -628,6 +628,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
         atom_indices: list[int],
         n_atoms: int,
         jit: bool = False,
+        transform_scale: float = 1.0,
     ):
         super().__init__()
         # Register flow as submodule - parameters auto-included in .parameters()
@@ -637,6 +638,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
         self.residue = residue
         self._atom_indices = atom_indices
         self.n_atoms = n_atoms
+        self.transform_scale = transform_scale
         self._atoms_group: "AtomGroup | None" = None
         self._jit_decoder: torch.jit.ScriptModule | None = None
 
@@ -720,25 +722,37 @@ class ResidueFlowModel(nn.Module, HubMixin):
         if transforms is None:
             transforms = torch.zeros(aligned_coords.shape[0], 6, device=aligned_coords.device)
 
+        # Scale transforms to match training data
+        if self.transform_scale != 1.0:
+            transforms = transforms * self.transform_scale
+
         extended = torch.cat([aligned_coords, transforms], dim=-1)
         return self.flow.encode(extended)
 
     def decode(
         self,
         z: "torch.Tensor",
+        project: bool = False,
     ) -> tuple["torch.Tensor", "torch.Tensor"]:
         """
         Decode latent vectors to coordinates and transforms.
 
         Args:
             z: (N, latent_dim) latent vectors.
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             coords: (N, n_atoms, 3) residue coordinates.
             transforms: (N, 6) SE(3) transforms [axis-angle, translation].
         """
         if self._jit_decoder is not None:
-            return self._jit_decoder(z)
+            coords, transforms = self._jit_decoder(z)
+            # Unscale transforms (JIT decoder doesn't know about scaling)
+            if self.transform_scale != 1.0:
+                transforms = transforms / self.transform_scale
+            if project:
+                coords = self.project_geometry(coords)
+            return coords, transforms
 
         extended = self.flow.decode(z)
         n_coord_dims = self.n_atoms * 3
@@ -746,12 +760,24 @@ class ResidueFlowModel(nn.Module, HubMixin):
         coords_flat = extended[:, :n_coord_dims]
         transforms = extended[:, n_coord_dims:]
 
+        # Unscale transforms back to original scale
+        if self.transform_scale != 1.0:
+            transforms = transforms / self.transform_scale
+
         coords = coords_flat.reshape(-1, self.n_atoms, 3)
+        if project:
+            coords = self.project_geometry(coords)
         return coords, transforms
 
-    def sample(self, n_samples: int) -> tuple["torch.Tensor", "torch.Tensor"]:
+    def sample(
+        self, n_samples: int, project: bool = False
+    ) -> tuple["torch.Tensor", "torch.Tensor"]:
         """
         Sample new conformations with link transforms.
+
+        Args:
+            n_samples: Number of samples to generate.
+            project: If True, project coordinates to satisfy bond constraints.
 
         Returns:
             coords: (N, n_atoms, 3) sampled coordinates.
@@ -759,7 +785,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
         """
         with torch.no_grad():
             z = torch.randn(n_samples, self.flow.k, device=self.flow.V.device)
-            return self.decode(z)
+            return self.decode(z, project=project)
 
     def save(self, path: str | Path) -> None:
         """Save model to directory."""
@@ -790,6 +816,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
             "hidden_dim": self.flow.layers[1].net.net[0].out_features,
             "bound": float(self.flow.bound) if self.flow.bound is not None else None,
             "use_rotation": use_rotation,
+            "transform_scale": self.transform_scale,
         }
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=2)
@@ -842,6 +869,7 @@ class ResidueFlowModel(nn.Module, HubMixin):
             atom_indices=config["atom_indices"],
             n_atoms=config["n_atoms"],
             jit=jit,
+            transform_scale=config.get("transform_scale", 1.0),
         )
 
     @property

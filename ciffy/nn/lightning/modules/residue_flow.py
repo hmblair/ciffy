@@ -16,6 +16,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
+from ciffy.geometry.constraints import GeometryConstraints
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -36,6 +37,7 @@ class ResidueFlowModelConfig:
     use_rotation: bool = True
     noise_std: float = 0.05
     latent_reg: float = 0.0  # Regularization weight (0 = disabled)
+    transform_scale: float = 1.0  # Scale factor for transforms in PCA
 
 
 @dataclass
@@ -109,6 +111,7 @@ class ResidueFlowModule(LightningModule):
         self._residue_model: "ResidueFlowModel | None" = None
         self.pca_V: torch.Tensor | None = None
         self.pca_mean: torch.Tensor | None = None
+        self._geometry_constraints: GeometryConstraints | None = None
 
     @property
     def model(self) -> torch.nn.Module | None:
@@ -175,11 +178,18 @@ class ResidueFlowModule(LightningModule):
         )
 
         # Wrap in ResidueFlowModel with metadata
+        atom_list = atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms)
         self._residue_model = ResidueFlowModel(
             flow=flow,
             residue=self.residue,
-            atom_indices=atoms.tolist() if isinstance(atoms, np.ndarray) else list(atoms),
+            atom_indices=atom_list,
             n_atoms=len(atoms),
+            transform_scale=config.transform_scale,
+        )
+
+        # Create geometry constraints for validation
+        self._geometry_constraints = GeometryConstraints.from_residue(
+            self.residue, atom_list
         )
 
     def training_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
@@ -218,9 +228,8 @@ class ResidueFlowModule(LightningModule):
         self.log("train/nll", nll, prog_bar=True, on_step=True, on_epoch=True)
         self.log("train/loss", loss, on_step=False, on_epoch=True)
 
-        # Log latent statistics (should be mean≈0, std≈1 for Gaussian)
-        self.log("train/z_mean", z.mean(), on_step=False, on_epoch=True)
-        self.log("train/z_std", z.std(), on_step=False, on_epoch=True)
+        # Log latent Gaussianity metrics (target: mean=0, std=1, skew=0, kurtosis=0)
+        self._log_gaussianity_metrics(z, prefix="train")
 
         # Log component breakdown for diagnostics
         self.log("train/log_pz", -log_pz.mean(), on_step=False, on_epoch=True)
@@ -247,6 +256,78 @@ class ResidueFlowModule(LightningModule):
 
         self.log("actnorm/total_log_det", total_log_scale_sum)
 
+    def _log_gaussianity_metrics(self, z: torch.Tensor, prefix: str) -> None:
+        """Log comprehensive Gaussianity metrics for latent space.
+
+        For a standard Gaussian N(0,1):
+        - mean should be 0
+        - std should be 1
+        - skewness should be 0
+        - excess kurtosis should be 0 (kurtosis = 3)
+        """
+        # Basic statistics
+        z_mean = z.mean()
+        z_std = z.std()
+
+        # Per-dimension statistics (detect collapsed dimensions)
+        z_dim_std = z.std(dim=0)
+        z_std_min = z_dim_std.min()
+        z_std_max = z_dim_std.max()
+
+        # Skewness: E[(x - μ)³] / σ³
+        z_centered = z - z.mean(dim=0, keepdim=True)
+        z_normalized = z_centered / (z.std(dim=0, keepdim=True) + 1e-8)
+        skewness = (z_normalized ** 3).mean()
+
+        # Excess kurtosis: E[(x - μ)⁴] / σ⁴ - 3
+        kurtosis = (z_normalized ** 4).mean() - 3.0
+
+        # Log metrics
+        self.log(f"{prefix}/z_mean", z_mean, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_std", z_std, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_std_min", z_std_min, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_std_max", z_std_max, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_skewness", skewness, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/z_kurtosis", kurtosis, on_step=False, on_epoch=True)
+
+    def _log_geometry_metrics(self, coords: torch.Tensor, transforms: torch.Tensor, prefix: str) -> None:
+        """Log geometry violation metrics.
+
+        Tracks bond length and angle errors vs ideal values.
+        """
+        if self._geometry_constraints is None:
+            return
+
+        gc = self._geometry_constraints.to(coords.device)
+
+        # Bond length errors (RMSE in Angstroms)
+        if gc.n_bonds > 0:
+            a1 = coords[:, gc.bond_indices[:, 0]]
+            a2 = coords[:, gc.bond_indices[:, 1]]
+            lengths = torch.norm(a2 - a1, dim=-1)
+            bond_errors = (lengths - gc.bond_targets).abs()
+            self.log(f"{prefix}/bond_mae", bond_errors.mean(), on_step=False, on_epoch=True)
+            self.log(f"{prefix}/bond_max", bond_errors.max(), on_step=False, on_epoch=True)
+
+        # Angle errors (in degrees)
+        if gc.n_angles > 0:
+            a = coords[:, gc.angle_indices[:, 0]]
+            b = coords[:, gc.angle_indices[:, 1]]
+            c = coords[:, gc.angle_indices[:, 2]]
+            v1 = a - b
+            v2 = c - b
+            cos_angles = (v1 * v2).sum(-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8)
+            angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
+            angle_errors = (angles - gc.angle_targets).abs() * (180 / math.pi)  # Convert to degrees
+            self.log(f"{prefix}/angle_mae", angle_errors.mean(), on_step=False, on_epoch=True)
+            self.log(f"{prefix}/angle_max", angle_errors.max(), on_step=False, on_epoch=True)
+
+        # Inter-residue bond (O3'-P) error
+        inter_lengths = torch.norm(transforms[:, 3:], dim=-1)
+        inter_errors = (inter_lengths - gc.inter_bond_target).abs()
+        self.log(f"{prefix}/inter_bond_mae", inter_errors.mean(), on_step=False, on_epoch=True)
+        self.log(f"{prefix}/inter_bond_max", inter_errors.max(), on_step=False, on_epoch=True)
+
     def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute validation NLL."""
         data = batch[0] if isinstance(batch, (tuple, list)) else batch
@@ -256,6 +337,16 @@ class ResidueFlowModule(LightningModule):
         loss = -(log_pz + log_det).mean()
 
         self.log("val/nll", loss, prog_bar=True, sync_dist=True)
+
+        # Log validation Gaussianity metrics
+        self._log_gaussianity_metrics(z, prefix="val")
+
+        # Log geometry metrics on decoded samples
+        with torch.no_grad():
+            # Sample from prior and decode
+            z_sample = torch.randn(100, self._residue_model.latent_dim, device=data.device)
+            coords, transforms = self._residue_model.decode(z_sample)
+            self._log_geometry_metrics(coords, transforms, prefix="val")
 
         return loss
 

@@ -247,7 +247,8 @@ static CifError _parse_molecule_types(mmCIF *cif, mmBlockList *blocks,
                 }
             }
         }
-        _free_lines(entity);
+        /* NOTE: Don't free entity lines here - they may be needed later for
+         * description loading. Lines will be freed during normal cleanup. */
     }
 
     /* ========================================================================

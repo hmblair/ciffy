@@ -649,7 +649,10 @@ class Polymer:
 
         return coords, atoms, residue
 
-    def align(self: Polymer, frame: "FrameDefinition | None" = None) -> Polymer:
+    def align(
+        self: Polymer,
+        frame: "FrameDefinition | None" = None,
+    ) -> tuple[Polymer, Array]:
         """
         Align all residues to a specified local coordinate frame.
 
@@ -665,17 +668,16 @@ class Polymer:
                 - PROTEIN_BACKBONE_FRAME: For proteins (CA origin, Z toward N)
 
         Returns:
-            New Polymer with aligned coordinates. Use .residue(i) to get
-            per-residue coords and atoms (guaranteed to be in sync).
+            Tuple of (aligned_polymer, Rs) where:
+            - aligned_polymer: New Polymer with aligned coordinates
+            - Rs: (n_residues, 3, 3) rotation matrices used for alignment
 
         Raises:
-            ValueError: If required frame atoms are missing from any residue,
-                or if polymer contains zero-atom residues.
+            ValueError: If required frame atoms are missing from any residue.
 
         Example:
-            >>> aligned = polymer.strip().align()  # Uses GLYCOSIDIC_FRAME
-            >>> from ciffy.biochemistry.linking import PROTEIN_BACKBONE_FRAME
-            >>> aligned = protein.align(PROTEIN_BACKBONE_FRAME)
+            >>> aligned, Rs = polymer.strip().align()
+            >>> # Rs[i] is the rotation matrix for residue i
         """
         from ..geometry.transforms import frame_from_positions
 
@@ -703,7 +705,7 @@ class Polymer:
         # centered[:, None, :] @ Rs_expanded -> (n_atoms, 1, 3) -> squeeze
         aligned_coords = (centered[:, None, :] @ Rs_expanded).squeeze(1)
 
-        return self.copy(coordinates=aligned_coords)
+        return self.copy(coordinates=aligned_coords), Rs
 
     def sort_atoms(self: Polymer) -> Polymer:
         """
@@ -719,7 +721,8 @@ class Polymer:
 
         Example:
             >>> # Canonical encoding: align then sort
-            >>> canonical = polymer.align().sort_atoms()
+            >>> aligned, _ = polymer.align()
+            >>> canonical = aligned.sort_atoms()
             >>> for i in range(canonical.size(Scale.RESIDUE)):
             ...     res = canonical.residue(i)
             ...     # atoms are now in sorted order

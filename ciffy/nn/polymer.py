@@ -844,7 +844,8 @@ class PolymerModel(nn.Module, HubMixin):
 
         # Align to canonical frames and sort atoms by enum value
         # This ensures consistent ordering matching training data
-        canonical = polymer.align().sort_atoms()
+        aligned, _ = polymer.align()
+        canonical = aligned.sort_atoms()
 
         # Filter each residue to only include model's atoms
         filtered_coords = []

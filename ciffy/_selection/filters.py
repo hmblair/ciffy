@@ -63,6 +63,14 @@ def by_residue(polymer: Polymer, res: Array | int) -> Polymer:
         >>> adenosines = by_residue(polymer, Residue.A)
         >>> purines = by_residue(polymer, [Residue.A, Residue.G])
     """
+    # Extract .value from Residue enums (which are AtomGroups)
+    if hasattr(res, 'value') and hasattr(res, 'atoms'):
+        # Single Residue enum
+        res = res.value
+    elif isinstance(res, (list, tuple)):
+        # List of Residue enums or values
+        res = [r.value if hasattr(r, 'value') and hasattr(r, 'atoms') else r for r in res]
+
     res = ops.convert_backend(res, polymer.sequence)
     res_mask = (polymer.sequence[:, None] == res).any(1)
     atom_mask = polymer.expand(res_mask, Scale.RESIDUE, Scale.ATOM)

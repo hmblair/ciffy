@@ -19,6 +19,7 @@ from ..biochemistry._generated_molecule import molecule_type
 if TYPE_CHECKING:
     import torch
     from ..hetero import HeteroAtoms
+    from ..biochemistry.linking import FrameDefinition
 from ..operations.reduction import Reduction, ReductionResult
 from .hierarchy import _Hierarchy
 from ..biochemistry import (
@@ -648,71 +649,60 @@ class Polymer:
 
         return coords, atoms, residue
 
-    def align(self: Polymer) -> Polymer:
+    def align(self: Polymer, frame: "FrameDefinition | None" = None) -> Polymer:
         """
-        Align all residues to their canonical local frames.
-
-        For nucleotides: glycosidic frame (C1' origin, Z toward N9/N1)
-        For proteins: backbone frame (CA origin, Z toward N)
+        Align all residues to a specified local coordinate frame.
 
         This is the preprocessing step for training generative models - it puts
         each residue in a consistent local frame independent of global position.
+
+        Args:
+            frame: FrameDefinition specifying origin, axis_ref, and plane_ref
+                AtomGroups. Defaults to GLYCOSIDIC_FRAME (C1' origin, Z toward
+                N9/N1) which works for all nucleotides. Common frames from
+                ciffy.biochemistry.linking:
+                - GLYCOSIDIC_FRAME: For nucleotides (C1' origin, Z toward N9/N1)
+                - PROTEIN_BACKBONE_FRAME: For proteins (CA origin, Z toward N)
 
         Returns:
             New Polymer with aligned coordinates. Use .residue(i) to get
             per-residue coords and atoms (guaranteed to be in sync).
 
         Raises:
-            ValueError: If required frame atoms are missing from any residue.
+            ValueError: If required frame atoms are missing from any residue,
+                or if polymer contains zero-atom residues.
 
         Example:
-            >>> aligned = polymer.align()
-            >>> for i in range(aligned.size(Scale.RESIDUE)):
-            ...     res = aligned.residue(i)
-            ...     coords, atoms = res.coordinates, res.atoms
+            >>> aligned = polymer.strip().align()  # Uses GLYCOSIDIC_FRAME
+            >>> from ciffy.biochemistry.linking import PROTEIN_BACKBONE_FRAME
+            >>> aligned = protein.align(PROTEIN_BACKBONE_FRAME)
         """
-        from ..backend import cat
-        from ..biochemistry.linking import (
-            PURINE_GLYCOSIDIC_FRAME,
-            PYRIMIDINE_GLYCOSIDIC_FRAME,
-            PROTEIN_BACKBONE_FRAME,
-        )
-        from ..geometry.transforms import extract_frame_positions, frame_from_positions, is_purine
+        from ..geometry.transforms import frame_from_positions
 
-        aligned_list = []
-        n_residues = self.size(Scale.RESIDUE)
+        if frame is None:
+            from ..biochemistry.linking import GLYCOSIDIC_FRAME
+            frame = GLYCOSIDIC_FRAME
 
-        for i in range(n_residues):
-            coords, atoms, residue = self._residue_coords(i)
+        # Gather frame positions for all residues: (n_residues, 3, 3)
+        frame_atoms = [frame.origin, frame.axis_ref, frame.plane_ref]
+        positions = self.gather(frame_atoms)
 
-            # Check for unresolved residues (no atoms)
-            if len(atoms) == 0:
-                raise ValueError(
-                    f"Residue {i} ({residue.name}) has no atoms - "
-                    f"likely unresolved in the structure. "
-                    f"Use polymer.strip() to remove zero-atom residues before align()."
-                )
+        # Compute frames in batch: origins (n_residues, 3), Rs (n_residues, 3, 3)
+        origins, Rs = frame_from_positions(positions)
 
-            mol_type = residue.molecule_type
+        # Expand origins and rotations to atom level for vectorized alignment
+        # membership[i] = residue index for atom i
+        membership = self.membership(Scale.RESIDUE)
+        origins_expanded = origins[membership]  # (n_atoms, 3)
+        Rs_expanded = Rs[membership]  # (n_atoms, 3, 3)
 
-            # Select appropriate frame definition
-            if mol_type in (1, 2, 3):  # RNA, DNA, HYBRID
-                frame_def = PURINE_GLYCOSIDIC_FRAME if is_purine(residue) else PYRIMIDINE_GLYCOSIDIC_FRAME
-            elif mol_type in (4, 5, 6):  # PROTEIN, PROTEIN_D, CYCLIC_PEPTIDE
-                frame_def = PROTEIN_BACKBONE_FRAME
-            else:
-                raise ValueError(
-                    f"Residue {i} ({residue.name}) has unsupported molecule type {mol_type}"
-                )
+        # Apply alignment: (coords - origin) @ R
+        # For each atom: (1, 3) @ (3, 3) -> (1, 3), squeeze to (3,)
+        centered = self.coordinates - origins_expanded
+        # Batched matrix multiply: einsum or manual
+        # centered[:, None, :] @ Rs_expanded -> (n_atoms, 1, 3) -> squeeze
+        aligned_coords = (centered[:, None, :] @ Rs_expanded).squeeze(1)
 
-            # Compute frame and align
-            positions = extract_frame_positions(coords, atoms, frame_def)
-            origin, R = frame_from_positions(positions)
-            aligned = (coords - origin) @ R
-            aligned_list.append(aligned)
-
-        # Concatenate and return new Polymer with aligned coordinates
-        aligned_coords = cat(aligned_list, axis=0)
         return self.copy(coordinates=aligned_coords)
 
     def sort_atoms(self: Polymer) -> Polymer:
@@ -755,48 +745,6 @@ class Polymer:
                 overrides[name] = field.data[sort_indices]
 
         return self.copy(**overrides)
-
-    def align_batch(self: Polymer) -> tuple[Array, Array]:
-        """
-        Align all residues and return as padded batch tensors.
-
-        Same as align() but returns results suitable for batched model input.
-
-        Returns:
-            coords: (n_residues, max_atoms, 3) padded coordinate array.
-            mask: (n_residues, max_atoms) boolean mask (True = valid atom).
-
-        Example:
-            >>> coords, mask = polymer.align_batch()
-            >>> # Use with model: output = model(coords, mask)
-        """
-        aligned = self.align()
-        n_residues = aligned.size(Scale.RESIDUE)
-
-        # Find max atoms for padding
-        res_sizes = aligned.counts(Scale.RESIDUE)
-        max_atoms = int(res_sizes.max())
-
-        # Create padded output
-        if is_torch(aligned.coordinates):
-            import torch
-            coords = torch.zeros(n_residues, max_atoms, 3, dtype=aligned.coordinates.dtype)
-            mask = torch.zeros(n_residues, max_atoms, dtype=torch.bool)
-            for i in range(n_residues):
-                res = aligned.residue(i)
-                n = res.size()
-                coords[i, :n] = torch.as_tensor(res.coordinates)
-                mask[i, :n] = True
-        else:
-            coords = np.zeros((n_residues, max_atoms, 3), dtype=np.float32)
-            mask = np.zeros((n_residues, max_atoms), dtype=bool)
-            for i in range(n_residues):
-                res = aligned.residue(i)
-                n = res.size()
-                coords[i, :n] = res.coordinates
-                mask[i, :n] = True
-
-        return coords, mask
 
     def _validate_consistency(self, sizes: dict[Scale, Array]) -> None:
         """
@@ -1233,6 +1181,60 @@ class Polymer:
             >>> mask = res_idx[:, None] == res_idx[None, :]
         """
         return self._hierarchy.index(scale)
+
+    def gather(
+        self: Polymer,
+        groups: list,
+    ) -> Array:
+        """
+        Gather coordinates for specific atoms from each residue.
+
+        For each atom group, finds the matching atom in each residue and
+        returns their coordinates. Useful for extracting frame atoms.
+
+        Args:
+            groups: List of AtomGroups (e.g., [Sugar.C1p, PurineBase.N9]).
+
+        Returns:
+            (n_residues, len(groups), 3) coordinate array.
+
+        Raises:
+            ValueError: If any residue doesn't have exactly one atom
+                matching each group.
+
+        Example:
+            >>> from ciffy.biochemistry.constants import Sugar, PurineBase
+            >>> positions = polymer.gather([Sugar.C1p, PurineBase.N9, PurineBase.C4])
+        """
+        n_groups = len(groups)
+        n_residues = self.size(Scale.RESIDUE)
+        membership = self.membership(Scale.RESIDUE)
+
+        if is_torch(self.atoms):
+            import torch
+            indices = torch.empty(
+                (n_residues, n_groups),
+                dtype=torch.long,
+                device=self.atoms.device,
+            )
+        else:
+            indices = np.empty((n_residues, n_groups), dtype=np.int64)
+
+        for i, group in enumerate(groups):
+            values = ops.to_backend(group.index(), self.atoms)
+            mask = ops.isin(self.atoms, values)
+            atom_idx = ops.nonzero_1d(mask)
+
+            if len(atom_idx) != n_residues:
+                raise ValueError(
+                    f"Group {i}: expected {n_residues} matches (one per residue), "
+                    f"got {len(atom_idx)}. Check for missing or duplicate atoms."
+                )
+
+            residue_idx = membership[atom_idx]
+            indices[residue_idx, i] = atom_idx
+
+        return self.coordinates[indices]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Geometry Operations

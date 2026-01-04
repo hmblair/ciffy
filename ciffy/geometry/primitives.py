@@ -24,14 +24,14 @@ from ..backend import Array, is_torch
 
 def cross(a: Array, b: Array) -> Array:
     """
-    Cross product of 3D vectors.
+    Cross product of 3D vectors, supports batched inputs.
 
     Args:
-        a: (3,) first vector
-        b: (3,) second vector
+        a: (..., 3) first vector(s)
+        b: (..., 3) second vector(s)
 
     Returns:
-        (3,) cross product a x b
+        (..., 3) cross product(s) a x b
     """
     if is_torch(a):
         import torch
@@ -41,49 +41,49 @@ def cross(a: Array, b: Array) -> Array:
 
 def dot(a: Array, b: Array) -> float | Array:
     """
-    Dot product of vectors.
+    Dot product of vectors, supports batched inputs.
 
     Args:
-        a: (n,) first vector
-        b: (n,) second vector
+        a: (..., n) first vector(s)
+        b: (..., n) second vector(s)
 
     Returns:
-        Scalar dot product a . b
+        Scalar or (...,) array of dot products.
     """
-    if is_torch(a):
-        import torch
-        return torch.dot(a, b)
-    return np.dot(a, b)
+    return (a * b).sum(axis=-1)
 
 
 def norm(v: Array) -> float | Array:
     """
-    L2 norm of a vector.
+    L2 norm of a vector, supports batched inputs.
 
     Args:
-        v: (n,) vector
+        v: (..., n) vector(s)
 
     Returns:
-        Scalar norm |v|
+        Scalar or (...,) array of norms.
     """
     if is_torch(v):
         import torch
-        return torch.linalg.norm(v)
-    return np.linalg.norm(v)
+        return torch.linalg.norm(v, dim=-1)
+    return np.linalg.norm(v, axis=-1)
 
 
 def normalize(v: Array, eps: float = 1e-10) -> Array:
     """
-    Normalize a vector to unit length.
+    Normalize vector(s) to unit length, supports batched inputs.
 
     Args:
-        v: (n,) vector
+        v: (..., n) vector(s)
         eps: Small constant to avoid division by zero
 
     Returns:
-        (n,) unit vector v/|v|
+        (..., n) unit vector(s) v/|v|
     """
     n = norm(v)
+    # Expand dims for broadcasting: (...,) -> (..., 1)
+    if v.ndim > 1:
+        n = n[..., None]
     return v / (n + eps)
 
 

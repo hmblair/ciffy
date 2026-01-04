@@ -291,3 +291,23 @@ PyrimidineBase = build_atom_group("PyrimidineBase", _PYRIMIDINES, _PYRIMIDINE_BA
 
 # Protein backbone - hierarchical access to N, CA, C, O across all protein-like residues
 ProteinBackbone = build_atom_group("ProteinBackbone", _ALL_PROTEIN_LIKE, _PROTEIN_BACKBONE_NAMES)
+
+# Unified nucleobase groups for frame computation (purines + pyrimidines)
+# N9 for purines, N1 for pyrimidines - exactly one glycosidic atom per nucleotide
+# Note: Purines have BOTH N9 and N1 (N1 is in the 6-membered ring), so we must
+# build separate groups and merge to get exactly one atom per residue.
+_purine_axis = build_atom_group("_purine_axis", _PURINES, {'N9'})
+_pyrimidine_axis = build_atom_group("_pyrimidine_axis", _PYRIMIDINES, {'N1'})
+NucleotideAxisRef = AtomGroup(
+    "NucleotideAxisRef",
+    {**_purine_axis._members['N9']._members, **_pyrimidine_axis._members['N1']._members}
+)
+
+# C4 for purines, C2 for pyrimidines - exactly one plane reference per nucleotide
+# Note: Purines have BOTH C4 and C2, so same approach needed.
+_purine_plane = build_atom_group("_purine_plane", _PURINES, {'C4'})
+_pyrimidine_plane = build_atom_group("_pyrimidine_plane", _PYRIMIDINES, {'C2'})
+NucleotidePlaneRef = AtomGroup(
+    "NucleotidePlaneRef",
+    {**_purine_plane._members['C4']._members, **_pyrimidine_plane._members['C2']._members}
+)

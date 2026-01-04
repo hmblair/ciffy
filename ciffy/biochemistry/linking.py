@@ -198,3 +198,12 @@ PROTEIN_BACKBONE_FRAME = FrameDefinition(
     axis_ref=ProteinBackbone.N,
     plane_ref=ProteinBackbone.C,
 )
+
+# Unified glycosidic frame for all nucleotides (purines + pyrimidines)
+# Uses combined AtomGroups that match N9/C4 for purines OR N1/C2 for pyrimidines
+from .constants import NucleotideAxisRef, NucleotidePlaneRef
+GLYCOSIDIC_FRAME = FrameDefinition(
+    origin=Sugar.C1p,
+    axis_ref=NucleotideAxisRef,
+    plane_ref=NucleotidePlaneRef,
+)

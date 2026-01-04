@@ -156,33 +156,6 @@ class TestResidueAlign:
             assert isinstance(aligned.coordinates, np.ndarray)
 
 
-class TestAlignBatch:
-    """Tests for Polymer.align_batch() - batched alignment."""
-
-    def test_align_batch_returns_padded_arrays(self):
-        """align_batch() returns padded coordinate and mask arrays."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
-        coords, mask = p.align_batch()
-
-        n_residues = p.size(Scale.RESIDUE)
-        assert coords.ndim == 3
-        assert coords.shape[0] == n_residues
-        assert coords.shape[2] == 3
-
-        assert mask.ndim == 2
-        assert mask.shape[0] == n_residues
-
-    def test_align_batch_mask_matches_atoms(self):
-        """Mask correctly indicates valid atoms per residue."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
-        atom_counts = p.counts(Scale.RESIDUE)
-        coords, mask = p.align_batch()
-
-        for i, count in enumerate(atom_counts):
-            # Number of True values in mask should equal atom count
-            assert mask[i].sum() == count
-
-
 # =============================================================================
 # Polymer.copy() Field Deletion Tests
 # =============================================================================

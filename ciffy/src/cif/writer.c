@@ -461,26 +461,22 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                  * so right-justified fields like %5d break offset computation. All fields
                  * must have consistent width for the fixed-line-width parser to work.
                  * Field widths: serial(7), element(2), atom(6 for quoted), res(4), chain(4), seq(6), coord(10) */
+                char seq_str[16];
                 if (atom_idx < cif->polymer) {
-                    if (has_bfactors) {
-                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
-                            group, serial, elem, atom_name,
-                            res_name, chain_name, output_seq_id, x, y, z, bfactor);
-                    } else {
-                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6d %-10.3f %-10.3f %-10.3f 1\n",
-                            group, serial, elem, atom_name,
-                            res_name, chain_name, output_seq_id, x, y, z);
-                    }
+                    snprintf(seq_str, sizeof(seq_str), "%d", output_seq_id);
                 } else {
-                    if (has_bfactors) {
-                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
-                            group, serial, elem, atom_name,
-                            res_name, chain_name, ".", x, y, z, bfactor);
-                    } else {
-                        CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
-                            group, serial, elem, atom_name,
-                            res_name, chain_name, ".", x, y, z);
-                    }
+                    seq_str[0] = '.';
+                    seq_str[1] = '\0';
+                }
+
+                if (has_bfactors) {
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
+                        group, serial, elem, atom_name,
+                        res_name, chain_name, seq_str, x, y, z, bfactor);
+                } else {
+                    CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
+                        group, serial, elem, atom_name,
+                        res_name, chain_name, seq_str, x, y, z);
                 }
 
                 atom_idx++;
@@ -615,11 +611,16 @@ CifError _write_cif(const mmCIF *cif, const char *filename, CifErrorContext *ctx
     /* Write the structure */
     CifError err = _write_cif_file(cif, file, ctx);
 
-    /* Close file */
-    if (fclose(file) != 0 && err == CIF_OK) {
+    /* Close file - always check for errors */
+    int close_failed = (fclose(file) != 0);
+    if (close_failed) {
         LOG_ERROR("Failed to close file: %s", filename);
-        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to close file: %s", filename);
-        return CIF_ERR_IO;
+        if (err == CIF_OK) {
+            /* Write succeeded but close failed - report close error */
+            CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to close file: %s", filename);
+            return CIF_ERR_IO;
+        }
+        /* Write already failed - return original error (more informative) */
     }
 
     if (err == CIF_OK) {

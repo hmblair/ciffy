@@ -74,66 +74,6 @@ class MaskedPCAFlow(PCAFlow):
 
 ## MEDIUM Priority
 
-### Load `_struct_conn` Bond Data from CIF Files
-
-**Goal**: Parse the `_struct_conn` mmCIF category to extract explicit bond/connection data.
-
-**Context**: The CIF loader currently does not parse `_struct_conn`. The C code defines `BLOCK_CONN` but no fields extract data from it. Bond connectivity is currently derived from:
-1. **Intra-residue bonds** - Template bonds from `Residue.A.bonds` (chemical component dictionary)
-2. **Inter-residue backbone** - Static linking rules in `ciffy/biochemistry/linking.py`
-
-This works for standard polymers but misses connections involving modified residues or non-standard linkages.
-
-**What `_struct_conn` contains**:
-
-| Type | Description | Use Case |
-|------|-------------|----------|
-| `covale` | Covalent bonds to/from **non-standard residues** only | Modified nucleotides (2MG, H2U, OMC, etc.) |
-| `hydrog` | Hydrogen bonds (base pairs, etc.) | Base-pair annotations, secondary structure |
-| `metalc` | Metal coordination | Mg²⁺, Zn²⁺ binding sites |
-| `disulf` | Disulfide bridges | Protein cross-links |
-
-**What `_struct_conn` does NOT contain**:
-- Standard backbone bonds (O3'-P between A/U/G/C, peptide bonds)
-- Intra-residue bonds (C-C, C-N within nucleotides)
-- These are implicit and derived from sequence + chemical knowledge
-
-**Typical sizes**:
-- RNA structures: 20-150 connections (mostly H-bonds)
-- 9MDS (102K atoms): 4,404 hydrogen bonds, 0 covalent
-- 1EHZ tRNA (76 residues): 25 covale (modified residues only), 70 hydrog, 47 metalc
-
-**Performance impact**: Minimal. Parsing ~100-200 rows adds <0.1ms. The main cost is building a reverse lookup table `(chain_id, residue_number, atom_name) → global_atom_index`, which would add 1-3ms (~10-30% overhead on large structures). Could be made optional via `ciffy.load(..., connections=True)`.
-
-**Implementation steps**:
-
-1. **C layer** (`ciffy/src/cif/`):
-   - Add `FIELD_CONNECTIONS` to registry with attributes: `ptnr1_label_asym_id`, `ptnr1_label_seq_id`, `ptnr1_label_atom_id`, `ptnr2_*`, `conn_type_id`
-   - Build reverse lookup hash during atom parsing
-   - Map connection records to global atom indices
-   - Store as `(n_connections, 2)` int array + connection type array
-
-2. **Python layer**:
-   - Add `connections` field to `mmCIF` struct and Polymer class
-   - Expose connection types (covale, hydrog, metalc, disulf)
-   - Optional parameter: `ciffy.load(..., connections=True)`
-
-3. **Integration**:
-   - Extend `build_bond_graph()` to include `_struct_conn` covalent bonds
-   - Add `Polymer.base_pairs` property using hydrog connections (optional)
-
-**Files affected**:
-- `ciffy/src/cif/registry.c/h` - Add connection field definitions
-- `ciffy/src/cif/parser.c/h` - Add connection parsing, reverse lookup
-- `ciffy/io/loader.py` - Pass connections to Polymer
-- `ciffy/polymer/polymer.py` - Add connections field
-- `ciffy/backend/graph.py` - Integrate covale bonds into bond graph
-
-**Effort**: 1-2 days
-**Impact**: Correct bond graphs for modified residues, explicit base-pair annotations, metal binding site identification
-
----
-
 ### Refactor CLI Module to Reduce Duplication
 
 **Goal**: Extract repeated patterns from `ciffy/cli/__main__.py` to reduce maintenance burden.
@@ -230,16 +170,64 @@ cli/
 
 ---
 
-### Consolidate Ensemble and ResidueDataset
+### Consolidate Residue Extraction Code
 
-**Goal**: Unify `ciffy/ensemble.py::Ensemble` and `ciffy/nn/flow/residue/data.py::ResidueDataset` - both extract residue conformations into dense (n, n_atoms, 3) arrays.
+**Goal**: Reduce duplication between `ciffy/operations/extract.py` and `ciffy/nn/flow/residue/data.py`.
 
-**Current duplication**:
-- `atom_to_col` remapping logic in `operations/extract.py:161-171` and `nn/flow/residue/data.py:140-145, 245-252`
-- Common atom finding (intersection vs coverage threshold)
-- Similar `__len__`/`__getitem__` protocols
+**Context**: Both modules extract residue coordinates into dense `(n, n_atoms, 3)` arrays with similar logic but different implementations.
 
-**Proposed design**:
+**Detailed comparison**:
+
+| Concern | `operations/extract.py` | `nn/flow/residue/data.py` |
+|---------|-------------------------|---------------------------|
+| Find common atoms | Set intersection (all instances) | Counter + min_coverage threshold |
+| Build dense array | Mask-based on sorted atoms | Dict lookup remapping |
+| Filter residue type | `poly.by_residue(residue.value)` | Manual `seq[i] != residue_type.value` |
+| Input | Single `Polymer` object | List of CIF file paths |
+| Output | `(n, n_atoms, 3)` coords only | coords + SE(3) link transforms |
+
+**Duplicated patterns**:
+
+1. **Common atom discovery** (`extract.py:134-142` vs `data.py:187-193`):
+```python
+# extract.py - strict intersection
+atom_sets = [set(to_numpy(a).tolist()) for a in per_res_atoms]
+common_atoms = set.intersection(*atom_sets)
+
+# data.py - coverage threshold
+atom_counts = Counter()
+for coords_i, atoms_i, *_ in all_instances:
+    atom_counts.update(atoms_i)
+common_atoms = sorted([a for a, c in atom_counts.items() if c >= min_count])
+```
+
+2. **Dense array construction** (`extract.py:163-173` vs `data.py:212-217`):
+```python
+# extract.py - mask-based
+result = np.zeros((n_residues, n_atoms, 3), dtype=np.float32)
+for i in range(n_residues):
+    mask = np.isin(res_atoms, common_atoms_arr)
+    result[i] = res_coords[mask]
+
+# data.py - dict remapping via _remap_to_common()
+coords_out = np.zeros((n, n_atoms, 3), dtype=np.float32)
+coords_out[idx] = _remap_to_common(c_i, a_i, common_atoms)
+```
+
+**Proposed refactor**:
+
+Option A: Extend `extract()` to support both modes:
+```python
+def extract(
+    poly: Polymer,
+    residue: AtomGroup,
+    atoms: list | None = None,
+    min_coverage: float = 1.0,  # 1.0 = strict intersection (current default)
+    ...
+) -> tuple[Array, list[int]]:
+```
+
+Option B: Create unified `Ensemble` class:
 ```python
 class Ensemble:
     coords: Array              # (n, n_atoms, 3)
@@ -257,36 +245,15 @@ class Ensemble:
 `ResidueDataset` becomes `Ensemble.from_cif_files(..., with_transforms=True)`.
 
 **Files affected**:
-- `ciffy/ensemble.py` - Add `from_cif_files()`, optional transforms
-- `ciffy/nn/flow/residue/data.py` - Deprecate `ResidueDataset`, use `Ensemble`
-- `ciffy/operations/extract.py` - Use `utils/mapping.py::atoms_to_col_map()`
+- `ciffy/operations/extract.py` - Add `min_coverage` parameter or refactor to shared utility
+- `ciffy/nn/flow/residue/data.py` - Use shared extraction logic, keep link transform computation
+- `ciffy/ensemble.py` (optional) - Unified interface
 
-**Effort**: 2-3 hours
+**Effort**: 2-4 hours
 
 ---
 
 ## LOW Priority
-
-### Extract Frame Computation to Geometry Helper
-
-**Goal**: Decouple frame computation from flow models.
-
-**Context**: Currently `ResidueFlowModel` stores pre-resolved frame column indices (`prev_frame_cols`, `next_frame_cols`) and `PolymerFlowModel.decode()` uses these to position residues. This couples geometry computation with the flow model.
-
-**Proposed refactor**:
-- Create a `ResidueFrameResolver` or similar helper in `ciffy/geometry.py`
-- Move frame index pre-resolution there
-- Flow models would use the helper rather than storing frame indices
-- This allows frame computation to be reused outside of flow models
-
-**Benefits**:
-- Separation of concerns (flow = encoding/decoding, geometry = positioning)
-- Frame computation reusable for other use cases
-- Cleaner flow model API
-
-**Note**: Frame cols could also be stored as `np.ndarray` shape `(3,)` with `-1` sentinel for `None`, enabling vectorized operations across multiple residues.
-
----
 
 ## Test Coverage Gaps
 

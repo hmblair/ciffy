@@ -31,7 +31,7 @@ except ImportError:
     torch = None
 
 if TYPE_CHECKING:
-    import torch.nn as nn
+    pass
 
 import ciffy
 from .model_registry import get_model_class

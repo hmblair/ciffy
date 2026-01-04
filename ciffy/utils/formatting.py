@@ -4,6 +4,9 @@ Terminal formatting utilities.
 Provides ANSI color codes and table formatting functions for terminal output.
 """
 
+from __future__ import annotations
+from datetime import date  # noqa: F401 - used in type annotations
+
 
 # =============================================================================
 # ANSI Color Codes

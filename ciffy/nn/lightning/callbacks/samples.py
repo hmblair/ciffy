@@ -6,7 +6,7 @@ Useful for monitoring generative model quality.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 from lightning import Callback, LightningModule, Trainer

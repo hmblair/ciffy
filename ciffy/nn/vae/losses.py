@@ -209,7 +209,6 @@ class GeometrySamplingLoss:
             weights: Optional weights for loss components.
                 Defaults to {"bond": 1.0, "angle": 1.0, "inter": 1.0}.
         """
-        from ciffy.geometry import GeometryConstraints as GC  # Avoid circular import
 
         self.constraints = constraints
         self.weights = weights or {"bond": 1.0, "angle": 1.0, "inter": 1.0}

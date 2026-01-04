@@ -37,7 +37,7 @@ from ciffy.nn.hub import HubMixin
 from ciffy.nn.model_registry import register_model
 
 if TYPE_CHECKING:
-    from ciffy.biochemistry import AtomGroup
+    from ciffy.biochemistry import AtomGroup, Residue
     from ciffy.nn.flow.residue import ResidueFlowModel
 
 

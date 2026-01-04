@@ -20,7 +20,7 @@ from .gmm_registry import GMMRegistry
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
-    from ..biochemistry import Molecule
+    from ..biochemistry import Molecule, Residue
 
 # Path to pre-fitted GMM parameters (backward compatibility)
 _DATA_DIR = Path(__file__).parent.parent / "data"
@@ -319,7 +319,6 @@ def _sample_single_residue_rna(
         Dict mapping DihedralType -> scalar value in radians (or NaN)
     """
     from ..biochemistry import DihedralType, Molecule
-    from ..biochemistry import Residue as ResidueEnum
 
     # Get residue-type-specific 7D GMM via registry
     try:
@@ -505,7 +504,6 @@ def _apply_dihedrals(
         polymer: Polymer to modify (in-place).
         dihedral_dict: Dict mapping DihedralType -> list of angle values (may contain NaN).
     """
-    from ..biochemistry import DihedralType
 
     for dtype, values in dihedral_dict.items():
         valid_values = np.array([v for v in values if not np.isnan(v)])
@@ -932,7 +930,6 @@ def sample_rna_dihedrals(
         Terminal residues have NaN where the dihedral cannot be defined.
     """
     from ..biochemistry import DihedralType
-    from ..biochemistry import Residue
 
     if rng is None:
         rng = np.random.default_rng()
@@ -1248,10 +1245,7 @@ def _sample_autoregressive_langevin_unified(
     Raises:
         ValueError: If molecule_type is not supported.
     """
-    from ..biochemistry import Scale, DihedralType, Molecule
-    from ..biochemistry import Residue as ResidueEnum
-    from .energy import GMMEnergy, ClashEnergy, CompositeEnergy
-    from .langevin import langevin_dynamics
+    from ..biochemistry import Scale, Molecule
 
     rng = np.random.default_rng(seed)
     n_residues = polymer.size(Scale.RESIDUE)

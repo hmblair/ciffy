@@ -131,9 +131,8 @@ def extract(
     if n_residues == 0:
         raise ValueError(f"No residues of type {residue.name} found in polymer")
 
-    # Collate atoms and coordinates per residue
+    # Collate atoms per residue to find common atoms
     per_res_atoms = sub.reduce(sub.atoms, Scale.RESIDUE, Reduction.COLLATE)
-    per_res_coords = sub.reduce(sub.coordinates, Scale.RESIDUE, Reduction.COLLATE)
 
     # Find atoms present in ALL residues (intersection)
     atom_sets = [set(to_numpy(a).tolist()) for a in per_res_atoms]

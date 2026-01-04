@@ -787,6 +787,7 @@ class Pairformer(nn.Module if TORCH_AVAILABLE else object):
                 attn_out, _ = self.single_attn[i](
                     single_normed, single_normed, single_normed,
                     key_padding_mask=mask,
+                    attn_mask=attn_mask,
                 )
                 single = single + attn_out
 

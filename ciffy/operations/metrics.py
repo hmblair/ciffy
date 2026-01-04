@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, is_numpy, svd, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp, clone
+from ..backend import Array, is_torch, svd, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp, clone
 from ..biochemistry import Scale, Molecule
 
 if TYPE_CHECKING:
@@ -484,7 +484,6 @@ def _rmsd_polymer(
 
     # Handle reflection case
     if is_torch(sigma):
-        import torch
         sigma = sigma.clone()
         sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
     else:
@@ -703,7 +702,6 @@ def clashes(
         >>> print(f"{len(pairs)} clashes found")
     """
     from ..backend.ops import cdist, triu, argwhere
-    from ..backend import to_numpy
 
     # Optionally filter to heavy atoms
     if heavy_only:
@@ -821,7 +819,6 @@ def _build_exclusion_mask(
         (n_atoms, n_atoms) boolean mask where True = within max_bonds.
     """
     from ..backend import to_numpy, is_torch
-    from ..backend.ops import zeros
 
     # Work in numpy for the sparse expansion, convert at end
     bonds_np = to_numpy(bonds)

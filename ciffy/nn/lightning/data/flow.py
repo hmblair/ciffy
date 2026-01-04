@@ -92,7 +92,6 @@ class ResidueDataModule(LightningDataModule):
             return
 
         from ciffy.nn.flow.residue.data import extract_residues_with_links
-        from ciffy.nn.split import split_by_structure
 
         # Split paths by structure (not by instance) to prevent leakage
         np.random.seed(self.seed)

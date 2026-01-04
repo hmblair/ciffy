@@ -8,7 +8,6 @@ polymer structures or coordinate arrays.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Tuple
 
-import numpy as np
 
 from ..backend import is_torch, Array, svd, det, has_nan, has_inf
 

@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.nn.functional as F
 from lightning import LightningModule
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR

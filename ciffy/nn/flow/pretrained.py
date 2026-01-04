@@ -7,7 +7,6 @@ Provides easy access to bundled pre-trained flow models.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 from .polymer import PolymerFlowModel
 

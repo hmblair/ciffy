@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..polymer import Polymer
     from ..utils.gmm import GaussianMixtureModel
     from .backbone import PolymerEvaluator
 

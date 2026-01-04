@@ -1,7 +1,6 @@
 """Type stubs for ciffy C extension module."""
 
 from typing import Any
-import numpy as np
 from numpy import ndarray
 
 # I/O functions

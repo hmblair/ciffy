@@ -6,7 +6,7 @@ Wraps CoordinateDiffusionModel with Lightning training logic.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING
 
 import torch
 

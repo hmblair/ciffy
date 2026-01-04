@@ -43,7 +43,6 @@ if TYPE_CHECKING:
 
     from ciffy import Polymer
 
-import numpy as np
 
 from .coordinate_denoiser import CoordinateDenoiser, CoordinateDenoiserConfig
 from .process import CosineNoiseSchedule, DiffusionProcess, LinearNoiseSchedule

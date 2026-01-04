@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import copy
 from contextlib import contextmanager
-from typing import Dict, Iterator, Optional
+from typing import Dict, Optional
 
 import torch
 from torch import nn

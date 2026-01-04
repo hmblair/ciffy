@@ -228,7 +228,6 @@ def train(
     import lightning as L
     from .polymer import PolymerModel
     from .lightning import FlowDataModule as ResidueDataModule
-    from .config import TrainingConfig
 
     # Validate model type
     if model_type not in _MODEL_REGISTRY:

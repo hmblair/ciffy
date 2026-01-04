@@ -244,7 +244,6 @@ class LatentDiffusionModule(BaseCiffyModule):
         Returns:
             Dictionary of coordinate-space metrics.
         """
-        from ciffy.biochemistry import Residue
 
         metrics = {}
         rmsds = []
@@ -388,7 +387,7 @@ class LatentDiffusionModule(BaseCiffyModule):
         Returns:
             List of O3'-P bond lengths.
         """
-        from ciffy.biochemistry import Backbone, Residue
+        from ciffy.biochemistry import Backbone
 
         bond_lengths = []
 

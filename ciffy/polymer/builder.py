@@ -15,7 +15,6 @@ import numpy as np
 
 from ..biochemistry import Molecule, Residue, atom_to_element
 from ..biochemistry.linking import LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
-from ..backend import Array
 
 
 # =============================================================================

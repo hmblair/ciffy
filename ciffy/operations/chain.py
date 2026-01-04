@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..backend import Array, get_backend, check_compatible
 from ..backend import ops
 from ..biochemistry import Scale
 from ..polymer import Field

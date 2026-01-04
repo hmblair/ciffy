@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
-from ciffy.backend import stack, cat, convert_backend
+from ciffy.backend import convert_backend
 from ciffy.geometry import project_bond_lengths
 from ciffy.nn.hub import HubMixin
 

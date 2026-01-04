@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from ..biochemistry import Molecule
 
 from ..polymer import Field
-from ..biochemistry import Scale
 
 def load(
     file: str | Path,

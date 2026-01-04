@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
-    import numpy as np
     import torch
     from .polymer import Polymer
     from .nn.flow.polymer import PolymerFlowModel
@@ -117,7 +116,6 @@ def sample(
         ...     p.write(f"sample_{i}.cif")
     """
     from .polymer import from_sequence
-    from .nn.flow import PolymerFlowModel
 
     # Load or use provided model
     if isinstance(model, str):

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from ciffy.backend import Array, is_torch, ops
 
 if TYPE_CHECKING:
-    import numpy as np
+    pass
 
 
 def compute_frames_batch(

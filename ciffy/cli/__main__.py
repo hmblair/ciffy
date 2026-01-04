@@ -6,6 +6,7 @@ Usage:
     ciffy info <file1> <file2> ...   # Load and print multiple files
     ciffy info <file.cif> --poly     # Show only polymer atoms
     ciffy info <file.cif> --desc     # Show entity descriptions per chain
+    ciffy geometry <file.cif>        # Compute geometric properties (Rg, etc.)
     ciffy map <file.cif>             # Display contact map
     ciffy split <file.cif>           # Split into per-chain files
     ciffy template <sequence>        # Create template from sequence with sampled dihedrals
@@ -103,6 +104,42 @@ def _info_command(args):
                 if len(desc) >= 2 and desc[0] == desc[-1] and desc[0] in "'\"":
                     desc = desc[1:-1]
                 print(f"  {name}: {desc}")
+
+
+def _geometry_command(args):
+    """Handle the geometry subcommand."""
+    from ciffy import load, rg, Scale
+
+    for i, filepath in enumerate(args.files):
+        # Add blank line between multiple files
+        if i > 0:
+            print()
+
+        try:
+            polymer = load(filepath)
+            if args.poly:
+                polymer = polymer.poly()
+        except FileNotFoundError:
+            print(f"Error: File not found: {filepath}", file=sys.stderr)
+            continue
+        except Exception as e:
+            print(f"Error loading {filepath}: {e}", file=sys.stderr)
+            continue
+
+        # Header
+        print(f"{polymer.pdb_id}")
+        print("-" * 40)
+
+        # Radius of gyration
+        rg_value = rg(polymer, scale=Scale.MOLECULE)
+        print(f"Radius of gyration: {float(rg_value[0]):.2f} Å")
+
+        # Per-chain Rg if requested
+        if args.per_chain and polymer.size(Scale.CHAIN) > 1:
+            rg_per_chain = rg(polymer, scale=Scale.CHAIN)
+            print("\nPer-chain Rg:")
+            for j, (name, r) in enumerate(zip(polymer.names, rg_per_chain)):
+                print(f"  {name}: {float(r):.2f} Å")
 
 
 def _split_command(args):
@@ -1049,6 +1086,28 @@ def main():
         help="Show only polymer atoms (exclude water, ions, ligands)",
     )
 
+    # Geometry subcommand
+    geometry_parser = subparsers.add_parser(
+        "geometry",
+        help="Compute geometric properties of a structure",
+        description="Compute geometric properties such as radius of gyration.",
+    )
+    geometry_parser.add_argument(
+        "files",
+        nargs="+",
+        help="Path(s) to CIF file(s)",
+    )
+    geometry_parser.add_argument(
+        "--poly", "-p",
+        action="store_true",
+        help="Use only polymer atoms (exclude water, ions, ligands)",
+    )
+    geometry_parser.add_argument(
+        "--per-chain", "-c",
+        action="store_true",
+        help="Show per-chain values in addition to overall",
+    )
+
     # Map subcommand
     map_parser = subparsers.add_parser(
         "map",
@@ -1669,6 +1728,8 @@ def main():
         _split_command(args)
     elif args.command == "info":
         _info_command(args)
+    elif args.command == "geometry":
+        _geometry_command(args)
     elif args.command == "cluster":
         _cluster_command(args)
     else:

@@ -264,17 +264,28 @@ class TestCopyFieldDeletion:
 class TestSortAtoms:
     """Tests for Polymer.sort_atoms() - canonical atom ordering."""
 
-    def test_sort_atoms_returns_polymer(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_sort_atoms_returns_polymer(self, backend):
         """sort_atoms() returns a Polymer."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        if backend == "torch":
+            p = p.torch()
         sorted_p = p.sort_atoms()
 
         assert isinstance(sorted_p, ciffy.Polymer)
         assert sorted_p.size(Scale.RESIDUE) == 3
+        assert sorted_p.backend == backend
 
-    def test_sort_atoms_preserves_size(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_sort_atoms_preserves_size(self, backend):
         """sort_atoms() preserves atom count."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        if backend == "torch":
+            p = p.torch()
         sorted_p = p.sort_atoms()
 
         assert sorted_p.size() == p.size()
@@ -283,9 +294,14 @@ class TestSortAtoms:
             np.asarray(p.counts(Scale.RESIDUE))
         )
 
-    def test_sort_atoms_orders_by_enum_value(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_sort_atoms_orders_by_enum_value(self, backend):
         """Atoms within each residue are sorted by enum value."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        if backend == "torch":
+            p = p.torch()
         sorted_p = p.sort_atoms()
 
         for i in range(sorted_p.size(Scale.RESIDUE)):
@@ -294,9 +310,14 @@ class TestSortAtoms:
             # Check atoms are sorted
             assert np.all(atoms[:-1] <= atoms[1:]), f"Residue {i} not sorted"
 
-    def test_sort_atoms_sorts_all_fields(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_sort_atoms_sorts_all_fields(self, backend):
         """sort_atoms() reorders all atom-level fields."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+        if backend == "torch":
+            p = p.torch()
 
         # Get original atoms and their corresponding coords
         orig_atoms = np.asarray(p.atoms).copy()
@@ -311,9 +332,14 @@ class TestSortAtoms:
         np.testing.assert_array_equal(sorted_atoms, orig_atoms[expected_order])
         np.testing.assert_array_equal(sorted_coords, orig_coords[expected_order])
 
-    def test_sort_atoms_idempotent(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_sort_atoms_idempotent(self, backend):
         """Calling sort_atoms() twice gives same result."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        if backend == "torch":
+            p = p.torch()
         sorted_once = p.sort_atoms()
         sorted_twice = sorted_once.sort_atoms()
 
@@ -326,9 +352,14 @@ class TestSortAtoms:
             np.asarray(sorted_twice.coordinates)
         )
 
-    def test_align_then_sort_canonical(self):
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_align_then_sort_canonical(self, backend):
         """align().sort_atoms() produces canonical representation."""
+        if backend == "torch":
+            pytest.importorskip("torch")
         p = ciffy.load("tests/data/9MDS.cif").chain(0).residue([0, 1, 2])
+        if backend == "torch":
+            p = p.torch()
         canonical = p.align().sort_atoms()
 
         # Each residue should have sorted atoms and aligned coords

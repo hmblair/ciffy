@@ -8,6 +8,7 @@
 
 #include "registry.h"
 #include "parser.h"
+#include "schema.h"
 #include "../common.h"
 #include "../log.h"
 
@@ -32,27 +33,27 @@ _Static_assert(sizeof(BLOCKS) / sizeof(BLOCKS[0]) == BLOCK_COUNT,
 
 
 /* ============================================================================
- * ATTRIBUTE NAME CONSTANTS
- * Used in field definitions below.
+ * ATTRIBUTE NAME ARRAYS
+ * Built from shared schema constants (schema.h) for round-trip compatibility.
  * ============================================================================ */
 
-static const char *ATTR_MODEL[]         = { "pdbx_PDB_model_num", NULL };
-static const char *ATTR_CHAIN_ID[]      = { "id", NULL };
-static const char *ATTR_RES_PER_CHAIN[] = { "asym_id", NULL };
-static const char *ATTR_STRAND_ID[]     = { "pdb_strand_id", NULL };
-static const char *ATTR_RESIDUE_NAME[]  = { "mon_id", NULL };
+static const char *ATTR_MODEL[]         = { SCHEMA_ATOM_MODEL_NUM, NULL };
+static const char *ATTR_CHAIN_ID[]      = { SCHEMA_ASYM_ID, NULL };
+static const char *ATTR_RES_PER_CHAIN[] = { SCHEMA_SEQ_ASYM_ID, NULL };
+static const char *ATTR_STRAND_ID[]     = { SCHEMA_SEQ_STRAND_ID, NULL };
+static const char *ATTR_RESIDUE_NAME[]  = { SCHEMA_SEQ_MON_ID, NULL };
 
 /* Batch-parsed field attributes */
-static const char *ATTR_COORDS[]   = { "Cartn_x", "Cartn_y", "Cartn_z", NULL };
-static const char *ATTR_BFACTOR[]  = { "B_iso_or_equiv", NULL };
-static const char *ATTR_ELEMENT[]  = { "type_symbol", NULL };
-static const char *ATTR_ATOM_TYPE[] = { "label_comp_id", "label_atom_id", NULL };
+static const char *ATTR_COORDS[]    = { SCHEMA_ATOM_CARTN_X, SCHEMA_ATOM_CARTN_Y, SCHEMA_ATOM_CARTN_Z, NULL };
+static const char *ATTR_BFACTOR[]   = { SCHEMA_ATOM_B_ISO, NULL };
+static const char *ATTR_ELEMENT[]   = { SCHEMA_ATOM_TYPE_SYMBOL, NULL };
+static const char *ATTR_ATOM_TYPE[] = { SCHEMA_ATOM_LABEL_COMP_ID, SCHEMA_ATOM_LABEL_ATOM_ID, NULL };
 
 /* Refinement attributes */
-static const char *ATTR_RESOLUTION[] = { "ls_d_res_high", NULL };
+static const char *ATTR_RESOLUTION[] = { SCHEMA_REFINE_RESOLUTION, NULL };
 
 /* Database status attributes */
-static const char *ATTR_DEPOSIT_DATE[] = { "recvd_initial_deposition_date", NULL };
+static const char *ATTR_DEPOSIT_DATE[] = { SCHEMA_REV_DATE, NULL };
 
 
 /* ============================================================================

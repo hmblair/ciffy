@@ -11,6 +11,7 @@
  */
 
 #include "writer.h"
+#include "schema.h"
 #include "../hash/reverse.h"
 #include "../log.h"
 
@@ -145,8 +146,8 @@ static const char *_entity_type_string(int mol_type, int res_per_chain) {
  */
 static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_entity.id\n");
-    CIF_FPRINTF(file, ctx, "_entity.type\n");
+    CIF_FPRINTF(file, ctx, "_entity." SCHEMA_ENTITY_ID "\n");
+    CIF_FPRINTF(file, ctx, "_entity." SCHEMA_ENTITY_TYPE "\n");
 
     for (int i = 0; i < cif->chains; i++) {
         int mol_type = cif->molecule_types ? cif->molecule_types[i] : -1;
@@ -167,9 +168,9 @@ static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx
  */
 static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_struct_asym.id\n");
-    CIF_FPRINTF(file, ctx, "_struct_asym.pdbx_strand_id\n");
-    CIF_FPRINTF(file, ctx, "_struct_asym.entity_id\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym." SCHEMA_ASYM_ID "\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym." SCHEMA_ASYM_STRAND_ID "\n");
+    CIF_FPRINTF(file, ctx, "_struct_asym." SCHEMA_ASYM_ENTITY_ID "\n");
 
     for (int i = 0; i < cif->chains; i++) {
         const char *name = cif->names[i];
@@ -211,9 +212,9 @@ static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext
     }
 
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_entity_poly.entity_id\n");
-    CIF_FPRINTF(file, ctx, "_entity_poly.type\n");
-    CIF_FPRINTF(file, ctx, "_entity_poly.pdbx_strand_id\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly." SCHEMA_ENTITY_POLY_ID "\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly." SCHEMA_ENTITY_POLY_TYPE "\n");
+    CIF_FPRINTF(file, ctx, "_entity_poly." SCHEMA_ENTITY_POLY_STRAND "\n");
 
     for (int i = 0; i < cif->chains; i++) {
         /* Skip non-polymer chains (no residues) */
@@ -269,8 +270,8 @@ static CifError _write_entity_nonpoly(FILE *file, const mmCIF *cif, CifErrorCont
     }
 
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly.entity_id\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly.comp_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly." SCHEMA_NONPOLY_ENTITY_ID "\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly." SCHEMA_NONPOLY_COMP_ID "\n");
 
     /* Use atoms_per_chain to compute first atom of each chain */
     int atom_idx = 0;
@@ -320,10 +321,10 @@ static CifError _write_entity_nonpoly(FILE *file, const mmCIF *cif, CifErrorCont
  */
 static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.asym_id\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.mon_id\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.pdb_strand_id\n");
-    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme.seq_id\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme." SCHEMA_SEQ_ASYM_ID "\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme." SCHEMA_SEQ_MON_ID "\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme." SCHEMA_SEQ_STRAND_ID "\n");
+    CIF_FPRINTF(file, ctx, "_pdbx_poly_seq_scheme." SCHEMA_SEQ_SEQ_ID "\n");
 
     int res_idx = 0;
     int skipped_count = 0;
@@ -373,21 +374,21 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
 
     /* Write block header */
     CIF_FPRINTF(file, ctx, "loop_\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.group_PDB\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.type_symbol\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.label_atom_id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.label_alt_id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.label_comp_id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.label_asym_id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.label_seq_id\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_x\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_y\n");
-    CIF_FPRINTF(file, ctx, "_atom_site.Cartn_z\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_GROUP_PDB "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_TYPE_SYMBOL "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_LABEL_ATOM_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_LABEL_ALT_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_LABEL_COMP_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_LABEL_ASYM_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_LABEL_SEQ_ID "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_CARTN_X "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_CARTN_Y "\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_CARTN_Z "\n");
     if (has_bfactors) {
-        CIF_FPRINTF(file, ctx, "_atom_site.B_iso_or_equiv\n");
+        CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_B_ISO "\n");
     }
-    CIF_FPRINTF(file, ctx, "_atom_site.pdbx_PDB_model_num\n");
+    CIF_FPRINTF(file, ctx, "_atom_site." SCHEMA_ATOM_MODEL_NUM "\n");
 
     LOG_INFO("Writing %d atoms (%d polymer, %d non-polymer)",
              cif->atoms, cif->polymer, cif->nonpoly);

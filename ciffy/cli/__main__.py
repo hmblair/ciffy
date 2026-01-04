@@ -108,7 +108,7 @@ def _info_command(args):
 
 def _geometry_command(args):
     """Handle the geometry subcommand."""
-    from ciffy import load, rg, Scale
+    from ciffy import load, rg, clashes, Scale
 
     for i, filepath in enumerate(args.files):
         # Add blank line between multiple files
@@ -133,6 +133,10 @@ def _geometry_command(args):
         # Radius of gyration
         rg_value = rg(polymer, scale=Scale.MOLECULE)
         print(f"Radius of gyration: {float(rg_value[0]):.2f} Å")
+
+        # Clash detection
+        clash_pairs = clashes(polymer)
+        print(f"Clashes: {len(clash_pairs)}")
 
         # Per-chain Rg if requested
         if args.per_chain and polymer.size(Scale.CHAIN) > 1:

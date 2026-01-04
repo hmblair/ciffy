@@ -903,6 +903,33 @@ class Polymer:
             self._bonds = ops.to_backend(edges, self._hierarchy._ref)
         return self._bonds
 
+    def adjacency(self, dtype: str = 'bool') -> Array:
+        """
+        Symmetric adjacency matrix of the bond graph.
+
+        Args:
+            dtype: Data type for the matrix ('bool', 'float32', 'int32').
+
+        Returns:
+            (N, N) symmetric matrix where adj[i,j] = True/1 if atoms
+            i and j are bonded.
+
+        Note:
+            This is O(N²) memory. For large structures, use bonds
+            property directly or CSR representation.
+        """
+        n_atoms = self.size()
+        bonds = self.bonds
+
+        # Create zero matrix in correct backend
+        adj = ops.zeros((n_atoms, n_atoms), like=self._hierarchy._ref, dtype=dtype)
+
+        # Set symmetric entries
+        adj[bonds[:, 0], bonds[:, 1]] = 1
+        adj[bonds[:, 1], bonds[:, 0]] = 1
+
+        return adj
+
     @property
     def connections(self) -> Array | None:
         """
@@ -929,6 +956,19 @@ class Polymer:
             Values: 0=UNKNOWN, 1=HYDROG (H-bond), 2=COVALE, 3=METALC, 4=DISULF.
         """
         return self._connection_types
+
+    def vdw_radii(self) -> Array:
+        """
+        Van der Waals radius for each atom (Angstroms).
+
+        Returns:
+            (N,) float32 array of VDW radii, one per atom.
+            Uses standard radii indexed by element type.
+            Unknown elements have radius 0.0.
+        """
+        from ..biochemistry.constants import VDW_RADII_ARRAY
+        radii_arr = ops.to_backend(VDW_RADII_ARRAY, self.elements)
+        return radii_arr[self.elements]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Identification

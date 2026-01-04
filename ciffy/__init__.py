@@ -69,7 +69,7 @@ from .ensemble import Ensemble
 
 # Operations - commonly used, re-exported at top level
 from .operations.alignment import align, intersect
-from .operations.metrics import rmsd, tm_score, lddt, rg
+from .operations.metrics import rmsd, tm_score, lddt, rg, clashes
 from .operations.chain import join
 from .operations.reduction import Reduction
 
@@ -129,6 +129,7 @@ __all__ = [
     "tm_score",
     "lddt",
     "rg",
+    "clashes",
     "join",
     "Reduction",
     # Submodules

@@ -657,3 +657,204 @@ def rg(
     mean_sq_dist = polymer.reduce(sq_dist, scale)  # (n_units,)
 
     return sqrt(mean_sq_dist)
+
+
+# =============================================================================
+# Clash Detection
+# =============================================================================
+
+def clashes(
+    polymer: "Polymer",
+    vdw_scale: float = 0.6,
+    exclude_bonds: int = 3,
+    heavy_only: bool = True,
+    residue_cutoff: float | None = 8.0,
+) -> Array:
+    """
+    Detect steric clashes in a polymer structure.
+
+    A clash occurs when two atoms are closer than the sum of their
+    van der Waals radii (scaled by vdw_scale), excluding atoms that
+    are connected by a small number of covalent bonds.
+
+    Args:
+        polymer: Structure to check for clashes.
+        vdw_scale: Scale factor for VDW radii (default 0.6 means atoms
+            can overlap 40% before it's considered a clash).
+        exclude_bonds: Exclude atom pairs connected by this many bonds
+            or fewer (default 3 excludes 1-2, 1-3, 1-4 interactions).
+        heavy_only: If True, only consider heavy (non-hydrogen) atoms.
+        residue_cutoff: Pre-filter to residues with non-sequential neighbors
+            within this distance (Angstroms). Set to None to disable.
+            Default 8.0 significantly speeds up large structures.
+
+    Returns:
+        (C, 2) array of clashing atom index pairs (indices into filtered polymer
+        if residue_cutoff is used).
+
+    Note:
+        This uses O(N²) memory for distance and exclusion matrices.
+        The residue_cutoff pre-filter reduces N for large structures.
+
+    Examples:
+        >>> import ciffy
+        >>> p = ciffy.load("structure.cif")
+        >>> pairs = ciffy.clashes(p)
+        >>> print(f"{len(pairs)} clashes found")
+    """
+    from ..backend.ops import cdist, triu, argwhere
+    from ..backend import to_numpy
+
+    # Optionally filter to heavy atoms
+    if heavy_only:
+        polymer = polymer.heavy()
+
+    # Residue-level pre-filter: keep only residues with close non-sequential neighbors
+    if residue_cutoff is not None:
+        polymer = _filter_close_residues(polymer, residue_cutoff, exclude_seq=3)
+
+    n_atoms = polymer.size()
+    if n_atoms == 0:
+        if is_torch(polymer.coordinates):
+            import torch
+            return torch.zeros((0, 2), dtype=torch.int64)
+        return np.zeros((0, 2), dtype=np.int64)
+
+    coords = polymer.coordinates
+    radii = polymer.vdw_radii()
+
+    # Pairwise distances
+    dists = cdist(coords, coords)
+
+    # VDW threshold matrix: (r_i + r_j) * scale
+    thresholds = (radii[:, None] + radii[None, :]) * vdw_scale
+
+    # Build exclusion mask via sparse neighbor expansion
+    exclusion = _build_exclusion_mask(polymer.bonds, n_atoms, exclude_bonds, coords)
+
+    # Find clashes: close AND not excluded
+    is_clash = (dists < thresholds) & ~exclusion
+
+    # Upper triangle only (avoid double-counting and self-clashes)
+    is_clash = triu(is_clash, diagonal=1)
+    return argwhere(is_clash)
+
+
+def _filter_close_residues(
+    polymer: "Polymer",
+    cutoff: float,
+    exclude_seq: int = 3,
+) -> "Polymer":
+    """
+    Filter to residues that have non-sequential neighbors within cutoff.
+
+    Args:
+        polymer: Input polymer.
+        cutoff: Distance threshold in Angstroms.
+        exclude_seq: Exclude sequential neighbors within ±exclude_seq residues.
+
+    Returns:
+        Filtered polymer with only residues that could potentially clash.
+    """
+    from ..backend.ops import cdist
+    from ..backend import to_numpy
+
+    n_res = polymer.size(Scale.RESIDUE)
+    if n_res == 0:
+        return polymer
+
+    # Get residue centroids
+    _, centroids = polymer.center(Scale.RESIDUE)
+
+    # Compute residue-residue distances
+    res_dists = to_numpy(cdist(centroids, centroids))
+
+    # Build sequential neighbor mask (exclude ±exclude_seq within same chain)
+    chain_lengths = to_numpy(polymer.lengths)
+    chain_boundaries = np.cumsum(np.concatenate([[0], chain_lengths]))
+
+    # Map residue -> chain
+    chain_membership = np.zeros(n_res, dtype=np.int32)
+    for c_idx in range(len(chain_lengths)):
+        start, end = chain_boundaries[c_idx], chain_boundaries[c_idx + 1]
+        chain_membership[start:end] = c_idx
+
+    # Create sequential neighbor mask
+    seq_neighbor = np.zeros((n_res, n_res), dtype=bool)
+    for offset in range(-exclude_seq, exclude_seq + 1):
+        if offset == 0:
+            np.fill_diagonal(seq_neighbor, True)
+        else:
+            idx = np.arange(max(0, -offset), min(n_res, n_res - offset))
+            idx_offset = idx + offset
+            same_chain = chain_membership[idx] == chain_membership[idx_offset]
+            seq_neighbor[idx[same_chain], idx_offset[same_chain]] = True
+
+    # Find residues with close non-sequential neighbors
+    close = (res_dists < cutoff) & ~seq_neighbor
+    has_close_neighbor = close.any(axis=1)
+
+    # Filter polymer
+    if has_close_neighbor.all():
+        return polymer
+    return polymer.select(has_close_neighbor, Scale.RESIDUE)
+
+
+def _build_exclusion_mask(
+    bonds: Array,
+    n_atoms: int,
+    max_bonds: int,
+    ref: Array,
+) -> Array:
+    """
+    Build boolean exclusion mask for atoms within max_bonds of each other.
+
+    Uses sparse neighbor expansion: O(n × degree^max_bonds) instead of O(n³).
+
+    Args:
+        bonds: (B, 2) bond pairs.
+        n_atoms: Total number of atoms.
+        max_bonds: Maximum bond distance to exclude.
+        ref: Reference array for backend matching.
+
+    Returns:
+        (n_atoms, n_atoms) boolean mask where True = within max_bonds.
+    """
+    from ..backend import to_numpy, is_torch
+    from ..backend.ops import zeros
+
+    # Work in numpy for the sparse expansion, convert at end
+    bonds_np = to_numpy(bonds)
+
+    # Build adjacency list (CSR-like)
+    # neighbors[i] = list of atoms bonded to i
+    neighbors = [[] for _ in range(n_atoms)]
+    for i, j in bonds_np:
+        neighbors[i].append(j)
+        neighbors[j].append(i)
+
+    # For each atom, find all atoms within max_bonds
+    # reachable[i] = set of atoms reachable from i within max_bonds
+    exclusion = np.zeros((n_atoms, n_atoms), dtype=bool)
+
+    for atom in range(n_atoms):
+        # BFS up to max_bonds depth
+        visited = {atom}
+        frontier = {atom}
+        for _ in range(max_bonds):
+            next_frontier = set()
+            for node in frontier:
+                for neighbor in neighbors[node]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        next_frontier.add(neighbor)
+            frontier = next_frontier
+        # Mark all visited atoms as excluded
+        for other in visited:
+            exclusion[atom, other] = True
+
+    # Convert to target backend
+    if is_torch(ref):
+        import torch
+        return torch.from_numpy(exclusion).to(ref.device)
+    return exclusion

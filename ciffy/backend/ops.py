@@ -217,6 +217,43 @@ def nonzero(condition: Array) -> tuple[Array, ...]:
     return np.where(condition)
 
 
+def argwhere(condition: Array) -> Array:
+    """
+    Return indices where condition is True as (N, ndim) array.
+
+    Args:
+        condition: Boolean array.
+
+    Returns:
+        (N, ndim) array where each row contains the indices of a True element.
+
+    Note:
+        Unlike nonzero() which returns a tuple of arrays, this returns a
+        single stacked array, similar to numpy.argwhere or torch.nonzero.
+    """
+    if is_torch(condition):
+        import torch
+        return torch.nonzero(condition)
+    return np.argwhere(condition)
+
+
+def triu(arr: Array, diagonal: int = 0) -> Array:
+    """
+    Return upper triangular part of an array.
+
+    Args:
+        arr: Input 2D array.
+        diagonal: Diagonal offset. 0 = main diagonal, 1 = above main, etc.
+
+    Returns:
+        Array with elements below the diagonal zeroed.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.triu(arr, diagonal=diagonal)
+    return np.triu(arr, k=diagonal)
+
+
 def argmax(arr: Array, axis: int | None = None) -> Array:
     """
     Return indices of maximum values along an axis.

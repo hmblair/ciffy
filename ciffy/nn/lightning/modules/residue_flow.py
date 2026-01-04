@@ -299,34 +299,10 @@ class ResidueFlowModule(LightningModule):
             return
 
         gc = self._geometry_constraints.to(coords.device)
+        metrics = gc.compute_error_metrics(coords, transforms)
 
-        # Bond length errors (RMSE in Angstroms)
-        if gc.n_bonds > 0:
-            a1 = coords[:, gc.bond_indices[:, 0]]
-            a2 = coords[:, gc.bond_indices[:, 1]]
-            lengths = torch.norm(a2 - a1, dim=-1)
-            bond_errors = (lengths - gc.bond_targets).abs()
-            self.log(f"{prefix}/bond_mae", bond_errors.mean(), on_step=False, on_epoch=True)
-            self.log(f"{prefix}/bond_max", bond_errors.max(), on_step=False, on_epoch=True)
-
-        # Angle errors (in degrees)
-        if gc.n_angles > 0:
-            a = coords[:, gc.angle_indices[:, 0]]
-            b = coords[:, gc.angle_indices[:, 1]]
-            c = coords[:, gc.angle_indices[:, 2]]
-            v1 = a - b
-            v2 = c - b
-            cos_angles = (v1 * v2).sum(-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8)
-            angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
-            angle_errors = (angles - gc.angle_targets).abs() * (180 / math.pi)  # Convert to degrees
-            self.log(f"{prefix}/angle_mae", angle_errors.mean(), on_step=False, on_epoch=True)
-            self.log(f"{prefix}/angle_max", angle_errors.max(), on_step=False, on_epoch=True)
-
-        # Inter-residue bond (O3'-P) error
-        inter_lengths = torch.norm(transforms[:, 3:], dim=-1)
-        inter_errors = (inter_lengths - gc.inter_bond_target).abs()
-        self.log(f"{prefix}/inter_bond_mae", inter_errors.mean(), on_step=False, on_epoch=True)
-        self.log(f"{prefix}/inter_bond_max", inter_errors.max(), on_step=False, on_epoch=True)
+        for name, value in metrics.items():
+            self.log(f"{prefix}/{name}", value, on_step=False, on_epoch=True)
 
     def validation_step(self, batch: tuple[torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Compute validation NLL."""

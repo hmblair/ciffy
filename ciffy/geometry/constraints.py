@@ -315,6 +315,30 @@ class GeometryConstraints:
             return 0
         return len(self.inter_angle_indices)
 
+    def bond_errors(self, coords: torch.Tensor) -> torch.Tensor:
+        """
+        Compute absolute bond length errors.
+
+        Args:
+            coords: (batch, n_atoms, 3) or (n_atoms, 3) coordinates.
+
+        Returns:
+            (batch, n_bonds) absolute errors in Angstroms.
+            Empty tensor if no bonds.
+        """
+        if self.n_bonds == 0:
+            return torch.zeros(0, device=coords.device, dtype=coords.dtype)
+
+        single = coords.dim() == 2
+        if single:
+            coords = coords.unsqueeze(0)
+
+        a1 = coords[:, self.bond_indices[:, 0]]
+        a2 = coords[:, self.bond_indices[:, 1]]
+        lengths = torch.norm(a2 - a1, dim=-1)
+
+        return (lengths - self.bond_targets).abs()
+
     def bond_loss(self, coords: torch.Tensor) -> torch.Tensor:
         """
         Compute MSE loss on bond lengths.
@@ -325,19 +349,46 @@ class GeometryConstraints:
         Returns:
             Scalar MSE loss on bond lengths vs ideal.
         """
-        if self.n_bonds == 0:
+        errors = self.bond_errors(coords)
+        if errors.numel() == 0:
             return torch.tensor(0.0, device=coords.device, dtype=coords.dtype)
+        return (errors ** 2).mean()
+
+    def angle_errors(self, coords: torch.Tensor, degrees: bool = True) -> torch.Tensor:
+        """
+        Compute absolute angle errors.
+
+        Args:
+            coords: (batch, n_atoms, 3) or (n_atoms, 3) coordinates.
+            degrees: If True, return errors in degrees. Otherwise radians.
+
+        Returns:
+            (batch, n_angles) absolute errors.
+            Empty tensor if no angles.
+        """
+        if self.n_angles == 0:
+            return torch.zeros(0, device=coords.device, dtype=coords.dtype)
 
         single = coords.dim() == 2
         if single:
             coords = coords.unsqueeze(0)
 
-        # Gather atom positions for all bonds
-        a1 = coords[:, self.bond_indices[:, 0]]  # (batch, n_bonds, 3)
-        a2 = coords[:, self.bond_indices[:, 1]]  # (batch, n_bonds, 3)
-        lengths = torch.norm(a2 - a1, dim=-1)    # (batch, n_bonds)
+        a = coords[:, self.angle_indices[:, 0]]
+        b = coords[:, self.angle_indices[:, 1]]  # vertex
+        c = coords[:, self.angle_indices[:, 2]]
 
-        return ((lengths - self.bond_targets) ** 2).mean()
+        v1 = a - b
+        v2 = c - b
+
+        cos_angles = (v1 * v2).sum(-1) / (
+            torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8
+        )
+        angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
+
+        errors = (angles - self.angle_targets).abs()
+        if degrees:
+            errors = errors * (180.0 / math.pi)
+        return errors
 
     def angle_loss(self, coords: torch.Tensor) -> torch.Tensor:
         """
@@ -349,28 +400,25 @@ class GeometryConstraints:
         Returns:
             Scalar MSE loss on angles vs ideal (in radians).
         """
-        if self.n_angles == 0:
+        errors = self.angle_errors(coords, degrees=False)
+        if errors.numel() == 0:
             return torch.tensor(0.0, device=coords.device, dtype=coords.dtype)
+        return (errors ** 2).mean()
 
-        single = coords.dim() == 2
-        if single:
-            coords = coords.unsqueeze(0)
+    def inter_bond_errors(self, transforms: torch.Tensor) -> torch.Tensor:
+        """
+        Compute absolute inter-residue bond length errors.
 
-        # Gather all three atoms for each angle
-        a = coords[:, self.angle_indices[:, 0]]  # (batch, n_angles, 3)
-        b = coords[:, self.angle_indices[:, 1]]  # (batch, n_angles, 3) - vertex
-        c = coords[:, self.angle_indices[:, 2]]  # (batch, n_angles, 3)
+        The translation component of the transform encodes the O3'-P distance.
 
-        v1 = a - b  # B -> A
-        v2 = c - b  # B -> C
+        Args:
+            transforms: (batch, 6) SE(3) transforms [axis_angle, translation].
 
-        # Compute angles
-        cos_angles = (v1 * v2).sum(-1) / (
-            torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8
-        )
-        angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
-
-        return ((angles - self.angle_targets) ** 2).mean()
+        Returns:
+            (batch,) absolute errors in Angstroms.
+        """
+        lengths = torch.norm(transforms[:, 3:], dim=-1)
+        return (lengths - self.inter_bond_target).abs()
 
     def inter_bond_loss(self, transforms: torch.Tensor) -> torch.Tensor:
         """
@@ -384,8 +432,8 @@ class GeometryConstraints:
         Returns:
             Scalar MSE loss on inter-residue bond length.
         """
-        lengths = torch.norm(transforms[:, 3:], dim=-1)
-        return ((lengths - self.inter_bond_target) ** 2).mean()
+        errors = self.inter_bond_errors(transforms)
+        return (errors ** 2).mean()
 
     def inter_angle_loss(self, coords: torch.Tensor) -> torch.Tensor:
         """
@@ -507,6 +555,45 @@ class GeometryConstraints:
             loss = loss + weights["inter_angle"] * self.inter_angle_loss(chain_coords)
 
         return loss
+
+    def compute_error_metrics(
+        self,
+        coords: torch.Tensor,
+        transforms: torch.Tensor,
+    ) -> dict[str, float]:
+        """
+        Compute geometry error metrics for logging/validation.
+
+        Args:
+            coords: (batch, n_atoms, 3) per-residue coordinates.
+            transforms: (batch, 6) SE(3) inter-residue transforms.
+
+        Returns:
+            Dict with keys: bond_mae, bond_max, angle_mae, angle_max,
+            inter_bond_mae, inter_bond_max. Values in Angstroms (bonds)
+            or degrees (angles).
+        """
+        metrics = {}
+
+        # Bond errors
+        bond_errs = self.bond_errors(coords)
+        if bond_errs.numel() > 0:
+            metrics["bond_mae"] = bond_errs.mean().item()
+            metrics["bond_max"] = bond_errs.max().item()
+
+        # Angle errors (already in degrees)
+        angle_errs = self.angle_errors(coords, degrees=True)
+        if angle_errs.numel() > 0:
+            metrics["angle_mae"] = angle_errs.mean().item()
+            metrics["angle_max"] = angle_errs.max().item()
+
+        # Inter-residue bond errors
+        inter_errs = self.inter_bond_errors(transforms)
+        if inter_errs.numel() > 0:
+            metrics["inter_bond_mae"] = inter_errs.mean().item()
+            metrics["inter_bond_max"] = inter_errs.max().item()
+
+        return metrics
 
     def __repr__(self) -> str:
         inter_angles = f", n_inter_angles={self.n_inter_angles}" if self.n_inter_angles > 0 else ""

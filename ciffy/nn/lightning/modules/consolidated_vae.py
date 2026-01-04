@@ -5,7 +5,6 @@ Trains a ConsolidatedResidueVAE with shared encoder and per-residue decoders.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -376,30 +375,17 @@ class ConsolidatedVAEModule(LightningModule):
 
             gc = gc.to(coords.device)
 
-            # Bond length errors
-            if gc.n_bonds > 0:
-                a1 = coords[:, gc.bond_indices[:, 0]]
-                a2 = coords[:, gc.bond_indices[:, 1]]
-                lengths = torch.norm(a2 - a1, dim=-1)
-                bond_errors = (lengths - gc.bond_targets).abs()
-                all_bond_errors.append(bond_errors.flatten())
+            # Collect raw errors for aggregation across residue types
+            bond_errs = gc.bond_errors(coords)
+            if bond_errs.numel() > 0:
+                all_bond_errors.append(bond_errs.flatten())
 
-            # Angle errors (in degrees)
-            if gc.n_angles > 0:
-                a = coords[:, gc.angle_indices[:, 0]]
-                b = coords[:, gc.angle_indices[:, 1]]
-                c = coords[:, gc.angle_indices[:, 2]]
-                v1 = a - b
-                v2 = c - b
-                cos_angles = (v1 * v2).sum(-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1) + 1e-8)
-                angles = torch.acos(cos_angles.clamp(-0.999, 0.999))
-                angle_errors = (angles - gc.angle_targets).abs() * (180 / math.pi)
-                all_angle_errors.append(angle_errors.flatten())
+            angle_errs = gc.angle_errors(coords, degrees=True)
+            if angle_errs.numel() > 0:
+                all_angle_errors.append(angle_errs.flatten())
 
-            # Inter-residue bond error
-            inter_lengths = torch.norm(transforms[:, 3:], dim=-1)
-            inter_errors = (inter_lengths - gc.inter_bond_target).abs()
-            all_inter_errors.append(inter_errors)
+            inter_errs = gc.inter_bond_errors(transforms)
+            all_inter_errors.append(inter_errs)
 
         # Aggregate and log
         if all_bond_errors:

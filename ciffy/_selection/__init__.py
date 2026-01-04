@@ -10,6 +10,7 @@ from .filters import (
     by_atom,
     by_residue,
     by_type,
+    by_element,
 )
 
 # Iteration functions
@@ -28,6 +29,7 @@ from .masks import (
     nucleobase,
     phosphate,
     sidechain,
+    heavy,
 )
 
 __all__ = [
@@ -36,6 +38,7 @@ __all__ = [
     "by_atom",
     "by_residue",
     "by_type",
+    "by_element",
     # Iterators
     "poly",
     "hetero",
@@ -48,4 +51,5 @@ __all__ = [
     "nucleobase",
     "phosphate",
     "sidechain",
+    "heavy",
 ]

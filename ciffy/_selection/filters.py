@@ -95,3 +95,24 @@ def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
         raise ValueError("Cannot filter by type: molecule_types not available on this polymer")
     ix = ops.nonzero_1d(polymer.molecule_types == mol.value)
     return polymer.select(ix, Scale.CHAIN)
+
+
+def by_element(polymer: Polymer, element: Array | int) -> Polymer:
+    """
+    Select atoms by element index.
+
+    Args:
+        polymer: Source polymer.
+        element: Element index or indices (from Element enum).
+
+    Returns:
+        New Polymer with matching atoms.
+
+    Example:
+        >>> from ciffy.biochemistry import Element
+        >>> carbons = by_element(polymer, Element.C)
+        >>> organic = by_element(polymer, [Element.C, Element.N, Element.O])
+    """
+    element = ops.convert_backend(element, polymer.elements)
+    mask = (polymer.elements[:, None] == element).any(1)
+    return polymer[mask]

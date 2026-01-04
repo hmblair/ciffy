@@ -123,3 +123,23 @@ def sidechain(polymer: Polymer) -> Polymer:
     """
     from .filters import by_atom
     return by_atom(polymer, Sidechain.index())
+
+
+def heavy(polymer: Polymer) -> Polymer:
+    """
+    Select heavy (non-hydrogen) atoms.
+
+    Args:
+        polymer: Source polymer.
+
+    Returns:
+        New Polymer with only heavy atoms (excludes hydrogen).
+
+    Note:
+        Many experimental structures (X-ray) don't include hydrogens,
+        so this may return the same atoms. NMR and computational
+        structures typically have explicit hydrogens.
+    """
+    from ..biochemistry import Element
+    mask = polymer.elements != Element.H
+    return polymer[mask]

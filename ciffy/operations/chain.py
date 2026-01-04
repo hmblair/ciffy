@@ -126,8 +126,8 @@ def join(*polymers: "Polymer") -> "Polymer":
     elements = ops.cat([p.elements for p in non_empty], axis=0)
     sequence = ops.cat([p.sequence for p in non_empty], axis=0)
 
-    res_sizes = ops.cat([p._sizes[Scale.RESIDUE] for p in non_empty], axis=0)
-    chn_sizes = ops.cat([p._sizes[Scale.CHAIN] for p in non_empty], axis=0)
+    res_sizes = ops.cat([p.counts(Scale.RESIDUE) for p in non_empty], axis=0)
+    chn_sizes = ops.cat([p.counts(Scale.CHAIN) for p in non_empty], axis=0)
     lengths = ops.cat([p.lengths for p in non_empty], axis=0)
 
     # Compute molecule size (total atoms)

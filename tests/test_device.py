@@ -135,7 +135,7 @@ class TestMixedDeviceHandling:
         # because create_reduction_index gets device from features
         from ciffy.operations.reduction import create_reduction_index
 
-        sizes = p_cuda._sizes[Scale.CHAIN]
+        sizes = p_cuda.counts(Scale.CHAIN)
         assert sizes.device.type == "cuda"
 
         # Pass CPU device explicitly

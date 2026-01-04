@@ -637,7 +637,7 @@ class Polymer:
             )
 
         # Compute atom offset and size for this residue
-        res_sizes = self._sizes[Scale.RESIDUE]
+        res_sizes = self.counts(Scale.RESIDUE)
         atom_offset = res_sizes[:idx].sum().item() if idx > 0 else 0
         n_atoms = res_sizes[idx].item()
 
@@ -774,7 +774,7 @@ class Polymer:
         n_residues = aligned.size(Scale.RESIDUE)
 
         # Find max atoms for padding
-        res_sizes = aligned._sizes[Scale.RESIDUE]
+        res_sizes = aligned.counts(Scale.RESIDUE)
         max_atoms = int(res_sizes.max())
 
         # Create padded output
@@ -797,20 +797,6 @@ class Polymer:
                 mask[i, :n] = True
 
         return coords, mask
-
-    @property
-    def _sizes(self) -> dict[Scale, Array]:
-        """
-        Get sizes dict from hierarchy.
-
-        Returns dict mapping Scale to atoms-per-unit arrays, for compatibility
-        with code expecting the old _sizes storage.
-        """
-        return {
-            Scale.RESIDUE: self._hierarchy.sizes(Scale.RESIDUE),
-            Scale.CHAIN: self._hierarchy.sizes(Scale.CHAIN),
-            Scale.MOLECULE: self._hierarchy.sizes(Scale.MOLECULE),
-        }
 
     def _validate_consistency(self, sizes: dict[Scale, Array]) -> None:
         """

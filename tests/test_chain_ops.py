@@ -307,7 +307,7 @@ class TestExtend:
 
         # Get centroids of each residue
         coords = extended.coordinates
-        res_sizes = extended._sizes[Scale.RESIDUE]
+        res_sizes = extended.counts(Scale.RESIDUE)
         first_res_atoms = res_sizes[0].item()
 
         first_centroid = coords[:first_res_atoms].mean(axis=0)

@@ -609,7 +609,7 @@ class TestRMSD:
         perturbed = copy.deepcopy(polymer)
         coords = perturbed.coordinates.copy()
         # Add larger noise to first chain's atoms
-        n_first_chain = polymer._sizes[Scale.CHAIN][0]
+        n_first_chain = polymer.counts(Scale.CHAIN)[0]
         coords[:n_first_chain] += np.random.randn(n_first_chain, 3) * 1.0
         perturbed.coordinates = coords
 

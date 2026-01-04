@@ -734,30 +734,21 @@ class Polymer:
             ...     res = canonical.residue(i)
             ...     # atoms are now in sorted order
         """
-        from ..backend import cat, to_numpy
         from ..backend.ops import argsort
+        from ..biochemistry import Atom
 
-        n_residues = self.size(Scale.RESIDUE)
-        counts = to_numpy(self.counts(Scale.RESIDUE))
-        offsets = np.zeros(n_residues + 1, dtype=np.int64)
-        offsets[1:] = np.cumsum(counts)
+        if self.size(Scale.RESIDUE) == 0:
+            return self.copy()
 
-        # Build global sort indices from per-residue argsort
-        atoms_np = to_numpy(self.atoms)
-        sort_indices_list = []
+        # Vectorized segment argsort: create combined key that keeps residues separate
+        # key = residue_id * offset + atom_value, where offset > max atom value
+        # argsort(key) sorts atoms within each residue in one operation
+        membership = self.membership(Scale.RESIDUE)
+        offset = Atom.count() + 1
+        combined_key = membership * offset + self.atoms
+        sort_indices = argsort(combined_key)
 
-        for i in range(n_residues):
-            start, end = offsets[i], offsets[i + 1]
-            residue_atoms = atoms_np[start:end]
-            # argsort gives indices that would sort the array
-            local_sort = np.argsort(residue_atoms)
-            # Convert to global indices
-            global_sort = local_sort + start
-            sort_indices_list.append(global_sort)
-
-        sort_indices = np.concatenate(sort_indices_list)
-
-        # Build overrides for all atom-level fields
+        # Reorder all atom-level fields
         overrides = {}
         for name, field in self._get_fields().items():
             if field.scale == Scale.ATOM:

@@ -882,13 +882,13 @@ class Polymer:
         return self._hierarchy.nonpoly
 
     @property
-    def bonds(self) -> np.ndarray:
+    def bonds(self) -> Array:
         """
         Covalent bonds as atom index pairs.
 
         Returns:
             (B, 2) int64 array where each row [i, j] represents a bond
-            between atoms i and j (with i < j).
+            between atoms i and j (with i < j). Backend matches polymer.
 
         Note:
             Computed lazily and cached. Includes both intra-residue bonds
@@ -898,7 +898,9 @@ class Polymer:
             from ..backend.graph import build_bond_graph
             edges, _ = build_bond_graph(self)
             # Filter to i < j to avoid duplicates
-            self._bonds = edges[edges[:, 0] < edges[:, 1]]
+            edges = edges[edges[:, 0] < edges[:, 1]]
+            # Convert to polymer's backend
+            self._bonds = ops.to_backend(edges, self._hierarchy._ref)
         return self._bonds
 
     @property
@@ -1929,6 +1931,11 @@ class Polymer:
         """Select protein sidechain atoms."""
         from .._selection import sidechain
         return sidechain(self)
+
+    def heavy(self: Polymer) -> Polymer:
+        """Select heavy (non-hydrogen) atoms."""
+        from .._selection import heavy
+        return heavy(self)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Chain Operations

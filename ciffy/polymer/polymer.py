@@ -2100,7 +2100,7 @@ class Polymer:
 
         # Position the new residue's coordinates and add to fields
         fields['coordinates'] = self._position_new_residue(
-            coordinates, transform, residue, fields.get('atoms')
+            coordinates, transform, fields.get('atoms')
         )
         fields['sequence'] = ops.array([residue.value], like=ref, dtype='int64')
 
@@ -2128,7 +2128,6 @@ class Polymer:
         self: Polymer,
         coords: Array,
         transform: Array,
-        new_residue: "Residue",
         atoms: Array | None,
     ) -> Array:
         """Position a new residue relative to the last residue using transform."""

@@ -7,9 +7,7 @@ other molecular types.
 """
 
 from __future__ import annotations
-from typing import Generator, TYPE_CHECKING
-
-import numpy as np
+from typing import Any, Generator, TYPE_CHECKING
 
 from ..backend import Array, is_torch, size as arr_size, check_compatible, to_numpy
 from ..backend import ops

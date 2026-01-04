@@ -7,8 +7,9 @@ import ciffy
 from ciffy import Residue, Scale, join
 from ciffy import from_sequence
 from ciffy.polymer import expand_residue
-# Import internal function for testing linear extension
-from ciffy.polymer.builder import linear_extend_transform
+
+# Identity rotation + Z-axis translation for ideal backbone spacing
+LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
 
 def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
@@ -48,13 +49,9 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
             if poly.empty():
                 poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
             else:
-                last_res_coords, last_res_atoms, _, last_res_type = poly._residue_slice(-1)
-                transform = linear_extend_transform(
-                    last_res_coords, last_res_atoms, last_res_type,
-                    atoms.numpy() if backend == "torch" else atoms,
-                    residue
-                )
+                transform = LINEAR_EXTEND_TRANSFORM
                 if backend == "torch":
+                    import torch
                     transform = torch.from_numpy(transform)
                 poly = poly.extend(residue, coords, transform, atoms=atoms, elements=elements)
 
@@ -63,16 +60,10 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
 
 def extend_with_linear(poly, residue):
     """Helper to extend polymer with linear extension (for backward-compatible tests)."""
-    # Get last residue info using _residue_slice
-    last_res_coords, last_res_atoms, _, last_res_type = poly._residue_slice(-1)
-
     # Get new residue data (internal, no start terminal)
     atoms, elements, coords = expand_residue(residue, start_terminal=False, end_terminal=False)
 
-    # Compute linear extension transform
-    transform = linear_extend_transform(
-        last_res_coords, last_res_atoms, last_res_type, atoms, residue
-    )
+    transform = LINEAR_EXTEND_TRANSFORM
 
     # Convert to match polymer backend
     if poly.backend == "torch":
@@ -304,13 +295,7 @@ class TestExtend:
         # Get new residue data
         atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
 
-        # Compute transform using _residue_slice
-        last_res_coords, last_res_atoms, _, last_res_type = p._residue_slice(-1)
-        transform = linear_extend_transform(
-            last_res_coords, last_res_atoms, last_res_type, atoms, Residue.G
-        )
-
-        extended = p.extend(Residue.G, coords, transform, atoms=atoms, elements=elements)
+        extended = p.extend(Residue.G, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements)
 
         assert extended.size(Scale.RESIDUE) == 3
         assert extended.sequence_str() == "acg"

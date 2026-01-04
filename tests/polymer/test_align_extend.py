@@ -11,9 +11,12 @@ import pytest
 import ciffy
 from ciffy import Scale, from_sequence
 from ciffy.biochemistry import Residue
-from ciffy.polymer.builder import expand_residue, linear_extend_transform
+from ciffy.polymer.builder import expand_residue
 
 from tests.utils import BACKENDS
+
+# Identity rotation + Z-axis translation for ideal backbone spacing
+LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
 
 def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
@@ -45,12 +48,8 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
         if poly.empty():
             poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
         else:
-            last_coords, last_atoms, last_res = poly._residue_coords(-1)
-            transform = linear_extend_transform(
-                last_coords, last_atoms, last_res, atoms, residue
-            )
             poly = poly.extend(
-                residue, coords, transform, atoms=atoms, elements=elements
+                residue, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements
             )
 
     return poly
@@ -405,28 +404,6 @@ class TestExtendEdgeCases:
         )
 
         assert extended.size(Scale.CHAIN) == 1
-
-    def test_extend_linear_transform_helper(self):
-        """linear_extend_transform produces valid spacing."""
-        p = template_with_coords("a")
-
-        atoms, elements, coords = expand_residue(Residue.C, start_terminal=False)
-
-        # Get last residue info
-        last_coords, last_atoms, last_res = p._residue_coords(-1)
-
-        transform = linear_extend_transform(
-            last_coords, last_atoms, last_res,
-            atoms, Residue.C
-        )
-
-        # Transform should have identity rotation (first 3 zeros)
-        assert transform[0] == 0
-        assert transform[1] == 0
-        assert transform[2] == 0
-
-        # Translation should be positive (extending chain)
-        assert transform[5] > 0
 
     def test_extend_from_different_residue_types(self):
         """Can extend from any RNA residue type."""

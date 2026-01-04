@@ -4,7 +4,6 @@ Chain building utilities for polymer construction and generative models.
 This module provides functions for:
 
 - **Residue expansion**: Get atom data with terminal filtering (expand_residue)
-- **Linear extension**: Calculate SE(3) transform for linear chain extension (linear_extend_transform)
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ import numpy as np
 from ..biochemistry import Molecule, Residue, atom_to_element
 from ..biochemistry.linking import LinkingDefinition, NUCLEIC_ACID_LINK, PEPTIDE_LINK
 from ..backend import Array
-from ..utils import atoms_to_col_map
 
 
 # =============================================================================
@@ -161,65 +159,4 @@ def expand_residue(
         np.array([element_indices[i] for i in keep_indices], dtype=np.int64),
         coords[keep_indices].copy(),
     )
-
-
-def linear_extend_transform(
-    prev_coords: Array,
-    prev_atoms: Array,
-    prev_residue: Residue,
-    next_atoms: Array,
-    next_residue: Residue,
-) -> np.ndarray:
-    """
-    Calculate SE(3) transform for linear chain extension.
-
-    Computes the transform that positions the next residue along the backbone
-    axis with proper spacing, maintaining the same orientation as the previous
-    residue.
-
-    Args:
-        prev_coords: (n_atoms, 3) coordinates of previous residue.
-        prev_atoms: Atom type indices of previous residue.
-        prev_residue: Previous residue type.
-        next_atoms: Atom type indices of next residue.
-        next_residue: Next residue type.
-
-    Returns:
-        (6,) SE(3) transform [axis-angle (3), translation (3)] as numpy array.
-        The axis-angle is [0, 0, 0] (no rotation), and translation is
-        [0, 0, spacing] where spacing is the backbone span + bond length.
-
-    Example:
-        >>> atoms1, elements1, coords1 = expand_residue(Residue.A)
-        >>> atoms2, elements2, coords2 = expand_residue(Residue.C, start_terminal=False)
-        >>> transform = linear_extend_transform(coords1, atoms1, Residue.A, atoms2, Residue.C)
-        >>> # Use with Polymer.extend() or position_residue_fast()
-    """
-    from ..biochemistry.linking import LINKING_BY_TYPE
-
-    link_def = LINKING_BY_TYPE.get(prev_residue.molecule_type)
-
-    if link_def is None:
-        # No linking definition - use default spacing
-        spacing = 6.0
-    else:
-        # Build atom_to_col mapping for previous residue
-        prev_atom_to_col = atoms_to_col_map(tuple(int(a) for a in prev_atoms))
-
-        # Get linking atom values for previous residue using AtomGroup.for_residue()
-        prev_link_val = link_def.prev_atom.for_residue(prev_residue)  # e.g., O3' for RNA
-        prev_p_val = link_def.next_atom.for_residue(prev_residue)  # P atom (start of current residue)
-
-        if prev_link_val in prev_atom_to_col and prev_p_val in prev_atom_to_col:
-            prev_link_pos = prev_coords[prev_atom_to_col[prev_link_val]]
-            prev_p_pos = prev_coords[prev_atom_to_col[prev_p_val]]
-            # Backbone span is distance from P to O3' plus bond length
-            backbone_span = float(np.linalg.norm(prev_link_pos - prev_p_pos))
-            spacing = backbone_span + link_def.bond_length
-        else:
-            # Missing atoms - use default spacing
-            spacing = 6.0
-
-    # Return identity rotation + Z-axis translation
-    return np.array([0.0, 0.0, 0.0, 0.0, 0.0, spacing], dtype=np.float32)
 

@@ -65,9 +65,7 @@ from .transforms import (
 # Frame computation functions
 from .frames import (
     compute_glycosidic_frame,
-    align_to_frame,
     align_and_compute_transform,
-    position_next_residue,
 )
 
 # Geometry projection (torch-only, differentiable)
@@ -110,9 +108,7 @@ __all__ = [
     "is_purine",
     # Frame computation functions
     "compute_glycosidic_frame",
-    "align_to_frame",
     "align_and_compute_transform",
-    "position_next_residue",
     # Geometry projection
     "project_bond_lengths",
     # Geometry constraints

@@ -426,55 +426,6 @@ class TestResidueFlowModel:
         assert decoded_coords.shape == (5, n_atoms, 3)
         assert decoded_transforms.shape == (5, 6)
 
-    def test_position_next_residue(self):
-        """Test positioning next residue using transform."""
-        from ciffy.geometry import (
-            position_next_residue,
-            extract_frame_positions,
-            frame_from_positions,
-            compute_relative_transform,
-            apply_relative_transform,
-        )
-        from ciffy.biochemistry import Residue
-        from ciffy.biochemistry.linking import LINKING_BY_TYPE
-
-        np.random.seed(42)
-
-        # Use all atoms from Residue.A
-        atoms = np.array(list(Residue.A.index()), dtype=np.int64)
-        n_atoms = len(atoms)
-        residue = Residue.A
-
-        # Get linking definition
-        link_def = LINKING_BY_TYPE[residue.molecule_type]
-
-        # Random coordinates (just for testing transform logic)
-        coords1 = np.random.randn(n_atoms, 3).astype(np.float32)
-        coords2 = np.random.randn(n_atoms, 3).astype(np.float32)
-
-        # Compute transform from coords1 to coords2 using new frame API
-        prev_positions = extract_frame_positions(coords1, atoms, link_def.prev_frame)
-        o1, R1 = frame_from_positions(prev_positions)
-
-        next_positions = extract_frame_positions(coords2, atoms, link_def.next_frame)
-        o2, R2 = frame_from_positions(next_positions)
-
-        transform = compute_relative_transform(o1, R1, o2, R2)
-
-        # Position coords2 using the transform (should recover original positions)
-        coords2_positioned = position_next_residue(coords1, coords2, transform, atoms, residue)
-
-        # The P atom should be at the target position
-        p_value = residue.P.value
-        p_idx = np.where(atoms == p_value)[0][0]
-
-        # P position from original coords2 after positioning
-        p_positioned = coords2_positioned[p_idx]
-        # Target P position from transform
-        target_p, _ = apply_relative_transform(o1, R1, transform)
-
-        np.testing.assert_allclose(p_positioned, target_p, atol=1e-5)
-
     def test_link_transform_stats(self, sample_extended_data):
         """Test that transform statistics are reasonable."""
         _, transforms = sample_extended_data

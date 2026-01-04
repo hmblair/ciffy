@@ -22,12 +22,7 @@ from ciffy.backend import Array, to_numpy, is_torch
 from ciffy.backend.ops import isin
 from ciffy.biochemistry import Scale
 from ciffy.operations.reduction import Reduction
-from ciffy.geometry import (
-    compute_glycosidic_frame,
-    align_to_frame,
-    align_and_compute_transform,
-    position_next_residue,
-)
+from ciffy.geometry import align_and_compute_transform
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue

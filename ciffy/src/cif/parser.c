@@ -42,7 +42,10 @@ static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 
 
 /* Forward declarations for partial loading support */
-static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErrorContext *ctx);
+static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                 const LoadFilter *filter, CifErrorContext *ctx);
+static int _prescan_alt_loc_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                   const LoadFilter *filter, CifErrorContext *ctx);
 static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx);
 static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block, CifErrorContext *ctx);
 
@@ -63,6 +66,121 @@ static void _recount_polymer_nonpoly(mmCIF *cif, int original_atoms) {
     }
     cif->polymer = polymer;
     cif->nonpoly = cif->atoms - polymer;
+}
+
+
+/* ============================================================================
+ * ATOM FILTER SYSTEM
+ * Extensible atom filtering with common interface.
+ * ============================================================================ */
+
+/**
+ * @brief Prescan function signature for atom filters.
+ *
+ * Each filter marks atoms for exclusion in cif->is_excluded.
+ * Filters should skip atoms already marked (is_excluded[i] != 0).
+ *
+ * @param cif       Structure with is_excluded array allocated
+ * @param block     Atom block with precomputed lines
+ * @param atoms     Total atom count (original, before filtering)
+ * @param filter    Filter options
+ * @param ctx       Error context
+ * @return Number of atoms excluded by this filter, or -1 on error
+ */
+typedef int (*AtomFilterFunc)(mmCIF *cif, mmBlock *block, int atoms,
+                              const LoadFilter *filter, CifErrorContext *ctx);
+
+/**
+ * @brief Filter definition with metadata.
+ */
+typedef struct {
+    const char *name;                              /**< Filter name for logging */
+    AtomFilterFunc prescan;                        /**< Prescan function */
+    bool (*is_active)(const mmCIF *cif, const LoadFilter *filter);  /**< Check if filter should run */
+} AtomFilter;
+
+/* Filter activation checks */
+static bool _chain_filter_active(const mmCIF *cif, const LoadFilter *filter) {
+    (void)filter;
+    return cif->chain_mask != NULL;
+}
+
+static bool _alt_loc_filter_active(const mmCIF *cif, const LoadFilter *filter) {
+    (void)cif;
+    return filter != NULL && filter->alt_loc != '\0';
+}
+
+/**
+ * @brief Filter registry - order matters (chain filter runs before alt_loc).
+ */
+static const AtomFilter ATOM_FILTERS[] = {
+    {"chain",   _prescan_chain_filter,   _chain_filter_active},
+    {"alt_loc", _prescan_alt_loc_filter, _alt_loc_filter_active},
+    {NULL, NULL, NULL}  /* Sentinel */
+};
+
+/**
+ * @brief Apply all active atom filters.
+ *
+ * Allocates is_excluded if any filter is active, runs each active filter's
+ * prescan function, and recounts polymer/nonpoly once at the end.
+ *
+ * @param cif           Structure to filter
+ * @param block         Atom block with precomputed lines
+ * @param original_atoms Total atom count before filtering
+ * @param filter        Filter options
+ * @param ctx           Error context
+ * @return CIF_OK on success, error code on failure
+ */
+static CifError _apply_atom_filters(mmCIF *cif, mmBlock *block, int original_atoms,
+                                    const LoadFilter *filter, CifErrorContext *ctx) {
+    /* Check if any filter is active */
+    bool any_active = false;
+    for (int i = 0; ATOM_FILTERS[i].name != NULL; i++) {
+        if (ATOM_FILTERS[i].is_active(cif, filter)) {
+            any_active = true;
+            break;
+        }
+    }
+    if (!any_active) return CIF_OK;
+
+    /* Allocate is_excluded array once for all filters */
+    cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
+    if (!cif->is_excluded) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded");
+        return CIF_ERR_ALLOC;
+    }
+
+    /* Run each active filter */
+    int total_excluded = 0;
+    for (int i = 0; ATOM_FILTERS[i].name != NULL; i++) {
+        const AtomFilter *f = &ATOM_FILTERS[i];
+        if (!f->is_active(cif, filter)) continue;
+
+        int excluded = f->prescan(cif, block, original_atoms, filter, ctx);
+        if (excluded < 0) {
+            free(cif->is_excluded);
+            cif->is_excluded = NULL;
+            return ctx->code;
+        }
+
+        if (excluded > 0) {
+            total_excluded += excluded;
+            LOG_DEBUG("%s filter: excluded %d atoms", f->name, excluded);
+        }
+    }
+
+    /* Update counts once after all filters */
+    if (total_excluded > 0) {
+        cif->original_atoms = original_atoms;
+        cif->atoms -= total_excluded;
+        cif->excluded_count = total_excluded;
+        _recount_polymer_nonpoly(cif, original_atoms);
+        LOG_DEBUG("After filtering: %d atoms (%d polymer, %d non-polymer)",
+                  cif->atoms, cif->polymer, cif->nonpoly);
+    }
+
+    return CIF_OK;
 }
 
 
@@ -643,51 +761,14 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
 
     LOG_DEBUG("Pre-scan: %d polymer, %d non-polymer atoms", cif->polymer, cif->nonpoly);
 
-    /* Pre-scan for excluded atoms based on chain filter */
-    if (cif->chain_mask) {
-        int excluded = _prescan_excluded_atoms(cif, &blocks->b[BLOCK_ATOM], original_atoms, ctx);
-        if (excluded < 0) {
-            free(cif->is_nonpoly);
-            _free_lines(&blocks->b[BLOCK_ATOM]);
-            _free_lines(&blocks->b[BLOCK_POLY]);
-            _free_lines(&blocks->b[BLOCK_CHAIN]);
-            return ctx->code;
-        }
-        cif->original_atoms = original_atoms;
-        cif->atoms -= excluded;
-        cif->excluded_count = excluded;
-        LOG_DEBUG("Chain filter: excluded %d atoms", excluded);
-    }
-
-    /* Pre-scan for alternate conformations */
-    if (filter && filter->alt_loc != '\0') {
-        /* Allocate is_excluded if not already done by chain filter */
-        if (cif->is_excluded == NULL) {
-            cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
-            if (!cif->is_excluded) {
-                free(cif->is_nonpoly);
-                _free_lines(&blocks->b[BLOCK_ATOM]);
-                _free_lines(&blocks->b[BLOCK_POLY]);
-                _free_lines(&blocks->b[BLOCK_CHAIN]);
-                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded for alt locs");
-                return CIF_ERR_ALLOC;
-            }
-        }
-
-        int alt_excluded = _prescan_alt_locs(&blocks->b[BLOCK_ATOM], original_atoms,
-                                              cif->is_excluded, filter->alt_loc, ctx);
-        if (alt_excluded > 0) {
-            cif->atoms -= alt_excluded;
-            cif->excluded_count += alt_excluded;
-            LOG_DEBUG("Alt loc filter: excluded %d atoms", alt_excluded);
-        }
-    }
-
-    /* Recount polymer/nonpoly once after all exclusion filters */
-    if (cif->is_excluded != NULL) {
-        _recount_polymer_nonpoly(cif, original_atoms);
-        LOG_DEBUG("After filtering: %d atoms (%d polymer, %d non-polymer), %d total excluded",
-                  cif->atoms, cif->polymer, cif->nonpoly, cif->excluded_count);
+    /* Apply atom filters (chain, alt_loc, etc.) */
+    err = _apply_atom_filters(cif, &blocks->b[BLOCK_ATOM], original_atoms, filter, ctx);
+    if (err != CIF_OK) {
+        free(cif->is_nonpoly);
+        _free_lines(&blocks->b[BLOCK_ATOM]);
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
+        return err;
     }
 
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
@@ -846,31 +927,25 @@ int _build_chain_mask(mmCIF *cif, const LoadFilter *filter, CifErrorContext *ctx
 
 
 /**
- * Prescan atoms to mark excluded atoms based on chain mask.
+ * @brief Chain filter: mark atoms from excluded chains.
  *
  * Iterates through all atoms and marks those belonging to excluded chains.
- * Also counts how many atoms are excluded.
  *
- * @param cif Structure with chain_mask and names already populated
+ * @param cif Structure with chain_mask, names, and is_excluded already set
  * @param block Atom block
  * @param atoms Total atom count
+ * @param filter Filter options (unused, chain_mask is in cif)
  * @param ctx Error context
  * @return Number of excluded atoms, or -1 on error
  */
-static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErrorContext *ctx) {
-    if (!cif->chain_mask) return 0;  /* No filtering */
+static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                 const LoadFilter *filter, CifErrorContext *ctx) {
+    (void)filter;  /* Chain mask is in cif, not filter */
 
     /* Get label_asym_id attribute index */
     int chain_idx = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
     if (chain_idx == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'label_asym_id' for chain filtering");
-        return -1;
-    }
-
-    /* Allocate is_excluded array */
-    cif->is_excluded = calloc((size_t)atoms, sizeof(int));
-    if (!cif->is_excluded) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded");
         return -1;
     }
 
@@ -881,11 +956,11 @@ static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErr
     int excluded = 0;
 
     for (int row = 0; row < atoms; row++) {
+        if (cif->is_excluded[row]) continue;  /* Already excluded */
+
         size_t chain_len;
         char *chain_ptr = _get_field_ptr(block, row, chain_idx, &chain_len);
         if (!chain_ptr) {
-            free(cif->is_excluded);
-            cif->is_excluded = NULL;
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Failed to get chain field at row %d", row);
             return -1;
         }
@@ -915,9 +990,22 @@ static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErr
         }
     }
 
-    cif->excluded_count = excluded;
-    LOG_DEBUG("Excluded atoms: %d/%d", excluded, atoms);
     return excluded;
+}
+
+/**
+ * @brief Alt loc filter: mark atoms with non-matching alternate conformations.
+ *
+ * @param cif Structure with is_excluded already set
+ * @param block Atom block
+ * @param atoms Total atom count
+ * @param filter Filter options (uses filter->alt_loc)
+ * @param ctx Error context
+ * @return Number of excluded atoms, or -1 on error
+ */
+static int _prescan_alt_loc_filter(mmCIF *cif, mmBlock *block, int atoms,
+                                   const LoadFilter *filter, CifErrorContext *ctx) {
+    return _prescan_alt_locs(block, atoms, cif->is_excluded, filter->alt_loc, ctx);
 }
 
 

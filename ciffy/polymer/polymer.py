@@ -1098,7 +1098,7 @@ class Polymer:
             >>> polymer.counts(Scale.RESIDUE, per=Scale.CHAIN)  # residues per chain
         """
         if per is None:
-            return self._hierarchy.sizes(scale)
+            return self._hierarchy.counts(scale)
         return self._hierarchy.per(scale, per)
 
     def istype(self: Polymer, mol: Molecule) -> bool:
@@ -2225,7 +2225,7 @@ class Polymer:
         mol_types = to_numpy(mol_types_data) if mol_types_data is not None else None
         residue_counts = to_numpy(self.lengths)
         hierarchy = object.__getattribute__(self, '_hierarchy')
-        atom_counts = to_numpy(hierarchy.sizes(Scale.CHAIN))
+        atom_counts = to_numpy(hierarchy.counts(Scale.CHAIN))
         elements_data = self._get_field_data('elements')
         elements = to_numpy(elements_data) if elements_data is not None else None
 

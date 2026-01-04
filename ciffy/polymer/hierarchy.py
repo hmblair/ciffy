@@ -238,9 +238,9 @@ class _Hierarchy:
             return 1
         raise ValueError(f"Unknown scale: {scale}")
 
-    def sizes(self, scale: Scale) -> Array:
+    def counts(self, scale: Scale) -> Array:
         """
-        Get the sizes tensor for a scale.
+        Get atom counts per unit at the specified scale.
 
         Args:
             scale: Scale level.
@@ -249,15 +249,18 @@ class _Hierarchy:
             Tensor of atom counts per unit at this scale.
 
         Raises:
-            ValueError: If the sizes array is not available (field was skipped).
+            ValueError: If the counts array is not available (field was skipped).
         """
         arr = self._per.get((Scale.ATOM, scale))
         if arr is None:
             raise ValueError(
-                f"Sizes at {scale.name} scale not available. "
+                f"Counts at {scale.name} scale not available. "
                 f"This field may have been skipped during loading."
             )
         return arr
+
+    # Alias for backwards compatibility
+    sizes = counts
 
     def per(self, inner: Scale, outer: Scale) -> Array:
         """

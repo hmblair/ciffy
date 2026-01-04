@@ -109,6 +109,73 @@ static inline const char *_format_atom_name(const char *name, char *buffer) {
 
 
 /* ============================================================================
+ * BLOCK WRITER SYSTEM
+ * Extensible block writing with common interface.
+ * ============================================================================ */
+
+/**
+ * @brief Block writer function signature.
+ *
+ * Each writer outputs a single mmCIF block to the file.
+ *
+ * @param file    Output file handle
+ * @param cif     Structure to write
+ * @param ctx     Error context
+ * @return CIF_OK on success, error code on failure
+ */
+typedef CifError (*BlockWriterFunc)(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+
+/**
+ * @brief Block writer definition with metadata.
+ */
+typedef struct {
+    const char *name;                              /**< Block name for logging */
+    BlockWriterFunc write;                         /**< Writer function */
+    bool (*should_write)(const mmCIF *cif);        /**< Check if block should be written (NULL = always) */
+} BlockWriter;
+
+/* Forward declarations for block writers */
+static CifError _write_entity(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+static CifError _write_entity_nonpoly(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+static CifError _write_poly_seq(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *ctx);
+
+/* Should-write checks for conditional blocks */
+static bool _should_write_entity_poly(const mmCIF *cif) {
+    if (cif->molecule_types == NULL) return false;
+    for (int i = 0; i < cif->chains; i++) {
+        if (cif->res_per_chain[i] > 0) return true;
+    }
+    return false;
+}
+
+static bool _should_write_entity_nonpoly(const mmCIF *cif) {
+    if (cif->molecule_types == NULL) return false;
+    enum { LIGAND = 8, ION = 9 };
+    for (int i = 0; i < cif->chains; i++) {
+        int mol_type = cif->molecule_types[i];
+        if (mol_type == LIGAND || mol_type == ION) return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Block writer registry - order defines output order.
+ */
+static const BlockWriter BLOCK_WRITERS[] = {
+    {"entity",         _write_entity,         NULL},
+    {"struct_asym",    _write_struct_asym,    NULL},
+    {"entity_poly",    _write_entity_poly,    _should_write_entity_poly},
+    {"entity_nonpoly", _write_entity_nonpoly, _should_write_entity_nonpoly},
+    {"poly_seq",       _write_poly_seq,       NULL},
+    {"atom_site",      _write_atom_site,      NULL},
+    {NULL, NULL, NULL}  /* Sentinel */
+};
+
+
+/* ============================================================================
  * INTERNAL: Block Writers
  * Each function writes a specific mmCIF block to the file.
  * ============================================================================ */
@@ -191,26 +258,7 @@ static CifError _write_struct_asym(FILE *file, const mmCIF *cif, CifErrorContext
  * Non-polymer chains (res_per_chain == 0) are skipped.
  */
 static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
-    /* Skip if no molecule_types array provided */
-    if (cif->molecule_types == NULL) {
-        LOG_DEBUG("No molecule_types array, skipping _entity_poly block");
-        return CIF_OK;
-    }
-
-    /* Count polymer chains first */
-    int poly_chains = 0;
-    for (int i = 0; i < cif->chains; i++) {
-        if (cif->res_per_chain[i] > 0) {
-            poly_chains++;
-        }
-    }
-
-    /* Skip block if no polymer chains */
-    if (poly_chains == 0) {
-        LOG_DEBUG("No polymer chains, skipping _entity_poly block");
-        return CIF_OK;
-    }
-
+    /* Note: should_write check done by BlockWriter registry */
     CIF_FPRINTF(file, ctx, "loop_\n");
     CIF_FPRINTF(file, ctx, "_entity_poly." SCHEMA_ENTITY_POLY_ID "\n");
     CIF_FPRINTF(file, ctx, "_entity_poly." SCHEMA_ENTITY_POLY_TYPE "\n");
@@ -246,28 +294,8 @@ static CifError _write_entity_poly(FILE *file, const mmCIF *cif, CifErrorContext
  * This enables proper round-trip of ION molecule types.
  */
 static CifError _write_entity_nonpoly(FILE *file, const mmCIF *cif, CifErrorContext *ctx) {
-    /* Skip if no molecule_types array provided */
-    if (cif->molecule_types == NULL) {
-        LOG_DEBUG("No molecule_types array, skipping _pdbx_entity_nonpoly block");
-        return CIF_OK;
-    }
-
+    /* Note: should_write check done by BlockWriter registry */
     enum { LIGAND = 8, ION = 9, WATER = 10 };
-
-    /* Count non-polymer entities that need comp_id */
-    int nonpoly_count = 0;
-    for (int i = 0; i < cif->chains; i++) {
-        int mol_type = cif->molecule_types[i];
-        if (mol_type == LIGAND || mol_type == ION) {
-            nonpoly_count++;
-        }
-    }
-
-    /* Skip block if no non-polymer entities */
-    if (nonpoly_count == 0) {
-        LOG_DEBUG("No non-polymer entities, skipping _pdbx_entity_nonpoly block");
-        return CIF_OK;
-    }
 
     CIF_FPRINTF(file, ctx, "loop_\n");
     CIF_FPRINTF(file, ctx, "_pdbx_entity_nonpoly." SCHEMA_NONPOLY_ENTITY_ID "\n");
@@ -440,14 +468,7 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 char atom_buf[MAX_ATOM_NAME_BUF];
                 const char *atom_name = _format_atom_name(ainfo->atom, atom_buf);
 
-                /* Get coordinates - bounds check atom_idx first to prevent overflow */
-                if (atom_idx < 0 || atom_idx >= cif->atoms) {
-                    LOG_ERROR("Atom index %d out of bounds [0, %d)", atom_idx, cif->atoms);
-                    CIF_SET_ERROR(ctx, CIF_ERR_BOUNDS,
-                        "Atom index %d out of bounds [0, %d)", atom_idx, cif->atoms);
-                    return CIF_ERR_BOUNDS;
-                }
-                /* Safe: atom_idx < atoms, so 3*atom_idx < 3*atoms */
+                /* Get coordinates (bounds already checked by CIF_CHECK_BOUNDS above) */
                 int coord_idx = 3 * atom_idx;
                 float x = cif->coordinates[coord_idx + 0];
                 float y = cif->coordinates[coord_idx + 1];
@@ -572,27 +593,26 @@ CifError _write_cif_file(const mmCIF *cif, FILE *file, CifErrorContext *ctx) {
     LOG_DEBUG("Validated structure: %d chains, %d residues, %d atoms",
               cif->chains, cif->residues, cif->atoms);
 
-    /* Write each block in order */
+    /* Write header (special case - takes id, not cif) */
     err = _write_header(file, cif->id, ctx);
     if (err != CIF_OK) return err;
 
-    err = _write_entity(file, cif, ctx);
-    if (err != CIF_OK) return err;
+    /* Write blocks via registry */
+    for (int i = 0; BLOCK_WRITERS[i].name != NULL; i++) {
+        const BlockWriter *bw = &BLOCK_WRITERS[i];
 
-    err = _write_struct_asym(file, cif, ctx);
-    if (err != CIF_OK) return err;
+        /* Check if block should be written */
+        if (bw->should_write != NULL && !bw->should_write(cif)) {
+            LOG_DEBUG("Skipping %s block (should_write returned false)", bw->name);
+            continue;
+        }
 
-    err = _write_entity_poly(file, cif, ctx);
-    if (err != CIF_OK) return err;
-
-    err = _write_entity_nonpoly(file, cif, ctx);
-    if (err != CIF_OK) return err;
-
-    err = _write_poly_seq(file, cif, ctx);
-    if (err != CIF_OK) return err;
-
-    err = _write_atom_site(file, cif, ctx);
-    if (err != CIF_OK) return err;
+        err = bw->write(file, cif, ctx);
+        if (err != CIF_OK) {
+            LOG_ERROR("Failed to write %s block", bw->name);
+            return err;
+        }
+    }
 
     return CIF_OK;
 }

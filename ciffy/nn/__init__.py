@@ -126,10 +126,8 @@ from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
 
 # VAE models
 from .vae import (
-    ResidueVAE,
-    ResidueVAEConfig,
-    AttentionResidueVAE,
-    AttentionResidueVAEConfig,
+    ConsolidatedResidueVAE,
+    ConsolidatedVAEConfig,
 )
 
 # Hub integration for model distribution
@@ -222,10 +220,8 @@ __all__ = [
     "PolymerFlowModel",  # Deprecated alias
     "ResidueGenerativeCore",
     # VAE models
-    "ResidueVAE",
-    "ResidueVAEConfig",
-    "AttentionResidueVAE",
-    "AttentionResidueVAEConfig",
+    "ConsolidatedResidueVAE",
+    "ConsolidatedVAEConfig",
     # Hub integration
     "HubMixin",
     "get_cache_dir",

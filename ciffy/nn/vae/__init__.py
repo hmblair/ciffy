@@ -4,18 +4,15 @@ Provides VAE-based generative models that share the same interface
 as flow models, enabling use with PolymerModel for chain assembly.
 
 Models:
-    ResidueVAE: MLP-based VAE for residue conformations.
-    AttentionResidueVAE: Attention-based VAE that handles missing atoms.
+    ConsolidatedResidueVAE: Shared encoder VAE for all residue types.
 
 Utilities:
     losses: Shared loss functions (KL divergence, ELBO, beta scheduling).
 """
 
 from .residue import (
-    ResidueVAE,
-    ResidueVAEConfig,
-    AttentionResidueVAE,
-    AttentionResidueVAEConfig,
+    ConsolidatedResidueVAE,
+    ConsolidatedVAEConfig,
 )
 from .losses import (
     compute_kl_divergence,
@@ -26,10 +23,8 @@ from .losses import (
 
 __all__ = [
     # Models
-    "ResidueVAE",
-    "ResidueVAEConfig",
-    "AttentionResidueVAE",
-    "AttentionResidueVAEConfig",
+    "ConsolidatedResidueVAE",
+    "ConsolidatedVAEConfig",
     # Loss utilities
     "compute_kl_divergence",
     "get_beta_with_warmup",

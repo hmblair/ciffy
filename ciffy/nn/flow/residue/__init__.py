@@ -27,7 +27,6 @@ from .model import (
     ResidueFlowConfig,
 )
 from .data import (
-    extract_residues,
     extract_residues_with_links,
     ResidueDataset,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "ResidueFlowModel",
     "ResidueFlowConfig",
     # Data extraction
-    "extract_residues",
     "extract_residues_with_links",
     "ResidueDataset",
 ]

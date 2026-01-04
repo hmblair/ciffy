@@ -281,6 +281,115 @@ class RBFDistanceEncoder(nn.Module):
         return self.proj(rbf)
 
 
+class InvariantAttentionEncoder(nn.Module):
+    """Rotation-invariant attention encoder using pairwise distances.
+
+    Spatial information enters only through pairwise distances, making
+    the encoder fully rotation and translation invariant.
+
+    Architecture:
+    1. Embed atom types
+    2. Encode pairwise distances
+    3. Aggregate distance info into atom features
+    4. Self-attention layers
+    5. Masked mean pooling
+    """
+
+    def __init__(
+        self,
+        n_atom_types: int,
+        d_model: int = 64,
+        d_dist: int = 32,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.d_model = d_model
+
+        # Atom type embedding
+        self.atom_embed = nn.Embedding(n_atom_types, d_model)
+
+        # Distance encoder (RBF-based)
+        self.dist_encoder = RBFDistanceEncoder(d_out=d_dist)
+
+        # Project aggregated distance features
+        self.dist_proj = nn.Linear(d_dist, d_model)
+
+        # Combine atom + distance features
+        self.combine = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.LayerNorm(d_model),
+            nn.SiLU(),
+        )
+
+        # Transformer layers
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+
+        # Final normalization
+        self.final_norm = nn.LayerNorm(d_model)
+
+    def forward(
+        self,
+        atom_types: torch.Tensor,
+        coords: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Encode residues using invariant attention.
+
+        Args:
+            atom_types: (batch, max_atoms) atom type indices.
+            coords: (batch, max_atoms, 3) coordinates.
+            mask: (batch, max_atoms) boolean mask, True for present atoms.
+
+        Returns:
+            (batch, d_model) pooled representation per residue.
+        """
+        batch_size, max_atoms, _ = coords.shape
+
+        # 1. Atom embeddings
+        atom_feat = self.atom_embed(atom_types)  # (batch, max_atoms, d_model)
+
+        # 2. Compute pairwise distances (invariant!)
+        # coords: (batch, max_atoms, 3)
+        dist = torch.cdist(coords, coords)  # (batch, max_atoms, max_atoms)
+
+        # 3. Encode distances
+        dist_feat = self.dist_encoder(dist)  # (batch, max_atoms, max_atoms, d_dist)
+
+        # 4. Aggregate distance info into each atom (masked mean over neighbors)
+        mask_pairs = mask.unsqueeze(2) & mask.unsqueeze(1)  # (batch, max_atoms, max_atoms)
+        dist_feat_masked = dist_feat * mask_pairs.unsqueeze(-1)
+
+        # Sum over neighbors, divide by count
+        neighbor_count = mask_pairs.sum(dim=2, keepdim=True).clamp(min=1)  # (batch, max_atoms, 1)
+        dist_agg = dist_feat_masked.sum(dim=2) / neighbor_count  # (batch, max_atoms, d_dist)
+        dist_agg = self.dist_proj(dist_agg)  # (batch, max_atoms, d_model)
+
+        # 5. Combine atom and distance features
+        x = self.combine(torch.cat([atom_feat, dist_agg], dim=-1))  # (batch, max_atoms, d_model)
+
+        # 6. Self-attention with masking
+        attn_mask = ~mask  # True = ignore
+        x = self.transformer(x, src_key_padding_mask=attn_mask)
+
+        # 7. Final norm and masked mean pooling
+        x = self.final_norm(x)
+        x_masked = x * mask.unsqueeze(-1)
+        pooled = x_masked.sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp(min=1)
+
+        return pooled
+
+
 __all__ = [
     "build_mlp_stack",
     "InputNorm",
@@ -288,4 +397,5 @@ __all__ = [
     "MLPEncoder",
     "CoordinateDecoder",
     "RBFDistanceEncoder",
+    "InvariantAttentionEncoder",
 ]

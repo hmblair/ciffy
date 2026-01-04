@@ -18,18 +18,6 @@ from .residue_flow import (
     ResidueFlowModelConfig,
     ResidueFlowModule,
 )
-from .residue_vae import (
-    ResidueVAEDataConfig,
-    ResidueVAEFullConfig,
-    ResidueVAEModelConfig,
-    ResidueVAEModule,
-)
-from .attention_vae import (
-    AttentionVAEDataConfig,
-    AttentionVAEFullConfig,
-    AttentionVAEModelConfig,
-    AttentionResidueVAEModule,
-)
 from .consolidated_vae import (
     ConsolidatedVAEDataConfig,
     ConsolidatedVAEFullConfig,
@@ -55,16 +43,6 @@ __all__ = [
     "ResidueFlowFullConfig",
     "ResidueFlowModelConfig",
     "ResidueFlowModule",
-    # Residue VAE (MLP)
-    "ResidueVAEDataConfig",
-    "ResidueVAEFullConfig",
-    "ResidueVAEModelConfig",
-    "ResidueVAEModule",
-    # Attention VAE
-    "AttentionVAEDataConfig",
-    "AttentionVAEFullConfig",
-    "AttentionVAEModelConfig",
-    "AttentionResidueVAEModule",
     # Consolidated VAE
     "ConsolidatedVAEDataConfig",
     "ConsolidatedVAEFullConfig",

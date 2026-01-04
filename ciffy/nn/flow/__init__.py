@@ -44,7 +44,6 @@ from .residue import (
     PCAFlow,
     ResidueFlowModel,
     ResidueFlowConfig,
-    extract_residues,
     extract_residues_with_links,
     ResidueDataset,
 )
@@ -70,7 +69,6 @@ __all__ = [
     "ResidueFlowModel",
     "ResidueFlowConfig",
     # Data extraction
-    "extract_residues",
     "extract_residues_with_links",
     "ResidueDataset",
     # Metrics

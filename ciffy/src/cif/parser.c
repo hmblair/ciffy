@@ -46,6 +46,25 @@ static int _prescan_excluded_atoms(mmCIF *cif, mmBlock *block, int atoms, CifErr
 static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx);
 static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block, CifErrorContext *ctx);
 
+/**
+ * @brief Recount polymer/non-polymer atoms after exclusion filtering.
+ *
+ * Updates cif->polymer and cif->nonpoly based on is_excluded and is_nonpoly masks.
+ *
+ * @param cif Structure with is_excluded and is_nonpoly masks set
+ * @param original_atoms Total atom count before filtering
+ */
+static void _recount_polymer_nonpoly(mmCIF *cif, int original_atoms) {
+    int polymer = 0;
+    for (int i = 0; i < original_atoms; i++) {
+        if (!cif->is_excluded[i] && !cif->is_nonpoly[i]) {
+            polymer++;
+        }
+    }
+    cif->polymer = polymer;
+    cif->nonpoly = cif->atoms - polymer;
+}
+
 
 /* ============================================================================
  * FILE HEADER
@@ -634,20 +653,10 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
             _free_lines(&blocks->b[BLOCK_CHAIN]);
             return ctx->code;
         }
-        /* Adjust counts for excluded atoms */
         cif->original_atoms = original_atoms;
         cif->atoms -= excluded;
-        /* Recount polymer/nonpoly excluding excluded atoms */
-        int adjusted_polymer = 0;
-        for (int i = 0; i < original_atoms; i++) {
-            if (!cif->is_excluded[i] && !cif->is_nonpoly[i]) {
-                adjusted_polymer++;
-            }
-        }
-        cif->polymer = adjusted_polymer;
-        cif->nonpoly = cif->atoms - adjusted_polymer;
-        LOG_DEBUG("After exclusion: %d atoms (%d polymer, %d non-polymer), %d excluded",
-                  cif->atoms, cif->polymer, cif->nonpoly, excluded);
+        cif->excluded_count = excluded;
+        LOG_DEBUG("Chain filter: excluded %d atoms", excluded);
     }
 
     /* Pre-scan for alternate conformations */
@@ -670,18 +679,15 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         if (alt_excluded > 0) {
             cif->atoms -= alt_excluded;
             cif->excluded_count += alt_excluded;
-            /* Recount polymer/nonpoly */
-            int adjusted_polymer = 0;
-            for (int i = 0; i < original_atoms; i++) {
-                if (!cif->is_excluded[i] && !cif->is_nonpoly[i]) {
-                    adjusted_polymer++;
-                }
-            }
-            cif->polymer = adjusted_polymer;
-            cif->nonpoly = cif->atoms - adjusted_polymer;
-            LOG_DEBUG("After alt loc filtering: %d atoms (%d polymer, %d non-polymer)",
-                      cif->atoms, cif->polymer, cif->nonpoly);
+            LOG_DEBUG("Alt loc filter: excluded %d atoms", alt_excluded);
         }
+    }
+
+    /* Recount polymer/nonpoly once after all exclusion filters */
+    if (cif->is_excluded != NULL) {
+        _recount_polymer_nonpoly(cif, original_atoms);
+        LOG_DEBUG("After filtering: %d atoms (%d polymer, %d non-polymer), %d total excluded",
+                  cif->atoms, cif->polymer, cif->nonpoly, cif->excluded_count);
     }
 
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
@@ -1047,6 +1053,24 @@ void _free_filter(LoadFilter *filter) {
     filter->mol_type_count = 0;
     filter->chain_count = 0;
     filter->model = 0;
+}
+
+
+/**
+ * Create a LoadFilter with default values.
+ *
+ * @return LoadFilter with sensible defaults
+ */
+LoadFilter _default_filter(void) {
+    return (LoadFilter){
+        .molecule_types = NULL,
+        .chain_names = NULL,
+        .mol_type_count = 0,
+        .chain_count = 0,
+        .model = 1,
+        .connections = false,
+        .alt_loc = 'A',
+    };
 }
 
 

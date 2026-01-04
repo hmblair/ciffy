@@ -156,6 +156,18 @@ int _build_chain_mask(mmCIF *cif, const LoadFilter *filter, CifErrorContext *ctx
  */
 void _free_filter(LoadFilter *filter);
 
+/**
+ * @brief Create a LoadFilter with default values.
+ *
+ * Default values:
+ *   - alt_loc = 'A' (keep first alternate conformation)
+ *   - model = 1 (first model)
+ *   - All other fields = 0/NULL (no filtering)
+ *
+ * @return LoadFilter with sensible defaults
+ */
+LoadFilter _default_filter(void);
+
 
 /* ─────────────────────────────────────────────────────────────────────────────
  * Block Parsing API

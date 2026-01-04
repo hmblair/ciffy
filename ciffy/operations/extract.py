@@ -154,21 +154,24 @@ def extract(
 
     # Sort by atom index for canonical ordering
     common_atoms = sorted(common_atoms)
+    common_atoms_arr = np.array(common_atoms, dtype=np.int64)
     n_atoms = len(common_atoms)
 
-    # Build dense output array
-    # Create mapping from atom index to output column
-    atom_to_col = {atom: col for col, atom in enumerate(common_atoms)}
+    # Sort atoms within each residue for consistent ordering
+    sorted_poly = sub.sort_atoms()
 
+    # Build dense output array using vectorized masking
     result = np.zeros((n_residues, n_atoms, 3), dtype=np.float32)
 
-    for i, (res_atoms, res_coords) in enumerate(zip(per_res_atoms, per_res_coords)):
-        res_atoms_np = to_numpy(res_atoms)
-        res_coords_np = to_numpy(res_coords)
+    for i in range(n_residues):
+        res = sorted_poly.residue(i)
+        res_atoms = to_numpy(res.atoms)
+        res_coords = to_numpy(res.coordinates)
 
-        for atom_idx, coord in zip(res_atoms_np, res_coords_np):
-            if atom_idx in atom_to_col:
-                result[i, atom_to_col[atom_idx]] = coord
+        # Since atoms are sorted and common_atoms is sorted,
+        # filtering with isin gives coords in the correct order
+        mask = np.isin(res_atoms, common_atoms_arr)
+        result[i] = res_coords[mask]
 
     # Convert back to original backend if needed
     result = _from_numpy(result, poly.coordinates)

@@ -607,66 +607,15 @@ class Polymer:
         result['_field_meta'] = field_meta
         return result
 
-    def _residue_slice(
-        self: Polymer,
-        idx: int,
-    ) -> tuple[Array, Array, dict[int, int], Residue]:
-        """
-        Extract coordinates, atoms, atom_to_col, and residue type for a residue.
-
-        This is a helper for methods that need to work with individual residue
-        data, such as extend() and geometry operations.
-
-        Args:
-            idx: Residue index. Negative indices are supported (e.g., -1 for last).
-
-        Returns:
-            Tuple of:
-            - coords: (n_atoms, 3) coordinates for this residue
-            - atoms: (n_atoms,) atom type indices
-            - atom_to_col: dict mapping atom type value to column index
-            - residue: Residue enum for this residue type
-
-        Raises:
-            IndexError: If idx is out of range.
-
-        Example:
-            >>> coords, atoms, atom_to_col, res_type = polymer._residue_slice(-1)
-            >>> # Get last residue's P atom position
-            >>> p_col = atom_to_col[res_type.P.value]
-            >>> p_pos = coords[p_col]
-        """
-        from ..utils import atoms_to_col_map
-
-        n_residues = self.size(Scale.RESIDUE)
-
-        # Handle negative indices
-        if idx < 0:
-            idx = n_residues + idx
-        if idx < 0 or idx >= n_residues:
-            raise IndexError(
-                f"Residue index {idx} out of range for Polymer with {n_residues} residues"
-            )
-
-        # Compute atom offset and size for this residue
-        res_sizes = self._sizes[Scale.RESIDUE]
-        atom_offset = res_sizes[:idx].sum().item() if idx > 0 else 0
-        n_atoms = res_sizes[idx].item()
-
-        # Extract data
-        coords = self.coordinates[atom_offset:atom_offset + n_atoms]
-        atoms = self.atoms[atom_offset:atom_offset + n_atoms]
-        atom_to_col = atoms_to_col_map(atoms)
-        residue = Residue.from_index(self.sequence[idx].item())
-
-        return coords, atoms, atom_to_col, residue
-
     def _residue_coords(
         self: Polymer,
         idx: int,
     ) -> tuple[Array, Array, Residue]:
         """
-        Extract coordinates and atoms for a residue (simplified _residue_slice).
+        Extract coordinates, atoms, and residue type for a single residue.
+
+        This is an internal helper for methods that need to work with individual
+        residue data, such as align() and extend().
 
         Args:
             idx: Residue index. Negative indices are supported (e.g., -1 for last).

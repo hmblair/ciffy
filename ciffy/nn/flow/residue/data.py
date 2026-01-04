@@ -169,20 +169,25 @@ def extract_residues(
 
     # Filter and build dense array
     common_set = set(common_atoms)
+    common_atoms_arr = np.array(common_atoms, dtype=np.int64)
     filtered = [inst for inst in all_instances if common_set.issubset(set(inst[1]))]
 
     if verbose:
         print(f"Instances with all common atoms: {len(filtered)}")
 
     coords_out = np.zeros((len(filtered), len(common_atoms), 3), dtype=np.float32)
-    atom_to_col = {a: c for c, a in enumerate(common_atoms)}
 
     for i, (coords, atoms) in enumerate(filtered):
-        for atom_idx, coord in zip(atoms, coords):
-            if atom_idx in atom_to_col:
-                coords_out[i, atom_to_col[atom_idx]] = coord
+        # Sort atoms and coords together, then filter to common atoms
+        atoms_arr = np.array(atoms, dtype=np.int64)
+        sort_idx = np.argsort(atoms_arr)
+        sorted_atoms = atoms_arr[sort_idx]
+        sorted_coords = coords[sort_idx]
 
-    return coords_out, np.array(common_atoms, dtype=np.int64)
+        mask = np.isin(sorted_atoms, common_atoms_arr)
+        coords_out[i] = sorted_coords[mask]
+
+    return coords_out, common_atoms_arr
 
 
 def compute_pca(
@@ -275,20 +280,22 @@ def _remap_coords_to_common_atoms(
     Args:
         raw_coords: (n_raw_atoms, 3) coordinates in raw ordering.
         raw_atoms: List of atom type indices for raw_coords.
-        common_atoms: Target atom ordering.
+        common_atoms: Target atom ordering (must be sorted).
 
     Returns:
         (n_common_atoms, 3) coordinates in common atom ordering.
     """
-    atom_to_col = {a: c for c, a in enumerate(common_atoms)}
-    n_atoms = len(common_atoms)
-    coords = np.zeros((n_atoms, 3), dtype=np.float32)
+    # Sort atoms and coords together
+    raw_atoms_arr = np.array(raw_atoms, dtype=np.int64)
+    sort_idx = np.argsort(raw_atoms_arr)
+    sorted_atoms = raw_atoms_arr[sort_idx]
+    sorted_coords = raw_coords[sort_idx]
 
-    for atom_idx, coord in zip(raw_atoms, raw_coords):
-        if atom_idx in atom_to_col:
-            coords[atom_to_col[atom_idx]] = coord
+    # Filter to common atoms using mask (both are now sorted)
+    common_atoms_arr = np.array(common_atoms, dtype=np.int64)
+    mask = np.isin(sorted_atoms, common_atoms_arr)
 
-    return coords
+    return sorted_coords[mask]
 
 
 def extract_residues_with_links(

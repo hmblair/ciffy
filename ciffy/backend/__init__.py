@@ -76,6 +76,7 @@ from .ops import (
     ones,
     ones_like,
     eye,
+    fill_diagonal,
     to_backend,
     convert_backend,
 )
@@ -140,6 +141,7 @@ __all__ = [
     "ones",
     "ones_like",
     "eye",
+    "fill_diagonal",
     "to_backend",
     "convert_backend",
 ]

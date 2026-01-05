@@ -22,13 +22,25 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..backend import Array, diag, pinv, diagonal, eigh, sqrt, outer
+from ..backend import (
+    Array,
+    diag,
+    diagonal,
+    eigh,
+    fill_diagonal,
+    ones_like,
+    outer,
+    pinv,
+    sqrt,
+    where,
+    zeros_like,
+)
 from ..biochemistry import Scale
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
 
-__all__ = ["GNM", "contact_map"]
+__all__ = ["GNM", "contact_map", "inverse_square_map"]
 
 
 def contact_map(
@@ -75,17 +87,64 @@ def contact_map(
 
     # Create binary adjacency: 1 if distance < cutoff, 0 otherwise
     mask = dists < cutoff
+    adj = where(mask, ones_like(dists), zeros_like(dists))
+    fill_diagonal(adj, 0)
 
-    # Convert boolean to float, handling both numpy and torch
-    if hasattr(mask, 'astype'):
-        # NumPy
-        import numpy as np
-        adj = mask.astype(dists.dtype)
-        np.fill_diagonal(adj, 0)
-    else:
-        # PyTorch
-        adj = mask.to(dists.dtype)
-        adj.fill_diagonal_(0)
+    return adj
+
+
+def inverse_square_map(
+    polymer: "Polymer",
+    cutoff: float | None = None,
+    scale: Scale = Scale.RESIDUE,
+) -> Array:
+    """Build a 1/r² weighted adjacency matrix from a Polymer.
+
+    Computes pairwise distances at the specified scale and returns a matrix
+    where entry (i, j) is 1/d² where d is the distance between units i and j.
+    This weighting is physically motivated for elastic network models where
+    spring constants scale inversely with distance squared.
+
+    Args:
+        polymer: Polymer structure to analyze.
+        cutoff: Optional distance cutoff in Angstroms. Pairs beyond this distance
+            are set to zero. If None, all pairs are included.
+        scale: Scale at which to compute distances. Default is RESIDUE,
+            which uses residue centroids. Use Scale.ATOM for all-atom distances.
+
+    Returns:
+        Weighted adjacency matrix of shape (N, N) where N is the number of
+        units at the specified scale. Diagonal entries are zero.
+        Uses the same backend (numpy/torch) as the input polymer.
+
+    Example:
+        >>> import ciffy
+        >>> from ciffy import Scale
+        >>> from ciffy.operations import inverse_square_map, GNM
+        >>>
+        >>> polymer = ciffy.load("structure.cif").poly()
+        >>>
+        >>> # Distance-weighted adjacency (all pairs)
+        >>> adj = inverse_square_map(polymer)
+        >>> gnm = GNM(adj)
+        >>>
+        >>> # With cutoff (ignore distant pairs)
+        >>> adj = inverse_square_map(polymer, cutoff=15.0)
+    """
+    # Compute pairwise distances at the specified scale
+    dists = polymer.pairwise_distances(scale)
+
+    # Compute 1/r² (avoid division by zero on diagonal by adding 1 to zeros)
+    # Diagonal entries have dist=0, so we temporarily set them to 1 to avoid div-by-zero
+    safe_dists = where(dists > 0, dists, ones_like(dists))
+    adj = 1.0 / (safe_dists ** 2)
+
+    # Apply cutoff if specified
+    if cutoff is not None:
+        adj = where(dists < cutoff, adj, zeros_like(adj))
+
+    # Zero the diagonal (self-interactions)
+    fill_diagonal(adj, 0)
 
     return adj
 

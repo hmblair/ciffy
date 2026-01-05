@@ -886,6 +886,24 @@ def zeros_like(arr: Array) -> Array:
     return np.zeros_like(arr)
 
 
+def fill_diagonal(arr: Array, value: float) -> Array:
+    """
+    Fill the diagonal of a 2D array with a value (in-place).
+
+    Args:
+        arr: 2D array to modify.
+        value: Value to fill on the diagonal.
+
+    Returns:
+        The modified array (same object, modified in-place).
+    """
+    if is_torch(arr):
+        arr.fill_diagonal_(value)
+    else:
+        np.fill_diagonal(arr, value)
+    return arr
+
+
 def zeros_nd(shape: tuple, *, like: Array) -> Array:
     """
     Create a zeros array with specified shape, matching dtype/device of 'like'.

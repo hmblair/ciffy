@@ -12,7 +12,7 @@ from .alignment import (
     intersect,
 )
 from .extract import extract
-from .gnm import GNM, contact_map
+from .gnm import GNM, contact_map, inverse_square_map
 from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg, clashes, sasa
 from .cluster import cluster, cluster_representatives, ClusterResult
 
@@ -32,6 +32,7 @@ __all__ = [
     # GNM utilities
     "GNM",
     "contact_map",
+    "inverse_square_map",
     # Structure comparison metrics
     "tm_score",
     "lddt",

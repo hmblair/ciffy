@@ -130,6 +130,14 @@ from .vae import (
     ConsolidatedVAEConfig,
 )
 
+# PCA + Quantile Spline model
+from .pca_quantile import (
+    PCAQuantileResidueModel,
+    PCAQuantileConfig,
+    fit_pca_quantile,
+    fit_all_residues,
+)
+
 # Hub integration for model distribution
 from .hub import HubMixin, get_cache_dir, set_cache_dir
 
@@ -222,6 +230,11 @@ __all__ = [
     # VAE models
     "ConsolidatedResidueVAE",
     "ConsolidatedVAEConfig",
+    # PCA + Quantile Spline model
+    "PCAQuantileResidueModel",
+    "PCAQuantileConfig",
+    "fit_pca_quantile",
+    "fit_all_residues",
     # Hub integration
     "HubMixin",
     "get_cache_dir",

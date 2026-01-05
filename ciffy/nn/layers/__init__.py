@@ -36,6 +36,12 @@ from .pairformer import (
     OuterProductMean,
     PairToSingleAttention,
 )
+from .causal import (
+    CausalTransformer,
+    CausalTransformerBlock,
+    CausalMultiHeadAttention,
+    create_causal_mask,
+)
 
 __all__ = [
     # Dense network
@@ -60,4 +66,9 @@ __all__ = [
     "PairTransition",
     "OuterProductMean",
     "PairToSingleAttention",
+    # Causal (autoregressive) components
+    "CausalTransformer",
+    "CausalTransformerBlock",
+    "CausalMultiHeadAttention",
+    "create_causal_mask",
 ]

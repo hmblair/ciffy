@@ -138,6 +138,21 @@ from .pca_quantile import (
     fit_all_residues,
 )
 
+# Autoregressive models
+from .autoregressive import (
+    ResidueLatentAR,
+    ResidueLatentARConfig,
+    PolymerLatentAR,
+)
+
+# Causal transformer components
+from .layers import (
+    CausalTransformer,
+    CausalTransformerBlock,
+    CausalMultiHeadAttention,
+    create_causal_mask,
+)
+
 # Hub integration for model distribution
 from .hub import HubMixin, get_cache_dir, set_cache_dir
 
@@ -235,6 +250,15 @@ __all__ = [
     "PCAQuantileConfig",
     "fit_pca_quantile",
     "fit_all_residues",
+    # Autoregressive models
+    "ResidueLatentAR",
+    "ResidueLatentARConfig",
+    "PolymerLatentAR",
+    # Causal transformer components
+    "CausalTransformer",
+    "CausalTransformerBlock",
+    "CausalMultiHeadAttention",
+    "create_causal_mask",
     # Hub integration
     "HubMixin",
     "get_cache_dir",

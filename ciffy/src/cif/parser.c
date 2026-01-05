@@ -752,10 +752,43 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         _free_lines(&blocks->b[BLOCK_POLY]);
         _free_lines(&blocks->b[BLOCK_CHAIN]);
 
-        /* Only compute atoms_per_chain for fast indexing */
-        cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
-                                                     &cif->chains, ctx);
+        /* Apply model filtering for multi-model structures */
+        int original_atoms = cif->atoms;
+        if (_model_filter_active(cif, filter)) {
+            cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
+            if (!cif->is_excluded) {
+                _free_lines(&blocks->b[BLOCK_ATOM]);
+                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded");
+                return CIF_ERR_ALLOC;
+            }
+
+            int excluded = _prescan_model_filter(cif, &blocks->b[BLOCK_ATOM],
+                                                  original_atoms, filter, ctx);
+            if (excluded < 0) {
+                free(cif->is_excluded);
+                cif->is_excluded = NULL;
+                _free_lines(&blocks->b[BLOCK_ATOM]);
+                return ctx->code;
+            }
+
+            cif->atoms -= excluded;
+            LOG_DEBUG("Model filter (metadata): excluded %d atoms, %d remaining",
+                      excluded, cif->atoms);
+        }
+
+        /* Count atoms per chain (respects is_excluded if set) */
+        if (cif->is_excluded) {
+            cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+        } else {
+            cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
+                                                         &cif->chains, ctx);
+        }
+
         _free_lines(&blocks->b[BLOCK_ATOM]);
+        if (cif->is_excluded) {
+            free(cif->is_excluded);
+            cif->is_excluded = NULL;
+        }
         if (cif->atoms_per_chain == NULL) return ctx->code;
 
         LOG_DEBUG("metadata only: computed atoms_per_chain for %d chains", cif->chains);

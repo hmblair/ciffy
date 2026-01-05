@@ -143,6 +143,8 @@ from .autoregressive import (
     ResidueLatentAR,
     ResidueLatentARConfig,
     PolymerLatentAR,
+    CoordinateAR,
+    CoordinateARConfig,
 )
 
 # Causal transformer components
@@ -254,6 +256,8 @@ __all__ = [
     "ResidueLatentAR",
     "ResidueLatentARConfig",
     "PolymerLatentAR",
+    "CoordinateAR",
+    "CoordinateARConfig",
     # Causal transformer components
     "CausalTransformer",
     "CausalTransformerBlock",

@@ -1,5 +1,5 @@
 """
-Autoregressive models for residue latent prediction.
+Latent-space autoregressive models.
 
 This module provides transformer-based autoregressive models for predicting
 residue latent vectors sequentially along a polymer chain.
@@ -8,36 +8,11 @@ The key model is `ResidueLatentAR`, which:
 1. Takes a sequence of residue types
 2. Predicts latent vectors autoregressively (each position conditioned on previous)
 3. Can be used with any residue encoder (PCAQuantile, VAE, Flow)
-
-Architecture:
-    - Residue type embeddings + latent projections
-    - Causal transformer (GPT-style)
-    - Output head predicting next latent (mean + optional std)
-
-Example:
-    >>> from ciffy.nn import ResidueLatentAR, PCAQuantileResidueModel, PolymerModel
-    >>> from ciffy.biochemistry import Residue
-    >>>
-    >>> # Build AR model
-    >>> ar_model = ResidueLatentAR(
-    ...     latent_dim=12,
-    ...     d_model=256,
-    ...     num_layers=6,
-    ...     num_heads=8,
-    ... )
-    >>>
-    >>> # Training: predict next latent from sequence + previous latents
-    >>> sequence = torch.tensor([0, 1, 4, 15])  # ACGU
-    >>> latents = torch.randn(1, 4, 12)  # Ground truth latents
-    >>> loss = ar_model.compute_loss(sequence, latents)
-    >>>
-    >>> # Generation: sample latents autoregressively
-    >>> sampled_latents = ar_model.generate(sequence, temperature=1.0)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Dict, TYPE_CHECKING
 import math
 
@@ -51,10 +26,10 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = None
 
-from .layers import CausalTransformer, RMSNorm, DenseNetwork
+from ..layers import CausalTransformer
 
 if TYPE_CHECKING:
-    from ..biochemistry import Residue
+    from ...biochemistry import Residue
 
 
 @dataclass
@@ -485,7 +460,7 @@ class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
         sequence: str,
         temperature: float = 1.0,
         n_samples: int = 1,
-    ) -> "Polymer":
+    ) -> "torch.Tensor":
         """
         Generate polymer structures from sequence string.
 
@@ -495,10 +470,9 @@ class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
             n_samples: Number of samples to generate.
 
         Returns:
-            Polymer object with generated coordinates.
+            Generated latent vectors (for now - full integration requires PolymerModel).
         """
-        from ..biochemistry import Residue
-        from ..polymer import Polymer
+        from ...biochemistry import Residue
 
         # Convert sequence string to indices
         seq_indices = []
@@ -517,9 +491,6 @@ class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
         # Generate latents
         latents = self.generate_latents(seq_tensor, temperature)
 
-        # Decode to coordinates using per-residue decoders
-        # This would integrate with PolymerModel.decode()
-        # For now, return latents - full integration requires PolymerModel
         return latents
 
     @property

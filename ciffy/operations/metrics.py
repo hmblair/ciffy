@@ -832,6 +832,128 @@ def _fibonacci_sphere(n: int, like: Array) -> Array:
     return to_backend(sphere, like)
 
 
+def _sasa_neighbor_list(
+    coords: np.ndarray,
+    expanded: np.ndarray,
+    sphere: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute SASA using neighbor lists for O(N×k) complexity.
+
+    Args:
+        coords: (N, 3) atom coordinates.
+        expanded: (N,) expanded radii (VDW + probe).
+        sphere: (P, 3) unit sphere points.
+
+    Returns:
+        (N,) per-atom SASA values.
+    """
+    from scipy.spatial import cKDTree
+
+    N = len(coords)
+    P = len(sphere)
+
+    # Build KD-tree for neighbor queries
+    tree = cKDTree(coords)
+    cutoff = 2 * expanded.max()
+
+    sasa_per_atom = np.zeros(N, dtype=np.float32)
+
+    for i in range(N):
+        # Generate test points for this atom
+        points = coords[i] + expanded[i] * sphere  # (P, 3)
+
+        # Find neighbors that could bury these points
+        neighbor_idx = tree.query_ball_point(coords[i], cutoff)
+        neighbor_idx = [j for j in neighbor_idx if j != i]
+
+        if not neighbor_idx:
+            # No neighbors - fully exposed
+            sasa_per_atom[i] = 4 * np.pi * expanded[i] ** 2
+            continue
+
+        neighbor_coords = coords[neighbor_idx]  # (K, 3)
+        neighbor_expanded = expanded[neighbor_idx]  # (K,)
+
+        # Distance from each point to each neighbor: (P, K)
+        dists = np.linalg.norm(
+            points[:, None, :] - neighbor_coords[None, :, :],
+            axis=2,
+        )
+
+        # Point is buried if inside any neighbor's sphere
+        buried = (dists < neighbor_expanded[None, :]).any(axis=1)  # (P,)
+
+        exposed_frac = (~buried).mean()
+        sasa_per_atom[i] = exposed_frac * 4 * np.pi * expanded[i] ** 2
+
+    return sasa_per_atom
+
+
+def _sasa_pairwise(
+    coords: Array,
+    expanded: Array,
+    sphere: Array,
+    temperature: float | None,
+) -> Array:
+    """
+    Compute SASA using O(N²) pairwise distances.
+
+    Supports both hard and soft (differentiable) modes.
+
+    Args:
+        coords: (N, 3) atom coordinates.
+        expanded: (N,) expanded radii (VDW + probe).
+        sphere: (P, 3) unit sphere points.
+        temperature: If provided, use soft sigmoid version.
+
+    Returns:
+        (N,) per-atom SASA values.
+    """
+    from ..backend.ops import (
+        cdist, sigmoid, prod, mean, any as any_, to_backend, where,
+    )
+
+    N = coords.shape[0]
+    P = sphere.shape[0]
+
+    # Scale and translate to each atom: (N, P, 3)
+    points = coords[:, None, :] + expanded[:, None, None] * sphere[None, :, :]
+    points_flat = points.reshape(-1, 3)  # (N*P, 3)
+
+    # Distance from each point to each atom center: (N*P, N)
+    dists = cdist(points_flat, coords)
+
+    # Build self-exclusion mask
+    self_mask_np = np.ones((N * P, N), dtype=np.float32)
+    self_mask_np[np.arange(N * P), np.repeat(np.arange(N), P)] = 0.0
+    self_mask = to_backend(self_mask_np, coords)
+
+    if temperature is not None:
+        # Soft version (differentiable)
+        inside = sigmoid((expanded[None, :] - dists) / temperature)
+        inside = inside * self_mask
+
+        # Soft "any": 1 - prod(1 - inside)
+        buried = 1.0 - prod(1.0 - inside, axis=1)
+        buried = buried.reshape(N, P)
+        exposed_frac = 1.0 - mean(buried, axis=1)
+    else:
+        # Hard version
+        inside = dists < expanded[None, :]
+        inside = inside & (self_mask > 0.5)
+        buried = any_(inside, axis=1).reshape(N, P)
+
+        one = to_backend(np.array(1.0, dtype=np.float32), coords)
+        zero = to_backend(np.array(0.0, dtype=np.float32), coords)
+        not_buried = where(buried, zero, one)
+        exposed_frac = mean(not_buried, axis=1)
+
+    # Surface area
+    sphere_area = 4.0 * np.pi * expanded ** 2
+    return exposed_frac * sphere_area
+
+
 def sasa(
     polymer: "Polymer",
     probe_radius: float = 1.4,
@@ -864,9 +986,9 @@ def sasa(
         - MOLECULE: (1,)
 
     Note:
-        Uses O(N²) memory for the distance matrix. For very large
-        structures (>10k atoms), consider using .chain() to process
-        chains separately.
+        The hard version uses neighbor lists for O(N×k) complexity,
+        scaling efficiently to large structures. The soft (differentiable)
+        version uses O(N²) pairwise computation for gradient flow.
 
     Examples:
         >>> import ciffy
@@ -878,14 +1000,12 @@ def sasa(
         >>> # Differentiable version for ML
         >>> sasa_soft = ciffy.sasa(p.torch(), temperature=0.5)
     """
-    from ..backend.ops import (
-        cdist, sigmoid, prod, mean, any as any_, to_backend, where,
-    )
+    from ..backend import is_torch, to_numpy
+    from ..backend.ops import to_backend
 
     coords = polymer.coordinates  # (N, 3)
     radii = polymer.vdw_radii()   # (N,)
     N = coords.shape[0]
-    P = n_points
 
     if N == 0:
         result = coords[:, 0]  # Empty array with correct backend
@@ -897,52 +1017,22 @@ def sasa(
     expanded = radii + probe_radius  # (N,)
 
     # Generate test points on unit sphere
-    sphere = _fibonacci_sphere(P, coords)  # (P, 3)
-
-    # Scale and translate to each atom: (N, P, 3)
-    # points[i, p] = coords[i] + expanded[i] * sphere[p]
-    points = coords[:, None, :] + expanded[:, None, None] * sphere[None, :, :]
-    points_flat = points.reshape(-1, 3)  # (N*P, 3)
-
-    # Distance from each point to each atom center: (N*P, N)
-    dists = cdist(points_flat, coords)
-
-    # Build self-exclusion mask (point i should not be buried by its owner atom)
-    # mask[i,j] = 0 if point i belongs to atom j, else 1
-    self_mask_np = np.ones((N * P, N), dtype=np.float32)
-    self_mask_np[np.arange(N * P), np.repeat(np.arange(N), P)] = 0.0
-    self_mask = to_backend(self_mask_np, coords)
+    sphere = _fibonacci_sphere(n_points, coords)  # (P, 3)
 
     if temperature is not None:
-        # Soft version (differentiable)
-        # inside[i,j] = sigmoid((expanded[j] - dists[i,j]) / temperature)
-        inside = sigmoid((expanded[None, :] - dists) / temperature)
-
-        # Exclude self (multiply by mask, no in-place ops)
-        inside = inside * self_mask
-
-        # Soft "any": 1 - prod(1 - inside)
-        buried = 1.0 - prod(1.0 - inside, axis=1)
-        buried = buried.reshape(N, P)
-        exposed_frac = 1.0 - mean(buried, axis=1)
+        # Soft version requires O(N²) pairwise for gradient flow
+        sasa_per_atom = _sasa_pairwise(coords, expanded, sphere, temperature)
     else:
-        # Hard version (non-differentiable but exact)
-        inside = dists < expanded[None, :]  # (N*P, N)
+        # Hard version uses efficient neighbor-list algorithm
+        # Convert to numpy for scipy KDTree
+        coords_np = to_numpy(coords)
+        expanded_np = to_numpy(expanded)
+        sphere_np = to_numpy(sphere)
 
-        # Exclude self using mask (cast to bool)
-        inside = inside & (self_mask > 0.5)
-        buried = any_(inside, axis=1).reshape(N, P)
+        sasa_np = _sasa_neighbor_list(coords_np, expanded_np, sphere_np)
 
-        # exposed_frac = mean(~buried)
-        # Use where to convert bool to float in a backend-agnostic way
-        one = to_backend(np.array(1.0, dtype=np.float32), coords)
-        zero = to_backend(np.array(0.0, dtype=np.float32), coords)
-        not_buried = where(buried, zero, one)
-        exposed_frac = mean(not_buried, axis=1)
-
-    # Surface area = exposed fraction × sphere surface area
-    sphere_area = 4.0 * np.pi * expanded ** 2
-    sasa_per_atom = exposed_frac * sphere_area
+        # Convert back to original backend
+        sasa_per_atom = to_backend(sasa_np, coords)
 
     # Aggregate to requested scale
     if scale is not None:

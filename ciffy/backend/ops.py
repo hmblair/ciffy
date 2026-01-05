@@ -778,6 +778,8 @@ def sigmoid(arr: Array) -> Array:
     if is_torch(arr):
         import torch
         return torch.sigmoid(arr)
+    # Clip to avoid overflow in exp
+    arr = np.clip(arr, -500, 500)
     return 1.0 / (1.0 + np.exp(-arr))
 
 

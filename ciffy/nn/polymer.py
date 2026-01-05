@@ -396,12 +396,12 @@ class PolymerModel(nn.Module, HubMixin):
 
         # Build polymer using extend() - handles frame computation internally
         poly = Polymer()
-        prev_transform = None
 
         for i, res_type in enumerate(sequence):
             model = self._get_model(int(res_type))
 
             # Decode this residue (keep gradients for optimization)
+            # coords_i: local coordinates, transform_i: positions THIS residue
             coords_i, transform_i = model.decode(latents[i:i + 1], project=project)
 
             # coords_i is (1, n_atoms, 3), squeeze to (n_atoms, 3)
@@ -416,10 +416,8 @@ class PolymerModel(nn.Module, HubMixin):
                 # First residue - no transform needed
                 poly = poly.extend(model.residue, coords_i, atoms=atoms_i)
             else:
-                # Position using PREVIOUS residue's transform
-                poly = poly.extend(model.residue, coords_i, prev_transform, atoms=atoms_i)
-
-            prev_transform = transform_i
+                # Position using THIS residue's transform
+                poly = poly.extend(model.residue, coords_i, transform_i, atoms=atoms_i)
 
         return poly.coordinates
 

@@ -76,6 +76,11 @@ def extract_residues_with_links(
     """
     Extract aligned residue coordinates with link transforms.
 
+    Each sample contains a residue's coordinates and the transform that positions
+    it relative to its predecessor. This convention means decode(z) returns
+    (coords, transform) where transform positions THIS residue, enabling direct
+    use with extend(): poly.extend(res, coords, transform, ...).
+
     Args:
         cif_paths: CIF files to process.
         residue_type: Residue type to extract (e.g., Residue.A).
@@ -84,8 +89,9 @@ def extract_residues_with_links(
         verbose: Print progress.
 
     Returns:
-        coords: (n, n_atoms, 3) aligned coordinates.
-        transforms: (n, 6) SE(3) link transforms [axis-angle, translation].
+        coords: (n, n_atoms, 3) aligned coordinates of residue.
+        transforms: (n, 6) SE(3) transform to position this residue relative
+            to predecessor [axis-angle, translation].
         atoms: (n_atoms,) atom type indices.
     """
     from ciffy.biochemistry.linking import LINKING_BY_TYPE, GLYCOSIDIC_FRAME
@@ -140,10 +146,10 @@ def extract_residues_with_links(
 
             count = 0
             for i in range(n_res - 1):
-                if seq[i] != residue_type.value:
-                    continue
-
                 j = i + 1
+                # Filter for residue_type at position j (the residue being positioned)
+                if seq[j] != residue_type.value:
+                    continue
                 s1, e1 = offsets[i], offsets[i + 1]
                 s2, e2 = offsets[j], offsets[j + 1]
 
@@ -184,10 +190,10 @@ def extract_residues_with_links(
     if verbose:
         print(f"\nTotal: {len(all_instances)} pairs")
 
-    # Phase 2: Find common atoms
+    # Phase 2: Find common atoms (from residue j, which is residue_type)
     atom_counts = Counter()
-    for coords_i, atoms_i, *_ in all_instances:
-        atom_counts.update(atoms_i)
+    for c_i, a_i, c_j, a_j, *_ in all_instances:
+        atom_counts.update(a_j)
 
     min_count = int(len(all_instances) * min_coverage)
     common_atoms = sorted([a for a, c in atom_counts.items() if c >= min_count])
@@ -197,10 +203,10 @@ def extract_residues_with_links(
         print(f"Common atoms: {len(common_atoms)}")
 
     # Phase 3: Build output arrays
-    # Filter to instances with all common atoms
+    # Filter to instances where j (residue_type) has all common atoms
     valid = [(c_i, a_i, c_j, a_j, o_i, R_i, o_j, R_j)
              for c_i, a_i, c_j, a_j, o_i, R_i, o_j, R_j in all_instances
-             if common_set.issubset(a_i) and common_set.issubset(a_j)]
+             if common_set.issubset(a_j)]
 
     if verbose:
         print(f"Valid pairs: {len(valid)}")
@@ -217,14 +223,16 @@ def extract_residues_with_links(
         coords_i = _remap_to_common(c_i, a_i, common_atoms)
         coords_j = _remap_to_common(c_j, a_j, common_atoms)
 
-        coords_out[idx] = coords_i
+        # Output coords_j (the residue being positioned, which is residue_type)
+        coords_out[idx] = coords_j
 
-        # Transform j's coords to i's frame
+        # Transform j's coords to i's frame for link transform computation
         R_j_to_i = R_j.T @ R_i
         t_j_to_i = (o_j - o_i) @ R_i
         coords_j_in_i = coords_j @ R_j_to_i + t_j_to_i
 
-        # Compute link transform (O3' frame of i -> P frame of j, both in i's frame)
+        # Compute link transform (O3' frame of i -> P frame of j)
+        # This transform positions residue j relative to residue i
         prev_pos = extract_frame_positions(coords_i, atoms_arr, link_def.prev_frame)
         o3p_origin, o3p_R = frame_from_positions(prev_pos)
 

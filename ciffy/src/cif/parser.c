@@ -437,7 +437,12 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
         }
 
         if ((size_t)ix >= alloc_size) {
-            /* Realloc to accommodate more groups than expected */
+            if (*size > 0) {
+                /* Caller specified expected size - other arrays depend on it.
+                 * Skip extras (matches original behavior). */
+                continue;
+            }
+            /* Dynamic sizing: grow array */
             size_t old_alloc = alloc_size;
             size_t new_alloc = (size_t)(ix + 1) * 2;
             int *resized = realloc(sizes, new_alloc * sizeof(int));
@@ -447,33 +452,22 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
                 free(sizes);
                 return NULL;
             }
-            /* Zero-initialize new elements */
             memset(resized + old_alloc, 0, (new_alloc - old_alloc) * sizeof(int));
             sizes = resized;
             alloc_size = new_alloc;
-            LOG_DEBUG("Reallocated sizes array: %zu -> %zu (ix=%d)", old_alloc, new_alloc, ix);
         }
         sizes[ix]++;
     }
 
-    /*
-     * Update *size only if we had to grow beyond the original allocation.
-     * When *size > 0 was passed, caller expects that many elements (e.g., one per chain).
-     * When *size <= 0 was passed, we determine size dynamically.
-     */
-    int final_count = ix + 1;
+    /* For dynamic sizing, shrink to actual count */
     if (*size <= 0) {
-        /* Dynamic sizing: shrink to actual count */
+        int final_count = ix + 1;
         int *resized = realloc(sizes, (size_t)final_count * sizeof(int));
         if (resized != NULL) {
             sizes = resized;
         }
         *size = final_count;
-    } else if (final_count > *size) {
-        /* Had to grow: update size to new count */
-        *size = final_count;
     }
-    /* else: keep original *size, array already has correct allocation */
     return sizes;
 }
 

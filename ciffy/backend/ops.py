@@ -765,6 +765,60 @@ def norm(arr: Array, axis: int | None = None, keepdims: bool = False) -> Array:
     return np.linalg.norm(arr, axis=axis, keepdims=keepdims)
 
 
+def sigmoid(arr: Array) -> Array:
+    """
+    Element-wise sigmoid (logistic) function.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Sigmoid values in [0, 1].
+    """
+    if is_torch(arr):
+        import torch
+        return torch.sigmoid(arr)
+    return 1.0 / (1.0 + np.exp(-arr))
+
+
+def prod(arr: Array, axis: int | None = None) -> Array:
+    """
+    Product of elements along an axis.
+
+    Args:
+        arr: Input array.
+        axis: Axis along which to compute product. None for all elements.
+
+    Returns:
+        Product values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        if axis is None:
+            return torch.prod(arr)
+        return torch.prod(arr, dim=axis)
+    return np.prod(arr, axis=axis)
+
+
+def mean(arr: Array, axis: int | None = None) -> Array:
+    """
+    Mean of elements along an axis.
+
+    Args:
+        arr: Input array.
+        axis: Axis along which to compute mean. None for all elements.
+
+    Returns:
+        Mean values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        if axis is None:
+            return torch.mean(arr)
+        return torch.mean(arr, dim=axis)
+    return np.mean(arr, axis=axis)
+
+
 def eye(n: int, *, like: Array) -> Array:
     """
     Create an identity matrix matching the backend/device of 'like'.

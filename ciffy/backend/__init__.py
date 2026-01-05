@@ -54,6 +54,9 @@ from .ops import (
     unsqueeze,
     expand,
     transpose,
+    sigmoid,
+    prod,
+    mean,
     # Array operations
     scatter_sum,
     scatter_mean,
@@ -113,6 +116,9 @@ __all__ = [
     "unsqueeze",
     "expand",
     "transpose",
+    "sigmoid",
+    "prod",
+    "mean",
     # Array operations
     "scatter_sum",
     "scatter_mean",

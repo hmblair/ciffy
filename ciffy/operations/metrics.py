@@ -798,6 +798,160 @@ def _filter_close_residues(
     return polymer.select(has_close_neighbor, Scale.RESIDUE)
 
 
+# =============================================================================
+# Solvent Accessible Surface Area (SASA)
+# =============================================================================
+
+def _fibonacci_sphere(n: int, like: Array) -> Array:
+    """
+    Generate n points uniformly distributed on a unit sphere.
+
+    Uses the Fibonacci lattice method for uniform distribution.
+
+    Args:
+        n: Number of points to generate.
+        like: Reference array for backend matching.
+
+    Returns:
+        (n, 3) array of unit sphere points.
+    """
+    from ..backend import to_backend
+
+    indices = np.arange(n, dtype=np.float64)
+    phi = np.pi * (3.0 - np.sqrt(5.0))  # golden angle
+
+    # y goes from 1 to -1
+    y = 1 - (indices / (n - 1)) * 2 if n > 1 else np.array([0.0])
+    radius = np.sqrt(1 - y * y)
+
+    theta = phi * indices
+    x = np.cos(theta) * radius
+    z = np.sin(theta) * radius
+
+    sphere = np.stack([x, y, z], axis=1).astype(np.float32)
+    return to_backend(sphere, like)
+
+
+def sasa(
+    polymer: "Polymer",
+    probe_radius: float = 1.4,
+    n_points: int = 100,
+    temperature: float | None = None,
+    scale: "Scale | None" = None,
+) -> Array:
+    """
+    Compute solvent accessible surface area using Shrake-Rupley algorithm.
+
+    SASA measures the surface area of a molecule accessible to solvent,
+    computed by "rolling" a probe sphere over the van der Waals surface.
+
+    Args:
+        polymer: Structure to compute SASA for.
+        probe_radius: Radius of solvent probe in Angstroms (water = 1.4).
+        n_points: Number of test points per atom sphere. Higher values
+            give more accurate results but are slower.
+        temperature: If provided, use soft (differentiable) version with
+            sigmoid smoothing. Lower values approach hard cutoff.
+            Recommended: 0.3-1.0 for training. None for hard version.
+        scale: Scale at which to return SASA. Default (None) returns
+            per-atom values. Use Scale.RESIDUE for per-residue, etc.
+
+    Returns:
+        SASA values in Å² (square Angstroms). Shape depends on scale:
+        - None/ATOM: (n_atoms,)
+        - RESIDUE: (n_residues,)
+        - CHAIN: (n_chains,)
+        - MOLECULE: (1,)
+
+    Note:
+        Uses O(N²) memory for the distance matrix. For very large
+        structures (>10k atoms), consider using .chain() to process
+        chains separately.
+
+    Examples:
+        >>> import ciffy
+        >>> p = ciffy.load("structure.cif")
+        >>> sasa_per_atom = ciffy.sasa(p)
+        >>> sasa_per_residue = ciffy.sasa(p, scale=ciffy.RESIDUE)
+        >>> total_sasa = ciffy.sasa(p, scale=ciffy.MOLECULE).sum()
+        >>>
+        >>> # Differentiable version for ML
+        >>> sasa_soft = ciffy.sasa(p.torch(), temperature=0.5)
+    """
+    from ..backend.ops import (
+        cdist, sigmoid, prod, mean, any as any_, to_backend, where,
+    )
+
+    coords = polymer.coordinates  # (N, 3)
+    radii = polymer.vdw_radii()   # (N,)
+    N = coords.shape[0]
+    P = n_points
+
+    if N == 0:
+        result = coords[:, 0]  # Empty array with correct backend
+        if scale is not None:
+            return polymer.reduce(result, scale)
+        return result
+
+    # Expanded radii (VDW + probe)
+    expanded = radii + probe_radius  # (N,)
+
+    # Generate test points on unit sphere
+    sphere = _fibonacci_sphere(P, coords)  # (P, 3)
+
+    # Scale and translate to each atom: (N, P, 3)
+    # points[i, p] = coords[i] + expanded[i] * sphere[p]
+    points = coords[:, None, :] + expanded[:, None, None] * sphere[None, :, :]
+    points_flat = points.reshape(-1, 3)  # (N*P, 3)
+
+    # Distance from each point to each atom center: (N*P, N)
+    dists = cdist(points_flat, coords)
+
+    # Build self-exclusion mask (point i should not be buried by its owner atom)
+    # mask[i,j] = 0 if point i belongs to atom j, else 1
+    self_mask_np = np.ones((N * P, N), dtype=np.float32)
+    self_mask_np[np.arange(N * P), np.repeat(np.arange(N), P)] = 0.0
+    self_mask = to_backend(self_mask_np, coords)
+
+    if temperature is not None:
+        # Soft version (differentiable)
+        # inside[i,j] = sigmoid((expanded[j] - dists[i,j]) / temperature)
+        inside = sigmoid((expanded[None, :] - dists) / temperature)
+
+        # Exclude self (multiply by mask, no in-place ops)
+        inside = inside * self_mask
+
+        # Soft "any": 1 - prod(1 - inside)
+        buried = 1.0 - prod(1.0 - inside, axis=1)
+        buried = buried.reshape(N, P)
+        exposed_frac = 1.0 - mean(buried, axis=1)
+    else:
+        # Hard version (non-differentiable but exact)
+        inside = dists < expanded[None, :]  # (N*P, N)
+
+        # Exclude self using mask (cast to bool)
+        inside = inside & (self_mask > 0.5)
+        buried = any_(inside, axis=1).reshape(N, P)
+
+        # exposed_frac = mean(~buried)
+        # Use where to convert bool to float in a backend-agnostic way
+        one = to_backend(np.array(1.0, dtype=np.float32), coords)
+        zero = to_backend(np.array(0.0, dtype=np.float32), coords)
+        not_buried = where(buried, zero, one)
+        exposed_frac = mean(not_buried, axis=1)
+
+    # Surface area = exposed fraction × sphere surface area
+    sphere_area = 4.0 * np.pi * expanded ** 2
+    sasa_per_atom = exposed_frac * sphere_area
+
+    # Aggregate to requested scale
+    if scale is not None:
+        from .reduction import Reduction
+        return polymer.reduce(sasa_per_atom, scale, rtype=Reduction.SUM)
+
+    return sasa_per_atom
+
+
 def _build_exclusion_mask(
     bonds: Array,
     n_atoms: int,

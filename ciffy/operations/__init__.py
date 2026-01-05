@@ -13,7 +13,7 @@ from .alignment import (
 )
 from .extract import extract
 from .gnm import GNM, contact_map
-from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg, clashes
+from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg, clashes, sasa
 from .cluster import cluster, cluster_representatives, ClusterResult
 
 # Legacy alias

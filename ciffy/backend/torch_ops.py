@@ -173,8 +173,13 @@ def cdist(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
 
     Returns:
         Distance matrix of shape (M, N).
+
+    Note:
+        Uses compute_mode='donot_use_mm_for_euclid_dist' for numerical stability
+        with float32 inputs. The default matrix-multiplication algorithm can
+        have errors up to 0.2 Å for molecular coordinates.
     """
-    return torch.cdist(x1, x2)
+    return torch.cdist(x1, x2, compute_mode='donot_use_mm_for_euclid_dist')
 
 
 def zeros(

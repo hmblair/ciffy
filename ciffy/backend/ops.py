@@ -745,6 +745,38 @@ def cos(arr: Array) -> Array:
     return np.cos(arr)
 
 
+def log(arr: Array) -> Array:
+    """
+    Element-wise natural logarithm.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Log values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.log(arr)
+    return np.log(arr)
+
+
+def exp(arr: Array) -> Array:
+    """
+    Element-wise exponential.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Exponential values in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.exp(arr)
+    return np.exp(arr)
+
+
 def norm(arr: Array, axis: int | None = None, keepdims: bool = False) -> Array:
     """
     Compute vector norm along an axis.
@@ -778,8 +810,8 @@ def sigmoid(arr: Array) -> Array:
     if is_torch(arr):
         import torch
         return torch.sigmoid(arr)
-    # Clip to avoid overflow in exp
-    arr = np.clip(arr, -500, 500)
+    # Clip to avoid overflow in exp (exp(88) ≈ 1.6e38 < float32 max)
+    arr = np.clip(arr, -88, 88)
     return 1.0 / (1.0 + np.exp(-arr))
 
 

@@ -133,6 +133,27 @@ dataset = PolymerDataset(
 polymer = dataset[0]
 ```
 
+## PolymerEmbedding
+
+```python
+from ciffy.nn import PolymerEmbedding
+
+# Atom-level embeddings (atom + residue + element)
+embed = PolymerEmbedding(
+    scale=Scale.ATOM,
+    atom_dim=64,      # Atom type embedding
+    residue_dim=32,   # Residue type (expanded to atoms)
+    element_dim=16,   # Element type embedding
+)
+features = embed(polymer)  # (num_atoms, 112)
+
+# Residue-level embeddings (only residue_dim valid)
+embed = PolymerEmbedding(scale=Scale.RESIDUE, residue_dim=64)
+features = embed(polymer)  # (num_residues, 64)
+
+embed.output_dim  # Total embedding dimension
+```
+
 ## Generative Models
 
 ### ResidueFlowModel (quick training)

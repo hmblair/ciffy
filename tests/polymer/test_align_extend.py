@@ -382,6 +382,27 @@ class TestExtendEdgeCases:
 
         assert extended.size(Scale.RESIDUE) == 2
 
+    def test_extend_with_absolute_coords(self):
+        """Extend with absolute coordinates (no transform)."""
+        p = template_with_coords("a")
+
+        atom_group = Residue.C.terminal(start=False, end=False)
+        atoms, elements = atom_group.index(), atom_group.elements()
+        # Absolute coordinates - offset from origin
+        abs_coords = atom_group.ideal + np.array([10.0, 0.0, 0.0], dtype=np.float32)
+
+        extended = p.extend(
+            coordinates=abs_coords,
+            atoms=atoms,
+            elements=elements,
+            residue=Residue.C
+        )
+
+        assert extended.size(Scale.RESIDUE) == 2
+        # New residue coords should be exactly what we passed (offset by 10 in X)
+        new_res_coords = extended.coordinates[-len(atoms):]
+        assert np.allclose(new_res_coords, abs_coords, atol=1e-5)
+
     def test_extend_sequence_updated(self):
         """Extended polymer has correct sequence."""
         p = template_with_coords("acg")

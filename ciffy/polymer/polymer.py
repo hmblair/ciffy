@@ -2062,10 +2062,14 @@ class Polymer:
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
-            coordinates: (n_atoms, 3) coordinates of the residue in its local frame.
-                If None, creates a template without coordinates.
+            coordinates: (n_atoms, 3) coordinates of the residue.
+                If transform is provided, these are local-frame coordinates that
+                will be positioned relative to the previous residue.
+                If transform is None, these are absolute coordinates used as-is.
+                If coordinates is None, creates a template without coordinates.
             transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
-                Required when extending a non-empty polymer with coordinates.
+                If provided, positions the residue relative to the previous one.
+                If None, coordinates are used as absolute positions.
             name: Chain name (only used when extending from empty polymer).
             **fields: Field arrays to concatenate (atoms, elements, etc.).
                 Must match fields on this polymer at ATOM/RESIDUE scale.
@@ -2086,11 +2090,15 @@ class Polymer:
             >>> atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
             >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
             >>>
-            >>> # Extend with model-predicted coordinates (internal residue, no terminals)
+            >>> # Extend with relative transform (positions relative to previous residue)
             >>> atom_group = Residue.C.terminal(start=False, end=False)
             >>> atoms, elements = atom_group.index(), atom_group.elements()
-            >>> coords, transform = model.predict(...)
-            >>> poly = poly.extend(Residue.C, coords, transform, atoms=atoms, elements=elements)
+            >>> local_coords, transform = model.predict_relative(...)
+            >>> poly = poly.extend(Residue.C, local_coords, transform, atoms=atoms, elements=elements)
+            >>>
+            >>> # Extend with absolute coordinates (no transform needed)
+            >>> abs_coords = model.predict_absolute(...)
+            >>> poly = poly.extend(Residue.G, abs_coords, atoms=atoms, elements=elements)
         """
         # Handle empty polymer case
         if self.empty():
@@ -2105,16 +2113,14 @@ class Polymer:
 
         # Determine n_new_atoms and handle coordinates
         if coordinates is not None:
-            # Transform is required for non-empty polymers with coordinates
-            if transform is None:
-                raise ValueError(
-                    "transform is required when extending a non-empty polymer "
-                    "with coordinates."
+            if transform is not None:
+                # Position relative to previous residue using transform
+                fields['coordinates'] = self._position_new_residue(
+                    coordinates, transform, fields.get('atoms')
                 )
-            # Position the new residue's coordinates
-            fields['coordinates'] = self._position_new_residue(
-                coordinates, transform, fields.get('atoms')
-            )
+            else:
+                # Use coordinates as absolute positions
+                fields['coordinates'] = coordinates
             n_new_atoms = coordinates.shape[0]
         else:
             # Template mode: no coordinates, get n_atoms from atoms field

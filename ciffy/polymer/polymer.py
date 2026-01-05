@@ -2100,6 +2100,12 @@ class Polymer:
             >>> abs_coords = model.predict_absolute(...)
             >>> poly = poly.extend(Residue.G, abs_coords, atoms=atoms, elements=elements)
         """
+        # Convert list inputs to arrays
+        if 'atoms' in fields and isinstance(fields['atoms'], list):
+            fields['atoms'] = np.asarray(fields['atoms'])
+        if 'elements' in fields and isinstance(fields['elements'], list):
+            fields['elements'] = np.asarray(fields['elements'])
+
         # Handle empty polymer case
         if self.empty():
             return self._extend_from_empty(residue, coordinates, name, **fields)
@@ -2278,6 +2284,9 @@ class Polymer:
 
         # Position the new residue
         if atoms is not None:
+            # Ensure atoms is an array
+            if isinstance(atoms, list):
+                atoms = np.asarray(atoms)
             # Compute next frame (e.g., P for RNA) from new residue
             next_positions = extract_frame_positions(
                 coords, atoms, link_def.next_frame

@@ -125,8 +125,8 @@ dataset = PolymerDataset(
     "./structures/",
     scale=Scale.CHAIN,           # MOLECULE or CHAIN
     molecule_types=Molecule.RNA,
-    min_residues=10,
-    max_atoms=5000,
+    min_residues=10,             # or max
+    max_atoms=5000,              # or min
     exclude_ids=["1ABC"],
     num_workers=8,
 )
@@ -177,3 +177,9 @@ The `eps` parameter adds numerical stability when RMSD approaches zero during tr
 1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.
 
 2. **Always save sample predictions** - Save sample predictions/generations to `outputs/` so the user can visually inspect model quality. Use `polymer.write('outputs/sample_001.cif')` to write structures.
+
+3. **Avoid batching complexity** - Structures have different sizes. Process one structure at a time rather than implementing complex batching logic.
+
+4. **Keep training loops simple** - Focus on getting results fast. Avoid premature optimization or over-engineering.
+
+5. **Use ciffy's built-in features** - `PolymerDataset`, `PolymerEmbedding`, and `Polymer` methods are battle-tested and handle the many edge cases in .cif files. Don't reimplement this functionality.

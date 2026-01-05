@@ -154,6 +154,24 @@ features = embed(polymer)  # (num_residues, 64)
 embed.output_dim  # Total embedding dimension
 ```
 
+## RMSD Loss
+
+**Use `ciffy.rmsd` as the default loss function for structure prediction models.** It computes Kabsch-aligned RMSD with gradient support.
+
+```python
+import ciffy
+
+# Polymer RMSD (returns per-molecule RMSD by default)
+loss = ciffy.rmsd(pred_polymer, target_polymer)
+loss = ciffy.rmsd(pred_polymer, target_polymer, scale=Scale.CHAIN)  # Per-chain
+
+# Coordinate RMSD (for training loops)
+loss = ciffy.rmsd(pred_coords, target_coords)           # (N, 3) -> scalar
+loss = ciffy.rmsd(pred_coords, target_coords, eps=1e-8) # Gradient-stable near 0
+```
+
+The `eps` parameter adds numerical stability when RMSD approaches zero during training.
+
 ## Generative Models
 
 ### ResidueFlowModel (quick training)

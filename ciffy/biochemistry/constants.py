@@ -191,11 +191,12 @@ _ALL_PROTEIN_LIKE = [
 # Predicates for flat groups
 # =============================================================================
 
-# Nucleic acid backbone: sugar-phosphate atoms (contain 'p' or 'P')
-_is_nucleic_backbone = lambda n: 'p' in n or 'P' in n
+# Nucleic acid backbone: sugar-phosphate atoms
+# Atoms with apostrophe (PDB names like C4') or phosphate atoms
+_is_nucleic_backbone = lambda n: "'" in n or 'P' in n
 
-# Nucleobase atoms: neither 'p' nor 'P'
-_is_nucleobase = lambda n: 'p' not in n and 'P' not in n
+# Nucleobase atoms: no apostrophe, no phosphate
+_is_nucleobase = lambda n: "'" not in n and 'P' not in n
 
 # Phosphate atoms: contain uppercase 'P'
 _is_phosphate = lambda n: 'P' in n

@@ -416,6 +416,24 @@ class AtomGroup:
         """Number of bonds (0 if no geometry)."""
         return 0 if self.bonds is None else len(self.bonds)
 
+    def elements(self) -> NDArray[np.int64]:
+        """
+        Get element atomic numbers for all atoms.
+
+        Returns:
+            (n_atoms,) int64 array of element atomic numbers, sorted by atom value
+            to match the order returned by index().
+
+        Example:
+            >>> Residue.A.elements()
+            array([15, 8, 8, 8, 8, ...])  # P=15, O=8, C=6, N=7
+        """
+        result = []
+        # Sort by value (int) to match index() order
+        for atom in sorted(self, key=lambda a: int(a)):
+            result.append(atom_to_element(atom))
+        return np.array(result, dtype=np.int64)
+
     @property
     def bond_lengths(self) -> NDArray[np.float64] | None:
         """
@@ -704,6 +722,15 @@ class AtomGroup:
         )
 
 
+def _to_python_name(pdb_name: str) -> str:
+    """Convert PDB atom name to Python-safe identifier.
+
+    Converts prime notation (O3', C5') to Python-safe names (O3p, C5p).
+    This matches the naming used in AtomGroup dict keys for attribute access.
+    """
+    return pdb_name.replace("'", "p").replace('"', "").replace("*", "s")
+
+
 def build_atom_group(
     name: str,
     sources: list[tuple[str, AtomGroup]],
@@ -718,7 +745,7 @@ def build_atom_group(
     Args:
         name: Name for the created AtomGroup.
         sources: List of (residue_name, AtomGroup) pairs.
-        atom_filter: Optional set of atom names to include.
+        atom_filter: Optional set of atom names to include (Python-safe names).
 
     Returns:
         AtomGroup with nested AtomGroups for each atom position.
@@ -735,15 +762,16 @@ def build_atom_group(
 
     for residue_name, source in sources:
         for atom in source:
-            atom_name = atom.name
-            if atom_filter is None or atom_name in atom_filter:
-                atoms_by_name[atom_name][residue_name] = atom
+            # Use Python-safe name as dict key for attribute access
+            py_name = _to_python_name(atom.name)
+            if atom_filter is None or py_name in atom_filter:
+                atoms_by_name[py_name][residue_name] = atom
 
     members: dict[str, AtomGroup] = {}
-    for atom_name, residue_atoms in sorted(atoms_by_name.items()):
+    for py_name, residue_atoms in sorted(atoms_by_name.items()):
         inner_members = {
             res_name: atom for res_name, atom in sorted(residue_atoms.items())
         }
-        members[atom_name] = AtomGroup(atom_name, inner_members)
+        members[py_name] = AtomGroup(py_name, inner_members)
 
     return AtomGroup(name, members)

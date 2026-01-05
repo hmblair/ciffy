@@ -342,9 +342,10 @@ def generate_python_atoms(
     """
 
     # Build per-residue atom dicts
-    residue_atoms: dict[str, dict[str, int]] = {}
+    # Maps residue_cif_name -> {py_atom_name: (global_idx, cif_atom_name)}
+    residue_atoms: dict[str, dict[str, tuple[int, str]]] = {}
     for (cif_name, atom), idx in atom_index.items():
-        residue_atoms.setdefault(cif_name, {})[to_python_name(atom)] = idx
+        residue_atoms.setdefault(cif_name, {})[to_python_name(atom)] = (idx, atom)
 
     # Group residues by type
     by_type: dict[int, list[ResidueDefinition]] = {}
@@ -401,10 +402,10 @@ def generate_python_atoms(
             lines.append(f'def _load_{res.class_name}():')
             lines.append(f'    """Load {res.class_name} residue data."""')
 
-            # Atoms dict
+            # Atoms dict - key is Python-safe name, Atom.name is PDB/CIF standard
             lines.append('    atoms = {')
-            for local_idx, (py_name, global_idx) in enumerate(atoms.items()):
-                lines.append(f'        "{py_name}": Atom("{py_name}", {global_idx}, {local_idx}),')
+            for local_idx, (py_name, (global_idx, cif_name)) in enumerate(atoms.items()):
+                lines.append(f'        "{py_name}": Atom("{cif_name}", {global_idx}, {local_idx}),')
             lines.append('    }')
 
             # Ideal coordinates

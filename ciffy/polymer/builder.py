@@ -38,15 +38,16 @@ class MoleculeConfig:
 # =============================================================================
 
 _MOLECULE_CONFIGS: dict[Molecule, MoleculeConfig] = {
+    # Terminal atoms use PDB standard names (with apostrophes, not Python-safe 'p')
     Molecule.RNA: MoleculeConfig(
         linking=NUCLEIC_ACID_LINK,
         start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
-        end_terminal_atoms=frozenset({'HO3p'}),
+        end_terminal_atoms=frozenset({"HO3'"}),
     ),
     Molecule.DNA: MoleculeConfig(
         linking=NUCLEIC_ACID_LINK,
         start_terminal_atoms=frozenset({'OP3', 'HOP3'}),
-        end_terminal_atoms=frozenset({'HO3p'}),
+        end_terminal_atoms=frozenset({"HO3'"}),
     ),
     Molecule.PROTEIN: MoleculeConfig(
         linking=PEPTIDE_LINK,

@@ -27,6 +27,7 @@ from ..backend import (
     diag,
     diagonal,
     eigh,
+    eye,
     fill_diagonal,
     ones_like,
     outer,
@@ -149,14 +150,18 @@ def inverse_square_map(
     return adj
 
 
-def graph_laplacian(adj: Array) -> Array:
+def graph_laplacian(adj: Array, normalized: bool = False) -> Array:
     """Compute the graph Laplacian (Kirchhoff matrix).
 
-    The graph Laplacian is defined as L = D - A, where D is the
+    The unnormalized graph Laplacian is defined as L = D - A, where D is the
     degree matrix and A is the adjacency matrix.
+
+    The normalized graph Laplacian is L_norm = I - D^{-1/2} A D^{-1/2}, which
+    has eigenvalues in [0, 2] and is better conditioned for some applications.
 
     Args:
         adj: Adjacency matrix of shape (N, N). Can be numpy array or torch tensor.
+        normalized: If True, return the normalized Laplacian. Default False.
 
     Returns:
         Laplacian matrix of shape (N, N).
@@ -165,9 +170,21 @@ def graph_laplacian(adj: Array) -> Array:
         >>> import numpy as np
         >>> adj = np.array([[0., 1., 1.], [1., 0., 1.], [1., 1., 0.]])
         >>> L = graph_laplacian(adj)
+        >>> L_norm = graph_laplacian(adj, normalized=True)
     """
-    deg = diag(adj.sum(1))
-    return deg - adj
+    deg = adj.sum(1)
+
+    if normalized:
+        # L_norm = I - D^{-1/2} A D^{-1/2}
+        # Handle isolated nodes (deg=0) by setting their inv_sqrt to 0
+        # Use where to avoid computing power of zero (which warns)
+        safe_deg = where(deg > 0, deg, ones_like(deg))
+        deg_inv_sqrt = where(deg > 0, safe_deg ** -0.5, zeros_like(deg))
+        # D^{-1/2} A D^{-1/2} using broadcasting
+        norm_adj = deg_inv_sqrt[:, None] * adj * deg_inv_sqrt[None, :]
+        return eye(adj.shape[0], like=adj) - norm_adj
+    else:
+        return diag(deg) - adj
 
 
 def gnm_correlations(adj: Array, rtol: float = 1e-2) -> Array:

@@ -255,15 +255,21 @@ class TestExtend:
         assert p.size(Scale.RESIDUE) == 4
         assert p.sequence_str() == "acgu"
 
-    def test_extend_multichain_error(self):
-        """Extend fails on multi-chain polymer."""
+    def test_extend_multichain_extends_last(self):
+        """Extend on multi-chain polymer extends the last chain."""
         # Build multi-chain by joining
         p = join(template_with_coords("ac"), template_with_coords("gu"))
+        original_chains = p.size(Scale.CHAIN)
+        original_residues = p.size(Scale.RESIDUE)
+
         atoms, elements, coords = expand_residue(Residue.A, start_terminal=False)
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
-        with pytest.raises(ValueError, match="single-chain"):
-            p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
+        # Extend should add to the last chain
+        p2 = p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
+
+        assert p2.size(Scale.CHAIN) == original_chains  # Same number of chains
+        assert p2.size(Scale.RESIDUE) == original_residues + 1  # One more residue
 
     def test_extend_hetatm_error(self):
         """Extend fails on polymer with HETATM."""

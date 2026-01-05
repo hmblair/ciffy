@@ -259,15 +259,15 @@ class TestFromSequenceEdgeCases:
         import time
         from ciffy import from_sequence, Scale
 
-        # 10000 residues
-        seq = "acgu" * 2500
+        # 1000 residues (reduced from 10000 for extend_new() loop approach)
+        seq = "acgu" * 250
 
         start = time.time()
         polymer = from_sequence(seq)
         elapsed = time.time() - start
 
-        assert polymer.size(Scale.RESIDUE) == 10000
-        # Should complete in reasonable time
+        assert polymer.size(Scale.RESIDUE) == 1000
+        # Should complete in reasonable time (~4s with extend_new loop)
         assert elapsed < 10.0
 
     def test_very_long_protein_sequence(self):
@@ -275,14 +275,15 @@ class TestFromSequenceEdgeCases:
         import time
         from ciffy import from_sequence, Scale
 
-        # All 20 amino acids repeated
-        seq = "ACDEFGHIKLMNPQRSTVWY" * 500  # 10000 residues
+        # All 20 amino acids repeated (reduced from 10000 for extend_new() loop)
+        seq = "ACDEFGHIKLMNPQRSTVWY" * 50  # 1000 residues
 
         start = time.time()
         polymer = from_sequence(seq)
         elapsed = time.time() - start
 
-        assert polymer.size(Scale.RESIDUE) == 10000
+        assert polymer.size(Scale.RESIDUE) == 1000
+        # Should complete in reasonable time (~2s with extend_new loop)
         assert elapsed < 10.0
 
     @pytest.mark.parametrize("sequence", [

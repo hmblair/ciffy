@@ -432,3 +432,136 @@ class TestExtendEdgeCases:
             )
 
             assert extended.size(Scale.RESIDUE) == 2
+
+
+# =============================================================================
+# AtomGroup.elements() Tests
+# =============================================================================
+
+class TestAtomGroupElements:
+    """Tests for AtomGroup.elements() method."""
+
+    def test_elements_returns_array(self):
+        """elements() returns numpy array of atomic numbers."""
+        elems = Residue.A.elements()
+        assert isinstance(elems, np.ndarray)
+        assert elems.dtype == np.int64
+
+    def test_elements_shape_matches_n_atoms(self):
+        """elements() shape matches number of atoms."""
+        for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
+            elems = res.elements()
+            assert elems.shape == (res.n_atoms,)
+
+    def test_elements_has_expected_values(self):
+        """elements() returns correct atomic numbers for RNA."""
+        elems = Residue.A.elements()
+        # RNA has P (15), O (8), C (6), N (7), H (1)
+        unique = set(elems)
+        assert unique <= {1, 6, 7, 8, 15}, f"Unexpected elements: {unique}"
+        # Must have at least C, N, O, P
+        assert 6 in unique  # Carbon
+        assert 7 in unique  # Nitrogen
+        assert 8 in unique  # Oxygen
+        assert 15 in unique  # Phosphorus
+
+    def test_elements_on_subset(self):
+        """elements() works on AtomGroup subsets."""
+        subset = Residue.A.subset({2, 3, 5, 6, 7})  # 5 atoms
+        elems = subset.elements()
+        assert elems.shape == (5,)
+
+
+# =============================================================================
+# Polymer.extend_new() Tests
+# =============================================================================
+
+class TestExtendNew:
+    """Tests for Polymer.extend_new() method."""
+
+    def test_extend_new_template_mode(self):
+        """extend_new() creates template without coordinates."""
+        p = ciffy.Polymer()
+        p = p.extend_new(Residue.A)
+
+        assert p.size() == Residue.A.n_atoms
+        assert p.size(Scale.RESIDUE) == 1
+        assert hasattr(p, 'atoms')
+        assert hasattr(p, 'elements')
+        # Template mode: no coordinates
+        assert not hasattr(p, '_coordinates') or p._coordinates is None
+
+    def test_extend_new_with_coordinates(self):
+        """extend_new() with coordinates creates polymer with coords."""
+        p = ciffy.Polymer()
+        coords = Residue.A.ideal
+        p = p.extend_new(Residue.A, coords)
+
+        assert p.size() == Residue.A.n_atoms
+        assert p.coordinates is not None
+        assert p.coordinates.shape == coords.shape
+
+    def test_extend_new_multi_residue_template(self):
+        """extend_new() builds multi-residue template."""
+        p = ciffy.Polymer()
+        for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
+            p = p.extend_new(res)
+
+        assert p.size(Scale.RESIDUE) == 4
+        expected_atoms = sum(r.n_atoms for r in [Residue.A, Residue.C, Residue.G, Residue.U])
+        assert p.size() == expected_atoms
+        assert p.sequence_str() == "acgu"
+
+    def test_extend_new_with_transform(self):
+        """extend_new() positions residue using transform."""
+        p = ciffy.Polymer()
+        p = p.extend_new(Residue.A, Residue.A.ideal)
+        p = p.extend_new(Residue.C, Residue.C.ideal, np.zeros(6))
+
+        assert p.size(Scale.RESIDUE) == 2
+        assert p.coordinates is not None
+        expected = Residue.A.n_atoms + Residue.C.n_atoms
+        assert p.coordinates.shape == (expected, 3)
+
+    def test_extend_new_with_subset_requires_residue(self):
+        """extend_new() with subset requires explicit residue parameter."""
+        subset = Residue.A.subset({2, 3, 5, 6, 7})
+        p = ciffy.Polymer()
+
+        # Should raise without residue=
+        with pytest.raises(ValueError, match="residue"):
+            p.extend_new(subset)
+
+        # Should work with residue=
+        p = p.extend_new(subset, residue=Residue.A)
+        assert p.size() == 5
+
+    def test_extend_new_preserves_sequence(self):
+        """extend_new() correctly sets sequence field."""
+        p = ciffy.Polymer()
+        p = p.extend_new(Residue.G)
+        p = p.extend_new(Residue.C)
+        p = p.extend_new(Residue.A)
+        p = p.extend_new(Residue.U)
+
+        assert p.sequence_str() == "gcau"
+
+    def test_extend_new_atoms_match_atomgroup(self):
+        """extend_new() atoms field matches AtomGroup.index()."""
+        p = ciffy.Polymer()
+        p = p.extend_new(Residue.A)
+
+        np.testing.assert_array_equal(
+            np.asarray(p.atoms),
+            Residue.A.index()
+        )
+
+    def test_extend_new_elements_match_atomgroup(self):
+        """extend_new() elements field matches AtomGroup.elements()."""
+        p = ciffy.Polymer()
+        p = p.extend_new(Residue.A)
+
+        np.testing.assert_array_equal(
+            np.asarray(p.elements),
+            Residue.A.elements()
+        )

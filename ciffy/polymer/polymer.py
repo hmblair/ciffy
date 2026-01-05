@@ -9,6 +9,8 @@ other molecular types.
 from __future__ import annotations
 from typing import Any, Generator, TYPE_CHECKING
 
+import numpy as np
+
 from ..backend import Array, is_torch, size as arr_size, check_compatible, to_numpy
 from ..backend import ops
 from ..biochemistry import Scale, Molecule
@@ -23,6 +25,7 @@ from .hierarchy import _Hierarchy
 from ..biochemistry import (
     Residue,
     Atom,
+    AtomGroup,
     ELEMENT_NAMES,
 )
 from ..utils import all_equal, filter_by_mask
@@ -1978,38 +1981,51 @@ class Polymer:
     def _extend_from_empty(
         self: Polymer,
         residue: Residue,
-        coords: Array,
+        coords: Array | None,
         name: str,
         **fields,
     ) -> Polymer:
         """Create first residue when extending from empty polymer."""
-        n_atoms = coords.shape[0]
+        # Determine n_atoms and reference array for backend
+        if coords is not None:
+            n_atoms = coords.shape[0]
+            ref = coords
+        elif 'atoms' in fields:
+            n_atoms = len(fields['atoms'])
+            ref = fields['atoms']
+        else:
+            raise ValueError(
+                "Either coordinates or atoms must be provided for extend()."
+            )
 
-        # Create hierarchy arrays in same backend as coords
+        # Create hierarchy arrays in same backend as ref
         sizes = {
-            Scale.RESIDUE: ops.array([n_atoms], like=coords, dtype='int64'),
-            Scale.CHAIN: ops.array([n_atoms], like=coords, dtype='int64'),
-            Scale.MOLECULE: ops.array([n_atoms], like=coords, dtype='int64'),
+            Scale.RESIDUE: ops.array([n_atoms], like=ref, dtype='int64'),
+            Scale.CHAIN: ops.array([n_atoms], like=ref, dtype='int64'),
+            Scale.MOLECULE: ops.array([n_atoms], like=ref, dtype='int64'),
         }
-        lengths = ops.array([1], like=coords, dtype='int64')
+        lengths = ops.array([1], like=ref, dtype='int64')
 
         hierarchy = _Hierarchy.from_sizes_and_lengths(
             sizes=sizes,
             lengths=lengths,
             polymer_count=n_atoms,
-            ref=coords,
+            ref=ref,
         )
 
         # Create sequence/molecule_type arrays in same backend
-        sequence_arr = ops.array([residue.value], like=coords, dtype='int64')
-        mol_type_arr = ops.array([residue.molecule_type], like=coords, dtype='int64')
+        sequence_arr = ops.array([residue.value], like=ref, dtype='int64')
+        mol_type_arr = ops.array([residue.molecule_type], like=ref, dtype='int64')
 
         # Build fields dict for Polymer constructor
         init_fields = {
-            'coordinates': Field(coords, Scale.ATOM),
             'sequence': Field(sequence_arr, Scale.RESIDUE),
             'molecule_types': Field(mol_type_arr, Scale.CHAIN),
         }
+
+        # Add coordinates only if provided
+        if coords is not None:
+            init_fields['coordinates'] = Field(coords, Scale.ATOM)
 
         # Add all user-provided fields (atoms, elements, etc.)
         for field_name, data in fields.items():
@@ -2029,7 +2045,7 @@ class Polymer:
     def extend(
         self: Polymer,
         residue: Residue,
-        coordinates: Array,
+        coordinates: Array | None = None,
         transform: Array | None = None,
         name: str = "A",
         **fields,
@@ -2047,8 +2063,9 @@ class Polymer:
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
             coordinates: (n_atoms, 3) coordinates of the residue in its local frame.
+                If None, creates a template without coordinates.
             transform: (6,) SE(3) transform [axis-angle, translation] for positioning.
-                Required when extending a non-empty polymer, ignored for empty.
+                Required when extending a non-empty polymer with coordinates.
             name: Chain name (only used when extending from empty polymer).
             **fields: Field arrays to concatenate (atoms, elements, etc.).
                 Must match fields on this polymer at ATOM/RESIDUE scale.
@@ -2073,39 +2090,58 @@ class Polymer:
             >>> atoms2, elements2, _ = expand_residue(Residue.C, start_terminal=False)
             >>> coords2, transform = model.predict(...)
             >>> poly = poly.extend(Residue.C, coords2, transform, atoms=atoms2, elements=elements2)
+            >>>
+            >>> # Template mode (no coordinates)
+            >>> poly = Polymer()
+            >>> poly = poly.extend(Residue.A, atoms=atoms, elements=elements)
         """
         # Handle empty polymer case
         if self.empty():
             return self._extend_from_empty(residue, coordinates, name, **fields)
 
-        # Validate single chain and poly-only
-        if self.size(Scale.CHAIN) != 1:
-            raise ValueError(
-                f"extend() requires a single-chain polymer. "
-                f"Got {self.size(Scale.CHAIN)} chains."
-            )
+        # Validate poly-only
         if self.nonpoly() > 0:
             raise ValueError(
                 "extend() requires a poly-only polymer (no HETATM atoms). "
                 "Use polymer.poly() first."
             )
 
-        # Transform is required for non-empty polymers
-        if transform is None:
-            raise ValueError(
-                "transform is required when extending a non-empty polymer."
+        # Determine n_new_atoms and handle coordinates
+        if coordinates is not None:
+            # Transform is required for non-empty polymers with coordinates
+            if transform is None:
+                raise ValueError(
+                    "transform is required when extending a non-empty polymer "
+                    "with coordinates."
+                )
+            # Position the new residue's coordinates
+            fields['coordinates'] = self._position_new_residue(
+                coordinates, transform, fields.get('atoms')
             )
+            n_new_atoms = coordinates.shape[0]
+        else:
+            # Template mode: no coordinates, get n_atoms from atoms field
+            if 'atoms' not in fields:
+                raise ValueError(
+                    "Either coordinates or atoms must be provided for extend()."
+                )
+            n_new_atoms = len(fields['atoms'])
+            # Check consistency: if existing polymer has coords, new residue must too
+            existing_coords = getattr(self, '_coordinates', None)
+            if existing_coords is not None:
+                raise ValueError(
+                    "Cannot add residue without coordinates to polymer with "
+                    "coordinates. Pass coordinates= to extend()."
+                )
 
         ref = self._hierarchy._ref
-
-        # Position the new residue's coordinates and add to fields
-        fields['coordinates'] = self._position_new_residue(
-            coordinates, transform, fields.get('atoms')
-        )
         fields['sequence'] = ops.array([residue.value], like=ref, dtype='int64')
 
+        # Check if we're starting a new chain or extending the current one
+        last_chain_name = self._names[-1] if self._names else "A"
+        starting_new_chain = (name != last_chain_name)
+
         # Concatenate all fields
-        n_new_atoms = coordinates.shape[0]
         new_fields = {}
 
         for field_name, field in self._get_fields().items():
@@ -2117,10 +2153,244 @@ class Polymer:
                         f"Field '{field_name}' required but not provided. "
                         f"This polymer has {field_name} data."
                     )
-            # Chain/molecule level fields are not extended per-residue
+            elif field.scale == Scale.CHAIN and starting_new_chain:
+                # Extend chain-level fields when starting a new chain
+                if field_name == 'molecule_types':
+                    new_val = ops.array([residue.molecule_type], like=ref, dtype='int64')
+                    new_fields[field_name] = ops.cat([field.data, new_val])
+
+        # Build new hierarchy and metadata
+        if starting_new_chain:
+            new_hierarchy = self._hierarchy.extend_new_chain(n_new_atoms)
+            new_names = list(self._names) + [name]
+            new_strands = list(self._strands) + [name]
+            new_descriptions = list(self._descriptions) + [""]
+        else:
+            new_hierarchy = self._hierarchy.extend_residue(n_new_atoms)
+            new_names = self._names
+            new_strands = self._strands
+            new_descriptions = self._descriptions
+
+        return self._clone(
+            hierarchy=new_hierarchy,
+            names=new_names,
+            strands=new_strands,
+            descriptions=new_descriptions,
+            **new_fields
+        )
+
+    def extend_new(
+        self: Polymer,
+        atom_group: AtomGroup,
+        coordinates: Array | None = None,
+        transform: Array | None = None,
+        *,
+        residue: Residue | None = None,
+        name: str = "A",
+    ) -> Polymer:
+        """
+        Extend polymer with a residue, auto-generating atoms and elements.
+
+        A convenience wrapper around extend() that automatically derives atoms
+        and elements from an AtomGroup. Use this when building chains from
+        residue models that store their own AtomGroup.
+
+        Args:
+            atom_group: AtomGroup defining the atoms (Residue.A, model.atoms, etc.)
+            coordinates: Optional (n_atoms, 3) coordinates. None for template mode.
+            transform: Optional (6,) SE(3) transform for positioning.
+            residue: Residue type for sequence field. Required for AtomGroup subsets
+                that don't have a .value attribute.
+            name: Chain name (only used for first residue).
+
+        Returns:
+            New Polymer with the residue appended.
+
+        Example:
+            >>> # Build with full residue
+            >>> p = Polymer()
+            >>> p = p.extend_new(Residue.A, coords)
+            >>> p = p.extend_new(Residue.C, coords2, transform)
+            >>>
+            >>> # Build template (no coordinates)
+            >>> p = Polymer()
+            >>> for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
+            ...     p = p.extend_new(res)
+            >>>
+            >>> # Build with model's atom subset
+            >>> p = p.extend_new(model.atoms, coords, transform, residue=model.residue)
+        """
+        # Get atom indices and elements from AtomGroup
+        atom_arr = atom_group.index()
+        elem_arr = atom_group.elements()
+
+        # Determine residue for sequence field
+        if residue is None:
+            if atom_group.value is None:
+                raise ValueError(
+                    "Cannot infer residue type from atom_group subset. "
+                    "Pass residue= explicitly."
+                )
+            residue = atom_group
+
+        return self.extend(
+            residue, coordinates, transform,
+            atoms=atom_arr, elements=elem_arr, name=name
+        )
+
+    def fix_terminals(self: Polymer) -> Polymer:
+        """
+        Fix terminal atoms for proper chain chemistry.
+
+        Removes internal terminal atoms so that only chain ends have terminal
+        atoms. For RNA/DNA, this means OP3/HOP3 only on 5' end and HO3' only
+        on 3' end. For proteins, H2/H3 only on N-terminus and OXT/HXT only on
+        C-terminus.
+
+        Returns:
+            New Polymer with corrected terminal atoms.
+
+        Example:
+            >>> # Build template with full atoms, then fix terminals
+            >>> p = Polymer()
+            >>> for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
+            ...     p = p.extend_new(res)
+            >>> p = p.fix_terminals()  # Remove internal terminal atoms
+        """
+        from .builder import _MOLECULE_CONFIGS
+
+        if self.empty():
+            return self
+
+        # Build mask of atoms to keep
+        keep_mask = np.ones(self.size(), dtype=bool)
+
+        # Process each chain
+        n_chains = self.size(Scale.CHAIN)
+        for chain_idx in range(n_chains):
+            chain = self.chain(chain_idx)
+            n_residues = chain.size(Scale.RESIDUE)
+
+            if n_residues == 0:
+                continue
+
+            # Get molecule type for this chain
+            mol_type = chain.molecule_types[0]
+            config = _MOLECULE_CONFIGS.get(Molecule(mol_type))
+            if config is None:
+                continue  # Unknown molecule type, skip
+
+            # Get atom names to remove at each position
+            start_atoms = config.start_terminal_atoms  # Remove from non-first
+            end_atoms = config.end_terminal_atoms      # Remove from non-last
+
+            # Process each residue in this chain
+            for res_idx in range(n_residues):
+                is_first = (res_idx == 0)
+                is_last = (res_idx == n_residues - 1)
+
+                # Determine which terminal atoms to remove
+                atoms_to_remove: set[str] = set()
+                if not is_first:
+                    atoms_to_remove.update(start_atoms)
+                if not is_last:
+                    atoms_to_remove.update(end_atoms)
+
+                if not atoms_to_remove:
+                    continue
+
+                # Get this residue's atoms
+                res = chain.residue(res_idx)
+                res_atoms = res.atoms  # atom indices
+
+                # Find atoms to remove by name
+                for i, atom_idx in enumerate(res_atoms):
+                    try:
+                        atom = Atom.from_value(int(atom_idx))
+                        if atom.name in atoms_to_remove:
+                            # Find global index of this atom
+                            global_idx = self._get_global_atom_index(
+                                chain_idx, res_idx, i
+                            )
+                            keep_mask[global_idx] = False
+                    except KeyError:
+                        continue  # Unknown atom, skip
+
+        # If nothing to remove, return self
+        if keep_mask.all():
+            return self
+
+        # Filter atoms
+        return self._filter_atoms(keep_mask)
+
+    def _get_global_atom_index(
+        self: Polymer,
+        chain_idx: int,
+        residue_idx: int,
+        atom_idx_in_residue: int,
+    ) -> int:
+        """Get global atom index from chain/residue/atom indices."""
+        # Sum atoms in previous chains
+        chain_offsets = np.cumsum(
+            np.concatenate([[0], to_numpy(self.counts(Scale.CHAIN))])
+        )
+        chain_start = chain_offsets[chain_idx]
+
+        # Sum atoms in previous residues within this chain
+        chain = self.chain(chain_idx)
+        res_counts = to_numpy(chain.counts(Scale.RESIDUE))
+        res_offsets = np.cumsum(np.concatenate([[0], res_counts]))
+        res_start = res_offsets[residue_idx]
+
+        return int(chain_start + res_start + atom_idx_in_residue)
+
+    def _filter_atoms(self: Polymer, keep_mask: Array) -> Polymer:
+        """Return new Polymer keeping only atoms where mask is True."""
+        keep_mask = to_numpy(keep_mask)
+
+        # Filter atom-level fields
+        new_fields = {}
+        for name, field in self._get_fields().items():
+            if field.scale == Scale.ATOM:
+                new_fields[name] = field.data[keep_mask]
+            elif field.scale == Scale.RESIDUE:
+                new_fields[name] = field.data  # Keep residue fields as-is
+            # Chain/molecule fields unchanged
+
+        # Recompute hierarchy with new atom counts per residue
+        residue_membership = to_numpy(self.membership(Scale.RESIDUE))
+        new_atoms_per_residue = []
+        for res_idx in range(self.size(Scale.RESIDUE)):
+            res_mask = residue_membership == res_idx
+            new_atoms_per_residue.append(int(keep_mask[res_mask].sum()))
+
+        chain_membership = to_numpy(self.membership(Scale.CHAIN))
+        new_atoms_per_chain = []
+        for chain_idx in range(self.size(Scale.CHAIN)):
+            chain_mask = chain_membership == chain_idx
+            new_atoms_per_chain.append(int(keep_mask[chain_mask].sum()))
+
+        n_atoms = int(keep_mask.sum())
 
         # Build new hierarchy
-        new_hierarchy = self._hierarchy.extend_residue(n_new_atoms)
+        from .hierarchy import _Hierarchy
+        sizes = {
+            Scale.RESIDUE: np.array(new_atoms_per_residue, dtype=np.int64),
+            Scale.CHAIN: np.array(new_atoms_per_chain, dtype=np.int64),
+            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+        }
+        lengths = to_numpy(self._hierarchy.lengths)
+
+        ref = new_fields.get('atoms', new_fields.get('coordinates'))
+        if ref is None:
+            ref = np.empty(0, dtype=np.int64)
+
+        new_hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=lengths,
+            polymer_count=n_atoms,
+            ref=ref,
+        )
 
         return self._clone(hierarchy=new_hierarchy, **new_fields)
 

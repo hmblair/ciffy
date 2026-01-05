@@ -146,72 +146,6 @@ def _generate_chain_name(index: int) -> str:
 
 
 # =============================================================================
-# CHAIN BUILDING
-# =============================================================================
-
-def _build_chain(
-    sequence: str,
-    atom_filter: dict[int, Sequence[int]] | None = None,
-) -> dict:
-    """
-    Build arrays for a single chain from sequence (no coordinates).
-
-    Args:
-        sequence: Single-letter sequence string.
-        atom_filter: Optional dict mapping residue type to allowed atom values.
-
-    Returns:
-        Dict with atoms, elements, sequence, atoms_per_residue, residue_indices, molecule_type.
-    """
-    from .builder import expand_residue
-
-    residue_indices, mol_type = _parse_sequence(sequence)
-
-    if not residue_indices:
-        return {
-            'atoms': np.empty(0, dtype=np.int64),
-            'elements': np.empty(0, dtype=np.int64),
-            'atoms_per_residue': [],
-            'residue_indices': [],
-            'molecule_type': mol_type,
-        }
-
-    all_atoms = []
-    all_elements = []
-    atoms_per_residue = []
-    n_residues = len(residue_indices)
-
-    for i, res_idx in enumerate(residue_indices):
-        residue = Residue.from_index(res_idx)
-        is_first = (i == 0)
-        is_last = (i == n_residues - 1)
-
-        # Get atom data with appropriate terminal filtering (ignore coords)
-        atoms, elements, _ = expand_residue(
-            residue, start_terminal=is_first, end_terminal=is_last
-        )
-
-        # Apply atom filter if provided
-        if atom_filter is not None and res_idx in atom_filter:
-            allowed = set(atom_filter[res_idx])
-            keep = [j for j, a in enumerate(atoms) if a in allowed]
-            atoms = atoms[keep]
-            elements = elements[keep]
-
-        all_atoms.append(atoms)
-        all_elements.append(elements)
-        atoms_per_residue.append(len(atoms))
-
-    return {
-        'atoms': np.concatenate(all_atoms) if all_atoms else np.empty(0, dtype=np.int64),
-        'elements': np.concatenate(all_elements) if all_elements else np.empty(0, dtype=np.int64),
-        'atoms_per_residue': atoms_per_residue,
-        'residue_indices': residue_indices,
-        'molecule_type': mol_type,
-    }
-
-
-# =============================================================================
 # PUBLIC API
 # =============================================================================
 
@@ -265,62 +199,25 @@ def from_sequence(
         empty = Polymer(pdb_id=id)
         return empty.torch() if backend == "torch" else empty
 
-    # Build each chain
-    all_atoms = []
-    all_elements = []
-    all_atoms_per_res = []
-    all_residue_indices = []
-    atoms_per_chain = []
-    residues_per_chain = []
-    chain_names = []
-    molecule_types = []
+    # Build polymer using extend_new() for each residue
+    polymer = Polymer(pdb_id=id)
 
     for chain_idx, seq in enumerate(sequences):
-        chain_data = _build_chain(seq, atom_filter=atoms)
+        residue_indices, mol_type = _parse_sequence(seq)
+        chain_name = _generate_chain_name(chain_idx)
 
-        all_atoms.append(chain_data['atoms'])
-        all_elements.append(chain_data['elements'])
-        all_atoms_per_res.extend(chain_data['atoms_per_residue'])
-        all_residue_indices.extend(chain_data['residue_indices'])
-        atoms_per_chain.append(len(chain_data['atoms']))
-        residues_per_chain.append(len(chain_data['residue_indices']))
-        chain_names.append(_generate_chain_name(chain_idx))
-        molecule_types.append(chain_data['molecule_type'].value)
+        for res_idx in residue_indices:
+            residue = Residue.from_index(res_idx)
 
-    # Concatenate arrays
-    atoms_arr = np.concatenate(all_atoms) if all_atoms else np.empty(0, dtype=np.int64)
-    elements_arr = np.concatenate(all_elements) if all_elements else np.empty(0, dtype=np.int64)
+            # Get AtomGroup, optionally filtered
+            atom_group = residue
+            if atoms is not None and res_idx in atoms:
+                atom_group = residue.subset(set(atoms[res_idx]))
 
-    n_atoms = len(atoms_arr)
+            polymer = polymer.extend_new(atom_group, residue=residue, name=chain_name)
 
-    # Create sizes and lengths arrays
-    sizes = {
-        Scale.RESIDUE: np.array(all_atoms_per_res, dtype=np.int64),
-        Scale.CHAIN: np.array(atoms_per_chain, dtype=np.int64),
-        Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
-    }
-    lengths = np.array(residues_per_chain, dtype=np.int64)
-
-    # Create hierarchy (use atoms array as ref for backend)
-    from .hierarchy import _Hierarchy
-    hierarchy = _Hierarchy.from_sizes_and_lengths(
-        sizes=sizes,
-        lengths=lengths,
-        polymer_count=n_atoms,
-        ref=atoms_arr,
-    )
-
-    polymer = Polymer(
-        hierarchy,
-        # No coordinates for templates - added later via copy(coordinates=...)
-        atoms=Field(atoms_arr, Scale.ATOM),
-        elements=Field(elements_arr, Scale.ATOM),
-        sequence=Field(np.array(all_residue_indices, dtype=np.int64), Scale.RESIDUE),
-        molecule_types=Field(np.array(molecule_types, dtype=np.int64), Scale.CHAIN),
-        pdb_id=id,
-        names=chain_names,
-        strands=chain_names,
-    )
+    # Fix terminal atoms (only chain ends should have terminal atoms)
+    polymer = polymer.fix_terminals()
 
     return polymer.torch() if backend == "torch" else polymer
 

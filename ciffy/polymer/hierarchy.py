@@ -656,9 +656,9 @@ class _Hierarchy:
 
     def extend_residue(self, n_atoms: int) -> "_Hierarchy":
         """
-        Create a new Hierarchy with one additional residue appended.
+        Create a new Hierarchy with one additional residue appended to the last chain.
 
-        For use by Polymer.extend() when adding a residue to a single-chain polymer.
+        For use by Polymer.extend() when adding a residue to the current chain.
         All atoms in the new residue are considered polymer atoms.
 
         Args:
@@ -666,15 +666,7 @@ class _Hierarchy:
 
         Returns:
             New _Hierarchy with updated counts.
-
-        Raises:
-            ValueError: If hierarchy has more than one chain.
         """
-        if self._n_chains != 1:
-            raise ValueError(
-                f"extend_residue requires a single-chain hierarchy, got {self._n_chains} chains"
-            )
-
         old_total = self._n_atoms
 
         # Append new residue's atom count
@@ -683,14 +675,31 @@ class _Hierarchy:
             ops.array([n_atoms], like=self._ref, dtype='int64')
         ])
 
-        # Update chain size (single chain gets all new atoms)
-        new_chn_sizes = ops.array([old_total + n_atoms], like=self._ref, dtype='int64')
+        # Update last chain's size (add new atoms to last chain)
+        old_chn_sizes = self._per[(Scale.ATOM, Scale.CHAIN)]
+        if self._n_chains == 1:
+            new_chn_sizes = ops.array([old_total + n_atoms], like=self._ref, dtype='int64')
+        else:
+            # Update only the last chain's atom count
+            last_chain_size = int(old_chn_sizes[-1]) + n_atoms
+            new_chn_sizes = ops.cat([
+                old_chn_sizes[:-1],
+                ops.array([last_chain_size], like=self._ref, dtype='int64')
+            ])
 
         # Update molecule size
         new_mol_sizes = ops.array([old_total + n_atoms], like=self._ref, dtype='int64')
 
-        # Update residues per chain
-        new_lengths = ops.array([self._n_residues + 1], like=self._ref, dtype='int64')
+        # Update residues in last chain
+        old_lengths = self._per[(Scale.RESIDUE, Scale.CHAIN)]
+        if self._n_chains == 1:
+            new_lengths = ops.array([self._n_residues + 1], like=self._ref, dtype='int64')
+        else:
+            last_chain_residues = int(old_lengths[-1]) + 1
+            new_lengths = ops.cat([
+                old_lengths[:-1],
+                ops.array([last_chain_residues], like=self._ref, dtype='int64')
+            ])
 
         new_per = {
             (Scale.ATOM, Scale.RESIDUE): new_res_sizes,
@@ -698,7 +707,54 @@ class _Hierarchy:
             (Scale.ATOM, Scale.MOLECULE): new_mol_sizes,
             (Scale.RESIDUE, Scale.CHAIN): new_lengths,
             (Scale.RESIDUE, Scale.MOLECULE): ops.array([self._n_residues + 1], like=self._ref),
-            (Scale.CHAIN, Scale.MOLECULE): ops.array([1], like=self._ref),
+            (Scale.CHAIN, Scale.MOLECULE): ops.array([self._n_chains], like=self._ref),
+        }
+
+        return _Hierarchy(new_per, self._polymer_count + n_atoms, self._ref)
+
+    def extend_new_chain(self, n_atoms: int) -> "_Hierarchy":
+        """
+        Create a new Hierarchy with a new chain containing one residue.
+
+        For use by Polymer.extend() when starting a new chain.
+        All atoms in the new residue are considered polymer atoms.
+
+        Args:
+            n_atoms: Number of atoms in the new residue.
+
+        Returns:
+            New _Hierarchy with an additional chain.
+        """
+        old_total = self._n_atoms
+
+        # Append new residue's atom count
+        new_res_sizes = ops.cat([
+            self._per[(Scale.ATOM, Scale.RESIDUE)],
+            ops.array([n_atoms], like=self._ref, dtype='int64')
+        ])
+
+        # Append new chain size (just the new residue's atoms)
+        new_chn_sizes = ops.cat([
+            self._per[(Scale.ATOM, Scale.CHAIN)],
+            ops.array([n_atoms], like=self._ref, dtype='int64')
+        ])
+
+        # Update molecule size (all chains combined)
+        new_mol_sizes = ops.array([old_total + n_atoms], like=self._ref, dtype='int64')
+
+        # Append residues in new chain (1 residue)
+        new_lengths = ops.cat([
+            self._per[(Scale.RESIDUE, Scale.CHAIN)],
+            ops.array([1], like=self._ref, dtype='int64')
+        ])
+
+        new_per = {
+            (Scale.ATOM, Scale.RESIDUE): new_res_sizes,
+            (Scale.ATOM, Scale.CHAIN): new_chn_sizes,
+            (Scale.ATOM, Scale.MOLECULE): new_mol_sizes,
+            (Scale.RESIDUE, Scale.CHAIN): new_lengths,
+            (Scale.RESIDUE, Scale.MOLECULE): ops.array([self._n_residues + 1], like=self._ref),
+            (Scale.CHAIN, Scale.MOLECULE): ops.array([self._n_chains + 1], like=self._ref),
         }
 
         return _Hierarchy(new_per, self._polymer_count + n_atoms, self._ref)

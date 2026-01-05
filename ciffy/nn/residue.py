@@ -410,7 +410,12 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
             hidden_dim=kwargs.get("hidden_dim", 64),
             use_rotation=kwargs.get("use_rotation", True),
             transform_scale=kwargs.get("transform_scale", 1.0),
-            latent_reg=kwargs.get("latent_reg", 0.01),  # Prevent Jacobian exploitation
+            latent_reg=kwargs.get("latent_reg", 0.01),  # Jacobian regularization
+            # Gaussian regularization to enforce N(0,1) latent marginals
+            gauss_reg=kwargs.get("gauss_reg", 0.5),
+            kurtosis_reg=kwargs.get("kurtosis_reg", 0.1),
+            outlier_clip=kwargs.get("outlier_clip", 5.0),
+            outlier_penalty=kwargs.get("outlier_penalty", 0.1),
         )
         data_config = ResidueFlowDataConfig(batch_size=batch_size)
         return config_cls(

@@ -36,8 +36,14 @@ class ResidueFlowModelConfig:
     bound: float | None = None
     use_rotation: bool = True
     noise_std: float = 0.05
-    latent_reg: float = 0.0  # Regularization weight (0 = disabled)
+    latent_reg: float = 0.01  # Jacobian regularization: penalize (log_det)^2
     transform_scale: float = 1.0  # Scale factor for transforms in PCA
+    # Gaussian regularization to enforce N(0,1) latent marginals
+    gauss_reg: float = 0.5  # Weight for moment matching: (μ² + (σ-1)²)
+    kurtosis_reg: float = 0.1  # Weight for kurtosis: (κ-3)²
+    kurtosis_warmup: float = 0.25  # Fraction of epochs before kurtosis reg starts
+    outlier_clip: float = 5.0  # Clip latents for robust moment estimation
+    outlier_penalty: float = 0.1  # Penalty weight for latents beyond clip threshold
 
 
 @dataclass
@@ -221,9 +227,36 @@ class ResidueFlowModule(LightningModule):
         nll = -(log_pz + log_det).mean()
 
         # Jacobian regularization: penalize log_det away from 0
-        # This directly prevents the model from exploiting the Jacobian
+        # This prevents the flow from exploiting the Jacobian to lower NLL
         jac_reg = self.config.model.latent_reg
-        loss = nll + jac_reg * (log_det ** 2).mean()
+        if jac_reg > 0:
+            jac_loss = (log_det ** 2).mean()
+            loss = nll + jac_reg * jac_loss
+            self.log("train/jac_loss", jac_loss, on_step=False, on_epoch=True)
+            self.log("train/log_det_mean", log_det.mean(), on_step=False, on_epoch=True)
+        else:
+            loss = nll
+
+        # Gaussian regularization: enforce N(0,1) marginals
+        config = self.config.model
+        if config.gauss_reg > 0:
+            gauss_loss = self._gaussian_regularization_loss(z)
+            loss = loss + config.gauss_reg * gauss_loss
+            self.log("train/gauss_loss", gauss_loss, on_step=False, on_epoch=True)
+
+        # Kurtosis regularization (after warmup period)
+        if config.kurtosis_reg > 0:
+            warmup_epochs = int(config.kurtosis_warmup * self.trainer.max_epochs)
+            if self.current_epoch >= warmup_epochs:
+                kurt_loss = self._kurtosis_regularization_loss(z)
+                loss = loss + config.kurtosis_reg * kurt_loss
+                self.log("train/kurtosis_loss", kurt_loss, on_step=False, on_epoch=True)
+
+        # Outlier penalty: discourage extreme latent values
+        if config.outlier_penalty > 0:
+            outlier_loss = self._outlier_penalty_loss(z)
+            loss = loss + config.outlier_penalty * outlier_loss
+            self.log("train/outlier_loss", outlier_loss, on_step=False, on_epoch=True)
 
         self.log("train/nll", nll, prog_bar=True, on_step=True, on_epoch=True)
         self.log("train/loss", loss, on_step=False, on_epoch=True)
@@ -240,6 +273,46 @@ class ResidueFlowModule(LightningModule):
             self._log_actnorm_stats()
 
         return loss
+
+    def _gaussian_regularization_loss(self, z: torch.Tensor) -> torch.Tensor:
+        """Compute moment matching loss to enforce N(0,1) marginals.
+
+        Uses clipped latents for robust estimation when outliers are present.
+        Penalizes deviation from mean=0 and std=1 per dimension.
+        """
+        clip = self.config.model.outlier_clip
+        z_clipped = torch.clamp(z, -clip, clip)
+
+        batch_mean = z_clipped.mean(dim=0)
+        batch_std = z_clipped.std(dim=0, correction=0)
+
+        mean_loss = (batch_mean ** 2).mean()
+        std_loss = ((batch_std - 1) ** 2).mean()
+
+        return mean_loss + std_loss
+
+    def _kurtosis_regularization_loss(self, z: torch.Tensor) -> torch.Tensor:
+        """Penalize excess kurtosis to encourage Gaussian shape.
+
+        Uses clipped latents for robust estimation.
+        For N(0,1), excess kurtosis = 0 (kurtosis = 3).
+        """
+        clip = self.config.model.outlier_clip
+        z_clipped = torch.clamp(z, -clip, clip)
+
+        z_centered = z_clipped - z_clipped.mean(dim=0, keepdim=True)
+        z_std = z_clipped.std(dim=0, keepdim=True, correction=0).clamp(min=1e-6)
+        z_norm = z_centered / z_std
+
+        # Excess kurtosis: E[(x-μ)^4]/σ^4 - 3
+        excess_kurtosis = (z_norm ** 4).mean(dim=0) - 3.0
+
+        return (excess_kurtosis ** 2).mean()
+
+    def _outlier_penalty_loss(self, z: torch.Tensor) -> torch.Tensor:
+        """Penalize latent values beyond clip threshold."""
+        clip = self.config.model.outlier_clip
+        return torch.relu(z.abs() - clip).mean()
 
     def _log_actnorm_stats(self) -> None:
         """Log ActNorm log_scale statistics for debugging."""

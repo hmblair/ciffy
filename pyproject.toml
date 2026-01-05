@@ -27,7 +27,7 @@ dependencies = ["numpy", "rich"]
 [project.optional-dependencies]
 torch = ["torch"]
 vis = ["matplotlib"]
-nn = ["torch>=2.0", "lightning>=2.0", "safetensors>=0.4"]
+nn = ["torch>=2.0", "lightning>=2.0", "safetensors>=0.4", "scipy>=1.10"]
 dev = ["pytest", "pytest-xdist", "torch", "matplotlib", "biopython", "mypy"]
 
 [project.scripts]

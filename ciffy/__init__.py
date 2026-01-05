@@ -90,6 +90,9 @@ except ImportError:
 # Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map
 
+# Reactivity data utilities
+from .reactivity import ReactivityIndex, ReactivityMatch
+
 # Convenience aliases - these are commonly used so we keep them
 ATOM = Scale.ATOM
 RESIDUE = Scale.RESIDUE
@@ -140,6 +143,9 @@ __all__ = [
     "to_defattr",
     "plot_profile",
     "contact_map",
+    # Reactivity
+    "ReactivityIndex",
+    "ReactivityMatch",
     # Convenience aliases
     "ATOM",
     "RESIDUE",

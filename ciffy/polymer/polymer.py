@@ -2079,21 +2079,18 @@ class Polymer:
 
         Example:
             >>> from ciffy import Residue, Polymer
-            >>> from ciffy.polymer import expand_residue
             >>>
-            >>> # Start from empty polymer
+            >>> # Start from empty polymer (first residue gets 5' terminal atoms)
             >>> poly = Polymer()
-            >>> atoms, elements, coords = expand_residue(Residue.A)
+            >>> atom_group = Residue.A.terminal(start=True, end=False)
+            >>> atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
             >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
             >>>
-            >>> # Extend with model-predicted coordinates and transform
-            >>> atoms2, elements2, _ = expand_residue(Residue.C, start_terminal=False)
-            >>> coords2, transform = model.predict(...)
-            >>> poly = poly.extend(Residue.C, coords2, transform, atoms=atoms2, elements=elements2)
-            >>>
-            >>> # Template mode (no coordinates)
-            >>> poly = Polymer()
-            >>> poly = poly.extend(Residue.A, atoms=atoms, elements=elements)
+            >>> # Extend with model-predicted coordinates (internal residue, no terminals)
+            >>> atom_group = Residue.C.terminal(start=False, end=False)
+            >>> atoms, elements = atom_group.index(), atom_group.elements()
+            >>> coords, transform = model.predict(...)
+            >>> poly = poly.extend(Residue.C, coords, transform, atoms=atoms, elements=elements)
         """
         # Handle empty polymer case
         if self.empty():
@@ -2237,162 +2234,6 @@ class Polymer:
             residue, coordinates, transform,
             atoms=atom_arr, elements=elem_arr, name=name
         )
-
-    def fix_terminals(self: Polymer) -> Polymer:
-        """
-        Fix terminal atoms for proper chain chemistry.
-
-        Removes internal terminal atoms so that only chain ends have terminal
-        atoms. For RNA/DNA, this means OP3/HOP3 only on 5' end and HO3' only
-        on 3' end. For proteins, H2/H3 only on N-terminus and OXT/HXT only on
-        C-terminus.
-
-        Returns:
-            New Polymer with corrected terminal atoms.
-
-        Example:
-            >>> # Build template with full atoms, then fix terminals
-            >>> p = Polymer()
-            >>> for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
-            ...     p = p.extend_new(res)
-            >>> p = p.fix_terminals()  # Remove internal terminal atoms
-        """
-        from .builder import _MOLECULE_CONFIGS
-
-        if self.empty():
-            return self
-
-        # Build mask of atoms to keep
-        keep_mask = np.ones(self.size(), dtype=bool)
-
-        # Process each chain
-        n_chains = self.size(Scale.CHAIN)
-        for chain_idx in range(n_chains):
-            chain = self.chain(chain_idx)
-            n_residues = chain.size(Scale.RESIDUE)
-
-            if n_residues == 0:
-                continue
-
-            # Get molecule type for this chain
-            mol_type = chain.molecule_types[0]
-            config = _MOLECULE_CONFIGS.get(Molecule(mol_type))
-            if config is None:
-                continue  # Unknown molecule type, skip
-
-            # Get atom names to remove at each position
-            start_atoms = config.start_terminal_atoms  # Remove from non-first
-            end_atoms = config.end_terminal_atoms      # Remove from non-last
-
-            # Process each residue in this chain
-            for res_idx in range(n_residues):
-                is_first = (res_idx == 0)
-                is_last = (res_idx == n_residues - 1)
-
-                # Determine which terminal atoms to remove
-                atoms_to_remove: set[str] = set()
-                if not is_first:
-                    atoms_to_remove.update(start_atoms)
-                if not is_last:
-                    atoms_to_remove.update(end_atoms)
-
-                if not atoms_to_remove:
-                    continue
-
-                # Get this residue's atoms
-                res = chain.residue(res_idx)
-                res_atoms = res.atoms  # atom indices
-
-                # Find atoms to remove by name
-                for i, atom_idx in enumerate(res_atoms):
-                    try:
-                        atom = Atom.from_value(int(atom_idx))
-                        if atom.name in atoms_to_remove:
-                            # Find global index of this atom
-                            global_idx = self._get_global_atom_index(
-                                chain_idx, res_idx, i
-                            )
-                            keep_mask[global_idx] = False
-                    except KeyError:
-                        continue  # Unknown atom, skip
-
-        # If nothing to remove, return self
-        if keep_mask.all():
-            return self
-
-        # Filter atoms
-        return self._filter_atoms(keep_mask)
-
-    def _get_global_atom_index(
-        self: Polymer,
-        chain_idx: int,
-        residue_idx: int,
-        atom_idx_in_residue: int,
-    ) -> int:
-        """Get global atom index from chain/residue/atom indices."""
-        # Sum atoms in previous chains
-        chain_offsets = np.cumsum(
-            np.concatenate([[0], to_numpy(self.counts(Scale.CHAIN))])
-        )
-        chain_start = chain_offsets[chain_idx]
-
-        # Sum atoms in previous residues within this chain
-        chain = self.chain(chain_idx)
-        res_counts = to_numpy(chain.counts(Scale.RESIDUE))
-        res_offsets = np.cumsum(np.concatenate([[0], res_counts]))
-        res_start = res_offsets[residue_idx]
-
-        return int(chain_start + res_start + atom_idx_in_residue)
-
-    def _filter_atoms(self: Polymer, keep_mask: Array) -> Polymer:
-        """Return new Polymer keeping only atoms where mask is True."""
-        keep_mask = to_numpy(keep_mask)
-
-        # Filter atom-level fields
-        new_fields = {}
-        for name, field in self._get_fields().items():
-            if field.scale == Scale.ATOM:
-                new_fields[name] = field.data[keep_mask]
-            elif field.scale == Scale.RESIDUE:
-                new_fields[name] = field.data  # Keep residue fields as-is
-            # Chain/molecule fields unchanged
-
-        # Recompute hierarchy with new atom counts per residue
-        residue_membership = to_numpy(self.membership(Scale.RESIDUE))
-        new_atoms_per_residue = []
-        for res_idx in range(self.size(Scale.RESIDUE)):
-            res_mask = residue_membership == res_idx
-            new_atoms_per_residue.append(int(keep_mask[res_mask].sum()))
-
-        chain_membership = to_numpy(self.membership(Scale.CHAIN))
-        new_atoms_per_chain = []
-        for chain_idx in range(self.size(Scale.CHAIN)):
-            chain_mask = chain_membership == chain_idx
-            new_atoms_per_chain.append(int(keep_mask[chain_mask].sum()))
-
-        n_atoms = int(keep_mask.sum())
-
-        # Build new hierarchy
-        from .hierarchy import _Hierarchy
-        sizes = {
-            Scale.RESIDUE: np.array(new_atoms_per_residue, dtype=np.int64),
-            Scale.CHAIN: np.array(new_atoms_per_chain, dtype=np.int64),
-            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
-        }
-        lengths = to_numpy(self._hierarchy.lengths)
-
-        ref = new_fields.get('atoms', new_fields.get('coordinates'))
-        if ref is None:
-            ref = np.empty(0, dtype=np.int64)
-
-        new_hierarchy = _Hierarchy.from_sizes_and_lengths(
-            sizes=sizes,
-            lengths=lengths,
-            polymer_count=n_atoms,
-            ref=ref,
-        )
-
-        return self._clone(hierarchy=new_hierarchy, **new_fields)
 
     def _position_new_residue(
         self: Polymer,

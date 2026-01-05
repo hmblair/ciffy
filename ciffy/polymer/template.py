@@ -205,19 +205,16 @@ def from_sequence(
     for chain_idx, seq in enumerate(sequences):
         residue_indices, mol_type = _parse_sequence(seq)
         chain_name = _generate_chain_name(chain_idx)
+        n_residues = len(residue_indices)
 
-        for res_idx in residue_indices:
+        for i, res_idx in enumerate(residue_indices):
             residue = Residue.from_index(res_idx)
+            atom_group = residue.terminal(start=(i == 0), end=(i == n_residues - 1))
 
-            # Get AtomGroup, optionally filtered
-            atom_group = residue
             if atoms is not None and res_idx in atoms:
-                atom_group = residue.subset(set(atoms[res_idx]))
+                atom_group = atom_group.subset(set(atoms[res_idx]))
 
             polymer = polymer.extend_new(atom_group, residue=residue, name=chain_name)
-
-    # Fix terminal atoms (only chain ends should have terminal atoms)
-    polymer = polymer.fix_terminals()
 
     return polymer.torch() if backend == "torch" else polymer
 

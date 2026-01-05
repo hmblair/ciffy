@@ -662,6 +662,34 @@ class AtomGroup:
         """Alias for exclude() for compatibility."""
         return self.exclude(names)
 
+    def terminal(self, start: bool = True, end: bool = True) -> "AtomGroup":
+        """
+        Return AtomGroup with terminal atoms filtered.
+
+        Args:
+            start: Keep 5'/N-terminal atoms.
+            end: Keep 3'/C-terminal atoms.
+
+        Returns:
+            Filtered AtomGroup, or self if no filtering needed.
+        """
+        if start and end:
+            return self
+
+        from ._generated_molecule import TERMINAL_ATOMS
+
+        terminals = TERMINAL_ATOMS.get(self.molecule_type)
+        if terminals is None:
+            return self
+
+        exclude = set()
+        if not start:
+            exclude |= terminals[0]
+        if not end:
+            exclude |= terminals[1]
+
+        return self.exclude(exclude) if exclude else self
+
     def filter(self, predicate: Callable[[Atom], bool]) -> AtomGroup:
         """
         Create subset based on arbitrary predicate.

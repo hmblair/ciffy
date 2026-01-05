@@ -402,6 +402,22 @@ BACKBONE_ATOMS_PROTEIN: frozenset[str] = frozenset({
 # All backbone atoms (union of nucleic and protein)
 ALL_BACKBONE_ATOMS: frozenset[str] = BACKBONE_ATOMS_NUCLEIC | BACKBONE_ATOMS_PROTEIN
 
+
+# =============================================================================
+# TERMINAL ATOM DEFINITIONS
+# =============================================================================
+# Atoms present only at chain termini. Tuple of (start_atoms, end_atoms).
+# Used for filtering during chain building with Residue.terminal().
+
+TERMINAL_ATOMS: dict[int, tuple[frozenset[str], frozenset[str]]] = {
+    Molecule.RNA: (frozenset({'OP3', 'HOP3'}), frozenset({'HO3p'})),
+    Molecule.DNA: (frozenset({'OP3', 'HOP3'}), frozenset({'HO3p'})),
+    Molecule.HYBRID: (frozenset({'OP3', 'HOP3'}), frozenset({'HO3p'})),
+    Molecule.PROTEIN: (frozenset({'H2', 'H3'}), frozenset({'OXT', 'HXT'})),
+    Molecule.PROTEIN_D: (frozenset({'H2', 'H3'}), frozenset({'OXT', 'HXT'})),
+    Molecule.CYCLIC_PEPTIDE: (frozenset({'H2', 'H3'}), frozenset({'OXT', 'HXT'})),
+}
+
 # Unified backbone atom values (1-indexed, 0 = unknown)
 # Order: nucleic acid backbone first, then protein backbone
 UNIFIED_BACKBONE_VALUES: dict[str, int] = {

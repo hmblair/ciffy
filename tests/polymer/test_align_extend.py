@@ -11,7 +11,6 @@ import pytest
 import ciffy
 from ciffy import Scale, from_sequence
 from ciffy.biochemistry import Residue
-from ciffy.polymer.builder import expand_residue
 
 from tests.utils import BACKENDS
 
@@ -35,9 +34,10 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
         is_first = (i == 0)
         is_last = (i == len(residue_indices) - 1)
 
-        atoms, elements, coords = expand_residue(
-            residue, start_terminal=is_first, end_terminal=is_last
-        )
+        atom_group = residue.terminal(start=is_first, end=is_last)
+        atoms = atom_group.index()
+        elements = atom_group.elements()
+        coords = atom_group.ideal
 
         if backend == "torch":
             import torch
@@ -195,7 +195,8 @@ class TestCopyFieldDeletion:
         p = p.copy(bfactors=None)
 
         # Get new residue data (no bfactors)
-        atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+        atom_group = Residue.G.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         # Should work without providing bfactors
@@ -366,7 +367,8 @@ class TestExtendEdgeCases:
         """Extend with zero rotation places residue along backbone."""
         p = template_with_coords("a")
 
-        atoms, elements, coords = expand_residue(Residue.C, start_terminal=False)
+        atom_group = Residue.C.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         # Identity rotation, translate along Z
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
@@ -384,7 +386,8 @@ class TestExtendEdgeCases:
         """Extended polymer has correct sequence."""
         p = template_with_coords("acg")
 
-        atoms, elements, coords = expand_residue(Residue.U, start_terminal=False)
+        atom_group = Residue.U.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         extended = p.extend(
@@ -402,7 +405,8 @@ class TestExtendEdgeCases:
         p = template_with_coords("ac")
         assert p.size(Scale.CHAIN) == 1
 
-        atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+        atom_group = Residue.G.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         extended = p.extend(
@@ -420,7 +424,8 @@ class TestExtendEdgeCases:
         for start_res in ['a', 'c', 'g', 'u']:
             p = template_with_coords(start_res)
 
-            atoms, elements, coords = expand_residue(Residue.A, start_terminal=False)
+            atom_group = Residue.A.terminal(start=False, end=False)
+            atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
             transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
             extended = p.extend(

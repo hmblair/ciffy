@@ -255,6 +255,35 @@ class Ensemble:
 
 ## LOW Priority
 
+### Derive Terminal Atoms from CCD
+
+**Goal**: Replace hardcoded `TERMINAL_ATOMS` in `codegen/config.py` with values derived from the Chemical Component Dictionary (CCD).
+
+**Context**: Terminal atoms (OP3, HOP3, HO3' for RNA; H2, OXT, HXT for protein) are currently hardcoded. The CCD contains relevant flags that could derive these automatically.
+
+**CCD fields available**:
+- `pdbx_leaving_atom_flag` - atoms removed during polymerization
+- `pdbx_n_terminal_atom_flag` - N-terminal atoms (proteins)
+- `pdbx_c_terminal_atom_flag` - C-terminal atoms (proteins)
+
+**Caveat for nucleic acids**: CCD marks OP3 and HO3' as `leaving=Y`, but HOP3 (hydrogen bonded to OP3) is **not** marked. Need transitive closure: atoms bonded to leaving atoms should also be considered terminal.
+
+**Implementation**:
+1. Parse `leaving_atom_flag`, `n_terminal_atom_flag`, `c_terminal_atom_flag` in `codegen/ccd.py`
+2. For nucleic acids: compute transitive closure (atoms bonded to leaving atoms)
+3. Generate per-residue terminal atoms (instead of per-molecule-type)
+4. Update `AtomGroup.terminal()` to use per-residue data
+
+**Files affected**:
+- `codegen/ccd.py` - Parse additional CCD fields
+- `codegen/python_codegen.py` - Generate per-residue terminal atoms
+- `ciffy/biochemistry/atom.py` - Update `terminal()` to use per-residue data
+
+**Effort**: 4-6 hours
+**Impact**: More robust handling of non-standard residues, single source of truth
+
+---
+
 ## Test Coverage Gaps
 
 The following modules lack test coverage. Adding tests would improve reliability.

@@ -6,7 +6,6 @@ import pytest
 import ciffy
 from ciffy import Residue, Scale, join
 from ciffy import from_sequence
-from ciffy.polymer import expand_residue
 
 # Identity rotation + Z-axis translation for ideal backbone spacing
 LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
@@ -35,9 +34,10 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
             is_first = (i == 0)
             is_last = (i == len(residue_indices) - 1)
 
-            atoms, elements, coords = expand_residue(
-                residue, start_terminal=is_first, end_terminal=is_last
-            )
+            atom_group = residue.terminal(start=is_first, end=is_last)
+            atoms = atom_group.index()
+            elements = atom_group.elements()
+            coords = atom_group.ideal
 
             # Convert to torch if needed
             if backend == "torch":
@@ -60,8 +60,11 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
 
 def extend_with_linear(poly, residue):
     """Helper to extend polymer with linear extension (for backward-compatible tests)."""
-    # Get new residue data (internal, no start terminal)
-    atoms, elements, coords = expand_residue(residue, start_terminal=False, end_terminal=False)
+    # Get new residue data (internal, no terminals)
+    atom_group = residue.terminal(start=False, end=False)
+    atoms = atom_group.index()
+    elements = atom_group.elements()
+    coords = atom_group.ideal
 
     transform = LINEAR_EXTEND_TRANSFORM
 
@@ -262,7 +265,8 @@ class TestExtend:
         original_chains = p.size(Scale.CHAIN)
         original_residues = p.size(Scale.RESIDUE)
 
-        atoms, elements, coords = expand_residue(Residue.A, start_terminal=False)
+        atom_group = Residue.A.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         # Extend should add to the last chain
@@ -279,7 +283,8 @@ class TestExtend:
         if p.nonpoly() == 0:
             pytest.skip("Test structure has no HETATM atoms")
 
-        atoms, elements, coords = expand_residue(Residue.A, start_terminal=False)
+        atom_group = Residue.A.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(ValueError, match="poly-only"):
@@ -288,7 +293,8 @@ class TestExtend:
     def test_extend_template_error(self):
         """Extend fails on template (no coordinates)."""
         template = from_sequence("ac")
-        atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+        atom_group = Residue.G.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(AttributeError, match="coordinates"):
@@ -299,7 +305,8 @@ class TestExtend:
         p = template_with_coords("ac")
 
         # Get new residue data
-        atoms, elements, coords = expand_residue(Residue.G, start_terminal=False)
+        atom_group = Residue.G.terminal(start=False, end=False)
+        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
 
         extended = p.extend(Residue.G, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements)
 

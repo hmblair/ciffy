@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import MOLECULE_TYPES, Molecule
+from .config import MOLECULE_TYPES, Molecule, TERMINAL_ATOMS
 from .names import to_python_name
 from .residue import ResidueDefinition, compute_atom_dihedral_ownership
 
@@ -115,6 +115,22 @@ def generate_python_molecule(biochem_dir: Path) -> None:
         '        return Molecule(value)',
         '    except ValueError as e:',
         '        raise ValueError(f"Unknown molecule type value: {value}") from e',
+        '',
+        '',
+        '# Terminal atoms per molecule type: (start_atoms, end_atoms)',
+        '# Used for filtering during chain building with AtomGroup.terminal()',
+        'TERMINAL_ATOMS: dict[int, tuple[frozenset[str], frozenset[str]]] = {',
+    ])
+
+    # Generate TERMINAL_ATOMS dict entries
+    for mol_type, (start_atoms, end_atoms) in TERMINAL_ATOMS.items():
+        # Use double quotes for atom names containing apostrophes
+        start_str = ', '.join(f'"{a}"' for a in sorted(start_atoms))
+        end_str = ', '.join(f'"{a}"' for a in sorted(end_atoms))
+        lines.append(f"    Molecule.{MOLECULE_TYPES[mol_type].name}: (frozenset({{{start_str}}}), frozenset({{{end_str}}})),")
+
+    lines.extend([
+        '}',
         '',
     ])
 

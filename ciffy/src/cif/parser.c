@@ -436,23 +436,44 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
             ix++;
         }
 
-        if ((size_t)ix < alloc_size) {
-            sizes[ix]++;
-        } else {
-            LOG_WARNING("Size index %d exceeds allocation %zu", ix, alloc_size);
+        if ((size_t)ix >= alloc_size) {
+            /* Realloc to accommodate more groups than expected */
+            size_t old_alloc = alloc_size;
+            size_t new_alloc = (size_t)(ix + 1) * 2;
+            int *resized = realloc(sizes, new_alloc * sizeof(int));
+            if (resized == NULL) {
+                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+                    "Failed to realloc sizes array from %zu to %zu", old_alloc, new_alloc);
+                free(sizes);
+                return NULL;
+            }
+            /* Zero-initialize new elements */
+            memset(resized + old_alloc, 0, (new_alloc - old_alloc) * sizeof(int));
+            sizes = resized;
+            alloc_size = new_alloc;
+            LOG_DEBUG("Reallocated sizes array: %zu -> %zu (ix=%d)", old_alloc, new_alloc, ix);
         }
+        sizes[ix]++;
     }
 
+    /*
+     * Update *size only if we had to grow beyond the original allocation.
+     * When *size > 0 was passed, caller expects that many elements (e.g., one per chain).
+     * When *size <= 0 was passed, we determine size dynamically.
+     */
+    int final_count = ix + 1;
     if (*size <= 0) {
-        int new_size = ix + 1;
-        int *resized = realloc(sizes, (size_t)new_size * sizeof(int));
+        /* Dynamic sizing: shrink to actual count */
+        int *resized = realloc(sizes, (size_t)final_count * sizeof(int));
         if (resized != NULL) {
             sizes = resized;
-        } else {
-            LOG_WARNING("realloc shrink failed for sizes array, using oversized buffer");
         }
-        *size = new_size;
+        *size = final_count;
+    } else if (final_count > *size) {
+        /* Had to grow: update size to new count */
+        *size = final_count;
     }
+    /* else: keep original *size, array already has correct allocation */
     return sizes;
 }
 

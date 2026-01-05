@@ -172,53 +172,8 @@ loss = ciffy.rmsd(pred_coords, target_coords, eps=1e-8) # Gradient-stable near 0
 
 The `eps` parameter adds numerical stability when RMSD approaches zero during training.
 
-## Generative Models
+## Training Practices
 
-### ResidueFlowModel (quick training)
+1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.
 
-```python
-from ciffy import flow
-
-model = flow.train(
-    cif_paths=["data/*.cif"],
-    residues="ACGU",
-    output_dir="models/rna_flow",
-    n_epochs=200,
-    latent_dim=12,
-    accelerator="gpu",
-)
-```
-
-### PolymerModel (sampling)
-
-```python
-from ciffy.nn import PolymerModel
-
-# Load trained model
-model = PolymerModel.load("models/polymer", device="cuda")
-
-# Sample from sequence
-polymer = model.sample_from_sequence("acgu")
-polymers = model.sample_from_sequence("acgu", n_samples=10, temperature=1.0)
-
-# Encode/decode
-latents = model.encode_polymer(polymer)  # (n_residues, latent_dim)
-reconstructed = model.decode_to_polymer(latents, template)
-
-# Save
-model.save("models/polymer")
-```
-
-### ConsolidatedResidueVAE
-
-```python
-from ciffy.nn.vae.residue import ConsolidatedResidueVAE, ConsolidatedVAEConfig
-
-model = ConsolidatedResidueVAE(
-    residue_atoms=residue_atoms,  # Dict[Residue, AtomGroup]
-    config=ConsolidatedVAEConfig(latent_dim=12, d_model=64),
-)
-
-coords, transforms = model.sample(n_samples=10)
-latents = model.encode(coords)
-```
+2. **Always save sample predictions** - Save sample predictions/generations to `outputs/` so the user can visually inspect model quality. Use `polymer.write('outputs/sample_001.cif')` to write structures.

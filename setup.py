@@ -4,10 +4,6 @@ Setup script for ciffy C extension.
 Metadata is defined in pyproject.toml. This file only handles:
 1. C extension compilation
 2. Hash table generation before build (downloads CCD if needed)
-
-For CUDA support, see setup_cuda.py which must be run separately:
-    pip install -e .                              # builds C extension
-    python setup_cuda.py build_ext --inplace      # builds CUDA extension
 """
 
 from setuptools import setup, Extension
@@ -500,18 +496,11 @@ ext_module = Extension(
 # Build extensions list
 # ============================================================================
 
-# The C extension is always built with standard setuptools
 ext_modules = [ext_module]
 cmdclass = {
     'build_ext': GenerateAndBuildExt,
     'sdist': GenerateAndSdist,
 }
-
-# CUDA extension is built separately via setup_cuda.py
-# This avoids conflicts between setuptools C compiler and PyTorch's BuildExtension
-# Users with CUDA should run:
-#   pip install -e .                              # builds C extension
-#   python setup_cuda.py build_ext --inplace      # builds CUDA extension
 
 setup(
     ext_modules=ext_modules,

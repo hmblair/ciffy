@@ -637,7 +637,7 @@ def clashes(
         return np.zeros((0, 2), dtype=np.int64)
 
     coords = polymer.coordinates
-    radii = polymer.vdw_radii()
+    radii = polymer.vdw_radii
 
     # Pairwise distances
     dists = cdist(coords, coords)
@@ -915,7 +915,7 @@ def sasa(
         >>> sasa_loss = ciffy.sasa(p.torch(), temperature=0.3).sum()
     """
     coords = polymer.coordinates  # (N, 3)
-    radii = polymer.vdw_radii()   # (N,)
+    radii = polymer.vdw_radii   # (N,)
     N = coords.shape[0]
 
     if N == 0:

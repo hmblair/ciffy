@@ -1107,8 +1107,7 @@ class Polymer(AtomContainer):
 
         # Step 2: Compute new hierarchy for selection
         new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
-        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref,
-                                   with_residues=self._hierarchy.has_residues)
+        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
 
         # Step 3: Slice all fields and annotations
         sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)

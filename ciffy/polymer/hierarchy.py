@@ -18,31 +18,32 @@ if TYPE_CHECKING:
     pass
 
 
-def _empty_per(with_residues: bool = True) -> dict[tuple[Scale, Scale], np.ndarray | None]:
+def _empty_per(scales: frozenset[Scale]) -> dict[tuple[Scale, Scale], np.ndarray]:
     """Create the _per dict for an empty hierarchy.
 
     Args:
-        with_residues: If True, include residue-level arrays.
-            If False, residue arrays are None (for HeteroAtoms).
+        scales: Set of scales this hierarchy supports.
+
+    Returns:
+        Dict containing only the scale pairs that are supported.
     """
-    if with_residues:
-        return {
-            (Scale.ATOM, Scale.RESIDUE): np.array([], dtype=np.int64),
-            (Scale.ATOM, Scale.CHAIN): np.array([], dtype=np.int64),
-            (Scale.ATOM, Scale.MOLECULE): np.array([0], dtype=np.int64),
-            (Scale.RESIDUE, Scale.CHAIN): np.array([], dtype=np.int64),
-            (Scale.RESIDUE, Scale.MOLECULE): np.array([0], dtype=np.int64),
-            (Scale.CHAIN, Scale.MOLECULE): np.array([0], dtype=np.int64),
-        }
-    else:
-        return {
-            (Scale.ATOM, Scale.RESIDUE): None,
-            (Scale.ATOM, Scale.CHAIN): np.array([], dtype=np.int64),
-            (Scale.ATOM, Scale.MOLECULE): np.array([0], dtype=np.int64),
-            (Scale.RESIDUE, Scale.CHAIN): None,
-            (Scale.RESIDUE, Scale.MOLECULE): None,
-            (Scale.CHAIN, Scale.MOLECULE): np.array([0], dtype=np.int64),
-        }
+    per = {}
+
+    # Always have ATOM -> MOLECULE
+    per[(Scale.ATOM, Scale.MOLECULE)] = np.array([0], dtype=np.int64)
+
+    if Scale.RESIDUE in scales:
+        per[(Scale.ATOM, Scale.RESIDUE)] = np.array([], dtype=np.int64)
+        per[(Scale.RESIDUE, Scale.MOLECULE)] = np.array([0], dtype=np.int64)
+
+    if Scale.CHAIN in scales:
+        per[(Scale.ATOM, Scale.CHAIN)] = np.array([], dtype=np.int64)
+        per[(Scale.CHAIN, Scale.MOLECULE)] = np.array([0], dtype=np.int64)
+
+    if Scale.RESIDUE in scales and Scale.CHAIN in scales:
+        per[(Scale.RESIDUE, Scale.CHAIN)] = np.array([], dtype=np.int64)
+
+    return per
 
 
 def backend_marker(arr: Array) -> Array:
@@ -70,7 +71,7 @@ class _Hierarchy:
     of actual molecular data - it only tracks counts and indices.
 
     The hierarchy is stored as a dict mapping (inner, outer) scale pairs to
-    arrays of counts, representing the upper triangle of a 4x4 relationship:
+    arrays of counts. Only supported scale pairs are present in the dict:
 
         _per[(ATOM, RESIDUE)]   = atoms per residue (R elements)
         _per[(ATOM, CHAIN)]     = atoms per chain (C elements)
@@ -79,27 +80,26 @@ class _Hierarchy:
         _per[(RESIDUE, MOLECULE)] = total residues (1 element)
         _per[(CHAIN, MOLECULE)] = total chains (1 element)
 
-    Some arrays may be None if fields were skipped during loading. The scalar
-    counts (_n_atoms, _n_residues, _n_chains) are always available as they're
-    computed from whichever arrays are present.
-
     Attributes:
-        _per: Dict mapping (inner_scale, outer_scale) to count arrays (may be None).
+        _per: Dict mapping (inner_scale, outer_scale) to count arrays.
+            Only contains entries for supported scale pairs.
         _ref: Minimal (0,) array used solely for backend/device detection.
-            Does not hold actual data - just matches the target backend/device.
         _n_atoms: Total atom count (cached).
         _n_residues: Total residue count (cached).
         _n_chains: Total chain count (cached).
     """
 
-    __slots__ = ('_per', '_ref', '_n_atoms', '_n_residues', '_n_chains', '_has_residues')
+    # Default scales for a full polymer hierarchy
+    ALL_SCALES = frozenset({Scale.ATOM, Scale.RESIDUE, Scale.CHAIN, Scale.MOLECULE})
+
+    __slots__ = ('_per', '_ref', '_n_atoms', '_n_residues', '_n_chains')
 
     def __init__(
         self,
         per: dict[tuple[Scale, Scale], Array] | None = None,
         ref: Array | None = None,
         *,
-        with_residues: bool = True,
+        scales: frozenset[Scale] | None = None,
     ):
         """
         Initialize a hierarchy.
@@ -109,28 +109,49 @@ class _Hierarchy:
 
         Args:
             per: Dict mapping (inner_scale, outer_scale) to count arrays.
-                If None, creates an empty hierarchy.
+                If None, creates an empty hierarchy with the given scales.
             ref: Minimal array for backend/device detection (shape doesn't matter).
                 If None, uses an empty numpy array.
-            with_residues: If True (default), hierarchy has residue scale.
-                If False, residue arrays are None (for HeteroAtoms).
+            scales: Frozenset of scales this hierarchy supports. Only used when
+                per is None to create an empty hierarchy. When per is provided,
+                scales are inferred from per.keys().
         """
         if per is None:
-            per = _empty_per(with_residues)
+            if scales is None:
+                scales = self.ALL_SCALES
+            per = _empty_per(scales)
         if ref is None:
             ref = np.zeros(0, dtype=np.float32)
 
         self._per = per
         self._ref = ref
-        self._has_residues = with_residues
 
         # Precompute scalar counts from available arrays
         self._n_atoms, self._n_residues, self._n_chains = self._compute_counts()
 
     @property
+    def scales(self) -> frozenset[Scale]:
+        """The scales this hierarchy supports (inferred from _per keys)."""
+        result = {Scale.ATOM, Scale.MOLECULE}  # Always present
+        for inner, outer in self._per.keys():
+            result.add(inner)
+            result.add(outer)
+        return frozenset(result)
+
+    def has_scale(self, scale: Scale) -> bool:
+        """Check if this hierarchy supports a given scale."""
+        if scale in (Scale.ATOM, Scale.MOLECULE):
+            return True
+        # Check if any key contains this scale
+        for inner, outer in self._per.keys():
+            if inner == scale or outer == scale:
+                return True
+        return False
+
+    @property
     def has_residues(self) -> bool:
         """Whether this hierarchy has residue-level information."""
-        return self._has_residues
+        return (Scale.ATOM, Scale.RESIDUE) in self._per
 
     def _compute_counts(self) -> tuple[int, int, int]:
         """Compute scalar counts from available arrays.
@@ -193,26 +214,22 @@ class _Hierarchy:
             ref: Array to derive backend/device from (will be converted to marker).
 
         Returns:
-            New _Hierarchy instance.
+            New _Hierarchy instance with all scales.
         """
         # Use lengths as fallback ref for array creation when coordinates is None
         arr_ref = ref if ref is not None else lengths
 
-        # Build the unified _per dict (values may be None if fields were skipped)
+        # Build the _per dict - only include entries that exist
         per = {
-            # Atoms per {residue, chain, molecule}
-            (Scale.ATOM, Scale.RESIDUE): sizes.get(Scale.RESIDUE),
-            (Scale.ATOM, Scale.CHAIN): sizes.get(Scale.CHAIN),
-            (Scale.ATOM, Scale.MOLECULE): sizes.get(Scale.MOLECULE),
-            # Residues per {chain, molecule}
+            (Scale.ATOM, Scale.RESIDUE): sizes[Scale.RESIDUE],
+            (Scale.ATOM, Scale.CHAIN): sizes[Scale.CHAIN],
+            (Scale.ATOM, Scale.MOLECULE): sizes[Scale.MOLECULE],
             (Scale.RESIDUE, Scale.CHAIN): lengths,
             (Scale.RESIDUE, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
-            # Chains per molecule
             (Scale.CHAIN, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
         }
-        # Convert ref to minimal marker
         marker = backend_marker(arr_ref)
-        return cls(per, marker, with_residues=True)
+        return cls(per, marker)
 
     @classmethod
     def from_atoms_per_chain(
@@ -224,7 +241,7 @@ class _Hierarchy:
         Create a hierarchy without residue scale (for HeteroAtoms).
 
         This creates a simplified hierarchy with only ATOM, CHAIN, and MOLECULE
-        scales. Residue-level arrays are set to None.
+        scales.
 
         Args:
             atoms_per_chain: Array of atom counts per chain.
@@ -237,16 +254,14 @@ class _Hierarchy:
         n_atoms = int(atoms_per_chain.sum()) if arr_size(atoms_per_chain, 0) > 0 else 0
         n_chains = arr_size(atoms_per_chain, 0)
 
+        # Only include ATOM, CHAIN, MOLECULE scale pairs
         per = {
-            (Scale.ATOM, Scale.RESIDUE): None,
             (Scale.ATOM, Scale.CHAIN): atoms_per_chain,
             (Scale.ATOM, Scale.MOLECULE): ops.array([n_atoms], like=arr_ref, dtype='int64'),
-            (Scale.RESIDUE, Scale.CHAIN): None,
-            (Scale.RESIDUE, Scale.MOLECULE): None,
             (Scale.CHAIN, Scale.MOLECULE): ops.array([n_chains], like=arr_ref, dtype='int64'),
         }
         marker = backend_marker(arr_ref)
-        return cls(per, marker, with_residues=False)
+        return cls(per, marker)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Properties
@@ -317,7 +332,7 @@ class _Hierarchy:
             Array with count of inner units per outer unit.
 
         Raises:
-            ValueError: If the requested array is not available (field was skipped).
+            ValueError: If the requested scale pair is not supported.
 
         Example:
             >>> hierarchy.per(Scale.RESIDUE, Scale.CHAIN)
@@ -326,20 +341,13 @@ class _Hierarchy:
         if inner == outer:
             return ops.ones(self.size(inner), like=self._ref)
 
-        # Direct lookup in _per dict
         key = (inner, outer)
-        arr = self._per.get(key)
-        if arr is not None:
-            return arr
-
-        # Check if key exists but value is None (skipped field)
         if key in self._per:
-            raise ValueError(
-                f"{inner.name} per {outer.name} not available. "
-                f"This field may have been skipped during loading."
-            )
+            return self._per[key]
 
-        raise ValueError(f"Cannot compute {inner.name} per {outer.name}")
+        raise ValueError(
+            f"{inner.name} per {outer.name} not supported by this hierarchy"
+        )
 
     def empty(self) -> bool:
         """Check if the hierarchy has no atoms."""
@@ -464,14 +472,12 @@ class _Hierarchy:
             Boolean tensor where True indicates resolved units.
 
         Raises:
-            ValueError: If RESIDUE scale requested but hierarchy has no residues.
+            ValueError: If requested scale is not supported by this hierarchy.
         """
-        if scale == Scale.RESIDUE and not self._has_residues:
-            raise ValueError("RESIDUE scale not supported for hierarchies without residues")
-        arr = self._per.get((Scale.ATOM, scale))
-        if arr is None:
-            raise ValueError(f"Scale {scale.name} not available in this hierarchy")
-        return arr != 0
+        key = (Scale.ATOM, scale)
+        if key not in self._per:
+            raise ValueError(f"{scale.name} scale not supported by this hierarchy")
+        return self._per[key] != 0
 
     def derive_masks(
         self,
@@ -492,29 +498,25 @@ class _Hierarchy:
             Tuple of (atom_mask, res_mask, chn_mask).
             res_mask is None if hierarchy has no residues.
         """
-        # No-residue path (HeteroAtoms)
-        if not self._has_residues:
-            if input_scale == Scale.RESIDUE:
-                raise ValueError("RESIDUE scale not supported for hierarchies without residues")
-            if input_scale == Scale.ATOM:
-                atom_mask = input_mask
-                chn_sizes_after = self.count(input_mask, Scale.CHAIN)
-                chn_mask = chn_sizes_after > 0
-            else:  # CHAIN
-                chn_mask = input_mask
-                atom_mask = self.expand(chn_mask, Scale.CHAIN, Scale.ATOM)
-            return atom_mask, None, chn_mask
+        has_residue = self.has_residues
 
-        # Standard path with residues
+        if input_scale == Scale.RESIDUE and not has_residue:
+            raise ValueError("RESIDUE scale not supported by this hierarchy")
+
         if input_scale == Scale.ATOM:
             atom_mask = input_mask
-            res_sizes = self.count(input_mask, Scale.RESIDUE)
-            if remove_empty_residues:
-                res_mask = res_sizes > 0
+            if has_residue:
+                res_sizes = self.count(input_mask, Scale.RESIDUE)
+                if remove_empty_residues:
+                    res_mask = res_sizes > 0
+                else:
+                    res_mask = ops.ones(self.size(Scale.RESIDUE), like=self._ref, dtype='bool')
+                new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
+                chn_mask = new_lengths > 0
             else:
-                res_mask = ops.ones(self.size(Scale.RESIDUE), like=self._ref, dtype='bool')
-            new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-            chn_mask = new_lengths > 0
+                res_mask = None
+                chn_sizes_after = self.count(input_mask, Scale.CHAIN)
+                chn_mask = chn_sizes_after > 0
 
         elif input_scale == Scale.RESIDUE:
             res_mask = input_mask
@@ -524,8 +526,12 @@ class _Hierarchy:
 
         elif input_scale == Scale.CHAIN:
             chn_mask = input_mask
-            res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            if has_residue:
+                res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
+                atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
+            else:
+                res_mask = None
+                atom_mask = self.expand(chn_mask, Scale.CHAIN, Scale.ATOM)
 
         else:
             raise ValueError(f"Selection not supported at {input_scale.name} scale")
@@ -538,7 +544,7 @@ class _Hierarchy:
         res_mask: Array | None,
         chn_mask: Array,
         input_scale: Scale,
-    ) -> dict[tuple[Scale, Scale], Array | None]:
+    ) -> dict[tuple[Scale, Scale], Array]:
         """
         Compute the _per dict for a new Hierarchy after selection.
 
@@ -549,23 +555,22 @@ class _Hierarchy:
             input_scale: Scale of the original input mask.
 
         Returns:
-            New _per dict.
+            New _per dict (only contains supported scale pairs).
         """
-        # No-residue path (HeteroAtoms)
-        if not self._has_residues:
+        has_residue = self.has_residues
+        per = {}
+
+        if not has_residue:
+            # No-residue path (HeteroAtoms)
             chn_sizes_after = self.count(atom_mask, Scale.CHAIN)
             mol_sizes = self.count(atom_mask, Scale.MOLECULE)
             new_chn_sizes = chn_sizes_after[chn_mask]
             n_chn = arr_size(new_chn_sizes, 0)
 
-            return {
-                (Scale.ATOM, Scale.RESIDUE): None,
-                (Scale.ATOM, Scale.CHAIN): new_chn_sizes,
-                (Scale.ATOM, Scale.MOLECULE): mol_sizes,
-                (Scale.RESIDUE, Scale.CHAIN): None,
-                (Scale.RESIDUE, Scale.MOLECULE): None,
-                (Scale.CHAIN, Scale.MOLECULE): ops.array([n_chn], like=self._ref),
-            }
+            per[(Scale.ATOM, Scale.CHAIN)] = new_chn_sizes
+            per[(Scale.ATOM, Scale.MOLECULE)] = mol_sizes
+            per[(Scale.CHAIN, Scale.MOLECULE)] = ops.array([n_chn], like=self._ref)
+            return per
 
         # Standard path with residues
         if input_scale == Scale.ATOM:
@@ -578,7 +583,6 @@ class _Hierarchy:
             new_chn_sizes = chn_sizes_after[chn_mask]
 
             # Compute new lengths (residues per chain)
-            # Count how many residues remain in each chain
             res_per_chain = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             new_lengths = res_per_chain[chn_mask]
 
@@ -611,14 +615,13 @@ class _Hierarchy:
         n_res = arr_size(new_res_sizes, 0)
         n_chn = arr_size(new_chn_sizes, 0)
 
-        return {
-            (Scale.ATOM, Scale.RESIDUE): new_res_sizes,
-            (Scale.ATOM, Scale.CHAIN): new_chn_sizes,
-            (Scale.ATOM, Scale.MOLECULE): mol_sizes,
-            (Scale.RESIDUE, Scale.CHAIN): new_lengths,
-            (Scale.RESIDUE, Scale.MOLECULE): ops.array([n_res], like=self._ref),
-            (Scale.CHAIN, Scale.MOLECULE): ops.array([n_chn], like=self._ref),
-        }
+        per[(Scale.ATOM, Scale.RESIDUE)] = new_res_sizes
+        per[(Scale.ATOM, Scale.CHAIN)] = new_chn_sizes
+        per[(Scale.ATOM, Scale.MOLECULE)] = mol_sizes
+        per[(Scale.RESIDUE, Scale.CHAIN)] = new_lengths
+        per[(Scale.RESIDUE, Scale.MOLECULE)] = ops.array([n_res], like=self._ref)
+        per[(Scale.CHAIN, Scale.MOLECULE)] = ops.array([n_chn], like=self._ref)
+        return per
 
     def select(
         self,
@@ -635,11 +638,11 @@ class _Hierarchy:
         Returns:
             New _Hierarchy for the selected subset.
         """
-        remove_empty = (scale == Scale.ATOM) and self._has_residues
+        remove_empty = (scale == Scale.ATOM) and self.has_residues
         atom_mask, res_mask, chn_mask = self.derive_masks(mask, scale, remove_empty)
         new_per = self.compute_per(atom_mask, res_mask, chn_mask, scale)
 
-        return _Hierarchy(new_per, self._ref, with_residues=self._has_residues)
+        return _Hierarchy(new_per, self._ref)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion
@@ -656,10 +659,9 @@ class _Hierarchy:
         if is_torch(self._ref):
             return self
 
-        new_per = {k: to_torch(v, dtype=Dtype.INT64) if v is not None else None
-                   for k, v in self._per.items()}
+        new_per = {k: to_torch(v, dtype=Dtype.INT64) for k, v in self._per.items()}
         new_ref = to_torch(self._ref)
-        return _Hierarchy(new_per, new_ref, with_residues=self._has_residues)
+        return _Hierarchy(new_per, new_ref)
 
     def numpy(self) -> _Hierarchy:
         """
@@ -672,10 +674,9 @@ class _Hierarchy:
         if not is_torch(self._ref):
             return self
 
-        new_per = {k: to_numpy(v) if v is not None else None
-                   for k, v in self._per.items()}
+        new_per = {k: to_numpy(v) for k, v in self._per.items()}
         new_ref = to_numpy(self._ref)
-        return _Hierarchy(new_per, new_ref, with_residues=self._has_residues)
+        return _Hierarchy(new_per, new_ref)
 
     def to(self, device) -> _Hierarchy:
         """
@@ -691,10 +692,9 @@ class _Hierarchy:
         if not is_torch(self._ref):
             return self  # NumPy arrays don't have devices
 
-        new_per = {k: v.to(device) if v is not None else None
-                   for k, v in self._per.items()}
+        new_per = {k: v.to(device) for k, v in self._per.items()}
         new_ref = self._ref.to(device) if hasattr(self._ref, 'to') else self._ref
-        return _Hierarchy(new_per, new_ref, with_residues=self._has_residues)
+        return _Hierarchy(new_per, new_ref)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Chain Extension
@@ -826,8 +826,10 @@ class _Hierarchy:
 
         Raises:
             IndexError: If index is out of range.
-            ValueError: If RESIDUE scale requested but hierarchy has no residues.
+            ValueError: If requested scale is not supported by this hierarchy.
         """
+        has_residue = self.has_residues
+
         if scale == Scale.CHAIN:
             if ix < 0 or ix >= self._n_chains:
                 raise IndexError(f"Chain index {ix} out of range [0, {self._n_chains})")
@@ -843,7 +845,7 @@ class _Hierarchy:
             atom_slice = slice(atom_start, atom_end)
 
             # Residue slice: cumsum of residues_per_chain (None if no residues)
-            if not self._has_residues:
+            if not has_residue:
                 return atom_slice, None, chain_slice
 
             res_per_chain = self._per[(Scale.RESIDUE, Scale.CHAIN)]
@@ -855,8 +857,8 @@ class _Hierarchy:
             return atom_slice, res_slice, chain_slice
 
         elif scale == Scale.RESIDUE:
-            if not self._has_residues:
-                raise ValueError("RESIDUE scale not supported for hierarchies without residues")
+            if not has_residue:
+                raise ValueError("RESIDUE scale not supported by this hierarchy")
             if ix < 0 or ix >= self._n_residues:
                 raise IndexError(f"Residue index {ix} out of range [0, {self._n_residues})")
 

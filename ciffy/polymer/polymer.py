@@ -96,9 +96,9 @@ class Polymer(AtomContainer):
         """Residues per chain (C,) array. Delegated to hierarchy."""
         return self._hierarchy.lengths
 
-    def _convert_backend(self, to_func, new_hierarchy: _Hierarchy | None = None) -> dict:
+    def _convert_backend(self, to_func) -> dict:
         """Override to also convert HETATM data."""
-        result = super()._convert_backend(to_func, new_hierarchy)
+        result = super()._convert_backend(to_func)
 
         # Convert HETATM data if present
         hetero = object.__getattribute__(self, '_hetero')
@@ -252,48 +252,6 @@ class Polymer(AtomContainer):
 
         return self.copy(**overrides)
 
-    def _validate_consistency(self, sizes: dict[Scale, Array]) -> None:
-        """
-        Validate that field sizes are consistent at each scale and across scales.
-
-        Checks:
-        1. All Fields at each scale (ATOM, RESIDUE, CHAIN) have the same size.
-        2. Atom counts are consistent across hierarchy (residue = chain = molecule).
-
-        Args:
-            sizes: Dict mapping Scale to atom counts per unit.
-
-        Raises:
-            ValueError: If field sizes are inconsistent or hierarchy doesn't match.
-        """
-        # Validate that all Fields at each scale have consistent sizes
-        for scale in [Scale.ATOM, Scale.RESIDUE, Scale.CHAIN]:
-            field_sizes = []
-            field_names = []
-            for name, field in self._get_fields().items():
-                if field.scale == scale:
-                    if field.data is not None:
-                        field_sizes.append(arr_size(field.data, 0))
-                        field_names.append(name)
-            if field_sizes and not all_equal(*field_sizes):
-                id_str = f" for PDB {self.pdb_id}" if self.pdb_id else ""
-                raise ValueError(
-                    f"Fields at {scale.name} scale have inconsistent sizes: "
-                    f"{dict(zip(field_names, field_sizes))}{id_str}."
-                )
-
-        # Validate hierarchy consistency (atom counts must match across scales)
-        res_count = sizes[Scale.RESIDUE].sum().item()
-        chn_count = sizes[Scale.CHAIN].sum().item()
-        mol_count = sizes[Scale.MOLECULE].sum().item()
-
-        if not all_equal(res_count, chn_count, mol_count):
-            id_str = f" for PDB {self.pdb_id}" if self.pdb_id else ""
-            raise ValueError(
-                f"Atom counts do not match: residues ({res_count}), "
-                f"chains ({chn_count}), molecule ({mol_count}){id_str}."
-            )
-
     def annotate(
         self,
         name: str,
@@ -334,92 +292,19 @@ class Polymer(AtomContainer):
         """
         return super().annotate(name, data, scale)
 
-    def _clone(self, **overrides) -> Polymer:
-        """
-        Create a copy of this Polymer with optional field overrides.
-
-        Collects all Field and Metadata values, applies overrides, and
-        constructs a new Polymer. This is the single place that maps
-        field/metadata names to constructor parameters.
-
-        Args:
-            **overrides: Field values to override. Can include any field/metadata
-                name (coordinates, atoms, pdb_id, etc.), 'hierarchy' for the
-                hierarchy, or '_field_meta' for field scale/dtype info.
-
-        Returns:
-            New Polymer with the specified overrides applied.
-
-        Example:
-            >>> # Create copy with new coordinates
-            >>> moved = polymer._clone(coordinates=new_coords)
-            >>> # Create copy with converted arrays
-            >>> converted = polymer._clone(**self._convert_backend(to_numpy))
-        """
-        # Extract hierarchy (used for new polymer)
-        hierarchy = overrides.pop('hierarchy', object.__getattribute__(self, '_hierarchy'))
-
-        # Extract field metadata (for dynamic fields from slicing/conversion)
-        field_meta = overrides.pop('_field_meta', None)
-
-        # Extract Polymer-specific internal state
+    def _copy_internal_state(self, instance: Polymer, overrides: dict) -> None:
+        """Copy Polymer-specific internal state to new instance."""
+        # Handle hetero override or copy from self
         if 'hetero' in overrides:
             hetero = overrides.pop('hetero')
         else:
             hetero = object.__getattribute__(self, '_hetero')
 
-        # Create new instance bypassing __init__ for efficiency
-        polymer = object.__new__(Polymer)
-        object.__setattr__(polymer, '_hierarchy', hierarchy)
-
-        # Reconstruct Fields (only if data is not None)
-        current_fields = self._get_fields()
-        for name, field in current_fields.items():
-            # Get scale from override metadata or original field
-            if field_meta and name in field_meta:
-                scale = field_meta[name]
-            else:
-                scale = field.scale
-
-            # Get data from override or original
-            if name in overrides:
-                data = overrides.pop(name)
-            else:
-                data = field.data
-
-            # Only set attribute if data exists
-            if data is not None:
-                new_field = Field(data, scale)
-                object.__setattr__(polymer, name, new_field)
-
-        # Handle overrides for known fields that don't exist on source
-        # (e.g., adding coordinates to a template)
-        for name in list(overrides.keys()):
-            if name in _KNOWN_FIELDS:
-                data = overrides.pop(name)
-                if data is not None:
-                    scale = _KNOWN_FIELDS[name]
-                    new_field = Field(data, scale)
-                    object.__setattr__(polymer, name, new_field)
-
-        # Copy Metadata descriptors
-        for name, desc in self._get_metadata().items():
-            if name in overrides:
-                value = overrides.pop(name)
-            else:
-                value = getattr(self, desc.private_name, None)
-            # Copy lists to avoid mutation
-            if desc.is_list and value is not None:
-                value = list(value)
-            setattr(polymer, desc.private_name, value)
-
-        # Copy Polymer-specific internal state
-        object.__setattr__(polymer, '_bonds', None)  # Bonds need recomputation
-        object.__setattr__(polymer, '_connections', object.__getattribute__(self, '_connections'))
-        object.__setattr__(polymer, '_connection_types', object.__getattribute__(self, '_connection_types'))
-        object.__setattr__(polymer, '_hetero', hetero)
-
-        return polymer
+        # Set internal state
+        object.__setattr__(instance, '_bonds', None)  # Bonds need recomputation
+        object.__setattr__(instance, '_connections', object.__getattribute__(self, '_connections'))
+        object.__setattr__(instance, '_connection_types', object.__getattribute__(self, '_connection_types'))
+        object.__setattr__(instance, '_hetero', hetero)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Computed Properties
@@ -1035,91 +920,6 @@ class Polymer(AtomContainer):
         from .._selection import mask
         return mask(self, indices, source, dest)
 
-    def _to_mask(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Array:
-        """
-        Convert a selector to a boolean mask.
-
-        Args:
-            selector: Boolean mask, int index, list of indices, or slice.
-            scale: Scale at which the selector operates.
-
-        Returns:
-            Boolean mask array at the specified scale.
-
-        Raises:
-            IndexError: If any index is out of range.
-        """
-        max_size = self.size(scale)
-
-        # Handle slice
-        if isinstance(selector, slice):
-            mask = ops.zeros(max_size, like=self._hierarchy._ref, dtype='bool')
-            mask[selector] = True
-            return mask
-
-        # Already a boolean mask - return as-is
-        if hasattr(selector, 'dtype'):
-            dtype_str = str(selector.dtype)
-            if 'bool' in dtype_str:
-                return selector
-
-        # Convert int to list
-        if isinstance(selector, int):
-            indices = [selector]
-        elif isinstance(selector, list):
-            indices = selector
-        elif hasattr(selector, 'tolist'):
-            # Array of indices
-            indices = selector.tolist()
-        else:
-            # Assume it's already a mask
-            return selector
-
-        # Validate indices and create mask
-        for ix in indices:
-            if ix < 0 or ix >= max_size:
-                raise IndexError(
-                    f"{scale.name} index {ix} out of range for Polymer with {max_size} {scale.name.lower()}s"
-                )
-
-        mask = ops.zeros(max_size, like=self._hierarchy._ref, dtype='bool')
-        for ix in indices:
-            mask[ix] = True
-        return mask
-
-    def _select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
-        """
-        Unified selection implementation for all scales.
-
-        Uses the hierarchy to derive masks, compute new sizes/lengths,
-        and slice fields accordingly.
-
-        Args:
-            mask: Boolean mask at the specified scale.
-            scale: Scale of the input mask (ATOM, RESIDUE, or CHAIN).
-
-        Returns:
-            New Polymer with selected units.
-        """
-        # Step 1: Derive masks at all scales
-        remove_empty = (scale == Scale.ATOM)
-        masks = self._hierarchy.derive_masks(mask, scale, remove_empty)
-
-        # Step 2: Compute new hierarchy for selection
-        new_per = self._hierarchy.compute_per(masks)
-        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
-
-        # Step 3: Extract masks for _slice_all
-        atom_mask = masks[Scale.ATOM]
-        res_mask = masks.get(Scale.RESIDUE)
-        chn_mask = masks.get(Scale.CHAIN)
-
-        # Step 4: Slice all fields and annotations
-        sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)
-        sliced['hierarchy'] = new_hierarchy
-
-        return self._clone(**sliced)
-
     def _select_contiguous(self: Polymer, ix: int, scale: Scale) -> Polymer:
         """
         Fast path for selecting a single contiguous unit (chain or residue).
@@ -1520,8 +1320,8 @@ class Polymer(AtomContainer):
                 )
             n_new_atoms = len(fields['atoms'])
             # Check consistency: if existing polymer has coords, new residue must too
-            existing_coords = getattr(self, '_coordinates', None)
-            if existing_coords is not None:
+            coords_field = self._get_fields().get('coordinates')
+            if coords_field is not None and coords_field.data is not None:
                 raise ValueError(
                     "Cannot add residue without coordinates to polymer with "
                     "coordinates. Pass coordinates= to extend()."
@@ -1560,9 +1360,10 @@ class Polymer(AtomContainer):
             new_descriptions = list(self._descriptions) + [""]
         else:
             new_hierarchy = self._hierarchy.extend_residue(n_new_atoms)
-            new_names = self._names
-            new_strands = self._strands
-            new_descriptions = self._descriptions
+            # Copy lists to avoid mutation of original
+            new_names = list(self._names) if self._names else []
+            new_strands = list(self._strands) if self._strands else []
+            new_descriptions = list(self._descriptions) if self._descriptions else []
 
         return self._clone(
             hierarchy=new_hierarchy,
@@ -1687,32 +1488,50 @@ class Polymer(AtomContainer):
     # String Representations
     # ─────────────────────────────────────────────────────────────────────────
 
-    def sequence_str(self: Polymer) -> str:
+    def sequence_str(self: Polymer, strict: bool = False) -> str:
         """
         Get the sequence as a single-letter string.
+
+        Args:
+            strict: If True, raise ValueError on unknown residue types.
+                If False (default), use 'n' for unknown types.
 
         Returns:
             Single-letter sequence string (e.g., "ACGU" for RNA,
             "MGKLV" for protein).
+
+        Raises:
+            ValueError: If strict=True and an unknown residue type is found.
         """
         def abbrev(x: int) -> str:
             try:
                 return Residue.from_index(x).abbrev
             except (ValueError, KeyError):
+                if strict:
+                    raise ValueError(f"Unknown residue index: {x}")
                 return 'n'
         return "".join(abbrev(ix.item()) for ix in self.sequence)
 
-    def atom_names(self: Polymer) -> list[str]:
+    def atom_names(self: Polymer, strict: bool = False) -> list[str]:
         """
         Get atom names as a list of strings.
 
+        Args:
+            strict: If True, raise ValueError on unknown atom types.
+                If False (default), use '?' for unknown types.
+
         Returns:
             List of atom name strings.
+
+        Raises:
+            ValueError: If strict=True and an unknown atom type is found.
         """
         def get_name(value: int) -> str:
             try:
                 return Atom.from_value(value).name
             except KeyError:
+                if strict:
+                    raise ValueError(f"Unknown atom value: {value}")
                 return '?'
         return [get_name(ix.item()) for ix in self.atoms]
 
@@ -1731,7 +1550,7 @@ class Polymer(AtomContainer):
         mol_types_data = self._get_field_data('molecule_types')
         mol_types = to_numpy(mol_types_data) if mol_types_data is not None else None
         residue_counts = to_numpy(self.lengths)
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         atom_counts = to_numpy(hierarchy.counts(Scale.CHAIN))
         elements_data = self._get_field_data('elements')
         elements = to_numpy(elements_data) if elements_data is not None else None
@@ -1815,7 +1634,7 @@ class Polymer(AtomContainer):
             converted[name] = result
 
         # Move hierarchy to device (int tensors only, no dtype change)
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         if device is not None:
             converted['hierarchy'] = hierarchy.to(device)
 

@@ -228,15 +228,9 @@ class AtomContainer:
             if isinstance(existing, Field):
                 # Validate if value is not None
                 if value is not None:
-                    hierarchy = object.__getattribute__(self, '_hierarchy')
+                    hierarchy = self._get_hierarchy()
                     check_compatible(hierarchy._ref, value, name)
-                    expected = hierarchy.size(existing.scale)
-                    actual = value.shape[0] if hasattr(value, 'shape') else len(value)
-                    if actual != expected:
-                        raise ValueError(
-                            f"Shape mismatch for '{name}': got {actual} elements, "
-                            f"expected {expected} ({existing.scale.name} scale)"
-                        )
+                    self._validate_field_size(name, value, existing.scale)
                 existing.data = value
                 return
         except AttributeError:
@@ -251,15 +245,9 @@ class AtomContainer:
                     f"Field '{name}' has scale {scale.name} which is not "
                     f"supported by {type(self).__name__}"
                 )
-            hierarchy = object.__getattribute__(self, '_hierarchy')
+            hierarchy = self._get_hierarchy()
             check_compatible(hierarchy._ref, value, name)
-            expected = hierarchy.size(scale)
-            actual = value.shape[0] if hasattr(value, 'shape') else len(value)
-            if actual != expected:
-                raise ValueError(
-                    f"Shape mismatch for '{name}': got {actual} elements, "
-                    f"expected {expected} ({scale.name} scale)"
-                )
+            self._validate_field_size(name, value, scale)
             new_field = Field(value, scale)
             object.__setattr__(self, name, new_field)
             return
@@ -315,17 +303,11 @@ class AtomContainer:
             raise ValueError("Field names cannot start with underscore")
 
         # Validate backend/device compatibility
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         check_compatible(hierarchy._ref, data, name)
 
         # Validate size
-        expected = hierarchy.size(scale)
-        actual = data.shape[0] if hasattr(data, 'shape') else len(data)
-        if actual != expected:
-            raise ValueError(
-                f"Shape mismatch for '{name}': got {actual} elements, "
-                f"expected {expected} ({scale.name} scale)"
-            )
+        self._validate_field_size(name, data, scale)
 
         # Create and store Field
         field = Field(data, scale)
@@ -336,6 +318,10 @@ class AtomContainer:
     # Field/Metadata Helpers
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _get_hierarchy(self) -> _Hierarchy:
+        """Get the internal hierarchy object, bypassing descriptor interception."""
+        return object.__getattribute__(self, '_hierarchy')
+
     def _get_field_data(self, name: str) -> Array | None:
         """Get field data, returning None if field doesn't exist."""
         try:
@@ -345,6 +331,25 @@ class AtomContainer:
         except AttributeError:
             pass
         return None
+
+    def _validate_field_size(self, name: str, value, scale: Scale) -> None:
+        """Validate that a field value has the expected size for its scale.
+
+        Args:
+            name: Field name (for error messages).
+            value: Array or sequence to validate.
+            scale: Expected scale of the field.
+
+        Raises:
+            ValueError: If size doesn't match hierarchy size at scale.
+        """
+        expected = self._get_hierarchy().size(scale)
+        actual = value.shape[0] if hasattr(value, 'shape') else len(value)
+        if actual != expected:
+            raise ValueError(
+                f"Shape mismatch for '{name}': got {actual} elements, "
+                f"expected {expected} ({scale.name} scale)"
+            )
 
     def _get_fields(self) -> dict[str, Field]:
         """Return all Field objects on this instance (built-in and dynamic)."""
@@ -366,7 +371,7 @@ class AtomContainer:
 
     def _validate_sizes(self) -> None:
         """Validate that field sizes and devices match hierarchy."""
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         ref = hierarchy._ref
 
         # Validate Field objects
@@ -527,13 +532,12 @@ class AtomContainer:
         result['_field_meta'] = field_meta
         return result
 
-    def _convert_backend(self, to_func, new_hierarchy: _Hierarchy | None = None) -> dict:
+    def _convert_backend(self, to_func) -> dict:
         """
         Convert all Field arrays to a target backend, pass through Metadata.
 
         Args:
             to_func: Function to convert arrays (e.g., to_numpy, to_torch).
-            new_hierarchy: Hierarchy for the converted container.
 
         Returns:
             Dict mapping all field/metadata names to converted/passed values.
@@ -561,9 +565,89 @@ class AtomContainer:
         """
         Create a copy of this container with optional field overrides.
 
-        Subclasses should override this to handle their specific fields.
+        Collects all Field and Metadata values, applies overrides, and
+        constructs a new instance. This unified implementation handles:
+        - Field reconstruction with optional scale overrides
+        - Known fields that don't exist on source (e.g., adding coordinates)
+        - Metadata copying with list protection
+        - Subclass-specific internal state via _copy_internal_state hook
+
+        Args:
+            **overrides: Field values to override. Can include any field/metadata
+                name (coordinates, atoms, pdb_id, etc.), 'hierarchy' for the
+                hierarchy, or '_field_meta' for field scale/dtype info.
+
+        Returns:
+            New container with the specified overrides applied.
         """
-        raise NotImplementedError("Subclasses must implement _clone()")
+        # Extract hierarchy (used for new instance)
+        hierarchy = overrides.pop('hierarchy', self._get_hierarchy())
+
+        # Extract field metadata (for dynamic fields from slicing/conversion)
+        field_meta = overrides.pop('_field_meta', None)
+
+        # Create new instance bypassing __init__ for efficiency
+        instance = object.__new__(type(self))
+        object.__setattr__(instance, '_hierarchy', hierarchy)
+
+        # Reconstruct Fields (only if data is not None)
+        current_fields = self._get_fields()
+        for name, field in current_fields.items():
+            # Get scale from override metadata or original field
+            if field_meta and name in field_meta:
+                scale = field_meta[name]
+            else:
+                scale = field.scale
+
+            # Get data from override or original
+            if name in overrides:
+                data = overrides.pop(name)
+            else:
+                data = field.data
+
+            # Only set attribute if data exists
+            if data is not None:
+                new_field = Field(data, scale)
+                object.__setattr__(instance, name, new_field)
+
+        # Handle overrides for known fields that don't exist on source
+        # (e.g., adding coordinates to a template)
+        for name in list(overrides.keys()):
+            if name in _KNOWN_FIELDS:
+                data = overrides.pop(name)
+                if data is not None:
+                    scale = _KNOWN_FIELDS[name]
+                    new_field = Field(data, scale)
+                    object.__setattr__(instance, name, new_field)
+
+        # Copy Metadata descriptors (with list protection)
+        for name, desc in self._get_metadata().items():
+            if name in overrides:
+                value = overrides.pop(name)
+            else:
+                value = getattr(self, desc.private_name, None)
+            # Copy lists to avoid mutation
+            if desc.is_list and value is not None:
+                value = list(value)
+            setattr(instance, desc.private_name, value)
+
+        # Let subclasses handle their internal state
+        self._copy_internal_state(instance, overrides)
+
+        return instance
+
+    def _copy_internal_state(self, instance: "AtomContainer", overrides: dict) -> None:
+        """
+        Copy subclass-specific internal state to new instance.
+
+        Subclasses should override this to handle their internal attributes
+        (e.g., cached computed values, references to related objects).
+
+        Args:
+            instance: The new instance being created.
+            overrides: Remaining overrides dict (subclass can pop values).
+        """
+        pass  # Base implementation has no internal state
 
     def copy(self, **overrides) -> "AtomContainer":
         """
@@ -576,7 +660,7 @@ class AtomContainer:
             New container with specified fields overridden (or all cloned if none).
         """
         # Validate device compatibility for array overrides
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         for name, value in overrides.items():
             if value is not None and hasattr(value, 'shape'):
                 check_compatible(hierarchy._ref, value, name)
@@ -609,7 +693,7 @@ class AtomContainer:
             return self
 
         new_hierarchy = self._hierarchy.numpy()
-        converted = self._convert_backend(to_numpy, new_hierarchy)
+        converted = self._convert_backend(to_numpy)
         converted['hierarchy'] = new_hierarchy
         return self._clone(**converted)
 
@@ -628,7 +712,7 @@ class AtomContainer:
             return self
 
         new_hierarchy = self._hierarchy.torch()
-        converted = self._convert_backend(to_torch, new_hierarchy)
+        converted = self._convert_backend(to_torch)
         converted['hierarchy'] = new_hierarchy
         return self._clone(**converted)
 
@@ -669,7 +753,7 @@ class AtomContainer:
             converted[name] = result
 
         # Move hierarchy to device (int tensors only, no dtype change)
-        hierarchy = object.__getattribute__(self, '_hierarchy')
+        hierarchy = self._get_hierarchy()
         if device is not None:
             converted['hierarchy'] = hierarchy.to(device)
 

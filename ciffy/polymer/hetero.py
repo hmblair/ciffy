@@ -57,56 +57,6 @@ class HeteroAtoms(AtomContainer):
                 f"__init__() got unexpected keyword arguments: {list(kwargs.keys())}"
             )
 
-    def _clone(self, **overrides) -> "HeteroAtoms":
-        """
-        Create a copy of this HeteroAtoms with optional field overrides.
-
-        Args:
-            **overrides: Field values to override.
-
-        Returns:
-            New HeteroAtoms with the specified overrides applied.
-        """
-        # Extract hierarchy
-        hierarchy = overrides.pop('hierarchy', object.__getattribute__(self, '_hierarchy'))
-
-        # Extract field metadata (for dynamic fields from slicing/conversion)
-        field_meta = overrides.pop('_field_meta', None)
-
-        # Create new instance bypassing __init__ for efficiency
-        hetero = object.__new__(HeteroAtoms)
-        object.__setattr__(hetero, '_hierarchy', hierarchy)
-
-        # Reconstruct Fields
-        current_fields = self._get_fields()
-        for name, field in current_fields.items():
-            # Get scale from override metadata or original field
-            if field_meta and name in field_meta:
-                scale = field_meta[name]
-            else:
-                scale = field.scale
-
-            # Get data from override or original
-            if name in overrides:
-                data = overrides.pop(name)
-            else:
-                data = field.data
-
-            # Only set attribute if data exists
-            if data is not None:
-                new_field = Field(data, scale)
-                object.__setattr__(hetero, name, new_field)
-
-        # Copy Metadata descriptors
-        for name, desc in self._get_metadata().items():
-            if name in overrides:
-                value = overrides.pop(name)
-            else:
-                value = getattr(self, desc.private_name, None)
-            setattr(hetero, desc.private_name, value)
-
-        return hetero
-
     # ─────────────────────────────────────────────────────────────────────────
     # HeteroAtoms-specific Selection Methods
     # ─────────────────────────────────────────────────────────────────────────
@@ -221,8 +171,13 @@ class HeteroAtoms(AtomContainer):
         if len(chains) == 0:
             atoms_per_chain = ops.zeros(0, like=coordinates, dtype='int64')
         else:
-            # Get max chain index
+            # Get max chain index and validate bounds
             chains_np = np.asarray(chains)
+            if chains_np.min() < 0:
+                raise ValueError(
+                    f"Negative chain index found: {chains_np.min()}. "
+                    "Chain indices must be non-negative."
+                )
             max_chain = int(chains_np.max()) + 1
             # Count atoms per chain using numpy (then convert back)
             counts = np.bincount(chains_np, minlength=max_chain)

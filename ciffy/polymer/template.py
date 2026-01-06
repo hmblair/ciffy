@@ -77,7 +77,12 @@ def _detect_molecule_type(sequence: str) -> tuple[dict[str, int], Molecule, str]
 
     Returns:
         Tuple of (char_to_index_map, Molecule enum, type_name_for_errors).
+
+    Raises:
+        ValueError: If sequence is empty.
     """
+    if not sequence:
+        raise ValueError("Sequence cannot be empty")
     if sequence[0].islower():
         has_u = 'u' in sequence
         has_t = 't' in sequence

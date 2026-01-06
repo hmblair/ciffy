@@ -28,26 +28,26 @@ class BaseCiffyModule(LightningModule):
     """Base LightningModule with shared training configuration.
 
     Subclasses should:
-    - Set `self.model` to the model being trained
+    - Set `self.model` to the model being trained (must have `compute_loss(polymer)`)
     - Set `self.training_config` to training hyperparameters
-    - Implement `training_step()` and optionally `validation_step()`
+    - Optionally override `training_step()` if custom batch handling is needed
+    - Optionally implement `validation_step()`
 
-    This base class handles:
+    This base class provides:
+    - Default `training_step()` that calls `model.compute_loss(polymer)`
     - Optimizer creation (AdamW)
     - Learning rate scheduling (cosine, linear, step, with optional warmup)
     - Gradient clipping
+    - Structure validation metric helpers
 
     Example:
         >>> class MyModule(BaseCiffyModule):
-        ...     def __init__(self, config):
+        ...     def __init__(self, model, training_config):
         ...         super().__init__()
-        ...         self.model = MyModel(config.model)
-        ...         self.training_config = config.training
+        ...         self.model = model  # Must have compute_loss(polymer)
+        ...         self.training_config = training_config
         ...
-        ...     def training_step(self, batch, batch_idx):
-        ...         loss = self.model(batch)
-        ...         self.log("train/loss", loss)
-        ...         return loss
+        >>> # That's it! training_step() is inherited from BaseCiffyModule
     """
 
     # Subclasses should set these
@@ -135,6 +135,26 @@ class BaseCiffyModule(LightningModule):
                 "frequency": 1,
             },
         }
+
+    def training_step(self, polymer: "Polymer", batch_idx: int) -> torch.Tensor:
+        """Default training step for models with compute_loss(polymer).
+
+        Assumes:
+        - `self.model` has a `compute_loss(polymer)` method
+        - DataLoader yields individual Polymer objects
+
+        Override this method if your model needs different batch handling.
+
+        Args:
+            polymer: Input polymer from DataLoader.
+            batch_idx: Batch index (unused but required by Lightning).
+
+        Returns:
+            Loss tensor for backpropagation.
+        """
+        loss = self.model.compute_loss(polymer.strip())
+        self.log("train/loss", loss, prog_bar=True)
+        return loss
 
     def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
         """Apply gradient clipping before optimizer step.

@@ -15,12 +15,12 @@ from ciffy.geometry import (
     atan2,
     cos,
     sin,
-    clone,
     to_scalar,
     rodrigues_rotate,
     optimal_rotation_to_target,
     project_to_rotation_circle,
 )
+from ciffy.backend import clone
 
 
 class TestVectorOperations:

@@ -529,39 +529,21 @@ class TestMoleculeTypeDetection:
 
 
 class TestPolymerCountInvariant:
-    """Test that polymer_count == sum(atoms_per_res) invariant holds."""
+    """Test that polymer_count == size() == sum(atoms_per_res) since HETATM is separate."""
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_polymer_count_equals_sum_atoms_per_res(self, cif_file, backend):
-        """Verify invariant: polymer_count == sum(atoms_per_res).
+        """Verify invariant: polymer_count == sum(atoms_per_res) == size().
 
         This invariant ensures that all polymer atoms belong to residues,
-        and all residue atoms are counted as polymer. It's enforced in the
-        C parser by checking both group_PDB and label_seq_id.
+        and all residue atoms are counted as polymer. HETATM atoms are
+        now in a separate HeteroAtoms container.
         """
         from ciffy import load, Scale
 
         polymer = load(cif_file, backend=backend)
 
-        # Sum of atoms per residue should equal polymer_count
+        # Sum of atoms per residue should equal polymer_count and size()
         atoms_per_res_sum = polymer.counts(Scale.RESIDUE).sum().item()
-        assert atoms_per_res_sum == polymer.polymer_count, \
-            f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum} != polymer_count={polymer.polymer_count}"
-
-    @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_nonpoly_is_nonnegative(self, cif_file, backend):
-        """Verify nonpoly count is non-negative."""
-        from ciffy import load
-
-        polymer = load(cif_file, backend=backend)
-        assert polymer.nonpoly() >= 0, f"nonpoly should be >= 0, got {polymer.nonpoly()}"
-
-    @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_polymer_plus_nonpoly_equals_total(self, cif_file, backend):
-        """Verify polymer_count + nonpoly == total atoms."""
-        from ciffy import load
-
-        polymer = load(cif_file, backend=backend)
-        total = polymer.size()
-        assert polymer.polymer_count + polymer.nonpoly() == total, \
-            f"polymer_count ({polymer.polymer_count}) + nonpoly ({polymer.nonpoly()}) != total ({total})"
+        assert atoms_per_res_sum == polymer.polymer_count == polymer.size(), \
+            f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum}, polymer_count={polymer.polymer_count}, size={polymer.size()}"

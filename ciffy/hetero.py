@@ -38,8 +38,8 @@ class HeteroAtoms:
 
     Attributes:
         coordinates: (H, 3) array of atom positions.
-        atoms: (H,) array of atom type indices.
         elements: (H,) array of element indices.
+        chains: (H,) array of chain indices (which chain each atom belongs to).
         bfactors: Optional (H,) array of B-factors.
         pdb_id: Molecule identifier.
 
@@ -52,8 +52,8 @@ class HeteroAtoms:
     """
 
     coordinates: Array
-    atoms: Array
     elements: Array
+    chains: Array
     bfactors: Array | None
     pdb_id: str
 
@@ -108,8 +108,8 @@ class HeteroAtoms:
 
         return HeteroAtoms(
             coordinates=to_numpy(self.coordinates),
-            atoms=to_numpy(self.atoms),
             elements=to_numpy(self.elements),
+            chains=to_numpy(self.chains),
             bfactors=to_numpy(self.bfactors) if self.bfactors is not None else None,
             pdb_id=self.pdb_id,
         )
@@ -129,8 +129,8 @@ class HeteroAtoms:
 
         return HeteroAtoms(
             coordinates=to_torch(self.coordinates).float(),
-            atoms=to_torch(self.atoms).long(),
             elements=to_torch(self.elements).long(),
+            chains=to_torch(self.chains).long(),
             bfactors=to_torch(self.bfactors).float() if self.bfactors is not None else None,
             pdb_id=self.pdb_id,
         )
@@ -184,8 +184,8 @@ class HeteroAtoms:
 
         return HeteroAtoms(
             coordinates=coords,
-            atoms=move_int(self.atoms),
             elements=move_int(self.elements),
+            chains=move_int(self.chains),
             bfactors=move_float(self.bfactors),
             pdb_id=self.pdb_id,
         )
@@ -214,8 +214,8 @@ class HeteroAtoms:
         """
         return HeteroAtoms(
             coordinates=self.coordinates[mask],
-            atoms=self.atoms[mask],
             elements=self.elements[mask],
+            chains=self.chains[mask],
             bfactors=self.bfactors[mask] if self.bfactors is not None else None,
             pdb_id=self.pdb_id,
         )
@@ -259,8 +259,8 @@ class HeteroAtoms:
         if backend == "numpy":
             return cls(
                 coordinates=np.empty((0, 3), dtype=np.float32),
-                atoms=np.empty((0,), dtype=np.int64),
                 elements=np.empty((0,), dtype=np.int64),
+                chains=np.empty((0,), dtype=np.int64),
                 bfactors=None,
                 pdb_id=pdb_id,
             )
@@ -268,8 +268,8 @@ class HeteroAtoms:
             import torch
             return cls(
                 coordinates=torch.empty((0, 3), dtype=torch.float32),
-                atoms=torch.empty((0,), dtype=torch.int64),
                 elements=torch.empty((0,), dtype=torch.int64),
+                chains=torch.empty((0,), dtype=torch.int64),
                 bfactors=None,
                 pdb_id=pdb_id,
             )

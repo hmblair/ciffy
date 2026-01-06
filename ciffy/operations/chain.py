@@ -22,18 +22,14 @@ def _validate_poly_only(polymer: "Polymer", operation: str) -> None:
     """
     Validate that a polymer has no HETATM atoms.
 
+    This is now a no-op since Polymer only contains polymer atoms
+    (HETATM atoms are in a separate HeteroAtoms container).
+
     Args:
         polymer: Polymer to validate.
         operation: Name of operation for error message.
-
-    Raises:
-        ValueError: If polymer has non-polymer atoms.
     """
-    if polymer.nonpoly() > 0:
-        raise ValueError(
-            f"{operation} requires poly-only polymers (no HETATM atoms). "
-            f"Use polymer.poly() to get the polymer portion first."
-        )
+    pass  # All polymers are poly-only now
 
 
 def _validate_same_backend(*polymers: "Polymer") -> str:

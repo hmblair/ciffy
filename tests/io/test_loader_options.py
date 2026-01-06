@@ -387,8 +387,8 @@ class TestMultiModelSupport:
         cif = get_test_cif("406D")  # 4 models
         polymer = load(cif, backend=backend)
 
-        # 406D model 1 has 760 atoms
-        assert polymer.size() == 760
+        # 406D model 1 has 726 polymer atoms (HETATM are separate)
+        assert polymer.size() == 726
 
     def test_load_model_1_explicit(self, backend):
         """Explicit model=1 works same as default."""
@@ -410,8 +410,8 @@ class TestMultiModelSupport:
         p1 = load(cif, backend=backend, model=1, alt_loc=None)
         p2 = load(cif, backend=backend, model=2, alt_loc=None)
 
-        # Models have different atom counts (760 vs 726)
-        assert p1.size() == 760
+        # Models have same polymer atom counts (726 each), HETATM separate
+        assert p1.size() == 726
         assert p2.size() == 726
 
     def test_load_model_3(self, backend):
@@ -421,8 +421,8 @@ class TestMultiModelSupport:
         cif = get_test_cif("406D")
         p3 = load(cif, backend=backend, model=3, alt_loc=None)
 
-        # Model 3 has 782 atoms
-        assert p3.size() == 782
+        # Model 3 has 726 polymer atoms (HETATM separate)
+        assert p3.size() == 726
 
     def test_load_model_4(self, backend):
         """Loading model 4 works correctly."""
@@ -431,7 +431,7 @@ class TestMultiModelSupport:
         cif = get_test_cif("406D")
         p4 = load(cif, backend=backend, model=4, alt_loc=None)
 
-        # Model 4 has 726 atoms
+        # Model 4 has 726 polymer atoms (HETATM separate)
         assert p4.size() == 726
 
     def test_different_models_different_coordinates(self, backend):
@@ -442,10 +442,9 @@ class TestMultiModelSupport:
         p1 = load(cif, backend=backend, model=1, alt_loc=None)
         p2 = load(cif, backend=backend, model=2, alt_loc=None)
 
-        # Even if we compare matching atoms, coords should differ
-        # (NMR models have different conformations)
-        # Just verify they're not identical
-        assert p1.size() != p2.size() or not np.allclose(p1.coordinates, p2.coordinates)
+        # NMR models have same atoms but different conformations
+        assert p1.size() == p2.size()  # Same polymer atom count
+        assert not np.allclose(p1.coordinates, p2.coordinates)  # Different coordinates
 
     def test_model_not_found(self, backend):
         """Invalid model number raises ValueError."""

@@ -189,15 +189,8 @@ class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
             res_idx = self._validate_indices(polymer.sequence, NUM_RESIDUES, "residue")
             res_emb = self.residue_embedding(res_idx)
             if self.scale == Scale.ATOM:
-                # Expand to atom level (only covers polymer atoms)
+                # Expand to atom level
                 res_emb = polymer.expand(res_emb, Scale.RESIDUE)
-                # Pad with zeros for non-polymer atoms (water, ions, etc.)
-                if polymer.nonpoly() > 0:
-                    padding = torch.zeros(
-                        polymer.nonpoly(), res_emb.shape[-1],
-                        dtype=res_emb.dtype, device=res_emb.device
-                    )
-                    res_emb = torch.cat([res_emb, padding], dim=0)
             embeddings.append(res_emb)
 
         if self.element_embedding is not None:

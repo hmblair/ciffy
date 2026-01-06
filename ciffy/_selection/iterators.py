@@ -33,13 +33,8 @@ def poly(polymer: Polymer) -> Polymer:
         >>> rna = poly(p)  # Get polymer only
         >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
     """
-    if polymer.nonpoly() == 0:
-        return polymer
-
-    # Create atom mask for polymer atoms only (first polymer_count atoms)
-    atom_mask = ops.zeros(polymer.size(), like=polymer.coordinates, dtype='bool')
-    atom_mask[:polymer.polymer_count] = True
-    return polymer.select(atom_mask, Scale.ATOM)
+    # Polymer now only contains polymer atoms (HETATM is separate)
+    return polymer
 
 
 def hetero(polymer: Polymer) -> "HeteroAtoms":
@@ -64,18 +59,12 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
     """
     from ..hetero import HeteroAtoms
 
-    if polymer.nonpoly() == 0:
-        return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
+    # Return stored HETATM data if available
+    if polymer._hetero is not None:
+        return polymer._hetero
 
-    pc = polymer.polymer_count
-    bfactors_data = polymer._get_field_data('bfactors')
-    return HeteroAtoms(
-        coordinates=polymer.coordinates[pc:],
-        atoms=polymer.atoms[pc:],
-        elements=polymer.elements[pc:],
-        bfactors=bfactors_data[pc:] if bfactors_data is not None else None,
-        pdb_id=polymer.pdb_id,
-    )
+    # No HETATM data - return empty container
+    return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
 
 
 def chains(polymer: Polymer) -> Generator[Polymer, None, None]:

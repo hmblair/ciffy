@@ -178,6 +178,21 @@ def load(
     polymer_count = data["polymer_count"]
     molecule_types = data["molecule_types"]
 
+    # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
+    # These chains only contain HETATM atoms and shouldn't be part of Polymer
+    chain_mask = res_per_chain > 0
+    if not np.all(chain_mask):
+        atoms_per_chain = atoms_per_chain[chain_mask]
+        res_per_chain = res_per_chain[chain_mask]
+        chain_names = [n for n, m in zip(chain_names, chain_mask) if m]
+        strand_names = [n for n, m in zip(strand_names, chain_mask) if m]
+        molecule_types = molecule_types[chain_mask]
+        # descriptions is per-chain if present
+        descriptions = data.get("descriptions", None)
+        if descriptions is not None:
+            descriptions = [d for d, m in zip(descriptions, chain_mask) if m]
+            data["descriptions"] = descriptions
+
     # Compute total atoms - use sum of atoms_per_chain if coordinates is None (skip='metadata')
     total_atoms = len(coordinates) if coordinates is not None else int(np.sum(atoms_per_chain))
     mol_sizes = np.array([total_atoms], dtype=np.int64)
@@ -213,7 +228,25 @@ def load(
     connections = data.get("connections", None)
     connection_types = data.get("connection_types", None)
 
+    # Extract HETATM data if present
+    hetatm_coords = data.get("hetatm_coordinates")
+    hetatm_elements = data.get("hetatm_elements")
+    hetatm_chains = data.get("hetatm_chains")
+    hetatm_bfactors = data.get("hetatm_bfactors")
+
+    hetero = None
+    if hetatm_coords is not None and len(hetatm_coords) > 0:
+        from ..hetero import HeteroAtoms
+        hetero = HeteroAtoms(
+            coordinates=hetatm_coords,
+            elements=hetatm_elements,
+            chains=hetatm_chains,
+            bfactors=hetatm_bfactors,
+            pdb_id=id,
+        )
+
     # Create hierarchy from sizes and lengths
+    # Note: polymer_count no longer needed - all atoms in main arrays are polymer atoms
     from ..polymer.hierarchy import _Hierarchy
     hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
@@ -242,6 +275,7 @@ def load(
         # Internal state
         connections=connections,
         connection_types=connection_types,
+        hetero=hetero,
     )
 
     # Convert to torch if requested
@@ -305,6 +339,13 @@ def load_metadata(file: str | Path) -> dict:
     atoms_per_chain = data["atoms_per_chain"]
     res_per_chain = data["res_per_chain"]
     molecule_types = data["molecule_types"]
+
+    # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
+    chain_mask = res_per_chain > 0
+    if not np.all(chain_mask):
+        atoms_per_chain = atoms_per_chain[chain_mask]
+        res_per_chain = res_per_chain[chain_mask]
+        molecule_types = molecule_types[chain_mask]
 
     # Convert date string to datetime.date
     date_value = None

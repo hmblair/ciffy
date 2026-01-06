@@ -41,6 +41,29 @@ static const char *ATTR_SEQ_ID        = "label_seq_id";
 static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 
 
+/* ============================================================================
+ * ATOM DATA HELPERS
+ * Allocate/free shared AtomData structures for polymer and HETATM atoms.
+ * ============================================================================ */
+
+void atom_data_alloc(AtomData *data, int count, bool with_bfactors) {
+    data->count = count;
+    data->coords = count > 0 ? malloc((size_t)count * 3 * sizeof(float)) : NULL;
+    data->elements = count > 0 ? malloc((size_t)count * sizeof(int)) : NULL;
+    data->bfactors = (count > 0 && with_bfactors) ? malloc((size_t)count * sizeof(float)) : NULL;
+}
+
+void atom_data_free(AtomData *data) {
+    free(data->coords);
+    free(data->elements);
+    free(data->bfactors);
+    data->coords = NULL;
+    data->elements = NULL;
+    data->bfactors = NULL;
+    data->count = 0;
+}
+
+
 /* Forward declarations for partial loading support */
 static int _prescan_model_filter(mmCIF *cif, mmBlock *block, int atoms,
                                  const LoadFilter *filter, CifErrorContext *ctx);
@@ -473,10 +496,10 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
 
 
 /**
- * Count atoms per chain with exclusion support.
+ * Count atoms per chain with exclusion and nonpoly support.
  *
- * Like _count_sizes_by_group but skips excluded atoms.
- * Used after chain filtering is applied.
+ * Like _count_sizes_by_group but skips excluded and non-polymer atoms.
+ * This ensures atoms_per_chain matches atoms_per_res (both polymer-only).
  */
 static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
                                              CifErrorContext *ctx) {
@@ -500,6 +523,11 @@ static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
     for (int line = 0; line < block->size; line++) {
         /* Skip excluded atoms */
         if (cif->is_excluded && cif->is_excluded[line]) {
+            continue;
+        }
+
+        /* Skip non-polymer atoms (HETATM) - these go to separate arrays */
+        if (cif->is_nonpoly && cif->is_nonpoly[line]) {
             continue;
         }
 
@@ -776,15 +804,48 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
                       excluded, cif->atoms);
         }
 
-        /* Count atoms per chain (respects is_excluded if set) */
-        if (cif->is_excluded) {
-            cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
-        } else {
-            cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
-                                                         &cif->chains, ctx);
+        /* Prescan for nonpoly atoms - needed to count polymer-only atoms per chain */
+        cif->is_nonpoly = calloc((size_t)original_atoms, sizeof(int));
+        if (!cif->is_nonpoly) {
+            if (cif->is_excluded) free(cif->is_excluded);
+            _free_lines(&blocks->b[BLOCK_ATOM]);
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_nonpoly (metadata)");
+            return CIF_ERR_ALLOC;
         }
 
+        int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], original_atoms,
+                                               cif->is_nonpoly, ctx);
+        if (polymer_count < 0) {
+            free(cif->is_nonpoly);
+            if (cif->is_excluded) free(cif->is_excluded);
+            _free_lines(&blocks->b[BLOCK_ATOM]);
+            return ctx->code;
+        }
+        cif->polymer = polymer_count;
+        cif->nonpoly = original_atoms - polymer_count;
+
+        /* Adjust atom count - we only count polymer atoms, minus any excluded */
+        /* Need to count how many excluded atoms were polymer vs nonpoly */
+        if (cif->is_excluded) {
+            int excluded_polymer = 0;
+            for (int i = 0; i < original_atoms; i++) {
+                if (cif->is_excluded[i] && !cif->is_nonpoly[i]) {
+                    excluded_polymer++;
+                }
+            }
+            cif->atoms = cif->polymer - excluded_polymer;
+        } else {
+            cif->atoms = cif->polymer;
+        }
+
+        LOG_DEBUG("metadata mode: %d polymer atoms (after filters)", cif->atoms);
+
+        /* Count atoms per chain - always use filtered version since is_nonpoly is set */
+        cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+
         _free_lines(&blocks->b[BLOCK_ATOM]);
+        free(cif->is_nonpoly);
+        cif->is_nonpoly = NULL;
         if (cif->is_excluded) {
             free(cif->is_excluded);
             cif->is_excluded = NULL;
@@ -820,9 +881,24 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
 
     LOG_DEBUG("Pre-scan: %d polymer, %d non-polymer atoms", cif->polymer, cif->nonpoly);
 
+    /* Allocate HETATM arrays for non-polymer atoms */
+    bool has_bfactors = !(skip_mask & SKIP_BFACTORS);
+    atom_data_alloc(&cif->hetatm, cif->nonpoly, has_bfactors);
+    if (cif->nonpoly > 0) {
+        cif->hetatm_chains = calloc((size_t)cif->nonpoly, sizeof(int));
+        if (!cif->hetatm_chains) {
+            atom_data_free(&cif->hetatm);
+            free(cif->is_nonpoly);
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate hetatm_chains");
+            return CIF_ERR_ALLOC;
+        }
+    }
+
     /* Apply atom filters (chain, alt_loc, etc.) */
     err = _apply_atom_filters(cif, &blocks->b[BLOCK_ATOM], original_atoms, filter, ctx);
     if (err != CIF_OK) {
+        atom_data_free(&cif->hetatm);
+        free(cif->hetatm_chains);
         free(cif->is_nonpoly);
         _free_lines(&blocks->b[BLOCK_ATOM]);
         _free_lines(&blocks->b[BLOCK_POLY]);
@@ -830,8 +906,11 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         return err;
     }
 
+    /* Set atoms to polymer count only - HETATM data goes in separate arrays */
+    cif->atoms = cif->polymer;
+
     /* Allocate arrays for fields with size_source set (coordinates, types, elements) */
-    /* NOTE: cif->atoms is now the FILTERED count */
+    /* NOTE: cif->atoms is now the POLYMER count only */
     err = _allocate_field_arrays(cif, skip_mask, ctx);
     if (err != CIF_OK) {
         free(cif->is_nonpoly);
@@ -886,18 +965,17 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         return ctx->code;
     }
 
+    /* Count atoms per chain - always use filtered version to skip nonpoly atoms.
+     * This ensures atoms_per_chain matches atoms_per_res (both polymer-only). */
+    cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+    if (cif->atoms_per_chain == NULL) {
+        free(cif->is_nonpoly);
+        return ctx->code;
+    }
+
     /* Free is_nonpoly - no longer needed */
     free(cif->is_nonpoly);
     cif->is_nonpoly = NULL;
-
-    /* Count atoms per chain - use filtered version if chain filtering is active */
-    if (cif->is_excluded) {
-        cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
-    } else {
-        cif->atoms_per_chain = _count_sizes_by_group(&blocks->b[BLOCK_ATOM], ATTR_LABEL_ASYM,
-                                                     &cif->chains, ctx);
-    }
-    if (cif->atoms_per_chain == NULL) return ctx->code;
 
     /* Free is_excluded - no longer needed */
     if (cif->is_excluded) {

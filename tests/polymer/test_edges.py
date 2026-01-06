@@ -203,24 +203,35 @@ class TestPolyHeteroPartition:
 
         assert hetero.empty()
 
-    def test_poly_hetero_sum(self, backend):
-        """poly() + hetero() atom counts sum to total."""
+    def test_poly_returns_self(self, backend):
+        """poly() returns self since Polymer only contains polymer atoms."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        poly_count = p.poly().size()
-        hetero_count = p.hetero().size()
+        # poly() returns self - all atoms are polymer atoms
+        poly = p.poly()
+        assert poly.size() == p.size()
 
-        assert poly_count + hetero_count == p.size()
+    def test_hetero_separate(self, backend):
+        """hetero() returns separate HETATM container."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        hetero = p.hetero()
+
+        # HETATM atoms are separate from polymer
+        assert hetero.size() == 48  # 3SKW has 48 HETATM atoms
+        assert p.size() == 2826  # Polymer only has polymer atoms
 
     def test_poly_matches_polymer_count(self, backend):
-        """poly() size matches polymer_count attribute."""
+        """poly() size matches polymer_count attribute (both equal size())."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        assert p.poly().size() == p.polymer_count
+        # All three are now equal
+        assert p.poly().size() == p.polymer_count == p.size()
 
 
 class TestChainsGenerator:

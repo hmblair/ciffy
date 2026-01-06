@@ -1210,28 +1210,38 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
  * @brief Fused batch processing for ATOM block fields.
  *
  * Processes coords, bfactors, elements, and types in a single tight loop,
- * eliminating per-field function call overhead. Uses two-pointer
- * placement for polymer/non-polymer separation.
+ * eliminating per-field function call overhead. Polymer atoms go to main arrays,
+ * HETATM atoms go to separate cif->hetatm arrays.
  */
 static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
                                           const int *coord_idx, int bfactor_idx,
                                           int elem_idx, int comp_idx, int atom_idx,
+                                          int chain_idx,
                                           CifErrorContext *ctx) {
     (void)ctx;
 
     char scratch[MAX_INLINE_BUFFER];
     char elem_buf[MAX_INLINE_BUFFER];
+    char chain_buf[MAX_INLINE_BUFFER];
+
+    /* Polymer arrays */
     float *coords = cif->coordinates;
     float *bfactors = cif->bfactors;
     int *elements = cif->elements;
     int *types = cif->types;
+
+    /* HETATM arrays */
+    AtomData *hetatm = &cif->hetatm;
+    int *hetatm_chains = cif->hetatm_chains;
+
     int *is_nonpoly = cif->is_nonpoly;
     int *is_excluded = cif->is_excluded;  /* May be NULL if no filtering */
     const int *offsets = block->offsets;
     char **lines = block->lines;
 
     int poly_idx = 0;
-    int nonpoly_idx = cif->polymer;
+    int hetatm_idx = 0;
+    int current_chain = 0;
 
     for (int row = 0; row < block->size; row++) {
         /* Skip excluded atoms (from chain filter) */
@@ -1239,27 +1249,68 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
             continue;
         }
 
-        int dest = is_nonpoly[row] ? nonpoly_idx++ : poly_idx++;
         char *line_start = lines[row];
 
-        /* Coordinates (x, y, z) */
-        BATCH_FLOAT(coords[3 * dest + 0], coord_idx[0]);
-        BATCH_FLOAT(coords[3 * dest + 1], coord_idx[1]);
-        BATCH_FLOAT(coords[3 * dest + 2], coord_idx[2]);
+        /* Track current chain (for HETATM chain assignment) */
+        if (chain_idx >= 0) {
+            char *chain_ptr = line_start + offsets[chain_idx];
+            while (*chain_ptr == ' ') chain_ptr++;
+            char *chain_end = chain_ptr;
+            while (*chain_end != ' ' && *chain_end != '\n' && *chain_end != '\0') chain_end++;
+            size_t chain_len = (size_t)(chain_end - chain_ptr);
 
-        /* B-factor (may not be present in all files) */
-        if (bfactor_idx >= 0 && bfactors) {
-            BATCH_FLOAT(bfactors[dest], bfactor_idx);
+            if (chain_len > 0 && chain_len < MAX_INLINE_BUFFER) {
+                memcpy(chain_buf, chain_ptr, chain_len);
+                chain_buf[chain_len] = '\0';
+
+                /* Find matching chain index */
+                for (int i = 0; i < cif->chains; i++) {
+                    if (cif->names[i] && strcmp(chain_buf, cif->names[i]) == 0) {
+                        current_chain = i;
+                        break;
+                    }
+                }
+            }
         }
 
-        /* Element symbol -> element index (may be skipped) */
-        if (elements) {
-            BATCH_LOOKUP(elements[dest], elem_idx, _lookup_element, elem_buf);
-        }
+        if (is_nonpoly[row]) {
+            /* Write to HETATM arrays */
+            BATCH_FLOAT(hetatm->coords[3 * hetatm_idx + 0], coord_idx[0]);
+            BATCH_FLOAT(hetatm->coords[3 * hetatm_idx + 1], coord_idx[1]);
+            BATCH_FLOAT(hetatm->coords[3 * hetatm_idx + 2], coord_idx[2]);
 
-        /* Residue_Atom -> atom type index (may be skipped) */
-        if (types) {
-            BATCH_LOOKUP2(types[dest], comp_idx, atom_idx, '_', _lookup_atom, scratch);
+            if (bfactor_idx >= 0 && hetatm->bfactors) {
+                BATCH_FLOAT(hetatm->bfactors[hetatm_idx], bfactor_idx);
+            }
+
+            if (hetatm->elements) {
+                BATCH_LOOKUP(hetatm->elements[hetatm_idx], elem_idx, _lookup_element, elem_buf);
+            }
+
+            if (hetatm_chains) {
+                hetatm_chains[hetatm_idx] = current_chain;
+            }
+
+            hetatm_idx++;
+        } else {
+            /* Write to polymer arrays */
+            BATCH_FLOAT(coords[3 * poly_idx + 0], coord_idx[0]);
+            BATCH_FLOAT(coords[3 * poly_idx + 1], coord_idx[1]);
+            BATCH_FLOAT(coords[3 * poly_idx + 2], coord_idx[2]);
+
+            if (bfactor_idx >= 0 && bfactors) {
+                BATCH_FLOAT(bfactors[poly_idx], bfactor_idx);
+            }
+
+            if (elements) {
+                BATCH_LOOKUP(elements[poly_idx], elem_idx, _lookup_element, elem_buf);
+            }
+
+            if (types) {
+                BATCH_LOOKUP2(types[poly_idx], comp_idx, atom_idx, '_', _lookup_atom, scratch);
+            }
+
+            poly_idx++;
         }
     }
 
@@ -1317,9 +1368,10 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
 
     /* Use fused loop for ATOM block when is_nonpoly is available */
     if (group->block_id == BLOCK_ATOM && cif->is_nonpoly != NULL) {
-        /* Find attribute indices for coords, bfactors, elements, types */
+        /* Find attribute indices for coords, bfactors, elements, types, chain */
         int coord_idx[3] = {-1, -1, -1};
         int bfactor_idx = -1, elem_idx = -1, comp_idx = -1, atom_idx = -1;
+        int chain_idx = _get_attr_index(block, SCHEMA_ATOM_LABEL_ASYM_ID, ctx);
 
         for (int f = 0; f < group->field_count; f++) {
             FieldId fid = group->fields[f];
@@ -1339,7 +1391,8 @@ CifError _execute_batch_group(mmCIF *cif, mmBlockList *blocks,
 
         LOG_DEBUG("Using fused batch loop for ATOM block");
         CifError err = _batch_atom_fields_fused(cif, block, coord_idx, bfactor_idx,
-                                                elem_idx, comp_idx, atom_idx, ctx);
+                                                elem_idx, comp_idx, atom_idx,
+                                                chain_idx, ctx);
 
         /* If bfactors attribute was missing, free the pre-allocated array */
         if (bfactor_idx < 0 && cif->bfactors != NULL) {

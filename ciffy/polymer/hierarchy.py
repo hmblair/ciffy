@@ -201,13 +201,8 @@ class _Hierarchy:
 
     @property
     def polymer_count(self) -> int:
-        """Number of polymer atoms."""
+        """Number of polymer atoms (equals n_atoms since HETATM is separate)."""
         return self._polymer_count
-
-    @property
-    def nonpoly(self) -> int:
-        """Number of non-polymer atoms."""
-        return self._n_atoms - self._polymer_count
 
     @property
     def lengths(self) -> Array:
@@ -340,10 +335,6 @@ class _Hierarchy:
             When reducing from ATOM to RESIDUE scale, non-polymer atoms are
             automatically excluded since they don't belong to any residue.
         """
-        # Non-polymer atoms don't belong to residues, so slice them out
-        if in_scale == Scale.ATOM and out_scale == Scale.RESIDUE and self.nonpoly > 0:
-            features = features[:self._polymer_count]
-
         count = self.size(out_scale)
         sizes = self._per[(in_scale, out_scale)]
         device = getattr(features, 'device', None)
@@ -456,26 +447,14 @@ class _Hierarchy:
 
         elif input_scale == Scale.RESIDUE:
             res_mask = input_mask
-            polymer_atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-            # Pad with False for non-polymer atoms
-            if self.nonpoly > 0:
-                atom_mask = ops.zeros(self.size(Scale.ATOM), like=self._ref, dtype='bool')
-                atom_mask[:self._polymer_count] = polymer_atom_mask
-            else:
-                atom_mask = polymer_atom_mask
+            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
             new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
             chn_mask = new_lengths > 0
 
         elif input_scale == Scale.CHAIN:
             chn_mask = input_mask
             res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
-            polymer_atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-            # Pad with False for non-polymer atoms
-            if self.nonpoly > 0:
-                atom_mask = ops.zeros(self.size(Scale.ATOM), like=self._ref, dtype='bool')
-                atom_mask[:self._polymer_count] = polymer_atom_mask
-            else:
-                atom_mask = polymer_atom_mask
+            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
 
         else:
             raise ValueError(f"Selection not supported at {input_scale.name} scale")

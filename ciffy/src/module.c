@@ -123,6 +123,32 @@ static PyObject *_init_2d_arr_float(int size1, int size2, float *data) {
 
 
 /**
+ * @brief Create a 1D NumPy array from float data.
+ *
+ * Sets NPY_ARRAY_OWNDATA so NumPy frees the memory when the array
+ * is garbage collected.
+ */
+static PyObject *_init_1d_arr_float(int size, float *data) {
+    /* Handle empty array case */
+    if (size == 0) {
+        if (data) free(data);
+        npy_intp dims[1] = {0};
+        return PyArray_SimpleNew(1, dims, NPY_FLOAT);  /* Empty array, no data needed */
+    }
+
+    npy_intp dims[1] = {size};
+    PyObject *arr = PyArray_SimpleNewFromData(1, dims, NPY_FLOAT, data);
+    if (arr == NULL) {
+        free(data);
+        PyErr_SetString(PyExc_MemoryError, "Failed to create NumPy array");
+        return NULL;
+    }
+    PyArray_ENABLEFLAGS((PyArrayObject *)arr, NPY_ARRAY_OWNDATA);
+    return arr;
+}
+
+
+/**
  * @brief Get the size for a field's array based on its size_source.
  */
 static int _get_py_size(const mmCIF *cif, const FieldDef *def) {
@@ -259,6 +285,51 @@ static PyObject *_c_to_py(mmCIF cif) {
         goto cleanup;
     }
     Py_DECREF(py_apc);
+
+    /* Export HETATM (non-polymer) data if present */
+    if (cif.hetatm.count > 0 && cif.hetatm.coords != NULL) {
+        /* hetatm_coordinates: (N, 3) float array */
+        PyObject *py_hetatm_coords = _init_2d_arr_float(cif.hetatm.count, 3, cif.hetatm.coords);
+        if (py_hetatm_coords == NULL) goto cleanup;
+        if (PyDict_SetItemString(dict, "hetatm_coordinates", py_hetatm_coords) < 0) {
+            Py_DECREF(py_hetatm_coords);
+            goto cleanup;
+        }
+        Py_DECREF(py_hetatm_coords);
+
+        /* hetatm_elements: (N,) int array */
+        if (cif.hetatm.elements != NULL) {
+            PyObject *py_hetatm_elem = _init_1d_arr_int(cif.hetatm.count, cif.hetatm.elements);
+            if (py_hetatm_elem == NULL) goto cleanup;
+            if (PyDict_SetItemString(dict, "hetatm_elements", py_hetatm_elem) < 0) {
+                Py_DECREF(py_hetatm_elem);
+                goto cleanup;
+            }
+            Py_DECREF(py_hetatm_elem);
+        }
+
+        /* hetatm_bfactors: (N,) float array (optional) */
+        if (cif.hetatm.bfactors != NULL) {
+            PyObject *py_hetatm_bf = _init_1d_arr_float(cif.hetatm.count, cif.hetatm.bfactors);
+            if (py_hetatm_bf == NULL) goto cleanup;
+            if (PyDict_SetItemString(dict, "hetatm_bfactors", py_hetatm_bf) < 0) {
+                Py_DECREF(py_hetatm_bf);
+                goto cleanup;
+            }
+            Py_DECREF(py_hetatm_bf);
+        }
+
+        /* hetatm_chains: (N,) int array - chain index for each HETATM */
+        if (cif.hetatm_chains != NULL) {
+            PyObject *py_hetatm_chains = _init_1d_arr_int(cif.hetatm.count, cif.hetatm_chains);
+            if (py_hetatm_chains == NULL) goto cleanup;
+            if (PyDict_SetItemString(dict, "hetatm_chains", py_hetatm_chains) < 0) {
+                Py_DECREF(py_hetatm_chains);
+                goto cleanup;
+            }
+            Py_DECREF(py_hetatm_chains);
+        }
+    }
 
     /* Export all registry fields with py_export != PY_NONE */
     for (int i = 0; i < FIELD_COUNT; i++) {

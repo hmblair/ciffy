@@ -161,18 +161,14 @@ class TestJoin:
         with pytest.raises(ValueError, match="at least one polymer"):
             join()
 
-    def test_join_hetatm_error(self):
-        """Join with HETATM atoms raises error."""
+    def test_join_with_loaded_structure(self):
+        """Join works with structures loaded from files (HETATM is separate)."""
         p1 = template_with_coords("ac")
         p2 = ciffy.load("tests/data/9MDS.cif")
 
-        # Skip if test structure doesn't have HETATM
-        if p2.nonpoly() == 0:
-            pytest.skip("Test structure has no HETATM atoms")
-
-        # Should fail because p2 has HETATM
-        with pytest.raises(ValueError, match="poly-only"):
-            join(p1, p2)
+        # Should work - HETATM atoms are now in separate HeteroAtoms container
+        result = join(p1, p2)
+        assert result.size() == p1.size() + p2.size()
 
     def test_join_preserves_pdb_id_when_same(self):
         """Join preserves PDB ID when all are the same."""
@@ -274,21 +270,6 @@ class TestExtend:
 
         assert p2.size(Scale.CHAIN) == original_chains  # Same number of chains
         assert p2.size(Scale.RESIDUE) == original_residues + 1  # One more residue
-
-    def test_extend_hetatm_error(self):
-        """Extend fails on polymer with HETATM."""
-        p = ciffy.load("tests/data/9MDS.cif")
-
-        # Skip if test structure doesn't have HETATM
-        if p.nonpoly() == 0:
-            pytest.skip("Test structure has no HETATM atoms")
-
-        atom_group = Residue.A.terminal(start=False, end=False)
-        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
-
-        with pytest.raises(ValueError, match="poly-only"):
-            p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
 
     def test_extend_template_error(self):
         """Extend fails on template (no coordinates)."""

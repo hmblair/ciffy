@@ -210,6 +210,7 @@ class Polymer:
         # Extract internal state (not Field or Metadata)
         connections = kwargs.pop('connections', None)
         connection_types = kwargs.pop('connection_types', None)
+        hetero = kwargs.pop('hetero', None)
 
         # Handle empty polymer case
         if hierarchy is None:
@@ -248,6 +249,7 @@ class Polymer:
         object.__setattr__(self, '_bonds', None)
         object.__setattr__(self, '_connections', connections)
         object.__setattr__(self, '_connection_types', connection_types)
+        object.__setattr__(self, '_hetero', hetero)
 
         # Validate field sizes match hierarchy
         self._validate_sizes()
@@ -606,6 +608,15 @@ class Polymer:
             else:
                 result[name] = value
 
+        # Convert HETATM data if present
+        hetero = object.__getattribute__(self, '_hetero')
+        if hetero is not None:
+            from ..backend import to_numpy as _to_numpy
+            if to_func is _to_numpy:
+                result['hetero'] = hetero.numpy()
+            else:
+                result['hetero'] = hetero.torch()
+
         result['_field_meta'] = field_meta
         return result
 
@@ -872,15 +883,18 @@ class Polymer:
         object.__setattr__(polymer, '_connections', object.__getattribute__(self, '_connections'))
         object.__setattr__(polymer, '_connection_types', object.__getattribute__(self, '_connection_types'))
 
+        # Handle HETATM data
+        if 'hetero' in overrides:
+            hetero = overrides.pop('hetero')
+        else:
+            hetero = object.__getattribute__(self, '_hetero')
+        object.__setattr__(polymer, '_hetero', hetero)
+
         return polymer
 
     # ─────────────────────────────────────────────────────────────────────────
     # Computed Properties
     # ─────────────────────────────────────────────────────────────────────────
-
-    def nonpoly(self) -> int:
-        """Return the number of non-polymer atoms (waters, ions, ligands)."""
-        return self._hierarchy.nonpoly
 
     @property
     def bonds(self) -> Array:
@@ -2110,13 +2124,6 @@ class Polymer:
         if self.empty():
             return self._extend_from_empty(residue, coordinates, name, **fields)
 
-        # Validate poly-only
-        if self.nonpoly() > 0:
-            raise ValueError(
-                "extend() requires a poly-only polymer (no HETATM atoms). "
-                "Use polymer.poly() first."
-            )
-
         # Determine n_new_atoms and handle coordinates
         if coordinates is not None:
             if transform is not None:
@@ -2491,6 +2498,11 @@ class Polymer:
         hierarchy = object.__getattribute__(self, '_hierarchy')
         if device is not None:
             converted['hierarchy'] = hierarchy.to(device)
+
+        # Move HETATM data to device if present
+        hetero = object.__getattribute__(self, '_hetero')
+        if hetero is not None:
+            converted['hetero'] = hetero.to(device, dtype)
 
         return self._clone(**converted)
 

@@ -45,6 +45,35 @@ typedef enum {
 } ConnType;
 
 /**
+ * @brief Shared atom data structure for polymer and HETATM atoms.
+ *
+ * Used to avoid duplication of coordinate/element/bfactor arrays
+ * between polymer and non-polymer atom data.
+ */
+typedef struct AtomData {
+    int count;              /**< Number of atoms */
+    float *coords;          /**< Coordinates [count * 3] as x,y,z triplets */
+    int *elements;          /**< Element type indices [count] */
+    float *bfactors;        /**< B-factors [count] (optional, may be NULL) */
+} AtomData;
+
+/**
+ * @brief Allocate arrays for AtomData struct.
+ *
+ * @param data AtomData struct to initialize
+ * @param count Number of atoms
+ * @param with_bfactors Whether to allocate bfactors array
+ */
+void atom_data_alloc(AtomData *data, int count, bool with_bfactors);
+
+/**
+ * @brief Free arrays in AtomData struct.
+ *
+ * @param data AtomData struct to free (count set to 0)
+ */
+void atom_data_free(AtomData *data);
+
+/**
  * @brief Parsed mmCIF molecular structure data.
  *
  * Contains all extracted information from an mmCIF file including
@@ -66,6 +95,10 @@ typedef struct mmCIF {
 
     int polymer;            /**< Count of polymeric atoms */
     int nonpoly;            /**< Count of non-polymeric atoms */
+
+    /* HETATM (non-polymer) data - separate from main polymer arrays */
+    AtomData hetatm;        /**< HETATM atom data (coords, elements, bfactors) */
+    int *hetatm_chains;     /**< HETATM chain indices [hetatm.count] */
 
     float *coordinates;     /**< Atom coordinates [atoms * 3] as x,y,z triplets */
     float *bfactors;        /**< B-factors/temperature factors [atoms] */

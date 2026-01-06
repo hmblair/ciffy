@@ -336,6 +336,9 @@ typedef uint32_t FieldSkipMask;
 /* Pre-defined skip mask presets */
 #define SKIP_NONE       ((FieldSkipMask)0)
 
+/* Individual field skip masks */
+#define SKIP_BFACTORS   (1U << FIELD_BFACTORS)
+
 /* SKIP_METADATA: Skip heavy atom-level fields (what load_metadata uses) */
 #define SKIP_METADATA   ((FieldSkipMask)( \
     (1U << FIELD_COORDS) | \

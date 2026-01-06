@@ -84,19 +84,17 @@ class TestReduce:
             assert min_val.shape[0] == p.size(Scale.CHAIN)
             assert max_val.shape[0] == p.size(Scale.CHAIN)
 
-    def test_reduce_excludes_hetero_at_residue_scale(self, backend):
-        """reduce to RESIDUE scale excludes non-polymer atoms."""
+    def test_reduce_to_residue_scale(self, backend):
+        """reduce to RESIDUE scale works correctly (HETATM is now separate)."""
         import ciffy
         from ciffy import Scale, Reduction
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        # Structure has hetero atoms
-        if p.nonpoly() > 0:
-            result = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
+        result = p.reduce(p.coordinates, Scale.RESIDUE, Reduction.MEAN)
 
-            # Result size should match number of residues
-            assert result.shape[0] == p.size(Scale.RESIDUE)
+        # Result size should match number of residues
+        assert result.shape[0] == p.size(Scale.RESIDUE)
 
 
 class TestResidueReduce:

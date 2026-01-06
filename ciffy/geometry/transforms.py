@@ -9,6 +9,7 @@ This module provides functions for:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,6 +21,36 @@ if TYPE_CHECKING:
     from ..biochemistry import Residue
     from ..biochemistry.linking import FrameDefinition
 from .primitives import cross, dot, normalize, clone, to_scalar
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
+
+
+@dataclass
+class LocalCoordinates:
+    """Coordinates in a local frame with SE(3) transform to position globally.
+
+    Used when building polymer chains autoregressively. The coordinates
+    are expressed in a local reference frame, and the transform positions
+    them relative to the previous residue's linking frame.
+
+    Attributes:
+        coordinates: (n_atoms, 3) atom positions in local frame.
+        transform: (6,) SE(3) as [axis_angle_x, axis_angle_y, axis_angle_z,
+            translation_x, translation_y, translation_z]. The first 3 elements
+            are the axis-angle rotation (direction is axis, magnitude is angle
+            in radians). The last 3 are the translation vector.
+
+    Example:
+        >>> from ciffy.geometry import LocalCoordinates
+        >>> local = LocalCoordinates(coords, transform)
+        >>> polymer = polymer.append(Residue.A, local)
+    """
+
+    coordinates: "Array"
+    transform: "Array"
 
 
 # =============================================================================

@@ -1182,10 +1182,15 @@ class Polymer(AtomContainer):
         self: Polymer,
         residue: Residue,
         coords: Array | None,
+        transform: Array | None,
         name: str,
         **fields,
     ) -> Polymer:
-        """Create first residue when extending from empty polymer."""
+        """Create first residue when extending from empty polymer.
+
+        If transform is provided, applies it relative to the global identity frame
+        (origin at [0,0,0] with identity rotation).
+        """
         # Determine n_atoms and reference array for backend
         if coords is not None:
             n_atoms = coords.shape[0]
@@ -1195,8 +1200,55 @@ class Polymer(AtomContainer):
             ref = fields['atoms']
         else:
             raise ValueError(
-                "Either coordinates or atoms must be provided for extend()."
+                "Either coordinates or atoms must be provided for _append()."
             )
+
+        # Apply transform relative to identity frame if provided
+        if coords is not None and transform is not None:
+            from ..geometry.transforms import (
+                apply_relative_transform,
+                extract_frame_positions,
+                frame_from_positions,
+                rigid_align,
+            )
+            from ..biochemistry.linking import LINKING_BY_TYPE
+            import numpy as np
+
+            # Get linking definition for this residue type
+            link_def = LINKING_BY_TYPE.get(residue.molecule_type)
+            if link_def is None:
+                raise ValueError(
+                    f"No linking definition for molecule type {residue.molecule_type}. "
+                    f"Cannot apply transform for first residue."
+                )
+
+            # Identity frame at origin
+            if is_torch(coords):
+                import torch
+                identity_origin = torch.zeros(3, dtype=coords.dtype, device=coords.device)
+                identity_R = torch.eye(3, dtype=coords.dtype, device=coords.device)
+            else:
+                identity_origin = np.zeros(3, dtype=np.float32)
+                identity_R = np.eye(3, dtype=np.float32)
+
+            # Apply transform to get target frame
+            target_origin, target_R = apply_relative_transform(
+                identity_origin, identity_R, transform
+            )
+
+            # Get the residue's linking frame from its coordinates
+            atoms_arr = fields.get('atoms')
+            if atoms_arr is not None:
+                next_positions = extract_frame_positions(
+                    coords, atoms_arr, link_def.next_frame
+                )
+                next_origin, next_R = frame_from_positions(next_positions)
+                # Align residue so its frame matches target
+                coords = rigid_align(coords, next_origin, next_R, target_origin, target_R)
+            else:
+                # No atoms provided - just translate to target origin
+                centroid = coords.mean(axis=0)
+                coords = coords + (target_origin - centroid)
 
         # Create hierarchy arrays in same backend as ref
         sizes = {
@@ -1240,7 +1292,7 @@ class Polymer(AtomContainer):
             pdb_id=self.pdb_id,
         )
 
-    def extend(
+    def _append(
         self: Polymer,
         residue: Residue,
         coordinates: Array | None = None,
@@ -1249,7 +1301,7 @@ class Polymer(AtomContainer):
         **fields,
     ) -> Polymer:
         """
-        Append a residue to the end of a polymer (for autoregressive generation).
+        Low-level append: add a residue with explicit field arrays.
 
         Creates a new Polymer with an additional residue. If the polymer is empty,
         creates the first residue. Otherwise, positions the residue relative to
@@ -1257,6 +1309,9 @@ class Polymer(AtomContainer):
 
         The caller must provide the same atom/residue-level fields that exist on
         this polymer (e.g., atoms, elements). These are concatenated automatically.
+
+        Note:
+            This is a low-level method. Prefer `append()` for the public API.
 
         Args:
             residue: Residue type being added (e.g., Residue.ALA, Residue.A).
@@ -1278,29 +1333,10 @@ class Polymer(AtomContainer):
         Raises:
             ValueError: If polymer has multiple chains, has HETATM atoms,
                 or required fields are missing.
-
-        Example:
-            >>> from ciffy import Residue, Polymer
-            >>>
-            >>> # Start from empty polymer (first residue gets 5' terminal atoms)
-            >>> poly = Polymer()
-            >>> atom_group = Residue.A.terminal(start=True, end=False)
-            >>> atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-            >>> poly = poly.extend(Residue.A, coords, atoms=atoms, elements=elements)
-            >>>
-            >>> # Extend with relative transform (positions relative to previous residue)
-            >>> atom_group = Residue.C.terminal(start=False, end=False)
-            >>> atoms, elements = atom_group.index(), atom_group.elements()
-            >>> local_coords, transform = model.predict_relative(...)
-            >>> poly = poly.extend(Residue.C, local_coords, transform, atoms=atoms, elements=elements)
-            >>>
-            >>> # Extend with absolute coordinates (no transform needed)
-            >>> abs_coords = model.predict_absolute(...)
-            >>> poly = poly.extend(Residue.G, abs_coords, atoms=atoms, elements=elements)
         """
         # Handle empty polymer case
         if self.empty():
-            return self._extend_from_empty(residue, coordinates, name, **fields)
+            return self._extend_from_empty(residue, coordinates, transform, name, **fields)
 
         # Determine n_new_atoms and handle coordinates
         if coordinates is not None:
@@ -1317,7 +1353,7 @@ class Polymer(AtomContainer):
             # Template mode: no coordinates, get n_atoms from atoms field
             if 'atoms' not in fields:
                 raise ValueError(
-                    "Either coordinates or atoms must be provided for extend()."
+                    "Either coordinates or atoms must be provided for _append()."
                 )
             n_new_atoms = len(fields['atoms'])
             # Check consistency: if existing polymer has coords, new residue must too
@@ -1325,7 +1361,7 @@ class Polymer(AtomContainer):
             if coords_field is not None and coords_field.data is not None:
                 raise ValueError(
                     "Cannot add residue without coordinates to polymer with "
-                    "coordinates. Pass coordinates= to extend()."
+                    "coordinates. Pass coordinates= to _append()."
                 )
 
         ref = self._hierarchy._ref
@@ -1371,47 +1407,55 @@ class Polymer(AtomContainer):
             **new_fields
         )
 
-    def extend_new(
+    def append(
         self: Polymer,
         atom_group: AtomGroup,
-        coordinates: Array | None = None,
-        transform: Array | None = None,
+        coordinates: "Array | LocalCoordinates | None" = None,
         *,
         residue: Residue | None = None,
         name: str = "A",
     ) -> Polymer:
         """
-        Extend polymer with a residue, auto-generating atoms and elements.
+        Append a residue to the polymer chain.
 
-        A convenience wrapper around extend() that automatically derives atoms
-        and elements from an AtomGroup. Use this when building chains from
-        residue models that store their own AtomGroup.
+        Automatically derives atoms and elements from an AtomGroup. This is the
+        primary method for building chains autoregressively.
 
         Args:
             atom_group: AtomGroup defining the atoms (Residue.A, model.atoms, etc.)
-            coordinates: Optional (n_atoms, 3) coordinates. None for template mode.
-            transform: Optional (6,) SE(3) transform for positioning.
-            residue: Residue type for sequence field. Required for AtomGroup subsets
-                that don't have a .value attribute.
+            coordinates: One of:
+                - (n_atoms, 3) array: Absolute coordinates (no transform)
+                - LocalCoordinates: Local-frame coordinates with SE(3) transform
+                - None: Template mode (no coordinates)
+            residue: Residue type for sequence field. Required for AtomGroup
+                subsets that don't have a .value attribute.
             name: Chain name (only used for first residue).
 
         Returns:
             New Polymer with the residue appended.
 
         Example:
-            >>> # Build with full residue
-            >>> p = Polymer()
-            >>> p = p.extend_new(Residue.A, coords)
-            >>> p = p.extend_new(Residue.C, coords2, transform)
+            >>> from ciffy import Polymer
+            >>> from ciffy.biochemistry import Residue
+            >>> from ciffy.geometry import LocalCoordinates
             >>>
             >>> # Build template (no coordinates)
             >>> p = Polymer()
             >>> for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
-            ...     p = p.extend_new(res)
+            ...     p = p.append(res)
+            >>>
+            >>> # Build with absolute coordinates (first residue)
+            >>> p = Polymer()
+            >>> p = p.append(Residue.A, coords)
+            >>>
+            >>> # Build with relative coordinates (subsequent residues)
+            >>> p = p.append(Residue.C, LocalCoordinates(coords, transform))
             >>>
             >>> # Build with model's atom subset
-            >>> p = p.extend_new(model.atoms, coords, transform, residue=model.residue)
+            >>> p = p.append(model.atoms, LocalCoordinates(coords, transform), residue=model.residue)
         """
+        from ..geometry import LocalCoordinates
+
         # Get atom indices and elements from AtomGroup
         atom_arr = atom_group.index()
         elem_arr = atom_group.elements()
@@ -1425,8 +1469,16 @@ class Polymer(AtomContainer):
                 )
             residue = atom_group
 
-        return self.extend(
-            residue, coordinates, transform,
+        # Extract coordinates and transform from LocalCoordinates if needed
+        if isinstance(coordinates, LocalCoordinates):
+            actual_coords = coordinates.coordinates
+            actual_transform = coordinates.transform
+        else:
+            actual_coords = coordinates
+            actual_transform = None
+
+        return self._append(
+            residue, actual_coords, actual_transform,
             atoms=atom_arr, elements=elem_arr, name=name
         )
 

@@ -47,13 +47,13 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
                 elements = torch.from_numpy(elements)
 
             if poly.empty():
-                poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
+                poly = poly._append(residue, coords, atoms=atoms, elements=elements)
             else:
                 transform = LINEAR_EXTEND_TRANSFORM
                 if backend == "torch":
                     import torch
                     transform = torch.from_numpy(transform)
-                poly = poly.extend(residue, coords, transform, atoms=atoms, elements=elements)
+                poly = poly._append(residue, coords, transform, atoms=atoms, elements=elements)
 
     return poly
 
@@ -76,7 +76,7 @@ def extend_with_linear(poly, residue):
         atoms = torch.from_numpy(atoms)
         elements = torch.from_numpy(elements)
 
-    return poly.extend(residue, coords, transform, atoms=atoms, elements=elements)
+    return poly._append(residue, coords, transform, atoms=atoms, elements=elements)
 
 
 class TestJoin:
@@ -206,8 +206,8 @@ class TestJoin:
         assert combined.backend == backend
 
 
-class TestExtend:
-    """Tests for Polymer.extend() method."""
+class TestAppend:
+    """Tests for Polymer._append() method."""
 
     def test_extend_rna(self):
         """Extend RNA chain with a new residue."""
@@ -266,7 +266,7 @@ class TestExtend:
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         # Extend should add to the last chain
-        p2 = p.extend(Residue.A, coords, transform, atoms=atoms, elements=elements)
+        p2 = p._append(Residue.A, coords, transform, atoms=atoms, elements=elements)
 
         assert p2.size(Scale.CHAIN) == original_chains  # Same number of chains
         assert p2.size(Scale.RESIDUE) == original_residues + 1  # One more residue
@@ -279,7 +279,7 @@ class TestExtend:
         transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(AttributeError, match="coordinates"):
-            template.extend(Residue.G, coords, transform, atoms=atoms, elements=elements)
+            template._append(Residue.G, coords, transform, atoms=atoms, elements=elements)
 
     def test_extend_with_custom_coords(self):
         """Extend with explicit coordinates."""
@@ -289,7 +289,7 @@ class TestExtend:
         atom_group = Residue.G.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
 
-        extended = p.extend(Residue.G, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements)
+        extended = p._append(Residue.G, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements)
 
         assert extended.size(Scale.RESIDUE) == 3
         assert extended.sequence_str() == "acg"

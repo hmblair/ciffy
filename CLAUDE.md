@@ -100,19 +100,20 @@ polymer.write('output.cif')
 
 ```python
 from ciffy import Polymer, Residue
+from ciffy.geometry import LocalCoordinates
 
 # Template (no coordinates)
 p = Polymer()
 for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
-    p = p.extend_new(res)
+    p = p.append(res)
 
 # With coordinates
 p = Polymer()
-p = p.extend_new(Residue.A, coords1)             # First at origin
-p = p.extend_new(Residue.C, coords2, transform)  # Relative positioning
+p = p.append(Residue.A, coords1)                              # First at origin
+p = p.append(Residue.C, LocalCoordinates(coords2, transform)) # Relative positioning
 ```
 
-`transform`: (6,) SE(3) as [axis-angle, translation]. If `None`, uses absolute coords.
+`LocalCoordinates`: Bundles (n_atoms, 3) coordinates with (6,) SE(3) transform [axis-angle, translation].
 
 ## PolymerDataset
 

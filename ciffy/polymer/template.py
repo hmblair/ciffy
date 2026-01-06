@@ -204,7 +204,7 @@ def from_sequence(
         empty = Polymer(pdb_id=id)
         return empty.torch() if backend == "torch" else empty
 
-    # Build polymer using extend_new() for each residue
+    # Build polymer using append() for each residue
     polymer = Polymer(pdb_id=id)
 
     for chain_idx, seq in enumerate(sequences):
@@ -219,7 +219,7 @@ def from_sequence(
             if atoms is not None and res_idx in atoms:
                 atom_group = atom_group.subset(set(atoms[res_idx]))
 
-            polymer = polymer.extend_new(atom_group, residue=residue, name=chain_name)
+            polymer = polymer.append(atom_group, residue=residue, name=chain_name)
 
     return polymer.torch() if backend == "torch" else polymer
 

@@ -435,11 +435,11 @@ def build_polymer_from_coords(
         elem_list = elements_per_residue[i][0].cpu().numpy().tolist()
 
         if i == 0:
-            poly = poly.extend(res, coords, atoms=atom_list, elements=elem_list)
+            poly = poly._append(res, coords, atoms=atom_list, elements=elem_list)
         else:
             # For subsequent residues, use identity transform (coords are in global frame)
             transform = np.zeros(6, dtype=np.float32)
-            poly = poly.extend(res, coords, transform, atoms=atom_list, elements=elem_list)
+            poly = poly._append(res, coords, transform, atoms=atom_list, elements=elem_list)
 
     return poly
 
@@ -612,11 +612,11 @@ def main():
             # Subsequent: we need to handle positioning differently
             # For now, just place all coordinates as given (they're predicted in global frame)
             if i == 0:
-                poly = poly.extend(res, coords, atoms=atom_list, elements=elem_list)
+                poly = poly._append(res, coords, atoms=atom_list, elements=elem_list)
             else:
                 # Use identity transform since coords are already global
                 transform = np.zeros(6, dtype=np.float32)
-                poly = poly.extend(res, coords, transform, atoms=atom_list, elements=elem_list)
+                poly = poly._append(res, coords, transform, atoms=atom_list, elements=elem_list)
 
         print(f"  Built: {poly.size()} atoms, {poly.size(Scale.RESIDUE)} residues")
 

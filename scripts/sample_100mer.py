@@ -65,9 +65,9 @@ def main():
         res_elements = atom_group.elements().tolist()
 
         if i == 0:
-            poly = poly.extend(res, res_coords, atoms=res_atoms, elements=res_elements)
+            poly = poly._append(res, res_coords, atoms=res_atoms, elements=res_elements)
         else:
-            poly = poly.extend(res, res_coords, res_transform, atoms=res_atoms, elements=res_elements)
+            poly = poly._append(res, res_coords, res_transform, atoms=res_atoms, elements=res_elements)
 
     print(f"Built: {poly.size()} atoms, {poly.size(Scale.RESIDUE)} residues")
 

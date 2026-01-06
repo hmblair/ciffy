@@ -250,7 +250,7 @@ class TestFromSequenceEdgeCases:
         import time
         from ciffy import from_sequence, Scale
 
-        # 1000 residues (reduced from 10000 for extend_new() loop approach)
+        # 1000 residues (reduced from 10000 for append() loop approach)
         seq = "acgu" * 250
 
         start = time.time()
@@ -258,7 +258,7 @@ class TestFromSequenceEdgeCases:
         elapsed = time.time() - start
 
         assert polymer.size(Scale.RESIDUE) == 1000
-        # Should complete in reasonable time (~4s with extend_new loop)
+        # Should complete in reasonable time (~4s with append loop)
         assert elapsed < 10.0
 
     def test_very_long_protein_sequence(self):
@@ -266,7 +266,7 @@ class TestFromSequenceEdgeCases:
         import time
         from ciffy import from_sequence, Scale
 
-        # All 20 amino acids repeated (reduced from 10000 for extend_new() loop)
+        # All 20 amino acids repeated (reduced from 10000 for append() loop)
         seq = "ACDEFGHIKLMNPQRSTVWY" * 50  # 1000 residues
 
         start = time.time()
@@ -274,7 +274,7 @@ class TestFromSequenceEdgeCases:
         elapsed = time.time() - start
 
         assert polymer.size(Scale.RESIDUE) == 1000
-        # Should complete in reasonable time (~2s with extend_new loop)
+        # Should complete in reasonable time (~2s with append loop)
         assert elapsed < 10.0
 
     @pytest.mark.parametrize("sequence", [
@@ -635,4 +635,4 @@ class TestBondsAndLinking:
 
     # Note: Tests for residue spacing were removed because from_sequence()
     # no longer builds coordinates. Templates are now coordinate-free.
-    # Use Polymer.extend() or load() for polymers with coordinates.
+    # Use Polymer.append() or load() for polymers with coordinates.

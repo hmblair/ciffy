@@ -35,14 +35,14 @@ def main():
     # =========================================================================
 
     # Add a guanine residue - just pass the residue type
-    polymer = polymer.extend(Residue.G)
+    polymer = polymer.append(Residue.G)
     print(f"After adding G:")
     print(f"  Sequence: {polymer.sequence_str()}")
     print(f"  Residues: {polymer.size(Scale.RESIDUE)}")
     print()
 
     # Add a uracil residue
-    polymer = polymer.extend(Residue.U)
+    polymer = polymer.append(Residue.U)
     print(f"After adding U:")
     print(f"  Sequence: {polymer.sequence_str()}")
     print(f"  Residues: {polymer.size(Scale.RESIDUE)}")

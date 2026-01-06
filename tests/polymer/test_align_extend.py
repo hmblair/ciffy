@@ -2,7 +2,7 @@
 Tests for Polymer.align() and related methods.
 
 Tests residue-to-local-frame alignment, field deletion via copy(),
-and edge cases for extend().
+and edge cases for _append() and append().
 """
 
 import numpy as np
@@ -46,9 +46,9 @@ def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer
             elements = torch.from_numpy(elements)
 
         if poly.empty():
-            poly = poly.extend(residue, coords, atoms=atoms, elements=elements)
+            poly = poly._append(residue, coords, atoms=atoms, elements=elements)
         else:
-            poly = poly.extend(
+            poly = poly._append(
                 residue, coords, LINEAR_EXTEND_TRANSFORM, atoms=atoms, elements=elements
             )
 
@@ -200,7 +200,7 @@ class TestCopyFieldDeletion:
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         # Should work without providing bfactors
-        extended = p.extend(
+        extended = p._append(
             coordinates=coords,
             atoms=atoms,
             elements=elements,
@@ -357,11 +357,11 @@ class TestSortAtoms:
 
 
 # =============================================================================
-# Polymer.extend() Edge Cases
+# Polymer._append() Edge Cases
 # =============================================================================
 
-class TestExtendEdgeCases:
-    """Edge case tests for Polymer.extend()."""
+class TestAppendEdgeCases:
+    """Edge case tests for Polymer._append()."""
 
     def test_extend_with_identity_transform(self):
         """Extend with zero rotation places residue along backbone."""
@@ -372,7 +372,7 @@ class TestExtendEdgeCases:
         # Identity rotation, translate along Z
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
-        extended = p.extend(
+        extended = p._append(
             coordinates=coords,
             atoms=atoms,
             elements=elements,
@@ -382,8 +382,8 @@ class TestExtendEdgeCases:
 
         assert extended.size(Scale.RESIDUE) == 2
 
-    def test_extend_with_absolute_coords(self):
-        """Extend with absolute coordinates (no transform)."""
+    def test_append_with_absolute_coords(self):
+        """Append with absolute coordinates (no transform)."""
         p = template_with_coords("a")
 
         atom_group = Residue.C.terminal(start=False, end=False)
@@ -391,7 +391,7 @@ class TestExtendEdgeCases:
         # Absolute coordinates - offset from origin
         abs_coords = atom_group.ideal + np.array([10.0, 0.0, 0.0], dtype=np.float32)
 
-        extended = p.extend(
+        extended = p._append(
             coordinates=abs_coords,
             atoms=atoms,
             elements=elements,
@@ -403,15 +403,15 @@ class TestExtendEdgeCases:
         new_res_coords = extended.coordinates[-len(atoms):]
         assert np.allclose(new_res_coords, abs_coords, atol=1e-5)
 
-    def test_extend_sequence_updated(self):
-        """Extended polymer has correct sequence."""
+    def test_append_sequence_updated(self):
+        """Appended polymer has correct sequence."""
         p = template_with_coords("acg")
 
         atom_group = Residue.U.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
-        extended = p.extend(
+        extended = p._append(
             coordinates=coords,
             atoms=atoms,
             elements=elements,
@@ -421,8 +421,8 @@ class TestExtendEdgeCases:
 
         assert extended.sequence_str() == "acgu"
 
-    def test_extend_chain_count_unchanged(self):
-        """Extend adds residue to existing chain, not new chain."""
+    def test_append_chain_count_unchanged(self):
+        """Append adds residue to existing chain, not new chain."""
         p = template_with_coords("ac")
         assert p.size(Scale.CHAIN) == 1
 
@@ -430,7 +430,7 @@ class TestExtendEdgeCases:
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
         transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
-        extended = p.extend(
+        extended = p._append(
             coordinates=coords,
             atoms=atoms,
             elements=elements,
@@ -440,8 +440,8 @@ class TestExtendEdgeCases:
 
         assert extended.size(Scale.CHAIN) == 1
 
-    def test_extend_from_different_residue_types(self):
-        """Can extend from any RNA residue type."""
+    def test_append_from_different_residue_types(self):
+        """Can append from any RNA residue type."""
         for start_res in ['a', 'c', 'g', 'u']:
             p = template_with_coords(start_res)
 
@@ -449,7 +449,7 @@ class TestExtendEdgeCases:
             atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
             transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
-            extended = p.extend(
+            extended = p._append(
                 coordinates=coords,
                 atoms=atoms,
                 elements=elements,
@@ -499,16 +499,16 @@ class TestAtomGroupElements:
 
 
 # =============================================================================
-# Polymer.extend_new() Tests
+# Polymer.append() Tests
 # =============================================================================
 
-class TestExtendNew:
-    """Tests for Polymer.extend_new() method."""
+class TestAppend:
+    """Tests for Polymer.append() method."""
 
-    def test_extend_new_template_mode(self):
-        """extend_new() creates template without coordinates."""
+    def test_append_template_mode(self):
+        """append() creates template without coordinates."""
         p = ciffy.Polymer()
-        p = p.extend_new(Residue.A)
+        p = p.append(Residue.A)
 
         assert p.size() == Residue.A.n_atoms
         assert p.size(Scale.RESIDUE) == 1
@@ -517,75 +517,76 @@ class TestExtendNew:
         # Template mode: no coordinates
         assert not hasattr(p, '_coordinates') or p._coordinates is None
 
-    def test_extend_new_with_coordinates(self):
-        """extend_new() with coordinates creates polymer with coords."""
+    def test_append_with_coordinates(self):
+        """append() with coordinates creates polymer with coords."""
         p = ciffy.Polymer()
         coords = Residue.A.ideal
-        p = p.extend_new(Residue.A, coords)
+        p = p.append(Residue.A, coords)
 
         assert p.size() == Residue.A.n_atoms
         assert p.coordinates is not None
         assert p.coordinates.shape == coords.shape
 
-    def test_extend_new_multi_residue_template(self):
-        """extend_new() builds multi-residue template."""
+    def test_append_multi_residue_template(self):
+        """append() builds multi-residue template."""
         p = ciffy.Polymer()
         for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
-            p = p.extend_new(res)
+            p = p.append(res)
 
         assert p.size(Scale.RESIDUE) == 4
         expected_atoms = sum(r.n_atoms for r in [Residue.A, Residue.C, Residue.G, Residue.U])
         assert p.size() == expected_atoms
         assert p.sequence_str() == "acgu"
 
-    def test_extend_new_with_transform(self):
-        """extend_new() positions residue using transform."""
+    def test_append_with_local_coordinates(self):
+        """append() positions residue using LocalCoordinates."""
+        from ciffy.geometry import LocalCoordinates
         p = ciffy.Polymer()
-        p = p.extend_new(Residue.A, Residue.A.ideal)
-        p = p.extend_new(Residue.C, Residue.C.ideal, np.zeros(6))
+        p = p.append(Residue.A, Residue.A.ideal)
+        p = p.append(Residue.C, LocalCoordinates(Residue.C.ideal, np.zeros(6)))
 
         assert p.size(Scale.RESIDUE) == 2
         assert p.coordinates is not None
         expected = Residue.A.n_atoms + Residue.C.n_atoms
         assert p.coordinates.shape == (expected, 3)
 
-    def test_extend_new_with_subset_requires_residue(self):
-        """extend_new() with subset requires explicit residue parameter."""
+    def test_append_with_subset_requires_residue(self):
+        """append() with subset requires explicit residue parameter."""
         subset = Residue.A.subset({2, 3, 5, 6, 7})
         p = ciffy.Polymer()
 
         # Should raise without residue=
         with pytest.raises(ValueError, match="residue"):
-            p.extend_new(subset)
+            p.append(subset)
 
         # Should work with residue=
-        p = p.extend_new(subset, residue=Residue.A)
+        p = p.append(subset, residue=Residue.A)
         assert p.size() == 5
 
-    def test_extend_new_preserves_sequence(self):
-        """extend_new() correctly sets sequence field."""
+    def test_append_preserves_sequence(self):
+        """append() correctly sets sequence field."""
         p = ciffy.Polymer()
-        p = p.extend_new(Residue.G)
-        p = p.extend_new(Residue.C)
-        p = p.extend_new(Residue.A)
-        p = p.extend_new(Residue.U)
+        p = p.append(Residue.G)
+        p = p.append(Residue.C)
+        p = p.append(Residue.A)
+        p = p.append(Residue.U)
 
         assert p.sequence_str() == "gcau"
 
-    def test_extend_new_atoms_match_atomgroup(self):
-        """extend_new() atoms field matches AtomGroup.index()."""
+    def test_append_atoms_match_atomgroup(self):
+        """append() atoms field matches AtomGroup.index()."""
         p = ciffy.Polymer()
-        p = p.extend_new(Residue.A)
+        p = p.append(Residue.A)
 
         np.testing.assert_array_equal(
             np.asarray(p.atoms),
             Residue.A.index()
         )
 
-    def test_extend_new_elements_match_atomgroup(self):
-        """extend_new() elements field matches AtomGroup.elements()."""
+    def test_append_elements_match_atomgroup(self):
+        """append() elements field matches AtomGroup.elements()."""
         p = ciffy.Polymer()
-        p = p.extend_new(Residue.A)
+        p = p.append(Residue.A)
 
         np.testing.assert_array_equal(
             np.asarray(p.elements),

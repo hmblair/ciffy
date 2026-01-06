@@ -465,6 +465,65 @@ class AtomARModel(nn.Module if TORCH_AVAILABLE else object):
 
         return coords
 
+    def compute_loss_polymer(self, polymer: "Polymer") -> torch.Tensor:
+        """
+        Compute loss from a Polymer.
+
+        Unified interface for training - extracts all required tensors from
+        the polymer and computes the AR loss.
+
+        Args:
+            polymer: Input polymer structure.
+
+        Returns:
+            Loss tensor.
+        """
+        from ...biochemistry import Scale
+
+        device = next(self.parameters()).device
+
+        # Convert to torch if needed
+        if polymer.backend != "torch":
+            polymer = polymer.torch()
+        polymer = polymer.to(device)
+
+        # Extract data from polymer
+        atoms = polymer.atoms  # (N,)
+        elements = polymer.elements  # (N,)
+        coords = polymer.coordinates  # (N, 3)
+        sequence = polymer.sequence  # (R,)
+        counts = polymer.counts(Scale.RESIDUE)  # (R,)
+
+        # Build residue boundaries (cumulative counts)
+        boundaries = torch.zeros(len(counts) + 1, dtype=torch.long, device=device)
+        boundaries[1:] = torch.cumsum(counts, dim=0)
+
+        # Build residues_per_atom (which residue each atom belongs to)
+        residues_per_atom = polymer.membership(Scale.RESIDUE)  # (N,)
+
+        # Add batch dimension (batch size 1)
+        atoms = atoms.unsqueeze(0)
+        elements = elements.unsqueeze(0)
+        coords = coords.unsqueeze(0)
+        residues_per_atom = residues_per_atom.unsqueeze(0)
+        sequence = sequence.unsqueeze(0)
+        boundaries = boundaries.unsqueeze(0)
+
+        # Create masks (all valid for single polymer)
+        atom_mask = torch.ones(1, atoms.shape[1], dtype=torch.bool, device=device)
+        residue_mask = torch.ones(1, sequence.shape[1], dtype=torch.bool, device=device)
+
+        return self.compute_loss(
+            atoms=atoms,
+            residues_per_atom=residues_per_atom,
+            elements=elements,
+            coords=coords,
+            atom_mask=atom_mask,
+            residue_types=sequence,
+            residue_boundaries=boundaries,
+            residue_mask=residue_mask,
+        )
+
     def compute_loss(
         self,
         atoms: torch.Tensor,

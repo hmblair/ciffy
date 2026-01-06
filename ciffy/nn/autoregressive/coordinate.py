@@ -230,6 +230,113 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
 
         return {"hidden": hidden, "outputs": outputs}
 
+    def compute_loss_polymer(self, polymer: "Polymer") -> "torch.Tensor":
+        """
+        Compute loss from a Polymer.
+
+        Unified interface for training - extracts local frames, transforms,
+        and coordinates from the polymer.
+
+        Args:
+            polymer: Input polymer structure (should be stripped of missing atoms).
+
+        Returns:
+            Loss tensor.
+        """
+        from ...biochemistry import Scale
+        from ...biochemistry.linking import GLYCOSIDIC_FRAME
+
+        device = next(self.parameters()).device
+
+        # Convert to torch if needed
+        if polymer.backend != "torch":
+            polymer = polymer.torch()
+        polymer = polymer.to(device)
+
+        n_residues = polymer.size(Scale.RESIDUE)
+        sequence = polymer.sequence  # (R,)
+        counts = polymer.counts(Scale.RESIDUE)  # (R,)
+
+        # Align to local frames
+        aligned, Rs = polymer.align()  # Rs: (R, 3, 3)
+
+        # Get frame origins (C1' positions for glycosidic frame)
+        origin_atom = GLYCOSIDIC_FRAME.origin
+        origins = polymer.gather([origin_atom])[:, 0, :]  # (R, 3)
+
+        # Convert rotation matrices to axis-angle
+        global_orientations = self._rotation_to_axis_angle(Rs)  # (R, 3)
+
+        # Build local_coords tensor: (1, R, max_atoms, 3)
+        max_atoms = self.max_atoms
+        local_coords = torch.zeros(1, n_residues, max_atoms, 3, device=device)
+        n_atoms_tensor = torch.zeros(1, n_residues, dtype=torch.long, device=device)
+
+        offset = 0
+        for i in range(n_residues):
+            n = counts[i].item()
+            n_atoms_tensor[0, i] = n
+            local_coords[0, i, :n] = aligned.coordinates[offset:offset + n]
+            offset += n
+
+        # Compute transforms: relative SE(3) from frame i-1 to frame i
+        # transforms[i] = (axis_angle, translation) to go from frame i-1 to frame i
+        transforms = torch.zeros(1, n_residues, 6, device=device)
+        for i in range(1, n_residues):
+            # Relative rotation: R_{i-1}^T @ R_i
+            R_prev = Rs[i - 1]
+            R_curr = Rs[i]
+            R_rel = R_prev.T @ R_curr
+            rot_aa = self._rotation_to_axis_angle(R_rel.unsqueeze(0)).squeeze(0)
+
+            # Relative translation in prev frame: R_{i-1}^T @ (origin_i - origin_{i-1})
+            t_global = origins[i] - origins[i - 1]
+            t_local = R_prev.T @ t_global
+
+            transforms[0, i, :3] = rot_aa
+            transforms[0, i, 3:] = t_local
+
+        # Add batch dimension to other tensors
+        sequence = sequence.unsqueeze(0)  # (1, R)
+        origins = origins.unsqueeze(0)  # (1, R, 3)
+        global_orientations = global_orientations.unsqueeze(0)  # (1, R, 3)
+
+        return self.compute_loss(
+            sequence=sequence,
+            local_coords=local_coords,
+            transforms=transforms,
+            global_centroids=origins,
+            global_orientations=global_orientations,
+            n_atoms=n_atoms_tensor,
+            padding_mask=None,
+        )
+
+    def _rotation_to_axis_angle(self, R: "torch.Tensor") -> "torch.Tensor":
+        """Convert rotation matrix to axis-angle representation."""
+        # R: (..., 3, 3) -> (..., 3)
+        # Using Rodrigues formula inverse
+        batch_shape = R.shape[:-2]
+
+        # Trace and angle
+        trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+        cos_angle = (trace - 1) / 2
+        cos_angle = torch.clamp(cos_angle, -1, 1)
+        angle = torch.acos(cos_angle)
+
+        # Axis from skew-symmetric part
+        axis = torch.stack([
+            R[..., 2, 1] - R[..., 1, 2],
+            R[..., 0, 2] - R[..., 2, 0],
+            R[..., 1, 0] - R[..., 0, 1],
+        ], dim=-1)
+
+        # Normalize axis
+        axis_norm = torch.norm(axis, dim=-1, keepdim=True)
+        axis = axis / (axis_norm + 1e-8)
+
+        # axis-angle = axis * angle
+        return axis * angle.unsqueeze(-1)
+
     def compute_loss(
         self,
         sequence: "torch.Tensor",
@@ -468,11 +575,12 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
 
                 if i == 0:
                     # First residue: absolute coordinates
-                    poly = poly.extend_new(atom_group, coords_i, residue=res)
+                    poly = poly.append(atom_group, coords_i, residue=res)
                 else:
                     # Subsequent residues: relative transform
+                    from ...geometry import LocalCoordinates
                     transform_i = transforms[s, i].cpu().numpy()
-                    poly = poly.extend_new(atom_group, coords_i, transform_i, residue=res)
+                    poly = poly.append(atom_group, LocalCoordinates(coords_i, transform_i), residue=res)
 
                 offset += n_atoms
 

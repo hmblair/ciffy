@@ -231,6 +231,30 @@ class LatentDiffusionModel(nn.Module):
         with torch.no_grad():
             return self.encoder_model.decode(latents, sequence)
 
+    def compute_loss(self, polymer: "Polymer") -> "torch.Tensor":
+        """
+        Compute training loss from a Polymer.
+
+        Unified interface for training - extracts coords and sequence from
+        the polymer and computes diffusion loss.
+
+        Args:
+            polymer: Input polymer structure.
+
+        Returns:
+            Loss tensor.
+        """
+        # Convert to torch if needed
+        if polymer.backend != "torch":
+            polymer = polymer.torch()
+        polymer = polymer.to(self.device)
+
+        coords = polymer.coordinates
+        sequence = polymer.sequence
+
+        loss, _ = self.training_step(coords, sequence)
+        return loss
+
     def training_step(
         self,
         coords: "torch.Tensor",

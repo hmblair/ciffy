@@ -110,6 +110,3 @@ def _nerf_reconstruct_parent(
     dihedrals: ndarray,
     parents: ndarray,
 ) -> ndarray: ...
-
-# Profiling (optional, only present when built with CIFFY_PROFILE=1)
-def _get_profile() -> dict[str, float]: ...

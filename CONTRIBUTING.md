@@ -106,7 +106,6 @@ RESIDUE_WHITELIST = {
 ### Environment Variables
 
 - `CIFFY_NO_OPENMP=1` - Disable OpenMP (single-threaded builds)
-- `CIFFY_PROFILE=1` - Enable profiling instrumentation
 - `CIFFY_CCD_PATH` - Custom path to CCD file
 
 ### Rebuilding After C Changes

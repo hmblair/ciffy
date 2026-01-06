@@ -67,19 +67,16 @@ def _biotite_load(file: str):
 
 
 def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
-                   ciffy_only: bool = False) -> tuple:
+                   ciffy_only: bool = False) -> dict:
     """
     Benchmark parsing a single file with all methods.
 
     Returns:
-        Tuple of (results dict, profile dict or None if profiling disabled).
+        Results dict with timing information.
     """
     import ciffy
 
     results = {"pdb_id": pdb_id, "file": filepath}
-
-    # Check if C profiling is available
-    has_profiling = hasattr(ciffy, '_get_profile')
 
     # Define loader functions
     def load_ciffy():
@@ -138,60 +135,10 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     results["atoms"] = poly.size()
     results["n_connections"] = len(poly.connections) if poly.connections is not None else 0
 
-    # Get profile data if available (from the last load)
-    profile = None
-    if has_profiling:
-        profile = ciffy._get_profile()
-
-    return results, profile
+    return results
 
 
-def print_profile_breakdown(profile: dict, total_ms: float) -> None:
-    """Print per-phase timing breakdown from C profiling."""
-    print("  Phase breakdown:")
-    phases = [
-        ("file_load", "File I/O"),
-        ("block_parse", "Block parsing"),
-        ("line_precomp", "Line precompute"),
-        ("metadata", "Metadata"),
-        ("batch_parse", "Batch parsing"),
-        ("residue_count", "Residue count"),
-        ("py_convert", "Python convert"),
-    ]
-    accounted = 0.0
-    for key, label in phases:
-        ms = profile.get(key, 0) * 1000
-        pct = (ms / total_ms * 100) if total_ms > 0 else 0
-        accounted += ms
-        print(f"    {label:16s}: {ms:7.2f} ms ({pct:5.1f}%)")
-
-    # Show batch_parse sub-phases if available
-    batch_ms = profile.get("batch_parse", 0) * 1000
-    if batch_ms > 0.1:  # Only show sub-phases if batch_parse is significant
-        sub_phases = [
-            ("batch_coords", "  -> coords"),
-            ("batch_elements", "  -> elements"),
-            ("batch_types", "  -> types"),
-        ]
-        sub_total = 0.0
-        for key, label in sub_phases:
-            ms = profile.get(key, 0) * 1000
-            pct = (ms / batch_ms * 100) if batch_ms > 0 else 0
-            sub_total += ms
-            print(f"    {label:16s}: {ms:7.2f} ms ({pct:5.1f}% of batch)")
-        # Show profiling overhead within batch
-        batch_overhead = batch_ms - sub_total
-        if batch_overhead > 0.01:
-            pct = (batch_overhead / batch_ms * 100) if batch_ms > 0 else 0
-            print(f"    {'  -> overhead':16s}: {batch_overhead:7.2f} ms ({pct:5.1f}% of batch)")
-
-    overhead = total_ms - accounted
-    if overhead > 0.01:  # Only show if significant
-        pct = (overhead / total_ms * 100) if total_ms > 0 else 0
-        print(f"    {'Unaccounted':16s}: {overhead:7.2f} ms ({pct:5.1f}%)")
-
-
-def print_results(results: dict, profile: dict = None) -> None:
+def print_results(results: dict) -> None:
     """Pretty-print benchmark results."""
     print(f"\n{'='*60}")
     print(f"PDB: {results['pdb_id']} ({results['atoms']} atoms)")
@@ -199,10 +146,6 @@ def print_results(results: dict, profile: dict = None) -> None:
 
     c = results["ciffy"]
     print(f"ciffy:       {c['mean']*1000:7.2f} ms ± {c['std']*1000:.2f} ms")
-
-    # Print profile breakdown if available
-    if profile is not None:
-        print_profile_breakdown(profile, c['mean']*1000)
 
     # Print connection loading timing
     if results.get("ciffy_connections"):
@@ -356,9 +299,6 @@ if __name__ == "__main__":
                         help="Maximum workers to test for dataset benchmark")
     args = parser.parse_args()
 
-    # Check if profiling is enabled
-    has_profiling = hasattr(ciffy, '_get_profile')
-
     # Dataset benchmark mode
     if args.dataset:
         print("PolymerDataset Scan Benchmark")
@@ -378,12 +318,10 @@ if __name__ == "__main__":
         exit(1)
 
     all_results = []
-    all_profiles = []
     for pdb_id, filepath in TEST_FILES:
         if os.path.exists(filepath):
-            results, profile = benchmark_file(pdb_id, filepath, ciffy_only=args.ciffy_only)
+            results = benchmark_file(pdb_id, filepath, ciffy_only=args.ciffy_only)
             all_results.append(results)
-            all_profiles.append(profile)
 
     if args.markdown:
         print(generate_markdown_table(all_results))
@@ -391,10 +329,6 @@ if __name__ == "__main__":
         print("ciffy Performance Benchmark")
         print("="*60)
         print(f"ciffy version: {ciffy.__version__}")
-        if has_profiling:
-            print("C profiling: ENABLED")
-        else:
-            print("C profiling: disabled (rebuild with CIFFY_PROFILE=1)")
-        for results, profile in zip(all_results, all_profiles):
-            print_results(results, profile)
+        for results in all_results:
+            print_results(results)
         print()

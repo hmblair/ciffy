@@ -398,11 +398,6 @@ def check_openmp_available():
 extra_compile_args = ['-O3']
 extra_link_args = []
 
-# Enable profiling if CIFFY_PROFILE environment variable is set
-if os.environ.get('CIFFY_PROFILE', '').lower() in ('1', 'true', 'yes'):
-    extra_compile_args.append('-DCIFFY_PROFILE')
-    print("Profiling enabled: building with -DCIFFY_PROFILE")
-
 # Enable OpenMP unless CIFFY_NO_OPENMP is set
 if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
     omp_compile, omp_link = check_openmp_available()

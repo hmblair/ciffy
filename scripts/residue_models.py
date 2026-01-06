@@ -135,27 +135,13 @@ def sample(args):
     # Verify geometry
     if args.verify:
         print("\nVerifying chain geometry...")
-        import torch
         from ciffy.biochemistry import Sugar, PhosphateGroup
 
         polymer = model.sample_from_sequence(sequence, id=model_type)
-        coords = torch.tensor(polymer.coordinates, dtype=torch.float32)
-        atoms = torch.tensor(polymer.atoms, dtype=torch.long)
+        dists = polymer.bonded_distances(Sugar.O3p.index(), PhosphateGroup.P.index())
 
-        o3p_vals = Sugar.O3p.index()
-        p_vals = PhosphateGroup.P.index()
-
-        o3p_mask = torch.isin(atoms, torch.tensor(o3p_vals))
-        p_mask = torch.isin(atoms, torch.tensor(p_vals))
-
-        o3p_coords = coords[o3p_mask]
-        p_coords = coords[p_mask]
-
-        if len(o3p_coords) > 1 and len(p_coords) > 1:
-            link_distances = torch.norm(o3p_coords[:-1] - p_coords[1:], dim=1)
-            mean_dist = link_distances.mean().item()
-            std_dist = link_distances.std().item()
-            print(f"  O3'-P distances: {mean_dist:.3f} +/- {std_dist:.3f} A (expected ~1.60 A)")
+        if len(dists) > 0:
+            print(f"  O3'-P distances: {dists.mean():.3f} +/- {dists.std():.3f} A (expected ~1.60 A)")
 
     print("\n" + "=" * 60)
     print("Done!")
@@ -403,34 +389,12 @@ def analyze(args):
             sequence = "".join(np.random.choice(list("acgu"), 20))
             polymer = model.sample_from_sequence(sequence)
 
-            coords = torch.tensor(polymer.coordinates, dtype=torch.float32)
-            atoms = torch.tensor(polymer.atoms, dtype=torch.long)
+            # Use Polymer.bonded_distances for geometry calculations
+            o3p_p_dists = polymer.bonded_distances(Sugar.O3p.index(), PhosphateGroup.P.index())
+            bond_lengths[model_name]["O3'-P"].extend(o3p_p_dists.tolist())
 
-            # O3'-P bonds (phosphodiester)
-            o3p_vals = torch.tensor(Sugar.O3p.index())
-            p_vals = torch.tensor(PhosphateGroup.P.index())
-
-            o3p_mask = torch.isin(atoms, o3p_vals)
-            p_mask = torch.isin(atoms, p_vals)
-
-            o3p_coords = coords[o3p_mask]
-            p_coords = coords[p_mask]
-
-            if len(o3p_coords) > 1 and len(p_coords) > 1:
-                # O3' of residue i bonds to P of residue i+1
-                dists = torch.norm(o3p_coords[:-1] - p_coords[1:], dim=1)
-                bond_lengths[model_name]["O3'-P"].extend(dists.tolist())
-
-            # P-O5' bonds
-            o5p_vals = torch.tensor(Sugar.O5p.index())
-            o5p_mask = torch.isin(atoms, o5p_vals)
-            o5p_coords = coords[o5p_mask]
-
-            if len(p_coords) > 0 and len(o5p_coords) > 0:
-                # P and O5' within same residue
-                min_len = min(len(p_coords), len(o5p_coords))
-                dists = torch.norm(p_coords[:min_len] - o5p_coords[:min_len], dim=1)
-                bond_lengths[model_name]["P-O5'"].extend(dists.tolist())
+            p_o5p_dists = polymer.bonded_distances(PhosphateGroup.P.index(), Sugar.O5p.index())
+            bond_lengths[model_name]["P-O5'"].extend(p_o5p_dists.tolist())
 
     # Plot bond length distributions
     for bond_name, expected in EXPECTED_BONDS.items():

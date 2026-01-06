@@ -150,15 +150,23 @@ def _extract_from_polymer(
     if polymer.size() == 0 or polymer.size(Scale.RESIDUE) < 2:
         return 0
 
-    # Align to canonical frame (skip if missing frame atoms)
+    # Align to glycosidic frame for local coordinates
     try:
-        aligned, Rs = polymer.align(frame_def)
+        aligned, _ = polymer.align(frame_def)
     except ValueError:
         return 0
-    Rs = to_numpy(Rs)
 
-    # Get frame origins for transform computation
-    origins = to_numpy(polymer.gather([frame_def.origin])[:, 0])
+    # Get link frame alignments for transform computation
+    # prev_frame = O3' frame, next_frame = P frame
+    try:
+        _, prev_Rs = polymer.align(link_def.prev_frame)
+        prev_origins = to_numpy(polymer.gather([link_def.prev_frame.origin])[:, 0])
+        _, next_Rs = polymer.align(link_def.next_frame)
+        next_origins = to_numpy(polymer.gather([link_def.next_frame.origin])[:, 0])
+    except ValueError:
+        return 0
+    prev_Rs = to_numpy(prev_Rs)
+    next_Rs = to_numpy(next_Rs)
 
     # Get sequence to find target residue type
     sequence = to_numpy(polymer.sequence)
@@ -183,9 +191,10 @@ def _extract_from_polymer(
         coords_j = to_numpy(aligned_j.coordinates)
         atoms_j = to_numpy(aligned_j.atoms).tolist()
 
-        # Compute transform: positions residue j relative to residue i
+        # Compute transform between link frames: O3' frame of i -> P frame of j
         transform = compute_relative_transform(
-            origins[i], Rs[i], origins[j], Rs[j]
+            prev_origins[i], prev_Rs[i],  # O3' frame of predecessor
+            next_origins[j], next_Rs[j],  # P frame of current residue
         )
 
         out_coords.append(coords_j)

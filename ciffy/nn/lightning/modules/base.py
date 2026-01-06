@@ -138,12 +138,33 @@ class BaseCiffyModule(LightningModule):
         """Apply gradient clipping before optimizer step.
 
         Uses `self.training_config.grad_clip` if set.
+        Logs gradient norms if `self.training_config.log_gradient_norms` is True.
         """
-        if hasattr(self, "training_config") and self.training_config.grad_clip:
+        if not hasattr(self, "training_config"):
+            return
+
+        config = self.training_config
+
+        # Log gradient norm before clipping (if enabled)
+        log_norms = getattr(config, "log_gradient_norms", False)
+        if log_norms:
+            total_norm = 0.0
+            for p in self.parameters():
+                if p.grad is not None:
+                    total_norm += p.grad.data.norm(2).item() ** 2
+            total_norm = total_norm ** 0.5
+            self.log("train/grad_norm_raw", total_norm, on_step=True, on_epoch=False)
+
+        # Apply gradient clipping
+        if config.grad_clip:
             torch.nn.utils.clip_grad_norm_(
                 self.parameters(),
-                self.training_config.grad_clip,
+                config.grad_clip,
             )
+            # Log clipped norm
+            if log_norms:
+                clipped_norm = min(total_norm, config.grad_clip)
+                self.log("train/grad_norm_clipped", clipped_norm, on_step=True, on_epoch=False)
 
 
 __all__ = ["BaseCiffyModule"]

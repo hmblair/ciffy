@@ -152,7 +152,7 @@ from .polymer import PolymerFlowModel, PolymerModel, ResidueGenerativeCore
 
 # VAE models
 from .vae import (
-    ConsolidatedResidueVAE,
+    ConsolidatedResidueVAEModel,
     ConsolidatedVAEConfig,
 )
 
@@ -166,13 +166,13 @@ from .pca_quantile import (
 
 # Autoregressive models
 from .autoregressive import (
-    AtomAR,
-    AtomARConfig,
-    CoordinateAR,
-    CoordinateARConfig,
-    PolymerLatentAR,
-    ResidueLatentAR,
-    ResidueLatentARConfig,
+    AtomARModel,
+    AtomARModelConfig,
+    CoordinateARModel,
+    CoordinateARModelConfig,
+    PolymerLatentARModel,
+    ResidueLatentARModel,
+    ResidueLatentARModelConfig,
 )
 
 # Unified residue model training API (alias for training.api)
@@ -268,7 +268,7 @@ __all__ = [
     "PolymerFlowModel",  # Deprecated alias
     "ResidueGenerativeCore",
     # VAE models
-    "ConsolidatedResidueVAE",
+    "ConsolidatedResidueVAEModel",
     "ConsolidatedVAEConfig",
     # PCA + Quantile Spline model
     "PCAQuantileResidueModel",
@@ -276,13 +276,13 @@ __all__ = [
     "fit_pca_quantile",
     "fit_all_residues",
     # Autoregressive models
-    "ResidueLatentAR",
-    "ResidueLatentARConfig",
-    "PolymerLatentAR",
-    "CoordinateAR",
-    "CoordinateARConfig",
-    "AtomAR",
-    "AtomARConfig",
+    "ResidueLatentARModel",
+    "ResidueLatentARModelConfig",
+    "PolymerLatentARModel",
+    "CoordinateARModel",
+    "CoordinateARModelConfig",
+    "AtomARModel",
+    "AtomARModelConfig",
     # Unified residue training API
     "residue",
 ]

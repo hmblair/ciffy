@@ -677,8 +677,8 @@ class PolymerModel(nn.Module, HubMixin):
         # Check for consolidated model (saved in path/consolidated/)
         consolidated_path = path / "consolidated"
         if (consolidated_path / "config.json").exists():
-            from ciffy.nn.vae.residue.consolidated import ConsolidatedResidueVAE
-            consolidated_model = ConsolidatedResidueVAE.load(consolidated_path, device=device)
+            from ciffy.nn.vae.residue.consolidated import ConsolidatedResidueVAEModel
+            consolidated_model = ConsolidatedResidueVAEModel.load(consolidated_path, device=device)
             residue_models = consolidated_model.as_residue_models()
             return cls(residue_models)
 

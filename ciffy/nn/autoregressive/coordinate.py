@@ -1,7 +1,7 @@
 """
 Coordinate autoregressive model.
 
-This module provides CoordinateAR, which directly predicts atom coordinates
+This module provides CoordinateARModel, which directly predicts atom coordinates
 and SE(3) transforms conditioned on the global assembled structure.
 """
 
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class CoordinateARConfig:
-    """Configuration for CoordinateAR model.
+class CoordinateARModelConfig:
+    """Configuration for CoordinateARModel model.
 
     Args:
         d_model: Transformer hidden dimension.
@@ -46,7 +46,7 @@ class CoordinateARConfig:
     num_residue_types: int = 32
 
 
-class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
+class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
     """
     Autoregressive model conditioned on global assembled structure.
 
@@ -67,7 +67,7 @@ class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
         config: Model configuration.
 
     Example:
-        >>> model = CoordinateAR(
+        >>> model = CoordinateARModel(
         ...     residue_atoms={Residue.A: 22, Residue.C: 20, Residue.G: 23, Residue.U: 20},
         ...     d_model=256,
         ... )
@@ -78,7 +78,7 @@ class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
     def __init__(
         self,
         residue_atoms: Dict["Residue", int],
-        config: Optional[CoordinateARConfig] = None,
+        config: Optional[CoordinateARModelConfig] = None,
         **kwargs,
     ):
         if not TORCH_AVAILABLE:
@@ -86,7 +86,7 @@ class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
         super().__init__()
 
         if config is None:
-            config = CoordinateARConfig(**kwargs)
+            config = CoordinateARModelConfig(**kwargs)
         self.config = config
         self.d_model = config.d_model
 
@@ -419,7 +419,7 @@ class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
         torch.save(self.state_dict(), path / "model.pt")
 
     @classmethod
-    def load(cls, path: str, device: str = "cpu") -> "CoordinateAR":
+    def load(cls, path: str, device: str = "cpu") -> "CoordinateARModel":
         """Load model from disk."""
         import json
         from pathlib import Path
@@ -428,7 +428,7 @@ class CoordinateAR(nn.Module if TORCH_AVAILABLE else object):
 
         with open(path / "config.json") as f:
             config_dict = json.load(f)
-        config = CoordinateARConfig(**config_dict)
+        config = CoordinateARModelConfig(**config_dict)
 
         with open(path / "residue_atoms.json") as f:
             residue_atoms = {int(k): v for k, v in json.load(f).items()}

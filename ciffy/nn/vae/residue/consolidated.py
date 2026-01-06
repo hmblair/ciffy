@@ -12,11 +12,11 @@ Benefits:
 - Simpler deployment (1 model instead of 4)
 
 Example with PolymerModel:
-    >>> from ciffy.nn.vae.residue import ConsolidatedResidueVAE
+    >>> from ciffy.nn.vae.residue import ConsolidatedResidueVAEModel
     >>> from ciffy.nn.polymer import PolymerModel
     >>>
     >>> # Train consolidated model
-    >>> model = ConsolidatedResidueVAE(residue_atoms)
+    >>> model = ConsolidatedResidueVAEModel(residue_atoms)
     >>> # ... training ...
     >>>
     >>> # Use with PolymerModel for chain sampling
@@ -42,7 +42,7 @@ from ciffy.nn.blocks import InputNorm, ResidualBlock, build_mlp_stack, Invariant
 
 @dataclass
 class ConsolidatedVAEConfig:
-    """Configuration for ConsolidatedResidueVAE."""
+    """Configuration for ConsolidatedResidueVAEModel."""
 
     latent_dim: int = 12
     d_model: int = 64
@@ -56,7 +56,7 @@ class ConsolidatedVAEConfig:
     use_residual: bool = True  # Residual connections in decoder
 
 
-class ConsolidatedResidueVAE(nn.Module):
+class ConsolidatedResidueVAEModel(nn.Module):
     """VAE with shared encoder and per-residue decoders.
 
     The encoder is rotation/translation invariant (uses only pairwise distances).
@@ -73,7 +73,7 @@ class ConsolidatedResidueVAE(nn.Module):
         ...     Residue.U: [1, 2, 3, ...],  # 20 atoms
         ... }
         >>>
-        >>> model = ConsolidatedResidueVAE(residue_atoms)
+        >>> model = ConsolidatedResidueVAEModel(residue_atoms)
         >>>
         >>> # Encode any residue type (internal batched method)
         >>> z, mu, logvar = model.encode_batch(atom_types, coords, mask, return_distribution=True)
@@ -402,7 +402,7 @@ class ConsolidatedResidueVAE(nn.Module):
             Dict mapping Residue to ConsolidatedResidueView.
 
         Example:
-            >>> model = ConsolidatedResidueVAE(residue_atoms)
+            >>> model = ConsolidatedResidueVAEModel(residue_atoms)
             >>> polymer_model = PolymerModel(model.as_residue_models())
             >>> polymer = polymer_model.sample_from_sequence("acgu")
         """
@@ -443,7 +443,7 @@ class ConsolidatedResidueVAE(nn.Module):
             json.dump(config, f, indent=2)
 
     @classmethod
-    def load(cls, path: str | Path, device: str = "cpu") -> "ConsolidatedResidueVAE":
+    def load(cls, path: str | Path, device: str = "cpu") -> "ConsolidatedResidueVAEModel":
         """Load model from directory.
 
         Args:
@@ -451,7 +451,7 @@ class ConsolidatedResidueVAE(nn.Module):
             device: Device to load model to.
 
         Returns:
-            Loaded ConsolidatedResidueVAE.
+            Loaded ConsolidatedResidueVAEModel.
         """
         from ciffy.biochemistry import Residue
 
@@ -491,7 +491,7 @@ class ConsolidatedResidueVAE(nn.Module):
 
 
 class ConsolidatedResidueView(nn.Module):
-    """Wrapper presenting a single-residue view of ConsolidatedResidueVAE.
+    """Wrapper presenting a single-residue view of ConsolidatedResidueVAEModel.
 
     This class implements the ResidueGenerativeCore protocol, allowing the
     consolidated model to be used with PolymerModel. Each view wraps the
@@ -501,7 +501,7 @@ class ConsolidatedResidueView(nn.Module):
     delegates to the consolidated model with the appropriate residue type.
     """
 
-    def __init__(self, model: ConsolidatedResidueVAE, residue: "Residue"):
+    def __init__(self, model: ConsolidatedResidueVAEModel, residue: "Residue"):
         """Initialize view for a specific residue type.
 
         Args:
@@ -621,7 +621,7 @@ class ConsolidatedResidueView(nn.Module):
         The consolidated model is saved once, and views are reconstructed
         via as_residue_models() on load.
         """
-        pass  # Parent ConsolidatedResidueVAE handles saving
+        pass  # Parent ConsolidatedResidueVAEModel handles saving
 
     def __repr__(self) -> str:
         return f"ConsolidatedResidueView(residue={self._residue.name}, n_atoms={self.n_atoms})"
@@ -634,7 +634,7 @@ def _test_consolidated_vae():
     from pathlib import Path
 
     print("=" * 60)
-    print("ConsolidatedResidueVAE Test")
+    print("ConsolidatedResidueVAEModel Test")
     print("=" * 60)
 
     # Load atom indices for each residue type
@@ -654,7 +654,7 @@ def _test_consolidated_vae():
         print(f"  {res_name}: {len(atoms)} atoms")
 
     # Create model
-    model = ConsolidatedResidueVAE(residue_atoms)
+    model = ConsolidatedResidueVAEModel(residue_atoms)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\nModel parameters: {n_params:,}")
     print(f"  Encoder: {sum(p.numel() for p in model.encoder.parameters()):,}")

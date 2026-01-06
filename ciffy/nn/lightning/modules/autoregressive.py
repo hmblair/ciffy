@@ -2,15 +2,15 @@
 PyTorch Lightning module for training autoregressive residue latent models.
 
 This module provides:
-- ResidueLatentARModule: Lightning module for training ResidueLatentAR
+- ResidueLatentARModelModule: Lightning module for training ResidueLatentARModel
 - Data handling for polymer -> latent conversion
 
 Example:
-    >>> from ciffy.nn.lightning import ResidueLatentARModule, ResidueLatentARDataModule
+    >>> from ciffy.nn.lightning import ResidueLatentARModelModule, ResidueLatentARModelDataModule
     >>> from lightning import Trainer
     >>>
-    >>> module = ResidueLatentARModule(config)
-    >>> datamodule = ResidueLatentARDataModule(cif_paths, encoder_model)
+    >>> module = ResidueLatentARModelModule(config)
+    >>> datamodule = ResidueLatentARModelDataModule(cif_paths, encoder_model)
     >>>
     >>> trainer = Trainer(max_epochs=100, accelerator="gpu")
     >>> trainer.fit(module, datamodule)
@@ -46,7 +46,7 @@ except ImportError:
         LightningModule = object
         LightningDataModule = object
 
-from ...autoregressive import ResidueLatentAR, ResidueLatentARConfig
+from ...autoregressive import ResidueLatentARModel, ResidueLatentARModelConfig
 
 if TYPE_CHECKING:
     from ....polymer import Polymer
@@ -54,8 +54,8 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class ResidueLatentARTrainingConfig:
-    """Training configuration for ResidueLatentAR.
+class ResidueLatentARModelTrainingConfig:
+    """Training configuration for ResidueLatentARModel.
 
     Args:
         lr: Learning rate.
@@ -74,20 +74,20 @@ class ResidueLatentARTrainingConfig:
 
 
 @dataclass
-class ResidueLatentARFullConfig:
+class ResidueLatentARModelFullConfig:
     """Full configuration for AR training.
 
     Args:
         model: Model configuration.
         training: Training configuration.
     """
-    model: ResidueLatentARConfig = field(default_factory=ResidueLatentARConfig)
-    training: ResidueLatentARTrainingConfig = field(default_factory=ResidueLatentARTrainingConfig)
+    model: ResidueLatentARModelConfig = field(default_factory=ResidueLatentARModelConfig)
+    training: ResidueLatentARModelTrainingConfig = field(default_factory=ResidueLatentARModelTrainingConfig)
 
 
-class ResidueLatentARModule(LightningModule):
+class ResidueLatentARModelModule(LightningModule):
     """
-    Lightning module for training ResidueLatentAR.
+    Lightning module for training ResidueLatentARModel.
 
     Handles:
     - Model creation and initialization
@@ -99,19 +99,19 @@ class ResidueLatentARModule(LightningModule):
         config: Full configuration object.
     """
 
-    def __init__(self, config: Optional[ResidueLatentARFullConfig] = None, **kwargs):
+    def __init__(self, config: Optional[ResidueLatentARModelFullConfig] = None, **kwargs):
         if not LIGHTNING_AVAILABLE:
             raise ImportError("PyTorch Lightning is required")
         super().__init__()
 
         if config is None:
-            config = ResidueLatentARFullConfig()
+            config = ResidueLatentARModelFullConfig()
 
         self.config = config
         self.save_hyperparameters({"config": asdict(config)})
 
         # Build model
-        self.model = ResidueLatentAR(config.model)
+        self.model = ResidueLatentARModel(config.model)
 
         # Track training steps for warmup
         self._train_steps = 0
@@ -204,7 +204,7 @@ class ResidueLatentARModule(LightningModule):
             },
         }
 
-    def get_model(self) -> ResidueLatentAR:
+    def get_model(self) -> ResidueLatentARModel:
         """Return the underlying model for inference."""
         return self.model
 
@@ -323,9 +323,9 @@ def collate_polymer_latents(batch: List[dict]) -> dict:
     }
 
 
-class ResidueLatentARDataModule(LightningDataModule):
+class ResidueLatentARModelDataModule(LightningDataModule):
     """
-    Lightning DataModule for ResidueLatentAR training.
+    Lightning DataModule for ResidueLatentARModel training.
 
     Handles:
     - Loading polymers from CIF files

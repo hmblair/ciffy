@@ -11,12 +11,18 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
-from lightning import LightningModule
-from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from ciffy.nn.config import TrainingConfig
+from ciffy.nn.config import TrainingConfig, SchedulerConfig
 from ciffy.geometry.constraints import GeometryConstraints
+from .base import BaseCiffyModule
+
+
+def _default_flow_training_config() -> TrainingConfig:
+    """Default training config for residue flow with cosine scheduler and gradient logging."""
+    return TrainingConfig(
+        log_gradient_norms=True,
+        scheduler=SchedulerConfig(scheduler_type="cosine"),
+    )
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -64,10 +70,10 @@ class ResidueFlowFullConfig:
 
     model: ResidueFlowModelConfig = field(default_factory=ResidueFlowModelConfig)
     data: ResidueFlowDataConfig = field(default_factory=ResidueFlowDataConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
+    training: TrainingConfig = field(default_factory=_default_flow_training_config)
 
 
-class ResidueFlowModule(LightningModule):
+class ResidueFlowModule(BaseCiffyModule):
     """LightningModule for training residue flow models.
 
     Unlike diffusion modules, this handles:
@@ -398,42 +404,6 @@ class ResidueFlowModule(LightningModule):
             self._log_geometry_metrics(coords, transforms, prefix="val")
 
         return loss
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        """Configure optimizer and scheduler."""
-        config = self.training_config
-
-        optimizer = Adam(self._residue_model.parameters(), lr=config.lr)
-
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=config.scheduler.min_lr if hasattr(config, "scheduler") else 1e-6,
-        )
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
-        }
-
-    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Apply gradient clipping if configured and log gradient norms."""
-        # Log gradient norm before clipping
-        total_norm = 0.0
-        for p in self._residue_model.parameters():
-            if p.grad is not None:
-                total_norm += p.grad.data.norm(2).item() ** 2
-        total_norm = total_norm ** 0.5
-        self.log("train/grad_norm_raw", total_norm, on_step=True, on_epoch=False)
-
-        if self.training_config.grad_clip:
-            torch.nn.utils.clip_grad_norm_(
-                self._residue_model.parameters(),
-                self.training_config.grad_clip,
-            )
-            # Log clipped norm
-            clipped_norm = min(total_norm, self.training_config.grad_clip)
-            self.log("train/grad_norm_clipped", clipped_norm, on_step=True, on_epoch=False)
 
 
 __all__ = [

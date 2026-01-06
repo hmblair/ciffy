@@ -25,8 +25,8 @@ from ciffy.nn import (
     PCAQuantileResidueModel,
     fit_all_residues,
     PolymerModel,
-    ResidueLatentAR,
-    ResidueLatentARConfig,
+    ResidueLatentARModel,
+    ResidueLatentARModelConfig,
 )
 from ciffy.biochemistry import Residue, Scale
 from ciffy.nn.flow.residue.data import extract_residues_with_links
@@ -226,7 +226,7 @@ def train_ar_model(
     print(f"  Train: {len(train_data)}, Val: {len(val_data)}")
 
     # Create model
-    config = ResidueLatentARConfig(
+    config = ResidueLatentARModelConfig(
         latent_dim=latent_dim,
         d_model=d_model,
         num_layers=num_layers,
@@ -234,7 +234,7 @@ def train_ar_model(
         dropout=0.1,
         predict_std=True,  # Predict uncertainty
     )
-    model = ResidueLatentAR(config).to(device)
+    model = ResidueLatentARModel(config).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {n_params:,}")
@@ -345,7 +345,7 @@ def train_ar_model(
 
 
 def sample_and_evaluate(
-    model: ResidueLatentAR,
+    model: ResidueLatentARModel,
     encoders: dict,
     test_sequences: list,
     device: str = "cuda",

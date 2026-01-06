@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Train CoordinateAR model for coordinate prediction with global conditioning.
+Train CoordinateARModel model for coordinate prediction with global conditioning.
 
-Unlike DirectCoordAR which only sees local frames, CoordinateAR conditions
+Unlike DirectCoordAR which only sees local frames, CoordinateARModel conditions
 on the assembled global structure, enabling long-range awareness.
 
 Steps:
 1. Use PolymerDataset for proper chain-level iteration
 2. Extract training data from chains (local coords + transforms)
 3. Compute global positions by assembling chains
-4. Train CoordinateAR to predict coords conditioned on global structure
+4. Train CoordinateARModel to predict coords conditioned on global structure
 5. Sample and generate structures
 """
 
@@ -25,7 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import ciffy
-from ciffy.nn import CoordinateAR, CoordinateARConfig, PolymerDataset
+from ciffy.nn import CoordinateARModel, CoordinateARModelConfig, PolymerDataset
 from ciffy.biochemistry import Residue, Scale, Molecule
 from ciffy.nn.flow.residue.data import extract_residues_with_links, _remap_to_common
 from ciffy.biochemistry.linking import LINKING_BY_TYPE, GLYCOSIDIC_FRAME
@@ -298,8 +298,8 @@ def train_model(
     lr: float = 1e-4,
     device: str = "cuda",
 ):
-    """Train the CoordinateAR model."""
-    print(f"\n=== Training CoordinateAR ===")
+    """Train the CoordinateARModel model."""
+    print(f"\n=== Training CoordinateARModel ===")
     print(f"  d_model={d_model}, num_layers={num_layers}, num_heads={num_heads}")
     print(f"  batch_size={batch_size}, num_epochs={num_epochs}, lr={lr}")
 
@@ -310,13 +310,13 @@ def train_model(
 
     print(f"  Train: {len(train_data)}, Val: {len(val_data)}")
 
-    config = CoordinateARConfig(
+    config = CoordinateARModelConfig(
         d_model=d_model,
         num_layers=num_layers,
         num_heads=num_heads,
         dropout=0.1,
     )
-    model = CoordinateAR(residue_atoms, config).to(device)
+    model = CoordinateARModel(residue_atoms, config).to(device)
 
     max_atoms = model.max_atoms
     n_params = sum(p.numel() for p in model.parameters())
@@ -405,7 +405,7 @@ def train_model(
 
 
 def sample_and_build(
-    model: CoordinateAR,
+    model: CoordinateARModel,
     atom_indices: dict,
     test_sequences: list,
     output_dir: Path,

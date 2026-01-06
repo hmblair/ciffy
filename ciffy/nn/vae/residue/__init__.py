@@ -1,8 +1,8 @@
 """Residue-level VAE models."""
 
-from .consolidated import ConsolidatedResidueVAE, ConsolidatedVAEConfig
+from .consolidated import ConsolidatedResidueVAEModel, ConsolidatedVAEConfig
 
 __all__ = [
-    "ConsolidatedResidueVAE",
+    "ConsolidatedResidueVAEModel",
     "ConsolidatedVAEConfig",
 ]

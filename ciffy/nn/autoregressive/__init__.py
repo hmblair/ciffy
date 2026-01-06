@@ -5,37 +5,37 @@ This module provides transformer-based autoregressive models for generating
 polymer structures either in latent space or directly in coordinate space.
 
 Models:
-    - ResidueLatentAR: Predicts latent vectors autoregressively
-    - PolymerLatentAR: End-to-end latent generation with decoders
-    - CoordinateAR: Direct coordinate prediction with global conditioning
-    - AtomAR: All-atom conditioned, residue-level output (recommended)
+    - ResidueLatentARModel: Predicts latent vectors autoregressively
+    - PolymerLatentARModel: End-to-end latent generation with decoders
+    - CoordinateARModel: Direct coordinate prediction with global conditioning
+    - AtomARModel: All-atom conditioned, residue-level output (recommended)
 """
 
 from .latent import (
-    ResidueLatentAR,
-    ResidueLatentARConfig,
-    PolymerLatentAR,
+    ResidueLatentARModel,
+    ResidueLatentARModelConfig,
+    PolymerLatentARModel,
 )
 
 from .coordinate import (
-    CoordinateAR,
-    CoordinateARConfig,
+    CoordinateARModel,
+    CoordinateARModelConfig,
 )
 
 from .atom import (
-    AtomAR,
-    AtomARConfig,
+    AtomARModel,
+    AtomARModelConfig,
 )
 
 __all__ = [
     # Latent-space models
-    "ResidueLatentAR",
-    "ResidueLatentARConfig",
-    "PolymerLatentAR",
+    "ResidueLatentARModel",
+    "ResidueLatentARModelConfig",
+    "PolymerLatentARModel",
     # Coordinate-space models (residue-level)
-    "CoordinateAR",
-    "CoordinateARConfig",
+    "CoordinateARModel",
+    "CoordinateARModelConfig",
     # All-atom conditioned model (recommended)
-    "AtomAR",
-    "AtomARConfig",
+    "AtomARModel",
+    "AtomARModelConfig",
 ]

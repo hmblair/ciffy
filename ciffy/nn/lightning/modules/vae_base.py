@@ -15,12 +15,10 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import torch
 import torch.nn.functional as F
-from lightning import LightningModule
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ciffy.nn.config import TrainingConfig
 from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup, GeometrySamplingLoss
+from .base import BaseCiffyModule
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -50,7 +48,7 @@ class BaseVAEModelConfig:
     n_geom_samples: int = 16  # Number of samples for geometry loss
 
 
-class BaseVAEModule(LightningModule):
+class BaseVAEModule(BaseCiffyModule):
     """Base class for VAE training modules.
 
     Subclasses must implement:
@@ -189,42 +187,6 @@ class BaseVAEModule(LightningModule):
         self.log("val/loss", loss, prog_bar=True, sync_dist=True)
 
         return loss
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        """Configure optimizer and scheduler."""
-        config = self.training_config
-
-        # Get model parameters - subclass must have _model or model attribute
-        model = getattr(self, "_model", None) or getattr(self, "_residue_model", None)
-        if model is None:
-            raise RuntimeError("No model found. Ensure setup() creates _model or _residue_model.")
-
-        optimizer = AdamW(
-            model.parameters(),
-            lr=config.lr,
-            weight_decay=getattr(config, "weight_decay", 0.01),
-        )
-
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=getattr(getattr(config, "scheduler", None), "min_lr", 1e-6),
-        )
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
-        }
-
-    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Apply gradient clipping if configured."""
-        if self.training_config.grad_clip:
-            model = getattr(self, "_model", None) or getattr(self, "_residue_model", None)
-            if model is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(),
-                    self.training_config.grad_clip,
-                )
 
 
 __all__ = [

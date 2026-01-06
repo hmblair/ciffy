@@ -1,6 +1,6 @@
 """LightningModule for consolidated VAE training.
 
-Trains a ConsolidatedResidueVAE with shared encoder and per-residue decoders.
+Trains a ConsolidatedResidueVAEModel with shared encoder and per-residue decoders.
 """
 
 from __future__ import annotations
@@ -9,22 +9,27 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
-from lightning import LightningModule
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from ciffy.nn.config import TrainingConfig
+from ciffy.nn.config import TrainingConfig, SchedulerConfig
 from ciffy.nn.vae.losses import compute_kl_divergence, get_beta_with_warmup, GeometrySamplingLoss
 from ciffy.geometry.constraints import GeometryConstraints
+from .base import BaseCiffyModule
+
+
+def _default_vae_training_config() -> TrainingConfig:
+    """Default training config for VAE with cosine scheduler."""
+    return TrainingConfig(
+        scheduler=SchedulerConfig(scheduler_type="cosine"),
+    )
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
-    from ciffy.nn.vae.residue.consolidated import ConsolidatedResidueVAE
+    from ciffy.nn.vae.residue.consolidated import ConsolidatedResidueVAEModel
 
 
 @dataclass
 class ConsolidatedVAEModelConfig:
-    """Configuration for ConsolidatedResidueVAE model."""
+    """Configuration for ConsolidatedResidueVAEModel model."""
 
     latent_dim: int = 12
     d_model: int = 64
@@ -58,11 +63,11 @@ class ConsolidatedVAEFullConfig:
 
     model: ConsolidatedVAEModelConfig = field(default_factory=ConsolidatedVAEModelConfig)
     data: ConsolidatedVAEDataConfig = field(default_factory=ConsolidatedVAEDataConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
+    training: TrainingConfig = field(default_factory=_default_vae_training_config)
 
 
-class ConsolidatedVAEModule(LightningModule):
-    """LightningModule for training ConsolidatedResidueVAE.
+class ConsolidatedVAEModule(BaseCiffyModule):
+    """LightningModule for training ConsolidatedResidueVAEModel.
 
     The consolidated VAE has a shared encoder for all residue types and
     separate decoder heads for each type. This allows learning shared
@@ -105,7 +110,7 @@ class ConsolidatedVAEModule(LightningModule):
         self.residues = residues
 
         # Model created in setup()
-        self._model: "ConsolidatedResidueVAE | None" = None
+        self._model: "ConsolidatedResidueVAEModel | None" = None
 
         # Geometry sampling loss (set in setup if gamma > 0)
         self._geometry_loss: GeometrySamplingLoss | None = None
@@ -113,8 +118,8 @@ class ConsolidatedVAEModule(LightningModule):
         # Geometry constraints per residue (for validation metrics)
         self._geometry_constraints: dict["Residue", GeometryConstraints] = {}
 
-    def get_model(self) -> "ConsolidatedResidueVAE":
-        """Get the trained ConsolidatedResidueVAE.
+    def get_model(self) -> "ConsolidatedResidueVAEModel":
+        """Get the trained ConsolidatedResidueVAEModel.
 
         Returns:
             The trained model.
@@ -132,7 +137,7 @@ class ConsolidatedVAEModule(LightningModule):
             return
 
         from ciffy.nn.vae.residue.consolidated import (
-            ConsolidatedResidueVAE,
+            ConsolidatedResidueVAEModel,
             ConsolidatedVAEConfig,
         )
 
@@ -157,7 +162,7 @@ class ConsolidatedVAEModule(LightningModule):
             use_residual=model_cfg.use_residual,
         )
 
-        self._model = ConsolidatedResidueVAE(residue_atoms, config)
+        self._model = ConsolidatedResidueVAEModel(residue_atoms, config)
 
         # Set up geometry sampling loss if gamma > 0
         if model_cfg.gamma > 0:
@@ -401,35 +406,6 @@ class ConsolidatedVAEModule(LightningModule):
             inter_errors = torch.cat(all_inter_errors)
             self.log(f"{prefix}/inter_bond_mae", inter_errors.mean(), on_step=False, on_epoch=True)
             self.log(f"{prefix}/inter_bond_max", inter_errors.max(), on_step=False, on_epoch=True)
-
-    def configure_optimizers(self) -> dict[str, Any]:
-        """Configure optimizer and scheduler."""
-        config = self.config.training
-
-        optimizer = AdamW(
-            self._model.parameters(),
-            lr=config.lr,
-            weight_decay=getattr(config, "weight_decay", 0.01),
-        )
-
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=getattr(getattr(config, "scheduler", None), "min_lr", 1e-6),
-        )
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
-        }
-
-    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer) -> None:
-        """Apply gradient clipping if configured."""
-        if self.config.training.grad_clip:
-            torch.nn.utils.clip_grad_norm_(
-                self._model.parameters(),
-                self.config.training.grad_clip,
-            )
 
 
 __all__ = [

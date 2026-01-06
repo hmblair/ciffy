@@ -3,7 +3,7 @@ Unified API for residue-level generative models.
 
 This module provides a single entry point for training any residue-level model:
 - ResidueFlowModel (PCA + normalizing flow)
-- ConsolidatedResidueVAE (shared encoder, per-residue decoders)
+- ConsolidatedResidueVAEModel (shared encoder, per-residue decoders)
 - More model types can be registered
 
 Example usage:
@@ -82,7 +82,7 @@ def _register_builtin_models():
         ConsolidatedVAEFullConfig,
     )
     from ..flow.residue.model import ResidueFlowModel
-    from ..vae.residue.consolidated import ConsolidatedResidueVAE
+    from ..vae.residue.consolidated import ConsolidatedResidueVAEModel
 
     register_model_type(
         "flow",
@@ -96,7 +96,7 @@ def _register_builtin_models():
         "consolidated",
         ConsolidatedVAEModule,
         ConsolidatedVAEFullConfig,
-        ConsolidatedResidueVAE,
+        ConsolidatedResidueVAEModel,
         "Consolidated VAE (shared encoder, per-residue decoders, 4x data efficiency)",
         consolidated=True,
     )
@@ -106,7 +106,7 @@ def _register_builtin_models():
         "vae",
         ConsolidatedVAEModule,
         ConsolidatedVAEFullConfig,
-        ConsolidatedResidueVAE,
+        ConsolidatedResidueVAEModel,
         "Alias for 'consolidated' (shared encoder VAE)",
         consolidated=True,
     )

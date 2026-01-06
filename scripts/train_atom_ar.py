@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Train AtomAR model for all-atom conditioned structure generation.
+Train AtomARModel model for all-atom conditioned structure generation.
 
-AtomAR predicts residue coordinates one residue at a time, conditioned on
+AtomARModel predicts residue coordinates one residue at a time, conditioned on
 all atoms from previously placed residues. This provides rich spatial
 context while avoiding arbitrary atom ordering within residues.
 
@@ -10,7 +10,7 @@ Steps:
 1. Use PolymerDataset for chain-level iteration
 2. Extract atom-level data (types, elements, coordinates)
 3. Track residue boundaries for per-residue loss computation
-4. Train AtomAR with teacher forcing
+4. Train AtomARModel with teacher forcing
 5. Sample and generate structures
 """
 
@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import ciffy
 from ciffy.nn import PolymerDataset
-from ciffy.nn.autoregressive import AtomAR, AtomARConfig
+from ciffy.nn.autoregressive import AtomARModel, AtomARModelConfig
 from ciffy.biochemistry import Residue, Scale, Molecule, Atom
 from ciffy.backend import to_numpy
 
@@ -86,7 +86,7 @@ def process_chain_for_atom_ar(
     max_residues: int = 256,
 ) -> dict | None:
     """
-    Process a single chain into training data for AtomAR.
+    Process a single chain into training data for AtomARModel.
 
     Returns dict with:
     - atoms: (n_atoms,) atom type indices
@@ -257,20 +257,20 @@ def train_model(
     train_data: list,
     val_data: list,
     output_dir: Path,
-    config: AtomARConfig,
+    config: AtomARModelConfig,
     batch_size: int = 16,
     num_epochs: int = 100,
     lr: float = 1e-4,
     device: str = "cuda",
 ):
-    """Train the AtomAR model."""
-    print(f"\n=== Training AtomAR ===")
+    """Train the AtomARModel model."""
+    print(f"\n=== Training AtomARModel ===")
     print(f"  d_model={config.d_model}, encoder_layers={config.num_encoder_layers}")
     print(f"  decoder_layers={config.num_decoder_layers}, heads={config.num_heads}")
     print(f"  batch_size={batch_size}, num_epochs={num_epochs}, lr={lr}")
     print(f"  Train: {len(train_data)}, Val: {len(val_data)}")
 
-    model = AtomAR(config).to(device)
+    model = AtomARModel(config).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {n_params:,}")
@@ -368,7 +368,7 @@ def train_model(
 
 
 def sample_structure(
-    model: AtomAR,
+    model: AtomARModel,
     atom_indices: dict,
     seq_str: str,
     device: str = "cuda",
@@ -562,7 +562,7 @@ def main():
     val_data = [all_data[i] for i in indices[:n_val]]
 
     # Configure model
-    config = AtomARConfig(
+    config = AtomARModelConfig(
         d_model=args.d_model,
         num_encoder_layers=args.num_encoder_layers,
         num_decoder_layers=args.num_decoder_layers,

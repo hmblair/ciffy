@@ -4,7 +4,7 @@ Latent-space autoregressive models.
 This module provides transformer-based autoregressive models for predicting
 residue latent vectors sequentially along a polymer chain.
 
-The key model is `ResidueLatentAR`, which:
+The key model is `ResidueLatentARModel`, which:
 1. Takes a sequence of residue types
 2. Predicts latent vectors autoregressively (each position conditioned on previous)
 3. Can be used with any residue encoder (PCAQuantile, VAE, Flow)
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class ResidueLatentARConfig:
-    """Configuration for ResidueLatentAR model.
+class ResidueLatentARModelConfig:
+    """Configuration for ResidueLatentARModel model.
 
     Args:
         latent_dim: Dimension of residue latent vectors.
@@ -60,7 +60,7 @@ class ResidueLatentARConfig:
     use_residue_bias: bool = True
 
 
-class ResidueLatentAR(nn.Module if TORCH_AVAILABLE else object):
+class ResidueLatentARModel(nn.Module if TORCH_AVAILABLE else object):
     """
     Autoregressive model for predicting residue latents along a chain.
 
@@ -84,14 +84,14 @@ class ResidueLatentAR(nn.Module if TORCH_AVAILABLE else object):
         d_model: Transformer hidden dimension.
     """
 
-    def __init__(self, config: Optional[ResidueLatentARConfig] = None, **kwargs):
+    def __init__(self, config: Optional[ResidueLatentARModelConfig] = None, **kwargs):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required")
         super().__init__()
 
         # Allow kwargs to override config
         if config is None:
-            config = ResidueLatentARConfig(**kwargs)
+            config = ResidueLatentARModelConfig(**kwargs)
         self.config = config
 
         self.latent_dim = config.latent_dim
@@ -361,7 +361,7 @@ class ResidueLatentAR(nn.Module if TORCH_AVAILABLE else object):
         torch.save(self.state_dict(), path / "model.pt")
 
     @classmethod
-    def load(cls, path: str, device: str = "cpu") -> "ResidueLatentAR":
+    def load(cls, path: str, device: str = "cpu") -> "ResidueLatentARModel":
         """Load model from disk."""
         import json
         from pathlib import Path
@@ -371,7 +371,7 @@ class ResidueLatentAR(nn.Module if TORCH_AVAILABLE else object):
         # Load config
         with open(path / "config.json") as f:
             config_dict = json.load(f)
-        config = ResidueLatentARConfig(**config_dict)
+        config = ResidueLatentARModelConfig(**config_dict)
 
         # Create model and load weights
         model = cls(config)
@@ -381,22 +381,22 @@ class ResidueLatentAR(nn.Module if TORCH_AVAILABLE else object):
         return model
 
 
-class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
+class PolymerLatentARModel(nn.Module if TORCH_AVAILABLE else object):
     """
     End-to-end autoregressive polymer generation.
 
     Combines:
-    1. ResidueLatentAR for predicting latent vectors
+    1. ResidueLatentARModel for predicting latent vectors
     2. Per-residue decoders (e.g., PCAQuantile) for decoding to coordinates
 
     This provides a complete pipeline from sequence to 3D structure.
 
     Example:
-        >>> from ciffy.nn import PolymerLatentAR, PolymerModel
+        >>> from ciffy.nn import PolymerLatentARModel, PolymerModel
         >>>
         >>> # Build from a trained PolymerModel (has per-residue decoders)
         >>> polymer_model = PolymerModel.load("path/to/model")
-        >>> ar_model = PolymerLatentAR(
+        >>> ar_model = PolymerLatentARModel(
         ...     latent_dim=12,
         ...     residue_decoders=polymer_model.models,
         ... )
@@ -409,7 +409,7 @@ class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
         self,
         latent_dim: int,
         residue_decoders: Dict["Residue", nn.Module],
-        ar_config: Optional[ResidueLatentARConfig] = None,
+        ar_config: Optional[ResidueLatentARModelConfig] = None,
         **ar_kwargs,
     ):
         if not TORCH_AVAILABLE:
@@ -424,8 +424,8 @@ class PolymerLatentAR(nn.Module if TORCH_AVAILABLE else object):
 
         # Build AR model
         if ar_config is None:
-            ar_config = ResidueLatentARConfig(latent_dim=latent_dim, **ar_kwargs)
-        self.ar_model = ResidueLatentAR(ar_config)
+            ar_config = ResidueLatentARModelConfig(latent_dim=latent_dim, **ar_kwargs)
+        self.ar_model = ResidueLatentARModel(ar_config)
 
     def forward(
         self,

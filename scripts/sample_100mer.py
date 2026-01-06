@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sample a 100-mer from the trained CoordinateAR model."""
+"""Sample a 100-mer from the trained CoordinateARModel model."""
 
 import sys
 import torch
@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ciffy.nn import CoordinateAR
+from ciffy.nn import CoordinateARModel
 from ciffy.biochemistry import Residue, Scale, Molecule
 from ciffy.backend import to_numpy
 import ciffy
@@ -20,7 +20,7 @@ def main():
 
     # Load the trained model
     print("Loading model...")
-    model = CoordinateAR.load(str(model_dir / "model"))
+    model = CoordinateARModel.load(str(model_dir / "model"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
     model.eval()

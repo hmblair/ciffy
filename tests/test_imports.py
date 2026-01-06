@@ -673,7 +673,6 @@ class TestRMSDEdgeCases:
             sequence=Field(sequence, Scale.RESIDUE),
             pdb_id="test",
             names=["A"],
-            strands=["A"],
         )
 
         if backend == "torch":

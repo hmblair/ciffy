@@ -379,7 +379,7 @@ class TestSplitBySequence:
 
     def test_basic_split(self):
         """Test basic split_by_sequence usage."""
-        from ciffy.nn.split import split_by_sequence
+        from ciffy.nn.training.split import split_by_sequence
 
         paths = [
             Path(get_test_cif("3SKW")),
@@ -396,7 +396,7 @@ class TestSplitBySequence:
 
     def test_reproducible_with_seed(self):
         """Same seed produces same split."""
-        from ciffy.nn.split import split_by_sequence
+        from ciffy.nn.training.split import split_by_sequence
 
         paths = [
             Path(get_test_cif("3SKW")),
@@ -411,7 +411,7 @@ class TestSplitBySequence:
 
     def test_different_seeds_may_differ(self):
         """Different seeds may produce different splits."""
-        from ciffy.nn.split import split_by_sequence
+        from ciffy.nn.training.split import split_by_sequence
 
         # Need enough structures/clusters to see variation
         paths = [
@@ -510,7 +510,7 @@ class TestImports:
 
     def test_import_split_by_sequence(self):
         """Can import split_by_sequence from ciffy.nn.split."""
-        from ciffy.nn.split import split_by_sequence, DataSplit
+        from ciffy.nn.training.split import split_by_sequence, DataSplit
 
         assert callable(split_by_sequence)
         assert hasattr(DataSplit, "by_sequence_identity")

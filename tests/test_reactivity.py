@@ -230,10 +230,10 @@ class TestAnnotateIntegration:
         result = index.match(polymer)
         assert result is not None
 
-        polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
+        polymer = polymer.annotate("react", result.reactivity, Scale.RESIDUE)
 
-        assert hasattr(polymer, "shape")
-        np.testing.assert_array_equal(polymer.shape, reactivity)
+        assert hasattr(polymer, "react")
+        np.testing.assert_array_equal(polymer.react, reactivity)
 
     def test_annotate_propagates_through_selection(self, polymer):
         """Annotated reactivity propagates through residue selection."""
@@ -245,13 +245,13 @@ class TestAnnotateIntegration:
         index.add("test", seq, reactivity)
 
         result = index.match(polymer)
-        polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
+        polymer = polymer.annotate("react", result.reactivity, Scale.RESIDUE)
 
         # Select subset
         selected = polymer.residue(slice(5, 10))
 
         assert selected.size(Scale.RESIDUE) == 5
-        np.testing.assert_array_equal(selected.shape, reactivity[5:10])
+        np.testing.assert_array_equal(selected.react, reactivity[5:10])
 
 
 class TestBackendConversion:
@@ -289,8 +289,8 @@ class TestBackendConversion:
         assert isinstance(result.reactivity, torch.Tensor)
 
         # Should be directly usable with annotate
-        torch_polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
-        assert isinstance(torch_polymer.shape, torch.Tensor)
+        torch_polymer = torch_polymer.annotate("react", result.reactivity, Scale.RESIDUE)
+        assert isinstance(torch_polymer.react, torch.Tensor)
 
     def test_gpu_polymer_returns_gpu_tensor(self, polymer):
         """GPU polymer returns GPU tensor reactivity."""
@@ -315,8 +315,8 @@ class TestBackendConversion:
         assert result.reactivity.device.type == "cuda"
 
         # Should be directly usable with annotate
-        gpu_polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
-        assert gpu_polymer.shape.device.type == "cuda"
+        gpu_polymer = gpu_polymer.annotate("react", result.reactivity, Scale.RESIDUE)
+        assert gpu_polymer.react.device.type == "cuda"
 
     def test_match_all_converts_backend(self, polymer):
         """match_all() also converts to polymer backend."""

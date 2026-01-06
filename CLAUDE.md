@@ -27,10 +27,9 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 ## Data Locations
 
 ```
-Local test file:  tests/data/9MDS.cif
-Local RNA DB:     /Users/hmblair/academic/data/structures/rna
-Remote RNA DB:    /home/hmblair/data/rna
-Output dir:       outputs/
+Local RNA DB:    /Users/hmblair/academic/data/structures/rna
+Remote RNA DB:   /home/hmblair/data/rna
+Output dir:      outputs/
 ```
 
 ## Git Safety
@@ -73,7 +72,6 @@ polymer.chain(0)               # First chain
 polymer.residue([0, 5])        # Residues by index
 polymer.by_residue(Residue.A)  # By residue type
 polymer.by_type(Molecule.RNA)  # By molecule type
-polymer.poly()                 # Polymer atoms only
 polymer.backbone()             # Backbone atoms
 polymer.strip()                # Remove unresolved residues
 ```

@@ -40,7 +40,7 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
         return polymer._hetero
 
     # No HETATM data - return empty container
-    return HeteroAtoms.create_empty(polymer.pdb_id, polymer.backend)
+    return HeteroAtoms()
 
 
 def chains(polymer: Polymer) -> Generator[Polymer, None, None]:

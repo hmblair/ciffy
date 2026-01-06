@@ -104,44 +104,6 @@ class HeteroAtoms(AtomContainer):
     # ─────────────────────────────────────────────────────────────────────────
 
     @classmethod
-    def create_empty(cls, pdb_id: str = "empty", backend: str = "numpy") -> "HeteroAtoms":
-        """
-        Create an empty HeteroAtoms container.
-
-        Args:
-            pdb_id: Molecule identifier.
-            backend: Array backend ('numpy' or 'torch').
-
-        Returns:
-            HeteroAtoms with 0 atoms.
-        """
-        if backend == "numpy":
-            coords = np.empty((0, 3), dtype=np.float32)
-            elements = np.empty((0,), dtype=np.int64)
-            chains = np.empty((0,), dtype=np.int64)
-        else:
-            import torch
-            coords = torch.empty((0, 3), dtype=torch.float32)
-            elements = torch.empty((0,), dtype=torch.int64)
-            chains = torch.empty((0,), dtype=torch.int64)
-
-        # Compute atoms_per_chain (empty array since no chains)
-        if backend == "numpy":
-            atoms_per_chain = np.empty((0,), dtype=np.int64)
-        else:
-            atoms_per_chain = torch.empty((0,), dtype=torch.int64)
-
-        hierarchy = _Hierarchy.from_atoms_per_chain(atoms_per_chain, ref=coords)
-
-        return cls(
-            hierarchy,
-            coordinates=Field(coords, Scale.ATOM),
-            elements=Field(elements, Scale.ATOM),
-            chains=Field(chains, Scale.ATOM),
-            pdb_id=pdb_id,
-        )
-
-    @classmethod
     def from_arrays(
         cls,
         coordinates: Array,

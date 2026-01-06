@@ -142,45 +142,6 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
                 if hasattr(layer, 'bias') and layer.bias is not None:
                     nn.init.zeros_(layer.bias)
 
-    def _rotation_to_axis_angle(self, R: "torch.Tensor") -> "torch.Tensor":
-        """Convert rotation matrix to axis-angle representation."""
-        # Trace gives angle
-        trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-        angle = torch.acos(torch.clamp((trace - 1) / 2, -1, 1))
-
-        # Axis from skew-symmetric part
-        axis = torch.stack([
-            R[..., 2, 1] - R[..., 1, 2],
-            R[..., 0, 2] - R[..., 2, 0],
-            R[..., 1, 0] - R[..., 0, 1],
-        ], dim=-1)
-
-        # Normalize and scale by angle
-        norm = axis.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-        axis_angle = axis / norm * angle.unsqueeze(-1)
-
-        return axis_angle
-
-    def _axis_angle_to_rotation(self, axis_angle: "torch.Tensor") -> "torch.Tensor":
-        """Convert axis-angle to rotation matrix."""
-        angle = axis_angle.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-        axis = axis_angle / angle
-
-        # Rodrigues formula
-        K = torch.zeros(*axis_angle.shape[:-1], 3, 3, device=axis_angle.device)
-        K[..., 0, 1] = -axis[..., 2]
-        K[..., 0, 2] = axis[..., 1]
-        K[..., 1, 0] = axis[..., 2]
-        K[..., 1, 2] = -axis[..., 0]
-        K[..., 2, 0] = -axis[..., 1]
-        K[..., 2, 1] = axis[..., 0]
-
-        I = torch.eye(3, device=axis_angle.device).expand(*axis_angle.shape[:-1], 3, 3)
-        angle = angle.unsqueeze(-1)
-
-        R = I + torch.sin(angle) * K + (1 - torch.cos(angle)) * (K @ K)
-        return R
-
     def forward(
         self,
         sequence: "torch.Tensor",
@@ -230,21 +191,25 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
 
         return {"hidden": hidden, "outputs": outputs}
 
-    def compute_loss_polymer(self, polymer: "Polymer") -> "torch.Tensor":
+    def compute_loss(self, polymer: "Polymer") -> "torch.Tensor":
         """
-        Compute loss from a Polymer.
+        Compute training loss from a Polymer using ciffy.rmsd.
 
-        Unified interface for training - extracts local frames, transforms,
-        and coordinates from the polymer.
+        Uses RMSD for local coordinates (per-residue) and MSE for SE(3) transforms.
 
         Args:
-            polymer: Input polymer structure (should be stripped of missing atoms).
+            polymer: Input polymer structure.
 
         Returns:
             Loss tensor.
         """
+        import ciffy
         from ...biochemistry import Scale
         from ...biochemistry.linking import GLYCOSIDIC_FRAME
+        from ...geometry.transforms import (
+            rotation_to_axis_angle,
+            compute_relative_transform,
+        )
 
         device = next(self.parameters()).device
 
@@ -264,164 +229,66 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
         origin_atom = GLYCOSIDIC_FRAME.origin
         origins = polymer.gather([origin_atom])[:, 0, :]  # (R, 3)
 
-        # Convert rotation matrices to axis-angle
-        global_orientations = self._rotation_to_axis_angle(Rs)  # (R, 3)
+        # Convert rotation matrices to axis-angle (loop since function handles single matrices)
+        global_orientations = torch.stack([
+            rotation_to_axis_angle(Rs[i]) for i in range(n_residues)
+        ])
 
-        # Build local_coords tensor: (1, R, max_atoms, 3)
-        max_atoms = self.max_atoms
-        local_coords = torch.zeros(1, n_residues, max_atoms, 3, device=device)
-        n_atoms_tensor = torch.zeros(1, n_residues, dtype=torch.long, device=device)
+        # Compute ground truth transforms using geometry utility
+        gt_transforms = torch.zeros(n_residues, 6, device=device)
+        for i in range(1, n_residues):
+            gt_transforms[i] = compute_relative_transform(
+                origins[i - 1], Rs[i - 1], origins[i], Rs[i]
+            )
+
+        # Forward pass - add batch dimension
+        result = self.forward(
+            sequence.unsqueeze(0),
+            origins.unsqueeze(0),
+            global_orientations.unsqueeze(0),
+        )
+        outputs = result["outputs"]
+
+        # Compute loss per residue
+        total_rmsd = torch.tensor(0.0, device=device)
+        total_transform_loss = torch.tensor(0.0, device=device)
+        n_valid = 0
 
         offset = 0
         for i in range(n_residues):
-            n = counts[i].item()
-            n_atoms_tensor[0, i] = n
-            local_coords[0, i, :n] = aligned.coordinates[offset:offset + n]
-            offset += n
+            res_val = sequence[i].item()
+            n_atoms = counts[i].item()
 
-        # Compute transforms: relative SE(3) from frame i-1 to frame i
-        # transforms[i] = (axis_angle, translation) to go from frame i-1 to frame i
-        transforms = torch.zeros(1, n_residues, 6, device=device)
-        for i in range(1, n_residues):
-            # Relative rotation: R_{i-1}^T @ R_i
-            R_prev = Rs[i - 1]
-            R_curr = Rs[i]
-            R_rel = R_prev.T @ R_curr
-            rot_aa = self._rotation_to_axis_angle(R_rel.unsqueeze(0)).squeeze(0)
-
-            # Relative translation in prev frame: R_{i-1}^T @ (origin_i - origin_{i-1})
-            t_global = origins[i] - origins[i - 1]
-            t_local = R_prev.T @ t_global
-
-            transforms[0, i, :3] = rot_aa
-            transforms[0, i, 3:] = t_local
-
-        # Add batch dimension to other tensors
-        sequence = sequence.unsqueeze(0)  # (1, R)
-        origins = origins.unsqueeze(0)  # (1, R, 3)
-        global_orientations = global_orientations.unsqueeze(0)  # (1, R, 3)
-
-        return self.compute_loss(
-            sequence=sequence,
-            local_coords=local_coords,
-            transforms=transforms,
-            global_centroids=origins,
-            global_orientations=global_orientations,
-            n_atoms=n_atoms_tensor,
-            padding_mask=None,
-        )
-
-    def _rotation_to_axis_angle(self, R: "torch.Tensor") -> "torch.Tensor":
-        """Convert rotation matrix to axis-angle representation."""
-        # R: (..., 3, 3) -> (..., 3)
-        # Using Rodrigues formula inverse
-        batch_shape = R.shape[:-2]
-
-        # Trace and angle
-        trace = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
-        cos_angle = (trace - 1) / 2
-        cos_angle = torch.clamp(cos_angle, -1, 1)
-        angle = torch.acos(cos_angle)
-
-        # Axis from skew-symmetric part
-        axis = torch.stack([
-            R[..., 2, 1] - R[..., 1, 2],
-            R[..., 0, 2] - R[..., 2, 0],
-            R[..., 1, 0] - R[..., 0, 1],
-        ], dim=-1)
-
-        # Normalize axis
-        axis_norm = torch.norm(axis, dim=-1, keepdim=True)
-        axis = axis / (axis_norm + 1e-8)
-
-        # axis-angle = axis * angle
-        return axis * angle.unsqueeze(-1)
-
-    def compute_loss(
-        self,
-        sequence: "torch.Tensor",
-        local_coords: "torch.Tensor",
-        transforms: "torch.Tensor",
-        global_centroids: "torch.Tensor",
-        global_orientations: "torch.Tensor",
-        n_atoms: "torch.Tensor",
-        padding_mask: Optional["torch.Tensor"] = None,
-    ) -> "torch.Tensor":
-        """
-        Compute MSE loss on local coordinates and transforms.
-
-        Args:
-            sequence: Residue type indices (batch, seq_len).
-            local_coords: Ground truth local coordinates (batch, seq_len, max_atoms, 3).
-            transforms: Ground truth transforms (batch, seq_len, 6).
-            global_centroids: Global centroid positions (batch, seq_len, 3).
-            global_orientations: Global orientations as axis-angle (batch, seq_len, 3).
-            n_atoms: Actual atom counts per position (batch, seq_len).
-            padding_mask: Optional mask (batch, seq_len) where True = padded.
-
-        Returns:
-            Loss tensor.
-        """
-        B, L = sequence.shape
-        device = sequence.device
-
-        result = self.forward(sequence, global_centroids, global_orientations, padding_mask)
-        outputs = result["outputs"]
-
-        total_loss = torch.tensor(0.0, device=device)
-        n_valid = 0
-
-        for res_val, pred in outputs.items():
-            n_res_atoms = self.residue_atoms[res_val]
-            mask = (sequence == res_val)
-
-            if padding_mask is not None:
-                mask = mask & ~padding_mask
-
-            if not mask.any():
+            if res_val not in outputs:
+                offset += n_atoms
                 continue
 
-            # Extract predictions
-            pred_flat = pred[mask]  # (N, n_atoms*3 + 6)
+            pred = outputs[res_val]  # (1, L, output_dim)
+            n_res_atoms = self.residue_atoms.get(res_val, n_atoms)
 
-            # Extract ground truth
-            gt_coords = local_coords[mask][:, :n_res_atoms]  # (N, n_atoms, 3)
-            gt_transforms = transforms[mask]  # (N, 6)
-            N = gt_coords.shape[0]
-            gt_flat = torch.cat([
-                gt_coords.reshape(N, n_res_atoms * 3),
-                gt_transforms
-            ], dim=-1)
+            # Get prediction for this residue
+            pred_i = pred[0, i]
+            pred_coords = pred_i[:n_res_atoms * 3].reshape(n_res_atoms, 3)
+            pred_transform = pred_i[n_res_atoms * 3:]
 
-            # MSE loss
-            loss = F.mse_loss(pred_flat, gt_flat, reduction='sum')
-            total_loss = total_loss + loss
-            n_valid += mask.sum().item() * (n_res_atoms * 3 + 6)
+            # Ground truth
+            gt_coords = aligned.coordinates[offset:offset + n_atoms]
+            gt_transform = gt_transforms[i]
+
+            # RMSD for coordinates
+            rmsd_loss = ciffy.rmsd(pred_coords, gt_coords, eps=1e-8)
+            total_rmsd = total_rmsd + rmsd_loss
+
+            # MSE for transforms (6D SE(3) parameters)
+            transform_loss = F.mse_loss(pred_transform, gt_transform)
+            total_transform_loss = total_transform_loss + transform_loss
+
+            n_valid += 1
+            offset += n_atoms
 
         if n_valid > 0:
-            return total_loss / n_valid
-        return total_loss
-
-    def _apply_transform(
-        self,
-        prev_centroid: "torch.Tensor",
-        prev_R: "torch.Tensor",
-        transform: "torch.Tensor",
-    ) -> tuple["torch.Tensor", "torch.Tensor"]:
-        """Apply SE(3) transform to get new global position."""
-        rot_aa = transform[:3]
-        trans = transform[3:]
-
-        # Relative rotation
-        rel_R = self._axis_angle_to_rotation(rot_aa.unsqueeze(0)).squeeze(0)
-
-        # New orientation: prev_R @ rel_R
-        new_R = prev_R @ rel_R
-
-        # New position: prev_centroid + prev_R @ trans
-        new_centroid = prev_centroid + (prev_R @ trans)
-
-        return new_centroid, new_R
+            return (total_rmsd + total_transform_loss) / n_valid
+        return torch.tensor(0.0, device=device)
 
     @torch.no_grad()
     def generate(
@@ -443,6 +310,11 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
             local_coords: (batch, seq_len, max_atoms, 3)
             transforms: (batch, seq_len, 6)
         """
+        from ...geometry.transforms import (
+            rotation_to_axis_angle,
+            apply_relative_transform,
+        )
+
         if sequence.dim() == 1:
             sequence = sequence.unsqueeze(0)
 
@@ -497,13 +369,13 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
                 else:
                     # Apply transform to get global position
                     for b in range(B):
-                        new_cent, new_R = self._apply_transform(
+                        new_cent, new_R = apply_relative_transform(
                             current_centroid[b],
                             current_R[b],
                             pred_transform[b],
                         )
                         global_centroids[b, i] = new_cent
-                        global_orientations[b, i] = self._rotation_to_axis_angle(new_R.unsqueeze(0)).squeeze(0)
+                        global_orientations[b, i] = rotation_to_axis_angle(new_R)
                         current_centroid[b] = new_cent
                         current_R[b] = new_R
 

@@ -465,19 +465,17 @@ class AtomARModel(nn.Module if TORCH_AVAILABLE else object):
 
         return coords
 
-    def compute_loss_polymer(self, polymer: "Polymer") -> torch.Tensor:
+    def compute_loss(self, polymer: "Polymer") -> torch.Tensor:
         """
-        Compute loss from a Polymer.
-
-        Unified interface for training - extracts all required tensors from
-        the polymer and computes the AR loss.
+        Compute training loss from a Polymer using ciffy.rmsd.
 
         Args:
             polymer: Input polymer structure.
 
         Returns:
-            Loss tensor.
+            Loss tensor (mean RMSD across residues).
         """
+        import ciffy
         from ...biochemistry import Scale
 
         device = next(self.parameters()).device
@@ -493,128 +491,65 @@ class AtomARModel(nn.Module if TORCH_AVAILABLE else object):
         coords = polymer.coordinates  # (N, 3)
         sequence = polymer.sequence  # (R,)
         counts = polymer.counts(Scale.RESIDUE)  # (R,)
+        n_residues = len(sequence)
 
-        # Build residue boundaries (cumulative counts)
-        boundaries = torch.zeros(len(counts) + 1, dtype=torch.long, device=device)
+        # Build residue boundaries
+        boundaries = torch.zeros(n_residues + 1, dtype=torch.long, device=device)
         boundaries[1:] = torch.cumsum(counts, dim=0)
 
-        # Build residues_per_atom (which residue each atom belongs to)
+        # Build residues_per_atom
         residues_per_atom = polymer.membership(Scale.RESIDUE)  # (N,)
 
-        # Add batch dimension (batch size 1)
-        atoms = atoms.unsqueeze(0)
-        elements = elements.unsqueeze(0)
-        coords = coords.unsqueeze(0)
-        residues_per_atom = residues_per_atom.unsqueeze(0)
-        sequence = sequence.unsqueeze(0)
-        boundaries = boundaries.unsqueeze(0)
+        # Get residue-level hidden states
+        res_emb = self.residue_embed(sequence.unsqueeze(0))
+        res_hidden = self.residue_transformer(res_emb).squeeze(0)  # (R, d_model)
 
-        # Create masks (all valid for single polymer)
-        atom_mask = torch.ones(1, atoms.shape[1], dtype=torch.bool, device=device)
-        residue_mask = torch.ones(1, sequence.shape[1], dtype=torch.bool, device=device)
-
-        return self.compute_loss(
-            atoms=atoms,
-            residues_per_atom=residues_per_atom,
-            elements=elements,
-            coords=coords,
-            atom_mask=atom_mask,
-            residue_types=sequence,
-            residue_boundaries=boundaries,
-            residue_mask=residue_mask,
-        )
-
-    def compute_loss(
-        self,
-        atoms: torch.Tensor,
-        residues_per_atom: torch.Tensor,
-        elements: torch.Tensor,
-        coords: torch.Tensor,
-        atom_mask: torch.Tensor,
-        residue_types: torch.Tensor,
-        residue_boundaries: torch.Tensor,
-        residue_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Compute loss over all residues with teacher forcing.
-
-        Args:
-            atoms: (batch, max_atoms) atom type indices.
-            residues_per_atom: (batch, max_atoms) residue type for each atom.
-            elements: (batch, max_atoms) element type indices.
-            coords: (batch, max_atoms, 3) ground truth coordinates.
-            atom_mask: (batch, max_atoms) True = valid atom.
-            residue_types: (batch, max_residues) residue type sequence.
-            residue_boundaries: (batch, max_residues+1) cumulative atom counts.
-            residue_mask: (batch, max_residues) True = valid residue.
-
-        Returns:
-            Scalar loss.
-        """
-        B = atoms.shape[0]
-        device = atoms.device
-        n_residues = residue_types.shape[1]
-
-        # Get residue-level hidden states from causal transformer
-        res_emb = self.residue_embed(residue_types)  # (B, n_res, d_model)
-        res_hidden = self.residue_transformer(res_emb, padding_mask=~residue_mask)
-
-        total_loss = 0.0
-        n_atoms_total = 0
+        # Compute loss per residue using RMSD
+        total_rmsd = torch.tensor(0.0, device=device)
+        n_valid = 0
 
         for i in range(n_residues):
-            # Skip if this residue is padded in all batches
-            if not residue_mask[:, i].any():
+            start, end = boundaries[i].item(), boundaries[i + 1].item()
+            n_atoms = end - start
+
+            if n_atoms == 0:
                 continue
 
             # Get context from previous atoms
             context = self._get_context_for_residue(
-                atoms, residues_per_atom, elements, coords, atom_mask,
-                residue_boundaries, i
+                atoms.unsqueeze(0),
+                residues_per_atom.unsqueeze(0),
+                elements.unsqueeze(0),
+                coords.unsqueeze(0),
+                torch.ones(1, len(atoms), dtype=torch.bool, device=device),
+                boundaries.unsqueeze(0),
+                i,
             )
 
-            # Get atoms for this residue
-            start_idx = residue_boundaries[:, i]
-            end_idx = residue_boundaries[:, i + 1]
-            max_res_atoms = (end_idx - start_idx).max().item()
-
-            if max_res_atoms == 0:
-                continue
-
-            # Gather atom data for this residue
-            res_atoms = torch.zeros(B, max_res_atoms, dtype=torch.long, device=device)
-            res_elements = torch.zeros(B, max_res_atoms, dtype=torch.long, device=device)
-            res_coords = torch.zeros(B, max_res_atoms, 3, device=device)
-            res_atom_mask = torch.zeros(B, max_res_atoms, dtype=torch.bool, device=device)
-
-            for b in range(B):
-                s, e = start_idx[b].item(), end_idx[b].item()
-                n = e - s
-                if n > 0:
-                    res_atoms[b, :n] = atoms[b, s:e]
-                    res_elements[b, :n] = elements[b, s:e]
-                    res_coords[b, :n] = coords[b, s:e]
-                    res_atom_mask[b, :n] = True
+            # Get atom data for this residue
+            res_atoms = atoms[start:end].unsqueeze(0)  # (1, n_atoms)
+            res_elements = elements[start:end].unsqueeze(0)
+            res_coords_gt = coords[start:end]  # (n_atoms, 3)
+            res_atom_mask = torch.ones(1, n_atoms, dtype=torch.bool, device=device)
 
             # Predict coordinates
             pred_coords = self.forward_residue(
                 context,
-                res_hidden[:, i],
-                residue_types[:, i],
+                res_hidden[i:i+1],
+                sequence[i:i+1],
                 res_atoms,
                 res_elements,
                 res_atom_mask,
             )
+            pred_coords = pred_coords.squeeze(0)  # (n_atoms, 3)
 
-            # Compute loss (only for valid atoms)
-            loss = F.mse_loss(pred_coords, res_coords, reduction='none').sum(dim=-1)
-            loss = (loss * res_atom_mask.float()).sum()
+            # RMSD loss for this residue
+            rmsd_loss = ciffy.rmsd(pred_coords, res_coords_gt, eps=1e-8)
+            total_rmsd = total_rmsd + rmsd_loss
+            n_valid += 1
 
-            total_loss += loss
-            n_atoms_total += res_atom_mask.sum().item()
-
-        if n_atoms_total > 0:
-            return total_loss / n_atoms_total
+        if n_valid > 0:
+            return total_rmsd / n_valid
         return torch.tensor(0.0, device=device)
 
     @torch.no_grad()

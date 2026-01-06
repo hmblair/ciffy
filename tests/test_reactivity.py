@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import ciffy
-from ciffy import ReactivityIndex, ReactivityMatch
+from ciffy.rna import ReactivityIndex, ReactivityMatch
 from ciffy.biochemistry import Scale
 
 

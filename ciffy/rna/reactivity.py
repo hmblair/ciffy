@@ -5,7 +5,7 @@ This module provides utilities for associating per-residue reactivity data
 (from chemical probing experiments like SHAPE or DMS) with 3D structures.
 
 Example:
-    >>> from ciffy.reactivity import ReactivityIndex
+    >>> from ciffy.rna import ReactivityIndex
     >>> import ciffy
     >>>
     >>> # Build index from dataset
@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .backend.core import Array
-from .backend.ops import convert_backend
+from ..backend.core import Array
+from ..backend.ops import convert_backend
 
 if TYPE_CHECKING:
-    from .polymer import Polymer
+    from ..polymer import Polymer
 
 __all__ = ["ReactivityIndex", "ReactivityMatch"]
 

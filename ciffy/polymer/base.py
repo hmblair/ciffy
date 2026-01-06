@@ -777,6 +777,21 @@ class AtomContainer:
         """Move tensors to CUDA (torch backend only)."""
         return self.to(device="cuda")
 
+    def detach(self) -> "AtomContainer":
+        """
+        Detach all float tensors from their computation graphs (torch backend only).
+
+        For NumPy arrays, this is a no-op since NumPy doesn't have
+        computation graphs.
+
+        Returns:
+            Self, for method chaining.
+        """
+        for name, field in self._get_fields().items():
+            if is_torch(field.data) and field.data.requires_grad:
+                field.data = field.data.detach()
+        return self
+
     # ─────────────────────────────────────────────────────────────────────────
     # Selection Operations
     # ─────────────────────────────────────────────────────────────────────────

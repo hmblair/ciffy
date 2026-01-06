@@ -1535,26 +1535,11 @@ class Polymer(AtomContainer):
             converted['hetero'] = hetero.to(device, dtype)
 
     def detach(self: Polymer) -> Polymer:
-        """
-        Detach all float tensors from their computation graphs (torch backend only).
-
-        Detaches all float Fields (coordinates, bfactors) from their computation
-        graphs. For NumPy arrays, this is a no-op since NumPy doesn't have
-        computation graphs.
-
-        Returns:
-            Self, for method chaining.
-
-        Example:
-            >>> coords = polymer.coordinates.clone().requires_grad_(True)
-            >>> polymer.coordinates = coords
-            >>> loss = polymer.coordinates.sum()
-            >>> loss.backward()
-            >>> polymer.detach()
-        """
-        for name, field in self._get_fields().items():
-            if is_torch(field.data) and field.data.requires_grad:
-                field.data = field.data.detach()
+        """Detach all float tensors, including HeteroAtoms."""
+        super().detach()
+        hetero = object.__getattribute__(self, '_hetero')
+        if hetero is not None:
+            hetero.detach()
         return self
 
     # ─────────────────────────────────────────────────────────────────────────

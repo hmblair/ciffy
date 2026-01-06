@@ -1,7 +1,7 @@
 """Base LightningModule for ciffy models.
 
 Provides shared training logic for optimizer configuration, learning rate
-scheduling, and gradient clipping.
+scheduling, gradient clipping, and structure validation metrics.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from torch.optim.lr_scheduler import (
 
 if TYPE_CHECKING:
     from ciffy.nn.config import TrainingConfig
+    from ciffy.polymer import Polymer
+    from ciffy.geometry.constraints import GeometryConstraints
 
 
 class BaseCiffyModule(LightningModule):
@@ -165,6 +167,159 @@ class BaseCiffyModule(LightningModule):
             if log_norms:
                 clipped_norm = min(total_norm, config.grad_clip)
                 self.log("train/grad_norm_clipped", clipped_norm, on_step=True, on_epoch=False)
+
+    # =========================================================================
+    # Structure Validation Metrics
+    # =========================================================================
+
+    def log_structure_metrics(
+        self,
+        pred: "Polymer",
+        target: "Polymer",
+        prefix: str = "val",
+        log_kwargs: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
+        """
+        Compute and log standard structure comparison metrics.
+
+        Logs RMSD, TM-score, and radius of gyration for predicted vs target.
+        Call this in your validation_step() for automatic metric logging.
+
+        Args:
+            pred: Predicted polymer structure.
+            target: Ground truth polymer structure.
+            prefix: Logging prefix (e.g., "val", "test").
+            log_kwargs: Additional kwargs for self.log() (e.g., batch_size).
+
+        Returns:
+            Dict of computed metrics for further processing.
+
+        Example:
+            >>> def validation_step(self, batch, batch_idx):
+            ...     pred = self.model.sample(batch.template)[0]
+            ...     metrics = self.log_structure_metrics(pred, batch.target)
+            ...     return metrics["rmsd"]
+        """
+        from ciffy.operations.metrics import rmsd, tm_score, rg
+
+        log_kwargs = log_kwargs or {}
+        metrics = {}
+
+        # RMSD (Kabsch-aligned)
+        try:
+            rmsd_val = float(rmsd(pred, target).mean())
+            metrics["rmsd"] = rmsd_val
+            self.log(f"{prefix}/rmsd", rmsd_val, **log_kwargs)
+        except Exception:
+            pass  # Skip if structures incompatible
+
+        # TM-score
+        try:
+            tm_val = tm_score(pred, target)
+            metrics["tm_score"] = tm_val
+            self.log(f"{prefix}/tm_score", tm_val, **log_kwargs)
+        except Exception:
+            pass  # Skip if representative atoms missing
+
+        # Radius of gyration (pred only - measures compactness)
+        try:
+            rg_pred = float(rg(pred).mean())
+            rg_target = float(rg(target).mean())
+            metrics["rg_pred"] = rg_pred
+            metrics["rg_target"] = rg_target
+            metrics["rg_diff"] = abs(rg_pred - rg_target)
+            self.log(f"{prefix}/rg", rg_pred, **log_kwargs)
+            self.log(f"{prefix}/rg_diff", metrics["rg_diff"], **log_kwargs)
+        except Exception:
+            pass
+
+        return metrics
+
+    def log_geometry_metrics(
+        self,
+        coords: torch.Tensor,
+        transforms: torch.Tensor | None = None,
+        constraints: "GeometryConstraints | None" = None,
+        prefix: str = "val",
+        log_kwargs: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
+        """
+        Compute and log geometry constraint metrics (bonds, angles).
+
+        Uses GeometryConstraints to validate bond lengths and angles.
+        Call this in validation_step() for residue-level models.
+
+        Args:
+            coords: (batch, n_atoms, 3) or (n_atoms, 3) coordinates.
+            transforms: Optional (batch, 6) inter-residue transforms.
+            constraints: GeometryConstraints instance. If None, skips.
+            prefix: Logging prefix (e.g., "val", "test").
+            log_kwargs: Additional kwargs for self.log().
+
+        Returns:
+            Dict of computed metrics.
+
+        Example:
+            >>> def validation_step(self, batch, batch_idx):
+            ...     coords, transforms = self.model(batch)
+            ...     metrics = self.log_geometry_metrics(
+            ...         coords, transforms, self.constraints
+            ...     )
+        """
+        if constraints is None:
+            return {}
+
+        log_kwargs = log_kwargs or {}
+        metrics = {}
+
+        # Use GeometryConstraints.compute_error_metrics()
+        if transforms is None:
+            transforms = torch.zeros(coords.shape[0], 6, device=coords.device)
+
+        error_metrics = constraints.compute_error_metrics(coords, transforms)
+
+        for key, value in error_metrics.items():
+            metrics[key] = value
+            self.log(f"{prefix}/{key}", value, **log_kwargs)
+
+        return metrics
+
+    def log_clash_metrics(
+        self,
+        polymer: "Polymer",
+        prefix: str = "val",
+        log_kwargs: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
+        """
+        Compute and log steric clash metrics.
+
+        Args:
+            polymer: Structure to check for clashes.
+            prefix: Logging prefix.
+            log_kwargs: Additional kwargs for self.log().
+
+        Returns:
+            Dict with clash count and clash fraction.
+        """
+        from ciffy.operations.metrics import clashes
+
+        log_kwargs = log_kwargs or {}
+        metrics = {}
+
+        try:
+            clash_pairs = clashes(polymer)
+            n_clashes = len(clash_pairs)
+            n_atoms = polymer.size()
+            clash_frac = n_clashes / max(1, n_atoms * (n_atoms - 1) / 2)
+
+            metrics["n_clashes"] = n_clashes
+            metrics["clash_frac"] = clash_frac
+            self.log(f"{prefix}/n_clashes", float(n_clashes), **log_kwargs)
+            self.log(f"{prefix}/clash_frac", clash_frac, **log_kwargs)
+        except Exception:
+            pass
+
+        return metrics
 
 
 __all__ = ["BaseCiffyModule"]

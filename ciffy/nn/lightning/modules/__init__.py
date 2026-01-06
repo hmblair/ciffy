@@ -25,10 +25,10 @@ from .consolidated_vae import (
     ConsolidatedVAEModule,
 )
 from .autoregressive import (
-    ResidueLatentARTrainingConfig,
-    ResidueLatentARFullConfig,
-    ResidueLatentARModule,
-    ResidueLatentARDataModule,
+    ResidueLatentARModelTrainingConfig,
+    ResidueLatentARModelFullConfig,
+    ResidueLatentARModelModule,
+    ResidueLatentARModelDataModule,
     PolymerLatentDataset,
 )
 
@@ -56,9 +56,9 @@ __all__ = [
     "ConsolidatedVAEModelConfig",
     "ConsolidatedVAEModule",
     # Autoregressive
-    "ResidueLatentARTrainingConfig",
-    "ResidueLatentARFullConfig",
-    "ResidueLatentARModule",
-    "ResidueLatentARDataModule",
+    "ResidueLatentARModelTrainingConfig",
+    "ResidueLatentARModelFullConfig",
+    "ResidueLatentARModelModule",
+    "ResidueLatentARModelDataModule",
     "PolymerLatentDataset",
 ]

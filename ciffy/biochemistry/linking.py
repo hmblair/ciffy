@@ -17,7 +17,6 @@ Unsupported polymer types (no linking definition):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from ._generated_molecule import Molecule
 from ._generated_linking import (
@@ -30,13 +29,11 @@ from .constants import (
 )
 from .atom import AtomGroup
 
-if TYPE_CHECKING:
-    pass
 
-
-# Unified backbone atom values (from codegen/config.py)
+# Unified backbone atom values (same indices as codegen/config.py but Python names)
 # These are shared across all residue types, enabling robust frame resolution
 # for modified residues with standard backbones.
+# Note: Uses Python names (O5p not O5') to match internal ciffy naming convention.
 BACKBONE_ATOM_VALUES: dict[str, int] = {
     # Nucleic acid backbone (Python names with p for apostrophe)
     "P": 1, "OP1": 2, "OP2": 3, "OP3": 4,

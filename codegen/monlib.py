@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from .names import clean_atom_name
+
 
 class MonLibParseError(Exception):
     """Error parsing the MonomerLibrary file."""
@@ -165,15 +167,11 @@ def parse_link_torsions(filepath: Path) -> Iterator[LinkTorsion]:
                         link_id = parts[link_id_col] if link_id_col >= 0 else current_link
                         tor_id = parts[tor_id_col].lower() if tor_id_col >= 0 else ""
 
-                        # Clean atom names (remove quotes)
-                        def clean_atom(s: str) -> str:
-                            return s.strip('"').strip("'")
-
                         atoms = (
-                            (clean_atom(parts[atom1_id_col]), int(parts[atom1_comp_col])),
-                            (clean_atom(parts[atom2_id_col]), int(parts[atom2_comp_col])),
-                            (clean_atom(parts[atom3_id_col]), int(parts[atom3_comp_col])),
-                            (clean_atom(parts[atom4_id_col]), int(parts[atom4_comp_col])),
+                            (clean_atom_name(parts[atom1_id_col]), int(parts[atom1_comp_col])),
+                            (clean_atom_name(parts[atom2_id_col]), int(parts[atom2_comp_col])),
+                            (clean_atom_name(parts[atom3_id_col]), int(parts[atom3_comp_col])),
+                            (clean_atom_name(parts[atom4_id_col]), int(parts[atom4_comp_col])),
                         )
 
                         yield LinkTorsion(
@@ -272,15 +270,11 @@ def parse_link_bonds(filepath: Path) -> Iterator[LinkBond]:
                     try:
                         link_id = parts[link_id_col] if link_id_col >= 0 else current_link
 
-                        def clean_atom(s: str) -> str:
-                            # Only strip outer double quotes, preserve internal apostrophes
-                            return s.strip('"')
-
                         yield LinkBond(
                             link_id=link_id,
-                            atom_1=clean_atom(parts[atom1_id_col]),
+                            atom_1=clean_atom_name(parts[atom1_id_col]),
                             comp_1=int(parts[atom1_comp_col]),
-                            atom_2=clean_atom(parts[atom2_id_col]),
+                            atom_2=clean_atom_name(parts[atom2_id_col]),
                             comp_2=int(parts[atom2_comp_col]),
                             bond_type=parts[type_col],
                             value_dist=float(parts[dist_col]),
@@ -380,17 +374,13 @@ def parse_link_angles(filepath: Path) -> Iterator[LinkAngle]:
                     try:
                         link_id = parts[link_id_col] if link_id_col >= 0 else current_link
 
-                        def clean_atom(s: str) -> str:
-                            # Only strip outer double quotes, preserve internal apostrophes
-                            return s.strip('"')
-
                         yield LinkAngle(
                             link_id=link_id,
-                            atom_1=clean_atom(parts[atom1_id_col]),
+                            atom_1=clean_atom_name(parts[atom1_id_col]),
                             comp_1=int(parts[atom1_comp_col]),
-                            atom_2=clean_atom(parts[atom2_id_col]),
+                            atom_2=clean_atom_name(parts[atom2_id_col]),
                             comp_2=int(parts[atom2_comp_col]),
-                            atom_3=clean_atom(parts[atom3_id_col]),
+                            atom_3=clean_atom_name(parts[atom3_id_col]),
                             comp_3=int(parts[atom3_comp_col]),
                             value_angle=float(parts[angle_col]),
                             value_angle_esd=float(parts[angle_esd_col]),

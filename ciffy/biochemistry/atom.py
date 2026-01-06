@@ -101,6 +101,16 @@ class Atom(int):
     # Note: int subclasses can't use __slots__, attributes stored in __dict__
 
     def __new__(cls, name: str, value: int, local: int = 0) -> Atom:
+        """Create a new Atom instance.
+
+        Args:
+            name: Atom name (e.g., "P", "CA", "O3p").
+            value: Global atom index used for array indexing.
+            local: Position within residue (0-indexed), used for local coordinate access.
+
+        Returns:
+            An Atom instance that is also an int with the given value.
+        """
         obj = super().__new__(cls, value)
         obj.name = name
         obj.local = local

@@ -6,6 +6,7 @@ Functions to parse the PDB Chemical Component Dictionary and load residue defini
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
@@ -299,8 +300,11 @@ class CCDParser:
                 self._state.ideal_coords[atom_name] = tuple(coord)
             else:
                 self._state.ideal_coords[atom_name] = coord
-        except ValueError:
-            pass  # Ignore unparseable coordinate values
+        except ValueError as e:
+            warnings.warn(
+                f"Unparseable coordinate for {self._state.comp_id}.{atom_name}: {value!r}",
+                stacklevel=2
+            )
 
     def _handle_atom_single_value(self, field_name: str, value: str) -> None:
         """

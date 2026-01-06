@@ -12,7 +12,7 @@ ciffy is **70-125x faster** than BioPython and Biotite for parsing CIF files:
 | 9GCM | 4,466 | 0.54 ms | 48 ms (88x) | 38 ms (70x) |
 | 9MDS | 102,216 | 11 ms | 1340 ms (126x) | 946 ms (89x) |
 
-<sub>Benchmarked on Apple M1 Max. Run `python tests/profile.py` to reproduce.</sub>
+<sub>Benchmarked on Apple M1 Max. Run `python tests/profiling/profile_io.py` to reproduce.</sub>
 
 ## Installation
 
@@ -30,23 +30,6 @@ cd ciffy
 pip install -e .
 ```
 
-### Optional Dependencies
-
-```bash
-pip install ciffy[ml]   # PyTorch + safetensors for neural networks
-pip install ciffy[vis]  # matplotlib for visualization
-pip install ciffy[dev]  # all dependencies for development
-```
-
-#### System Dependencies
-
-For sequence-based clustering (used in `ciffy cluster` and homology-aware data splitting):
-
-```bash
-# Install MMseqs2 via conda/mamba
-mamba install -c conda-forge -c bioconda mmseqs2
-```
-
 ## Backends
 
 `ciffy` supports two array backends:
@@ -59,114 +42,43 @@ Specify the backend when loading structures:
 ```python
 import ciffy
 
-# Load with NumPy backend (recommended for general use)
+# Load with NumPy backend (default)
 polymer = ciffy.load("structure.cif", backend="numpy")
 
-# Load with PyTorch backend (for deep learning workflows)
+# Load with PyTorch backend
 polymer = ciffy.load("structure.cif", backend="torch")
 ```
 
-Polymers can be converted between backends:
+Convert between backends:
 
 ```python
-# Convert to PyTorch tensors
 torch_polymer = polymer.torch()
-
-# Convert to NumPy arrays
 numpy_polymer = polymer.numpy()
 ```
 
-For PyTorch, move tensors to GPU:
+Move tensors to GPU (PyTorch only):
 
 ```python
-# Move to CUDA
 polymer_gpu = polymer.torch().to("cuda")
-
-# Move to Apple Silicon (MPS)
 polymer_mps = polymer.torch().to("mps")
 ```
 
-**Note:** The default backend is `"numpy"` as of v0.6.0. Specify the backend explicitly for clarity.
-
-## Usage
+## Loading Structures
 
 ```python
 import ciffy
 
-# Load a structure from a CIF file
-polymer = ciffy.load("structure.cif", backend="numpy")
+# Load from CIF file
+polymer = ciffy.load("structure.cif")
 
-# Basic information
-print(polymer)  # Summary of chains, residues, atoms
+# Load specific chains
+polymer = ciffy.load("structure.cif", chains=["A", "B"])
 
-# Access coordinates and properties
-coords = polymer.coordinates      # (N, 3) array/tensor
-atoms = polymer.atoms             # (N,) array/tensor of atom types
-sequence = polymer.sequence_str()  # Sequence string
+# Load specific molecule types
+polymer = ciffy.load("structure.cif", molecule_types=ciffy.RNA)
 
-# Geometric operations
-centered, means = polymer.center(ciffy.MOLECULE)
-aligned, Q = polymer.pca(ciffy.CHAIN)
-distances = polymer.pairwise_distances(ciffy.RESIDUE)
-
-# Selection
-rna_chains = polymer.by_type(ciffy.RNA)
-backbone = polymer.backbone()
-
-# Molecule type per chain (parsed from CIF _entity_poly block)
-mol_types = polymer.molecule_types  # Array of Molecule enum values
-
-# Load with entity descriptions (off by default for performance)
-polymer = ciffy.load("structure.cif", load_descriptions=True)
-descriptions = polymer.descriptions  # List of description strings per chain
-
-# Iterate over chains
-for chain in polymer.chains(ciffy.RNA):
-    print(chain.pdb_id, chain.sequence_str())
-
-# Compute RMSD between structures (defaults to MOLECULE scale)
-rmsd = ciffy.rmsd(polymer1, polymer2)
-```
-
-## Saving Structures
-
-```python
-# Save to CIF format (supports all molecule types)
-polymer.write("output.cif")
-
-# Save only polymer atoms (excludes water, ions, ligands)
-polymer.poly().write("polymer_only.cif")
-```
-
-## Command Line Interface
-
-```bash
-# View structure summary
-ciffy info structure.cif
-
-# Show sequences per chain
-ciffy info structure.cif --sequence
-
-# Show entity descriptions per chain
-ciffy info structure.cif --desc
-
-# Multiple files
-ciffy info file1.cif file2.cif
-
-# Train models
-ciffy train flow --data data/*.cif --output models/flow
-ciffy train latent-diffusion --data data/*.cif --output models/diffusion
-ciffy train coord-diffusion --data data/*.cif --output models/coord
-
-# Generate structures from trained models
-ciffy predict flow models/flow --sequence acguacgu -o output.cif
-ciffy predict flow models/flow --sequence acguacgu -n 10 -o samples/
-
-# Cluster structures by sequence identity (requires mmseqs2)
-ciffy cluster data/*.cif --threshold 0.5
-
-# Cluster and create train/val/test directories (homology-aware splitting)
-ciffy cluster data/*.cif --threshold 0.5 --split 0.8,0.1,0.1 --output splits/
+# Print summary
+print(polymer)
 ```
 
 Example output:
@@ -180,97 +92,204 @@ C  PROTEIN  246   1261
 D  PROTEIN  485    760
 ──────────────────────
             998   4466
-
-Descriptions:
-  A: U11 snRNA
-  B: U11/U12 small nuclear ribonucleoprotein 25 kDa protein
-  C: U11/U12 small nuclear ribonucleoprotein 35 kDa protein
-  D: Programmed cell death protein 7
 ```
 
-## Training Neural Networks
+## Working with Polymers
 
-ciffy includes PyTorch Lightning modules for training generative models. See the [deep learning guide](docs/guides/deep-learning.md) for full documentation.
-
-### Training from CLI
-
-```bash
-# Train flow model (for sampling RNA conformations)
-ciffy train flow --data data/*.cif --output models/rna --epochs 200
-
-# Train with custom hyperparameters
-ciffy train flow --data data/*.cif --output models/rna \
-    --latent-dim 16 --n-layers 8 --hidden-dim 128
-
-# Train with W&B logging
-ciffy train flow --data data/*.cif --output models/rna --wandb
-
-# Train diffusion models
-ciffy train latent-diffusion --data data/*.cif --output models/diffusion
-ciffy train coord-diffusion --data data/*.cif --output models/coord
-```
-
-### Generating Structures
-
-```bash
-# Sample from trained flow model
-ciffy predict flow models/rna --sequence acguacgu -o output.cif
-
-# Generate multiple samples
-ciffy predict flow models/rna --sequence acguacgu -n 10 -o samples/
-```
-
-## Flow Models for Generative Modeling
-
-ciffy provides a high-level API for generative modeling with normalizing flows. Generate new polymer conformations from sequences:
+### Properties
 
 ```python
-from ciffy import flow
+polymer.coordinates       # (N, 3) atom positions
+polymer.atoms             # (N,) atom type indices
+polymer.elements          # (N,) element indices
+polymer.sequence          # (R,) residue type indices
+polymer.bonds             # (B, 2) covalent bond pairs
+polymer.molecule_types    # (C,) molecule type per chain
+polymer.names             # Chain names ["A", "B", ...]
+polymer.lengths           # (C,) residues per chain
 
-# Sample a polymer conformation from sequence
-polymer = flow.sample("acgu")  # RNA sequence
+polymer.size()                      # Total atoms
+polymer.size(ciffy.RESIDUE)         # Total residues
+polymer.size(ciffy.CHAIN)           # Total chains
+polymer.sequence_str()              # "acgu..." sequence string
+```
+
+### Selection
+
+```python
+# Select by chain
+chain_a = polymer.chain(0)
+chains_ab = polymer.chain([0, 1])
+
+# Select by residue
+first_residue = polymer.residue(0)
+some_residues = polymer.residue([0, 5, 10])
+
+# Select by molecule type
+rna_only = polymer.molecule_type(ciffy.RNA)
+protein_only = polymer.molecule_type(ciffy.PROTEIN)
+
+# Select by residue type
+adenines = polymer.residue_type(ciffy.Residue.A)
+
+# Structural selections
+backbone = polymer.backbone()          # Backbone atoms only
+bases = polymer.nucleobase()           # Nucleobase atoms (RNA/DNA)
+sidechains = polymer.sidechain()       # Sidechain atoms
+heavy = polymer.heavy()                # Heavy atoms (no hydrogens)
+
+# Remove unresolved residues
+resolved = polymer.strip()
+```
+
+### Iteration
+
+```python
+# Iterate over all chains
+for chain in polymer.chains():
+    print(chain.sequence_str())
+
+# Iterate over RNA chains only
+for chain in polymer.molecule_type(ciffy.RNA).chains():
+    print(chain.pdb_id, chain.sequence_str())
+```
+
+### Hierarchy Operations
+
+```python
+# Counts at different scales
+atoms_per_residue = polymer.counts(ciffy.RESIDUE)    # (R,)
+residues_per_chain = polymer.counts(ciffy.CHAIN)     # (C,)
+
+# Membership indices
+chain_per_atom = polymer.membership(ciffy.CHAIN)     # (N,) chain index per atom
+residue_per_atom = polymer.membership(ciffy.RESIDUE) # (N,) residue index per atom
+
+# Reduce atom features to residue level (mean pooling)
+residue_coords = polymer.reduce(polymer.coordinates, ciffy.RESIDUE)  # (R, 3)
+
+# Expand residue features to atom level
+atom_features = polymer.expand(residue_features, ciffy.RESIDUE)  # (N, ...)
+```
+
+### Geometry
+
+```python
+# Center coordinates
+centered, centroids = polymer.center(ciffy.MOLECULE)
+centered, centroids = polymer.center(ciffy.CHAIN)
+
+# PCA alignment
+aligned, rotations = polymer.pca(ciffy.CHAIN)
+
+# Pairwise distances
+distances = polymer.pairwise_distances()                    # Atom-atom
+distances = polymer.pairwise_distances(ciffy.RESIDUE)       # Residue centroids
+
+# K-nearest neighbors
+neighbors = polymer.knn(k=16)
+```
+
+### Saving
+
+```python
 polymer.write("output.cif")
-
-# Generate multiple samples
-samples = flow.sample("acgu", n_samples=10)
-for i, p in enumerate(samples):
-    p.write(f"sample_{i}.cif")
 ```
 
-### Training Custom Models
+## Building Polymers
 
-```python
-from ciffy import flow
+### From Sequence
 
-# Train on your structures
-model = flow.train(
-    ["data/*.cif"],        # CIF files for training
-    residues="ACGU",       # Residue types to model
-    n_epochs=200,
-    device="cuda",
-)
-
-# Sample from trained model
-samples = flow.sample("acgu", n_samples=10, model=model)
-```
-
-### Latent Space Operations
+Create template polymers (no coordinates) from sequence strings:
 
 ```python
 import ciffy
-from ciffy import flow
 
-# Encode existing structure to latent space
-polymer = ciffy.load("structure.cif").poly()
-latents = flow.encode(polymer)
+# RNA (lowercase with u)
+rna = ciffy.from_sequence("acguacgu")
 
-# Modify and decode back
-import torch
-modified = latents + torch.randn_like(latents) * 0.1
-new_polymer = flow.decode(modified, "acgu")
+# DNA (lowercase with t)
+dna = ciffy.from_sequence("acgtacgt")
+
+# Protein (uppercase)
+protein = ciffy.from_sequence("MGKLF")
+
+# Multi-chain
+multi = ciffy.from_sequence(["acgu", "MGKLF"])
 ```
 
-See the [flow models guide](docs/guides/flow-models.md) for comprehensive documentation.
+### Building Chains Residue-by-Residue
+
+Build polymers incrementally using `append()`:
+
+```python
+from ciffy import Polymer, Residue
+
+# Build a template (no coordinates)
+p = Polymer()
+for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
+    p = p.append(res)
+
+# Build with coordinates
+p = Polymer()
+p = p.append(Residue.A, coords)  # First residue with absolute coords
+```
+
+For autoregressive generation with relative positioning:
+
+```python
+from ciffy import Polymer, Residue
+from ciffy.geometry import LocalCoordinates
+
+p = Polymer()
+p = p.append(Residue.A, first_coords)  # Absolute coordinates
+
+# Subsequent residues use LocalCoordinates(coords, transform)
+# where transform is an SE(3) transform [axis-angle (3), translation (3)]
+p = p.append(Residue.C, LocalCoordinates(coords, transform))
+p = p.append(Residue.G, LocalCoordinates(coords, transform))
+```
+
+## Structural Metrics
+
+```python
+import ciffy
+
+# RMSD (Kabsch-aligned)
+rmsd = ciffy.rmsd(polymer1, polymer2)
+rmsd = ciffy.rmsd(polymer1, polymer2, scale=ciffy.CHAIN)  # Per-chain
+
+# Also works on raw coordinates
+rmsd = ciffy.rmsd(coords1, coords2)
+
+# TM-score
+tm = ciffy.tm_score(pred, ref)
+
+# lDDT
+lddt = ciffy.lddt(pred, ref)
+
+# Radius of gyration
+rg = ciffy.rg(polymer)
+
+# Clash detection
+clashes = ciffy.clashes(polymer)
+```
+
+## Command Line Interface
+
+```bash
+# View structure summary
+ciffy info structure.cif
+
+# Show sequences
+ciffy info structure.cif --sequence
+
+# Show entity descriptions
+ciffy info structure.cif --desc
+
+# Multiple files
+ciffy info *.cif
+```
 
 ## Testing
 
@@ -280,4 +299,4 @@ pytest tests/
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, repository structure, and code generation details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.

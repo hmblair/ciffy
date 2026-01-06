@@ -105,6 +105,7 @@ def _build_visualization_script(
     max_value: float,
     chain: Union[str, None],
     style: str = "sphere",
+    attr_name: str = "value",
 ) -> str:
     """
     Build ChimeraX command script for visualization.
@@ -134,7 +135,7 @@ def _build_visualization_script(
         "graphics quality 5",
         "renumber start 1 relative false",
         f"open {defattr_path}",
-        f"color byattribute value palette white:{color} range 0,{max_value}",
+        f"color byattribute {attr_name} palette white:{color} range 0,{max_value}",
         "hide cartoons",
         "nucleotides atoms",
     ])
@@ -240,6 +241,7 @@ def visualize(
         max_value=max_value,
         chain=chain_name,
         style=style,
+        attr_name=attr_name,
     )
 
     # Launch ChimeraX

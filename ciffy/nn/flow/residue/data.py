@@ -79,7 +79,7 @@ def extract_residues_with_links(
     Each sample contains a residue's coordinates and the transform that positions
     it relative to its predecessor. This convention means decode(z) returns
     (coords, transform) where transform positions THIS residue, enabling direct
-    use with extend(): poly.extend(res, coords, transform, ...).
+    use with append(): poly.append(res, LocalCoordinates(coords, transform)).
 
     Args:
         cif_paths: CIF files to process.

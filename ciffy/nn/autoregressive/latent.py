@@ -570,9 +570,10 @@ class PolymerLatentARModel(nn.Module if TORCH_AVAILABLE else object):
                 atom_group = res.subset(set(template_res.atoms.tolist()))
 
                 if i == 0:
-                    poly = poly.extend_new(atom_group, coords_i, residue=res)
+                    poly = poly.append(atom_group, coords_i, residue=res)
                 else:
-                    poly = poly.extend_new(atom_group, coords_i, transform_i, residue=res)
+                    from ...geometry import LocalCoordinates
+                    poly = poly.append(atom_group, LocalCoordinates(coords_i, transform_i), residue=res)
 
             results.append(poly)
 

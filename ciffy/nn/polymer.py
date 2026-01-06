@@ -4,7 +4,7 @@ PolymerModel: Orchestrates per-residue generative models for full polymer encodi
 This module provides a wrapper around residue-level models (ResidueFlowModel, ResidueVAE)
 that handles:
 - Encoding each residue with its appropriate model (after alignment)
-- Decoding and positioning residues using SE(3) transforms via Polymer.extend()
+- Decoding and positioning residues using SE(3) transforms via Polymer.append()
 
 Works with any model implementing ResidueGenerativeCore protocol (Flow, VAE, etc.).
 
@@ -151,7 +151,7 @@ class PolymerModel(nn.Module, HubMixin):
     Encoding aligns each residue to its canonical frame (glycosidic for RNA,
     backbone for protein) via Polymer.align(), then encodes to latent space.
     Decoding reconstructs coordinates and chains residues together using
-    SE(3) transforms via Polymer.extend().
+    SE(3) transforms via Polymer.append().
 
     Attributes:
         latent_dim: Dimension of per-residue latent space.
@@ -363,7 +363,7 @@ class PolymerModel(nn.Module, HubMixin):
         """
         Decode latent vectors to positioned polymer coordinates.
 
-        Uses Polymer.extend() for chain assembly, which handles frame computation
+        Uses Polymer.append() for chain assembly, which handles frame computation
         internally.
 
         Returns a PyTorch tensor. Call .numpy() if NumPy array is needed.
@@ -394,7 +394,7 @@ class PolymerModel(nn.Module, HubMixin):
         if latent_bound is not None:
             latents = latent_bound * torch.tanh(latents / latent_bound)
 
-        # Build polymer using extend() - handles frame computation internally
+        # Build polymer using _append() - handles frame computation internally
         poly = Polymer()
 
         for i, res_type in enumerate(sequence):
@@ -414,10 +414,10 @@ class PolymerModel(nn.Module, HubMixin):
 
             if i == 0:
                 # First residue - no transform needed
-                poly = poly.extend(model.residue, coords_i, atoms=atoms_i)
+                poly = poly._append(model.residue, coords_i, atoms=atoms_i)
             else:
                 # Position using THIS residue's transform
-                poly = poly.extend(model.residue, coords_i, transform_i, atoms=atoms_i)
+                poly = poly._append(model.residue, coords_i, transform_i, atoms=atoms_i)
 
         return poly.coordinates
 

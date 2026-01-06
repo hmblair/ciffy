@@ -768,12 +768,17 @@ class AtomContainer:
         and slice fields accordingly.
         """
         # Derive masks at all scales
-        remove_empty_residues = (scale == Scale.ATOM) and self._hierarchy.has_residues
-        atom_mask, res_mask, chn_mask = self._hierarchy.derive_masks(mask, scale, remove_empty_residues)
+        remove_empty_residues = (scale == Scale.ATOM) and self._hierarchy.has_scale(Scale.RESIDUE)
+        masks = self._hierarchy.derive_masks(mask, scale, remove_empty_residues)
 
         # Compute new hierarchy for selection
-        new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
+        new_per = self._hierarchy.compute_per(masks)
         new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
+
+        # Extract masks for _slice_all
+        atom_mask = masks[Scale.ATOM]
+        res_mask = masks.get(Scale.RESIDUE)
+        chn_mask = masks.get(Scale.CHAIN)
 
         # Slice all fields and annotations
         sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)

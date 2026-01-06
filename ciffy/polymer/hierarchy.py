@@ -148,10 +148,6 @@ class _Hierarchy:
                 return True
         return False
 
-    @property
-    def has_residues(self) -> bool:
-        """Whether this hierarchy has residue-level information."""
-        return (Scale.ATOM, Scale.RESIDUE) in self._per
 
     def _compute_counts(self) -> tuple[int, int, int]:
         """Compute scalar counts from available arrays.
@@ -495,132 +491,99 @@ class _Hierarchy:
                 (ATOM scale behavior).
 
         Returns:
-            Tuple of (atom_mask, res_mask, chn_mask).
-            res_mask is None if hierarchy has no residues.
+            Dict mapping Scale to boolean mask. Only contains entries for
+            scales that this hierarchy supports.
         """
-        has_residue = self.has_residues
+        if not self.has_scale(input_scale):
+            raise ValueError(f"{input_scale.name} scale not supported by this hierarchy")
 
-        if input_scale == Scale.RESIDUE and not has_residue:
-            raise ValueError("RESIDUE scale not supported by this hierarchy")
+        masks: dict[Scale, Array] = {}
 
-        if input_scale == Scale.ATOM:
-            atom_mask = input_mask
-            if has_residue:
-                res_sizes = self.count(input_mask, Scale.RESIDUE)
-                if remove_empty_residues:
-                    res_mask = res_sizes > 0
-                else:
-                    res_mask = ops.ones(self.size(Scale.RESIDUE), like=self._ref, dtype='bool')
-                new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-                chn_mask = new_lengths > 0
+        # Get ordered list of scales from finest to coarsest (excluding MOLECULE)
+        # by checking which keys exist in _per
+        scales_present = []
+        for scale in [Scale.ATOM, Scale.RESIDUE, Scale.CHAIN]:
+            if self.has_scale(scale):
+                scales_present.append(scale)
+
+        # Find position of input scale
+        input_idx = scales_present.index(input_scale)
+
+        # Set the input mask
+        masks[input_scale] = input_mask
+
+        # Expand to finer scales (go backwards from input)
+        for i in range(input_idx - 1, -1, -1):
+            finer = scales_present[i]
+            coarser = scales_present[i + 1]
+            masks[finer] = self.expand(masks[coarser], coarser, finer)
+
+        # Derive coarser scales from atom mask
+        atom_mask = masks[Scale.ATOM]
+        for i in range(1, len(scales_present)):
+            scale = scales_present[i]
+            if scale in masks:
+                continue  # Already set (was input or coarser than input)
+
+            # Count atoms per this scale, check if > 0
+            counts = self.count(atom_mask, scale)
+
+            # For residues at ATOM input scale, optionally remove empty
+            if scale == Scale.RESIDUE and input_scale == Scale.ATOM and remove_empty_residues:
+                masks[scale] = counts > 0
+            elif scale == Scale.RESIDUE and input_scale == Scale.ATOM:
+                masks[scale] = ops.ones(self.size(scale), like=self._ref, dtype='bool')
             else:
-                res_mask = None
-                chn_sizes_after = self.count(input_mask, Scale.CHAIN)
-                chn_mask = chn_sizes_after > 0
+                # For chains: check if any atoms/residues remain
+                prev_scale = scales_present[i - 1]
+                prev_counts = self.reduce(
+                    ops.to_int64(masks[prev_scale]), scale, Reduction.SUM, in_scale=prev_scale
+                )
+                masks[scale] = prev_counts > 0
 
-        elif input_scale == Scale.RESIDUE:
-            res_mask = input_mask
-            atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-            new_lengths = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-            chn_mask = new_lengths > 0
-
-        elif input_scale == Scale.CHAIN:
-            chn_mask = input_mask
-            if has_residue:
-                res_mask = self.expand(chn_mask, Scale.CHAIN, Scale.RESIDUE)
-                atom_mask = self.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
-            else:
-                res_mask = None
-                atom_mask = self.expand(chn_mask, Scale.CHAIN, Scale.ATOM)
-
-        else:
-            raise ValueError(f"Selection not supported at {input_scale.name} scale")
-
-        return atom_mask, res_mask, chn_mask
+        return masks
 
     def compute_per(
         self,
-        atom_mask: Array,
-        res_mask: Array | None,
-        chn_mask: Array,
-        input_scale: Scale,
+        masks: dict[Scale, Array],
     ) -> dict[tuple[Scale, Scale], Array]:
         """
         Compute the _per dict for a new Hierarchy after selection.
 
         Args:
-            atom_mask: Boolean mask for atoms.
-            res_mask: Boolean mask for residues (None if no residues).
-            chn_mask: Boolean mask for chains.
-            input_scale: Scale of the original input mask.
+            masks: Dict mapping Scale to boolean mask for that scale.
+                Must contain ATOM mask. Other masks are optional based on
+                which scales this hierarchy supports.
 
         Returns:
             New _per dict (only contains supported scale pairs).
         """
-        has_residue = self.has_residues
         per = {}
 
-        if not has_residue:
-            # No-residue path (HeteroAtoms)
-            chn_sizes_after = self.count(atom_mask, Scale.CHAIN)
-            mol_sizes = self.count(atom_mask, Scale.MOLECULE)
-            new_chn_sizes = chn_sizes_after[chn_mask]
-            n_chn = arr_size(new_chn_sizes, 0)
+        for (inner, outer), arr in self._per.items():
+            if outer == Scale.MOLECULE:
+                # X per MOLECULE = [count of X remaining]
+                if inner == Scale.ATOM:
+                    # Total atoms = sum of atom mask
+                    per[(inner, outer)] = self.count(masks[Scale.ATOM], Scale.MOLECULE)
+                else:
+                    # Total of inner scale = size of filtered array
+                    n = arr_size(masks[inner], 0) if masks[inner].all() else int(masks[inner].sum())
+                    per[(inner, outer)] = ops.array([n], like=self._ref)
 
-            per[(Scale.ATOM, Scale.CHAIN)] = new_chn_sizes
-            per[(Scale.ATOM, Scale.MOLECULE)] = mol_sizes
-            per[(Scale.CHAIN, Scale.MOLECULE)] = ops.array([n_chn], like=self._ref)
-            return per
+            elif inner == Scale.ATOM:
+                # ATOM per X = count atoms in each X, then filter by X mask
+                counts = self.count(masks[Scale.ATOM], outer)
+                per[(inner, outer)] = counts[masks[outer]]
 
-        # Standard path with residues
-        if input_scale == Scale.ATOM:
-            # Count atoms per unit after masking
-            res_sizes_after = self.count(atom_mask, Scale.RESIDUE)
-            chn_sizes_after = self.count(atom_mask, Scale.CHAIN)
-            mol_sizes = self.count(atom_mask, Scale.MOLECULE)
+            else:
+                # inner per outer (e.g., RESIDUE per CHAIN)
+                # = reduce inner mask over outer, then filter by outer mask
+                inner_per_outer = self.reduce(
+                    ops.to_int64(masks[inner]), outer, Reduction.SUM, in_scale=inner
+                )
+                per[(inner, outer)] = inner_per_outer[masks[outer]]
 
-            new_res_sizes = res_sizes_after[res_mask]
-            new_chn_sizes = chn_sizes_after[chn_mask]
-
-            # Compute new lengths (residues per chain)
-            res_per_chain = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-            new_lengths = res_per_chain[chn_mask]
-
-        else:
-            # For RESIDUE/CHAIN: use original sizes filtered by masks
-            orig_res_sizes = self._per[(Scale.ATOM, Scale.RESIDUE)]
-
-            if input_scale == Scale.RESIDUE:
-                masked_res_sizes = orig_res_sizes * ops.to_int64(res_mask)
-                chn_sizes = self.reduce(masked_res_sizes, Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-            else:  # CHAIN
-                chn_sizes = self._per[(Scale.ATOM, Scale.CHAIN)]
-
-            new_res_sizes = orig_res_sizes[res_mask]
-            new_chn_sizes = chn_sizes[chn_mask]
-
-            # Compute new lengths
-            orig_lengths = self._per[(Scale.RESIDUE, Scale.CHAIN)]
-            if input_scale == Scale.RESIDUE:
-                res_per_chain = self.reduce(ops.to_int64(res_mask), Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
-                new_lengths = res_per_chain[chn_mask]
-            else:  # CHAIN
-                new_lengths = orig_lengths[chn_mask]
-
-            # Total atoms
-            total_atoms = new_res_sizes.sum().item()
-            mol_sizes = ops.array([total_atoms], like=self._ref)
-
-        # Count new units
-        n_res = arr_size(new_res_sizes, 0)
-        n_chn = arr_size(new_chn_sizes, 0)
-
-        per[(Scale.ATOM, Scale.RESIDUE)] = new_res_sizes
-        per[(Scale.ATOM, Scale.CHAIN)] = new_chn_sizes
-        per[(Scale.ATOM, Scale.MOLECULE)] = mol_sizes
-        per[(Scale.RESIDUE, Scale.CHAIN)] = new_lengths
-        per[(Scale.RESIDUE, Scale.MOLECULE)] = ops.array([n_res], like=self._ref)
-        per[(Scale.CHAIN, Scale.MOLECULE)] = ops.array([n_chn], like=self._ref)
         return per
 
     def select(
@@ -638,9 +601,9 @@ class _Hierarchy:
         Returns:
             New _Hierarchy for the selected subset.
         """
-        remove_empty = (scale == Scale.ATOM) and self.has_residues
-        atom_mask, res_mask, chn_mask = self.derive_masks(mask, scale, remove_empty)
-        new_per = self.compute_per(atom_mask, res_mask, chn_mask, scale)
+        remove_empty = (scale == Scale.ATOM) and self.has_scale(Scale.RESIDUE)
+        masks = self.derive_masks(mask, scale, remove_empty)
+        new_per = self.compute_per(masks)
 
         return _Hierarchy(new_per, self._ref)
 
@@ -828,7 +791,7 @@ class _Hierarchy:
             IndexError: If index is out of range.
             ValueError: If requested scale is not supported by this hierarchy.
         """
-        has_residue = self.has_residues
+        has_residue = self.has_scale(Scale.RESIDUE)
 
         if scale == Scale.CHAIN:
             if ix < 0 or ix >= self._n_chains:

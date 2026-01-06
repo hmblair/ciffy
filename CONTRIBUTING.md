@@ -70,22 +70,6 @@ pytest tests/test_loader.py
 
 Most biochemistry definitions are auto-generated from the [PDB Chemical Component Dictionary](https://www.wwpdb.org/data/ccd) (CCD). This runs automatically during `pip install`.
 
-### Generated Files
-
-```
-ciffy/biochemistry/_generated_atoms.py      # Atom indices per residue
-ciffy/biochemistry/_generated_elements.py   # Element enum
-ciffy/biochemistry/_generated_residues.py   # Residue enum and mappings
-ciffy/biochemistry/_generated_dihedrals.py  # Dihedral angle definitions
-ciffy/biochemistry/_generated_zmatrix.py    # Z-matrix reference tables
-ciffy/types/molecule.py                     # Molecule type enum
-ciffy/src/hash/*.gperf                      # gperf input files
-ciffy/src/hash/*.c                          # gperf output (hash tables)
-ciffy/src/hash/reverse.h                    # Reverse lookup tables
-ciffy/src/internal/bond_patterns.h          # Bond connectivity
-ciffy/src/internal/canonical_refs.h         # Z-matrix references
-```
-
 ### Manual Regeneration
 
 ```bash

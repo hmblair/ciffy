@@ -92,7 +92,6 @@ def join(*polymers: "Polymer") -> "Polymer":
             elements=ops.clone(p.elements),
             sequence=ops.clone(p.sequence),
             names=list(p.names),
-            strands=list(p.strands),
             molecule_types=ops.clone(mol_types_data) if mol_types_data is not None else None,
             descriptions=list(p.descriptions) if p.descriptions else None,
         )
@@ -119,10 +118,8 @@ def join(*polymers: "Polymer") -> "Polymer":
 
     # Concatenate lists
     names = []
-    strands = []
     for p in non_empty:
         names.extend(p.names)
-        strands.extend(p.strands)
 
     # Handle molecule types - only include if all polymers have them
     molecule_types = None
@@ -160,7 +157,6 @@ def join(*polymers: "Polymer") -> "Polymer":
         sequence=Field(sequence, Scale.RESIDUE),
         pdb_id=pdb_id,
         names=names,
-        strands=strands,
         descriptions=descriptions,
     )
     if molecule_types is not None:

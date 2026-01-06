@@ -174,7 +174,6 @@ def load(
     atoms_per_chain = data["atoms_per_chain"]
     res_per_chain = data["res_per_chain"]
     chain_names = data["chain_names"]
-    strand_names = data["strand_names"]
     molecule_types = data["molecule_types"]
 
     # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
@@ -184,7 +183,6 @@ def load(
         atoms_per_chain = atoms_per_chain[chain_mask]
         res_per_chain = res_per_chain[chain_mask]
         chain_names = [n for n, m in zip(chain_names, chain_mask) if m]
-        strand_names = [n for n, m in zip(strand_names, chain_mask) if m]
         molecule_types = molecule_types[chain_mask]
         # descriptions is per-chain if present
         descriptions = data.get("descriptions", None)
@@ -265,7 +263,6 @@ def load(
         # Metadata (non-array values)
         pdb_id=id,
         names=chain_names,
-        strands=strand_names,
         descriptions=descriptions,
         resolution=resolution,
         date=deposition_date,

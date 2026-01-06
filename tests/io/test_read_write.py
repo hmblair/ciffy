@@ -50,7 +50,6 @@ class TestLoad:
         polymer = load(cif_file, backend=backend)
         assert polymer.size(Scale.CHAIN) > 0
         assert len(polymer.names) == polymer.size(Scale.CHAIN)
-        assert len(polymer.strands) == polymer.size(Scale.CHAIN)
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_load_has_residues(self, cif_file, backend):

@@ -482,7 +482,6 @@ class AtomContainer:
         atom_sel: Array | slice,
         res_sel: Array | slice | None,
         chain_sel: Array | slice,
-        new_hierarchy: _Hierarchy | None = None,
     ) -> dict:
         """
         Slice all Field and Metadata attributes according to their scale.
@@ -491,7 +490,6 @@ class AtomContainer:
             atom_sel: Boolean mask or slice for atoms.
             res_sel: Boolean mask or slice for residues (None if no residues).
             chain_sel: Boolean mask or slice for chains.
-            new_hierarchy: Hierarchy for the sliced container.
 
         Returns:
             Dict mapping field/metadata names to sliced values.
@@ -865,7 +863,7 @@ class AtomContainer:
         chn_mask = masks.get(Scale.CHAIN)
 
         # Slice all fields and annotations
-        sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)
+        sliced = self._slice_all(atom_mask, res_mask, chn_mask)
         sliced['hierarchy'] = new_hierarchy
 
         return self._clone(**sliced)

@@ -74,7 +74,7 @@ def write_cif(polymer: "Polymer", filename: str) -> None:
         atoms_per_chain,
         res_per_chain,
         polymer.names,
-        polymer.strands,
+        polymer.names,  # Use names for both chain_names and strand_names
         polymer.size(),  # All atoms are polymer atoms
         molecule_types,
         bfactors,

@@ -316,7 +316,6 @@ def from_extract(
         sequence=Field(sequence, Scale.RESIDUE),
         pdb_id=id,
         names=["A"],
-        strands=["A"],
     )
 
     return polymer.torch() if backend == "torch" else polymer

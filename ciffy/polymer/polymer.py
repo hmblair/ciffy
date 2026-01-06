@@ -54,7 +54,6 @@ class Polymer(AtomContainer):
         elements: (N,) tensor of element indices.
         sequence: (R,) tensor of residue type indices.
         names: List of chain names.
-        strands: List of strand identifiers.
         lengths: (C,) tensor of residues per chain.
     """
 
@@ -71,7 +70,6 @@ class Polymer(AtomContainer):
 
     # Per-chain lists
     names = Metadata(Scale.CHAIN, is_list=True)
-    strands = Metadata(Scale.CHAIN, is_list=True)
     descriptions = Metadata(Scale.CHAIN, is_list=True)
 
     def _init_from_kwargs(self, kwargs: dict) -> None:
@@ -378,21 +376,6 @@ class Polymer(AtomContainer):
         if self.pdb_id is not None:
             return f"{self.pdb_id}_{self.names[ix]}"
         return self.names[ix]
-
-    def strand_id(self: Polymer, ix: int) -> str:
-        """
-        Get the strand identifier for a specific chain.
-
-        Args:
-            ix: Chain index.
-
-        Returns:
-            String combining PDB ID and strand name,
-            or just the strand name if no PDB ID is set.
-        """
-        if self.pdb_id is not None:
-            return f"{self.pdb_id}_{self.strands[ix]}"
-        return self.strands[ix]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Size and Structure
@@ -905,7 +888,7 @@ class Polymer(AtomContainer):
         new_hierarchy = self._hierarchy.select(mask, scale)
 
         # Slice all fields and annotations using slices (fast path for large arrays)
-        sliced = self._slice_all(atom_slice, res_slice, chain_slice, new_hierarchy)
+        sliced = self._slice_all(atom_slice, res_slice, chain_slice)
         sliced['hierarchy'] = new_hierarchy
 
         return self._clone(**sliced)
@@ -1189,7 +1172,6 @@ class Polymer(AtomContainer):
             hierarchy,
             **init_fields,
             names=[name],
-            strands=[""],
             descriptions=[""],
             pdb_id=self.pdb_id,
         )
@@ -1311,19 +1293,16 @@ class Polymer(AtomContainer):
         if starting_new_chain:
             new_hierarchy = self._hierarchy.extend_new_chain(n_new_atoms)
             new_names = list(self._names) + [name]
-            new_strands = list(self._strands) + [name]
             new_descriptions = list(self._descriptions) + [""]
         else:
             new_hierarchy = self._hierarchy.extend_residue(n_new_atoms)
             # Copy lists to avoid mutation of original
             new_names = list(self._names) if self._names else []
-            new_strands = list(self._strands) if self._strands else []
             new_descriptions = list(self._descriptions) if self._descriptions else []
 
         return self._clone(
             hierarchy=new_hierarchy,
             names=new_names,
-            strands=new_strands,
             descriptions=new_descriptions,
             **new_fields
         )

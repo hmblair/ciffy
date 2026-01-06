@@ -1,5 +1,5 @@
 """
-Tests for Polymer identification methods: chain_id, strand_id, istype.
+Tests for Polymer identification methods: chain_id, istype.
 """
 
 import pytest
@@ -83,47 +83,6 @@ class TestChainId:
 
         assert isinstance(chain_id, str)
         assert "_" in chain_id
-
-
-class TestStrandId:
-    """Test strand_id() method."""
-
-    def test_strand_id_format(self, backend):
-        """strand_id returns PDB_strandname format."""
-        from ciffy import load
-
-        cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend)
-
-        strand_id = polymer.strand_id(0)
-
-        # Format should be PDBID_strandname
-        assert "_" in strand_id
-        assert strand_id.startswith(polymer.pdb_id)
-
-    def test_strand_id_first_chain(self, backend):
-        """strand_id(0) returns correct ID for first chain."""
-        from ciffy import load
-
-        cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend)
-
-        strand_id = polymer.strand_id(0)
-        expected = f"{polymer.pdb_id}_{polymer.strands[0]}"
-
-        assert strand_id == expected
-
-    def test_strand_id_matches_strands_property(self, backend):
-        """strand_id is consistent with strands list."""
-        from ciffy import load, Scale
-
-        cif = get_test_cif("9GCM")
-        polymer = load(cif, backend=backend)
-
-        for i in range(polymer.size(Scale.CHAIN)):
-            strand_id = polymer.strand_id(i)
-            expected = f"{polymer.pdb_id}_{polymer.strands[i]}"
-            assert strand_id == expected
 
 
 class TestIstype:

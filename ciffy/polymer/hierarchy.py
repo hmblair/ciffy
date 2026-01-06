@@ -70,7 +70,6 @@ class _Hierarchy:
 
     Attributes:
         _per: Dict mapping (inner_scale, outer_scale) to count arrays (may be None).
-        _polymer_count: Number of polymer atoms (first _polymer_count atoms).
         _ref: Minimal (0,) array used solely for backend/device detection.
             Does not hold actual data - just matches the target backend/device.
         _n_atoms: Total atom count (cached).
@@ -78,12 +77,11 @@ class _Hierarchy:
         _n_chains: Total chain count (cached).
     """
 
-    __slots__ = ('_per', '_polymer_count', '_ref', '_n_atoms', '_n_residues', '_n_chains')
+    __slots__ = ('_per', '_ref', '_n_atoms', '_n_residues', '_n_chains')
 
     def __init__(
         self,
         per: dict[tuple[Scale, Scale], Array] | None = None,
-        polymer_count: int = 0,
         ref: Array | None = None,
     ):
         """
@@ -95,7 +93,6 @@ class _Hierarchy:
         Args:
             per: Dict mapping (inner_scale, outer_scale) to count arrays.
                 If None, creates an empty hierarchy.
-            polymer_count: Number of polymer atoms.
             ref: Minimal array for backend/device detection (shape doesn't matter).
                 If None, uses an empty numpy array.
         """
@@ -105,7 +102,6 @@ class _Hierarchy:
             ref = np.zeros(0, dtype=np.float32)
 
         self._per = per
-        self._polymer_count = polymer_count
         self._ref = ref
 
         # Precompute scalar counts from available arrays
@@ -158,7 +154,6 @@ class _Hierarchy:
         cls,
         sizes: dict[Scale, Array],
         lengths: Array,
-        polymer_count: int,
         ref: Array,
     ) -> _Hierarchy:
         """
@@ -170,7 +165,6 @@ class _Hierarchy:
         Args:
             sizes: Dict mapping Scale to atoms-per-unit arrays.
             lengths: Array of residues per chain.
-            polymer_count: Number of polymer atoms.
             ref: Array to derive backend/device from (will be converted to marker).
 
         Returns:
@@ -193,16 +187,11 @@ class _Hierarchy:
         }
         # Convert ref to minimal marker
         marker = backend_marker(arr_ref)
-        return cls(per, polymer_count, marker)
+        return cls(per, marker)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Properties
     # ─────────────────────────────────────────────────────────────────────────
-
-    @property
-    def polymer_count(self) -> int:
-        """Number of polymer atoms (equals n_atoms since HETATM is separate)."""
-        return self._polymer_count
 
     @property
     def lengths(self) -> Array:
@@ -532,29 +521,6 @@ class _Hierarchy:
             (Scale.CHAIN, Scale.MOLECULE): ops.array([n_chn], like=self._ref),
         }
 
-    def compute_polymer_count(
-        self,
-        atom_mask: Array,
-        res_mask: Array,
-        input_scale: Scale,
-    ) -> int:
-        """
-        Compute new polymer_count based on selection scale.
-
-        Args:
-            atom_mask: Boolean mask for atoms.
-            res_mask: Boolean mask for residues.
-            input_scale: Scale of the original input mask.
-
-        Returns:
-            New polymer_count value.
-        """
-        if input_scale == Scale.ATOM:
-            return atom_mask[:self._polymer_count].sum().item()
-        else:
-            res_sizes = self._per[(Scale.ATOM, Scale.RESIDUE)][res_mask]
-            return res_sizes.sum().item()
-
     def select(
         self,
         mask: Array,
@@ -573,9 +539,8 @@ class _Hierarchy:
         remove_empty = (scale == Scale.ATOM)
         atom_mask, res_mask, chn_mask = self.derive_masks(mask, scale, remove_empty)
         new_per = self.compute_per(atom_mask, res_mask, chn_mask, scale)
-        new_polymer_count = self.compute_polymer_count(atom_mask, res_mask, scale)
 
-        return _Hierarchy(new_per, new_polymer_count, self._ref)
+        return _Hierarchy(new_per, self._ref)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion
@@ -594,7 +559,7 @@ class _Hierarchy:
 
         new_per = {k: to_torch(v, dtype=Dtype.INT64) for k, v in self._per.items()}
         new_ref = to_torch(self._ref)
-        return _Hierarchy(new_per, self._polymer_count, new_ref)
+        return _Hierarchy(new_per, new_ref)
 
     def numpy(self) -> _Hierarchy:
         """
@@ -609,7 +574,7 @@ class _Hierarchy:
 
         new_per = {k: to_numpy(v) for k, v in self._per.items()}
         new_ref = to_numpy(self._ref)
-        return _Hierarchy(new_per, self._polymer_count, new_ref)
+        return _Hierarchy(new_per, new_ref)
 
     def to(self, device) -> _Hierarchy:
         """
@@ -627,7 +592,7 @@ class _Hierarchy:
 
         new_per = {k: v.to(device) for k, v in self._per.items()}
         new_ref = self._ref.to(device) if hasattr(self._ref, 'to') else self._ref
-        return _Hierarchy(new_per, self._polymer_count, new_ref)
+        return _Hierarchy(new_per, new_ref)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Chain Extension
@@ -689,7 +654,7 @@ class _Hierarchy:
             (Scale.CHAIN, Scale.MOLECULE): ops.array([self._n_chains], like=self._ref),
         }
 
-        return _Hierarchy(new_per, self._polymer_count + n_atoms, self._ref)
+        return _Hierarchy(new_per, self._ref)
 
     def extend_new_chain(self, n_atoms: int) -> "_Hierarchy":
         """
@@ -736,7 +701,7 @@ class _Hierarchy:
             (Scale.CHAIN, Scale.MOLECULE): ops.array([self._n_chains + 1], like=self._ref),
         }
 
-        return _Hierarchy(new_per, self._polymer_count + n_atoms, self._ref)
+        return _Hierarchy(new_per, self._ref)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Contiguous Selection Support

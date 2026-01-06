@@ -15,7 +15,6 @@ from .filters import (
 
 # Iteration functions
 from .iterators import (
-    poly,
     hetero,
     chains,
 )
@@ -40,7 +39,6 @@ __all__ = [
     "by_type",
     "by_element",
     # Iterators
-    "poly",
     "hetero",
     "chains",
     # Masks

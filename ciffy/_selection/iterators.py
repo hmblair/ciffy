@@ -11,30 +11,7 @@ if TYPE_CHECKING:
     from ..polymer import Polymer
     from ..hetero import HeteroAtoms
 
-from ..backend import ops
 from ..biochemistry import Scale
-
-
-def poly(polymer: Polymer) -> Polymer:
-    """
-    Return polymer portion only (excludes HETATM/non-polymer atoms).
-
-    The returned Polymer has valid residue information and can be used
-    with residue-scale operations like reduce(scale=Scale.RESIDUE).
-
-    Args:
-        polymer: Source polymer.
-
-    Returns:
-        New Polymer with only polymer atoms, or the input polymer if no HETATM atoms.
-
-    Example:
-        >>> p = load("file.cif")
-        >>> rna = poly(p)  # Get polymer only
-        >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
-    """
-    # Polymer now only contains polymer atoms (HETATM is separate)
-    return polymer
 
 
 def hetero(polymer: Polymer) -> "HeteroAtoms":

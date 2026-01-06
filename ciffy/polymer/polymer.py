@@ -153,9 +153,9 @@ class Polymer:
     organization: atoms, residues, chains, and molecules. Provides
     methods for geometric operations, selection, and analysis.
 
-    Atoms are ordered with polymer atoms first [0, polymer_count),
-    followed by non-polymer atoms [polymer_count, total). This enables
-    efficient slicing instead of boolean masking.
+    Polymer objects contain only polymer atoms. Non-polymer atoms
+    (water, ions, ligands) are stored separately in HeteroAtoms
+    objects, accessible via the hetero() method.
 
     Attributes:
         coordinates: (N, 3) tensor of atom positions.
@@ -165,15 +165,13 @@ class Polymer:
         names: List of chain names.
         strands: List of strand identifiers.
         lengths: (C,) tensor of residues per chain.
-        polymer_count: Number of polymer atoms (first polymer_count atoms).
-        nonpoly: Count of non-polymer atoms (computed property).
     """
 
     # ─────────────────────────────────────────────────────────────────────────
     # Metadata Descriptors - values passed through without conversion
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Molecule-level (polymer_count is a property delegated to hierarchy)
+    # Molecule-level
     pdb_id = Metadata(Scale.MOLECULE)
     resolution = Metadata(Scale.MOLECULE)
     date = Metadata(Scale.MOLECULE)
@@ -258,11 +256,6 @@ class Polymer:
     def lengths(self) -> Array:
         """Residues per chain (C,) array. Delegated to hierarchy."""
         return self._hierarchy.lengths
-
-    @property
-    def polymer_count(self) -> int:
-        """Number of polymer atoms. Delegated to hierarchy."""
-        return self._hierarchy.polymer_count
 
     # ─────────────────────────────────────────────────────────────────────────
     # Attribute Access - for Field unwrapping and validation
@@ -767,7 +760,7 @@ class Polymer:
 
         Checks:
         1. All Fields at each scale (ATOM, RESIDUE, CHAIN) have the same size.
-        2. Atom counts are consistent across hierarchy (residue + nonpoly = chain = molecule).
+        2. Atom counts are consistent across hierarchy (residue = chain = molecule).
 
         Args:
             sizes: Dict mapping Scale to atom counts per unit.
@@ -795,13 +788,11 @@ class Polymer:
         res_count = sizes[Scale.RESIDUE].sum().item()
         chn_count = sizes[Scale.CHAIN].sum().item()
         mol_count = sizes[Scale.MOLECULE].sum().item()
-        # Compute nonpoly locally (can't use property - hierarchy not yet created)
-        nonpoly = mol_count - self.polymer_count
 
-        if not all_equal(res_count + nonpoly, chn_count, mol_count):
+        if not all_equal(res_count, chn_count, mol_count):
             id_str = f" for PDB {self.pdb_id}" if self.pdb_id else ""
             raise ValueError(
-                f"Atom counts do not match: residues ({res_count} + {nonpoly}), "
+                f"Atom counts do not match: residues ({res_count}), "
                 f"chains ({chn_count}), molecule ({mol_count}){id_str}."
             )
 
@@ -1650,8 +1641,7 @@ class Polymer:
 
         # Step 2: Compute new hierarchy for selection
         new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
-        new_polymer_count = self._hierarchy.compute_polymer_count(atom_mask, res_mask, scale)
-        new_hierarchy = _Hierarchy(new_per, new_polymer_count, self._hierarchy._ref)
+        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
 
         # Step 3: Slice all fields and annotations
         sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)
@@ -1880,27 +1870,6 @@ class Polymer:
         from .._selection import by_type
         return by_type(self, mol)
 
-    def poly(self: Polymer) -> Polymer:
-        """
-        Return polymer portion only (excludes HETATM/non-polymer atoms).
-
-        The returned Polymer has valid residue information and can be used
-        with residue-scale operations like reduce(scale=Scale.RESIDUE).
-
-        This is more permissive than `polymer_only()` as it keeps atoms
-        with unknown types (useful for modified residues).
-
-        Returns:
-            New Polymer with only polymer atoms, or self if no HETATM atoms.
-
-        Example:
-            >>> p = load("file.cif")
-            >>> rna = p.poly()  # Get polymer only
-            >>> rna.reduce(features, Scale.RESIDUE)  # Works correctly
-        """
-        from .._selection import poly
-        return poly(self)
-
     def hetero(self: Polymer) -> "HeteroAtoms":
         """
         Return non-polymer atoms only (HETATM: water, ions, ligands).
@@ -2023,7 +1992,6 @@ class Polymer:
         hierarchy = _Hierarchy.from_sizes_and_lengths(
             sizes=sizes,
             lengths=lengths,
-            polymer_count=n_atoms,
             ref=ref,
         )
 

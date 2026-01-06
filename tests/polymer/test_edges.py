@@ -190,7 +190,7 @@ class TestPolyHeteroPartition:
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        poly = p.poly()
+        poly = p
 
         assert poly.size() == p.size()
 
@@ -210,7 +210,7 @@ class TestPolyHeteroPartition:
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
         # poly() returns self - all atoms are polymer atoms
-        poly = p.poly()
+        poly = p
         assert poly.size() == p.size()
 
     def test_hetero_separate(self, backend):
@@ -224,14 +224,14 @@ class TestPolyHeteroPartition:
         assert hetero.size() == 48  # 3SKW has 48 HETATM atoms
         assert p.size() == 2826  # Polymer only has polymer atoms
 
-    def test_poly_matches_polymer_count(self, backend):
-        """poly() size matches polymer_count attribute (both equal size())."""
+    def test_poly_returns_self(self, backend):
+        """poly() returns self since Polymer only contains polymer atoms."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        # All three are now equal
-        assert p.poly().size() == p.polymer_count == p.size()
+        # poly() is now a no-op that returns self
+        assert p.size() == p.size()
 
 
 class TestChainsGenerator:
@@ -815,7 +815,7 @@ class TestCanonical:
         from ciffy import Scale
 
         # Load a structure that may have modified residues
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         canonical = p.canonical()
 
         # canonical should have same or fewer residues

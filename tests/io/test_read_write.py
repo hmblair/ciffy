@@ -314,12 +314,11 @@ class TestCifSave:
             original.write(output_path)
             reloaded = load(output_path, backend=backend)
 
-            # Note: CIF writer currently only writes polymer atoms,
-            # so we compare polymer counts instead of total counts
-            assert reloaded.size() == original.polymer_count
+            # Polymer only contains polymer atoms now (HETATM is separate)
+            assert reloaded.size() == original.size()
 
-            # Verify polymer coordinates are close (allow small float precision loss)
-            orig_coords = np.asarray(original.coordinates[:original.polymer_count])
+            # Verify coordinates are close (allow small float precision loss)
+            orig_coords = np.asarray(original.coordinates)
             reload_coords = np.asarray(reloaded.coordinates)
             tol = get_tolerances()
             assert np.allclose(orig_coords, reload_coords, atol=tol.coord_roundtrip)
@@ -355,10 +354,9 @@ class TestCifSave:
             reload_seq = np.asarray(reloaded.sequence)
             assert len(reload_seq) > 0, "Reloaded structure should have residues"
 
-            # Verify residue count matches what was written (polymer atoms only)
-            # The reloaded polymer_count should match what we wrote
-            assert reloaded.polymer_count == reloaded.size(), \
-                "Reloaded should be all polymer (no HETATM in round-trip)"
+            # Verify residue count matches what was written
+            assert reloaded.size() == original.size(), \
+                "Reloaded should match original (no HETATM in Polymer)"
 
         finally:
             if os.path.exists(output_path):
@@ -384,8 +382,8 @@ class TestCifSave:
             original.write(output_path)
             reloaded = load(output_path, backend=backend)
 
-            # Compare polymer atom types (non-polymer atoms not written)
-            orig_atoms = np.asarray(original.atoms[:original.polymer_count])
+            # Compare atom types (Polymer only contains polymer atoms now)
+            orig_atoms = np.asarray(original.atoms)
             reload_atoms = np.asarray(reloaded.atoms)
 
             # Atom types should match exactly
@@ -418,7 +416,7 @@ class TestCifSave:
         polymer = load(cif_file, backend="numpy")
 
         rna = polymer.by_type(RNA)
-        if rna.empty() or rna.polymer_count == 0:
+        if rna.empty() or rna.size() == 0:
             return  # No RNA to test - pass vacuously
 
         with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as f:
@@ -430,9 +428,8 @@ class TestCifSave:
             assert os.path.getsize(output_path) > 0
 
             # Reload and verify polymer size
-            # Note: CIF writer only writes polymer atoms
             reloaded = load(output_path, backend="numpy")
-            assert reloaded.size() == rna.polymer_count
+            assert reloaded.size() == rna.size()
 
         finally:
             if os.path.exists(output_path):
@@ -528,22 +525,21 @@ class TestMoleculeTypeDetection:
                 f"Chain {name} should be {Molecule(expected[name]).name}, got {Molecule(mol_type).name}"
 
 
-class TestPolymerCountInvariant:
-    """Test that polymer_count == size() == sum(atoms_per_res) since HETATM is separate."""
+class TestAtomCountInvariant:
+    """Test that size() == sum(atoms_per_res) since HETATM is separate."""
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_polymer_count_equals_sum_atoms_per_res(self, cif_file, backend):
-        """Verify invariant: polymer_count == sum(atoms_per_res) == size().
+    def test_size_equals_sum_atoms_per_res(self, cif_file, backend):
+        """Verify invariant: sum(atoms_per_res) == size().
 
-        This invariant ensures that all polymer atoms belong to residues,
-        and all residue atoms are counted as polymer. HETATM atoms are
-        now in a separate HeteroAtoms container.
+        This invariant ensures that all polymer atoms belong to residues.
+        HETATM atoms are in a separate HeteroAtoms container.
         """
         from ciffy import load, Scale
 
         polymer = load(cif_file, backend=backend)
 
-        # Sum of atoms per residue should equal polymer_count and size()
+        # Sum of atoms per residue should equal size()
         atoms_per_res_sum = polymer.counts(Scale.RESIDUE).sum().item()
-        assert atoms_per_res_sum == polymer.polymer_count == polymer.size(), \
-            f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum}, polymer_count={polymer.polymer_count}, size={polymer.size()}"
+        assert atoms_per_res_sum == polymer.size(), \
+            f"Invariant violated: sum(atoms_per_res)={atoms_per_res_sum}, size={polymer.size()}"

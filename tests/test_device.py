@@ -81,8 +81,8 @@ class TestDeviceOperations:
         skip_if_no_device(device)
         import ciffy
 
-        # Use .poly() to exclude ligands/water.
-        p_gpu = any_polymer_torch.poly().to(device)
+        # Use  to exclude ligands/water.
+        p_gpu = any_polymer_torch.to(device)
 
         # Calculate RMSD against self (should be ~0)
         # Note: MPS doesn't support SVD natively, but we fall back to CPU

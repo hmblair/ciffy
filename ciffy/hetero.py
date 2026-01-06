@@ -7,7 +7,6 @@ non-polymer atoms such as water molecules, ions, and ligands.
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -22,9 +21,6 @@ from .backend import (
     size as arr_size,
 )
 from .backend import ops
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass

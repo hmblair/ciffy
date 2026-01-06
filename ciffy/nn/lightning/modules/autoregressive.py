@@ -383,7 +383,7 @@ class ResidueLatentARDataModule(LightningDataModule):
             try:
                 polymer = ciffy.load(path)
                 # Filter to polymer atoms and strip empty residues
-                polymer = polymer.poly().strip()
+                polymer = polymer.strip()
                 if polymer.size() > 0:
                     polymers.append(polymer)
             except Exception as e:

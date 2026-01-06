@@ -175,7 +175,6 @@ def load(
     res_per_chain = data["res_per_chain"]
     chain_names = data["chain_names"]
     strand_names = data["strand_names"]
-    polymer_count = data["polymer_count"]
     molecule_types = data["molecule_types"]
 
     # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
@@ -246,12 +245,10 @@ def load(
         )
 
     # Create hierarchy from sizes and lengths
-    # Note: polymer_count no longer needed - all atoms in main arrays are polymer atoms
     from ..polymer.hierarchy import _Hierarchy
     hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
         lengths=res_per_chain,
-        polymer_count=polymer_count,
         ref=coordinates,
     )
 

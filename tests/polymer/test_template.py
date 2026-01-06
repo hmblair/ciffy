@@ -139,15 +139,6 @@ class TestFromSequence:
         assert len(atoms_per_res) == 4
         assert all(count > 0 for count in atoms_per_res)
 
-    def test_polymer_count_equals_total(self):
-        """Test all atoms are polymer atoms (no HETATM)."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu")
-
-        # polymer_count should equal total atoms
-        assert polymer.polymer_count == polymer.size()
-
     def test_all_20_amino_acids(self):
         """Test all 20 standard amino acids work."""
         from ciffy import from_sequence, Scale
@@ -607,7 +598,7 @@ class TestTemplateMatchesCIF:
         """Test template matches 1ZEW (DNA duplex)."""
         from ciffy import load, from_sequence
 
-        loaded = load(get_test_cif("1ZEW")).poly()
+        loaded = load(get_test_cif("1ZEW"))
         sequences = self._extract_chain_sequences(loaded)
         template = from_sequence(sequences)
 
@@ -617,7 +608,7 @@ class TestTemplateMatchesCIF:
         """Test template matches 9GCM (RNA + protein complex)."""
         from ciffy import load, from_sequence
 
-        loaded = load(get_test_cif("9GCM")).poly()
+        loaded = load(get_test_cif("9GCM"))
         sequences = self._extract_chain_sequences(loaded)
 
         # Skip if no valid sequences (structure might have unusual residues)

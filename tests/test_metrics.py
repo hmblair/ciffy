@@ -28,7 +28,7 @@ class TestTMScore:
         skip_if_no_torch(backend)
 
         # 3SKW has non-standard residues (CCC, GTP) - should work with extended groups
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p)
 
         tol = get_tolerances()
@@ -39,15 +39,15 @@ class TestTMScore:
         """TM-score should be between 0 and 1."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p)
 
         assert 0.0 <= score <= 1.0
 
     def test_tm_score_size_mismatch(self):
         """TM-score should raise error for mismatched sizes."""
-        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy").poly()
-        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy").poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
+        p2 = ciffy.load(get_test_cif("9GCM"), backend="numpy")
 
         # Different residue counts will cause size mismatch
         with pytest.raises(ValueError):
@@ -210,7 +210,7 @@ class TestTMScoreEdgeCases:
         skip_if_no_torch(backend)
 
         # 3SKW includes non-standard residues (CCC, GTP) - tests extended atom groups
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         score = tm_score(p, p)
 
         assert 0.0 <= score <= 1.0
@@ -374,7 +374,7 @@ class TestRmsdFunction:
         skip_if_no_torch(backend)
 
         # Use poly() to exclude hetero atoms (water, ions) that don't have residues
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         n_res = p.size(Scale.RESIDUE)
         rmsd_val = rmsd(p, p, scale=Scale.RESIDUE)
 
@@ -387,7 +387,7 @@ class TestRmsdFunction:
         skip_if_no_torch(backend)
 
         # Use poly() to exclude hetero atoms
-        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
         np.random.seed(42)
         noise = np.random.randn(p1.size(), 3).astype(np.float32) * 0.5
@@ -451,7 +451,7 @@ class TestIntersect:
         """Intersect of identical polymers returns same atoms."""
         skip_if_no_torch(backend)
 
-        p = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         a, b = ciffy.intersect(p, p)
 
         assert len(a) == len(p)
@@ -462,7 +462,7 @@ class TestIntersect:
         """Intersect handles missing atoms correctly."""
         skip_if_no_torch(backend)
 
-        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
         # Remove first 10 atoms from p2
         p2 = p1[10:]
 
@@ -478,7 +478,7 @@ class TestIntersect:
         """Intersected polymers have matching atom types."""
         skip_if_no_torch(backend)
 
-        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
         p2 = p1[10:]
 
         a, b = ciffy.intersect(p1, p2)
@@ -493,7 +493,7 @@ class TestIntersect:
         """Intersect enables RMSD between polymers with different atoms."""
         skip_if_no_torch(backend)
 
-        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend).poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend=backend)
         p2 = p1[10:].copy()
 
         # Add some noise to p2 coordinates
@@ -514,8 +514,8 @@ class TestIntersect:
 
     def test_intersect_residue_mismatch_raises(self):
         """Intersect raises ValueError for different residue counts."""
-        p1 = ciffy.load(get_test_cif("3SKW")).poly()
-        p2 = ciffy.load(get_test_cif("9GCM")).poly()
+        p1 = ciffy.load(get_test_cif("3SKW"))
+        p2 = ciffy.load(get_test_cif("9GCM"))
 
         with pytest.raises(ValueError, match="residue count"):
             ciffy.intersect(p1, p2)
@@ -524,8 +524,8 @@ class TestIntersect:
         """Intersect raises TypeError for mixed backends."""
         skip_if_no_torch("torch")
 
-        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy").poly()
-        p2 = ciffy.load(get_test_cif("3SKW"), backend="torch").poly()
+        p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
+        p2 = ciffy.load(get_test_cif("3SKW"), backend="torch")
 
         with pytest.raises(TypeError, match="Backend mismatch"):
             ciffy.intersect(p1, p2)

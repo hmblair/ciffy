@@ -4,7 +4,6 @@ Command-line interface for ciffy.
 Usage:
     ciffy info <file.cif>            # Load and print polymer summary
     ciffy info <file1> <file2> ...   # Load and print multiple files
-    ciffy info <file.cif> --poly     # Show only polymer atoms
     ciffy info <file.cif> --desc     # Show entity descriptions per chain
     ciffy geometry <file.cif>        # Compute geometric properties (Rg, etc.)
     ciffy map <file.cif>             # Display contact map
@@ -44,8 +43,6 @@ def _info_command(args):
             try:
                 skip = ["connections"] if args.desc else ["descriptions", "connections"]
                 polymer = load(filepath, skip=skip)
-                if args.poly:
-                    polymer = polymer.poly()
                 if not polymers:  # First successful load
                     backend = polymer.backend
                 rows = polymer.chain_info()
@@ -70,8 +67,6 @@ def _info_command(args):
         try:
             skip = ["connections"] if args.desc else ["descriptions", "connections"]
             polymer = load(filepath, skip=skip)
-            if args.poly:
-                polymer = polymer.poly()
         except FileNotFoundError:
             print(f"Error: File not found: {filepath}", file=sys.stderr)
             continue
@@ -117,8 +112,6 @@ def _geometry_command(args):
 
         try:
             polymer = load(filepath)
-            if args.poly:
-                polymer = polymer.poly()
         except FileNotFoundError:
             print(f"Error: File not found: {filepath}", file=sys.stderr)
             continue
@@ -160,12 +153,10 @@ def _split_command(args):
         print(f"Error loading {args.file}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Filter to polymer chains only (unless --all specified)
-    if not args.all:
-        polymer = polymer.poly()
-        if polymer.size() == 0:
-            print("No polymer chains found.", file=sys.stderr)
-            sys.exit(1)
+    # Check for polymer chains
+    if polymer.size() == 0:
+        print("No polymer chains found.", file=sys.stderr)
+        sys.exit(1)
 
     # Determine output directory
     if args.output:
@@ -1084,12 +1075,6 @@ def main():
         action="store_true",
         help="Show entity descriptions for each chain",
     )
-    info_parser.add_argument(
-        "--poly", "-p",
-        action="store_true",
-        help="Show only polymer atoms (exclude water, ions, ligands)",
-    )
-
     # Geometry subcommand
     geometry_parser = subparsers.add_parser(
         "geometry",
@@ -1100,11 +1085,6 @@ def main():
         "files",
         nargs="+",
         help="Path(s) to CIF file(s)",
-    )
-    geometry_parser.add_argument(
-        "--poly", "-p",
-        action="store_true",
-        help="Use only polymer atoms (exclude water, ions, ligands)",
     )
     geometry_parser.add_argument(
         "--per-chain", "-c",

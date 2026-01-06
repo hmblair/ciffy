@@ -18,20 +18,6 @@ if TYPE_CHECKING:
     from ..polymer import Polymer
 
 
-def _validate_poly_only(polymer: "Polymer", operation: str) -> None:
-    """
-    Validate that a polymer has no HETATM atoms.
-
-    This is now a no-op since Polymer only contains polymer atoms
-    (HETATM atoms are in a separate HeteroAtoms container).
-
-    Args:
-        polymer: Polymer to validate.
-        operation: Name of operation for error message.
-    """
-    pass  # All polymers are poly-only now
-
-
 def _validate_same_backend(*polymers: "Polymer") -> str:
     """
     Validate that all polymers have the same backend.
@@ -65,20 +51,18 @@ def join(*polymers: "Polymer") -> "Polymer":
     in sequence.
 
     Args:
-        *polymers: Polymers to combine. All must have the same backend
-            and be poly-only (no HETATM atoms).
+        *polymers: Polymers to combine. All must have the same backend.
 
     Returns:
         A new Polymer containing all chains from all inputs.
 
     Raises:
-        ValueError: If no polymers provided, backends differ, or any
-            polymer has HETATM atoms.
+        ValueError: If no polymers provided or backends differ.
 
     Example:
         >>> import ciffy
-        >>> p1 = ciffy.load("chain_a.cif").poly()
-        >>> p2 = ciffy.load("chain_b.cif").poly()
+        >>> p1 = ciffy.load("chain_a.cif")
+        >>> p2 = ciffy.load("chain_b.cif")
         >>> combined = ciffy.join(p1, p2)
         >>> combined.size(ciffy.CHAIN)
         2
@@ -97,8 +81,6 @@ def join(*polymers: "Polymer") -> "Polymer":
 
     # Validate all inputs
     backend = _validate_same_backend(*non_empty)
-    for p in non_empty:
-        _validate_poly_only(p, "join()")
 
     # Single polymer case - return a copy using _clone
     if len(non_empty) == 1:
@@ -155,9 +137,6 @@ def join(*polymers: "Polymer") -> "Polymer":
         for p in non_empty:
             descriptions.extend(p.descriptions)
 
-    # Compute total polymer count
-    polymer_count = sum(p.polymer_count for p in non_empty)
-
     # Determine pdb_id
     pdb_ids = set(p.pdb_id for p in non_empty)
     if len(pdb_ids) == 1:
@@ -170,7 +149,6 @@ def join(*polymers: "Polymer") -> "Polymer":
     hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
         lengths=lengths,
-        polymer_count=polymer_count,
         ref=coordinates,
     )
 

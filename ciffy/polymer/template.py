@@ -300,7 +300,6 @@ def from_extract(
     hierarchy = _Hierarchy.from_sizes_and_lengths(
         sizes=sizes,
         lengths=lengths,
-        polymer_count=total_atoms,
         ref=flat_coords,
     )
 

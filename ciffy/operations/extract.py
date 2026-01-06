@@ -115,9 +115,8 @@ def extract(
     """
     from ..biochemistry import Scale
 
-    # Work with polymer atoms only (residues don't include HETATM)
-    # Then filter to residues of the target type and remove empty ones
-    sub = poly.poly().by_residue(residue.value).strip()
+    # Filter to residues of the target type and remove empty ones
+    sub = poly.by_residue(residue.value).strip()
 
     # Apply transformations at residue level (each implies centering)
     if align:

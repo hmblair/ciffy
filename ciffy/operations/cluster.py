@@ -113,8 +113,6 @@ def _extract_sequences(paths: list[Path]) -> dict[str, tuple[Path, str]]:
     for path in paths:
         try:
             polymer = ciffy.load(str(path))
-            # Get polymer chains only
-            polymer = polymer.poly()
             if polymer.size() == 0:
                 continue
 

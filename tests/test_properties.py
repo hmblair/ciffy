@@ -281,14 +281,6 @@ class TestHeteroAtoms:
         polymer = load(cif_file, backend=backend)
         assert polymer.hetero().size() >= 0
 
-    @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_polymer_only_contains_polymer_atoms(self, cif_file, backend):
-        """polymer_count == size() since HETATM is separate."""
-        from ciffy import load
-
-        polymer = load(cif_file, backend=backend)
-        assert polymer.polymer_count == polymer.size()
-
     def test_hetero_empty_for_template(self, backend):
         """hetero() is empty for template-generated polymers."""
         from ciffy import from_sequence
@@ -296,4 +288,3 @@ class TestHeteroAtoms:
         polymer = from_sequence("acgu", backend=backend)
 
         assert polymer.hetero().empty()
-        assert polymer.polymer_count == polymer.size()

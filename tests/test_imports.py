@@ -662,7 +662,6 @@ class TestRMSDEdgeCases:
         hierarchy = _Hierarchy.from_sizes_and_lengths(
             sizes=sizes,
             lengths=lengths,
-            polymer_count=n_atoms,
             ref=coords,
         )
 

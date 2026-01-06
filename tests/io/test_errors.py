@@ -158,8 +158,8 @@ class TestRoundTripEdgeCases:
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        # Only test polymer portion (writer only writes polymer atoms)
-        polymer_coords = np.asarray(p.coordinates[:p.polymer_count])
+        # Polymer now only contains polymer atoms (HETATM is separate)
+        polymer_coords = np.asarray(p.coordinates)
 
         out_path = tmp_path / "roundtrip.cif"
         p.write(str(out_path))

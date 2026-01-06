@@ -37,18 +37,15 @@ def assert_cif_roundtrip(
     tol = get_tolerances()
     output_path = tmp_path / "test.cif"
 
-    # Get polymer count before writing
-    polymer_count = getattr(polymer, "polymer_count", polymer.size())
-
     # Write
     polymer.write(str(output_path))
 
     # Reload
     reloaded = load(str(output_path), backend=polymer.backend)
 
-    # Verify
-    if check_coordinates and polymer_count > 0:
-        orig_coords = np.asarray(polymer.coordinates[:polymer_count])
+    # Verify (Polymer now only contains polymer atoms)
+    if check_coordinates and polymer.size() > 0:
+        orig_coords = np.asarray(polymer.coordinates)
         reload_coords = np.asarray(reloaded.coordinates)
         assert np.allclose(orig_coords, reload_coords, atol=tol.coord_roundtrip), (
             "Coordinates not preserved in CIF roundtrip"

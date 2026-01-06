@@ -113,7 +113,7 @@ def extract_residues_with_links(
             print(f"{path.name}...", end=" ", flush=True)
 
         try:
-            poly = ciffy.load(str(path)).poly()
+            poly = ciffy.load(str(path))
             poly = poly.by_type(Molecule(residue_type.molecule_type)).canonical()
             if poly.size() == 0:
                 if verbose:

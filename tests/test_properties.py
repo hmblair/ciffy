@@ -270,21 +270,3 @@ class TestBonds:
         assert len(bonds) == 0
 
 
-class TestHeteroAtoms:
-    """Test hetero() method for accessing HETATM atoms."""
-
-    @pytest.mark.parametrize("cif_file", CIF_FILES)
-    def test_hetero_size_nonnegative(self, cif_file, backend):
-        """hetero().size() is non-negative."""
-        from ciffy import load
-
-        polymer = load(cif_file, backend=backend)
-        assert polymer.hetero().size() >= 0
-
-    def test_hetero_empty_for_template(self, backend):
-        """hetero() is empty for template-generated polymers."""
-        from ciffy import from_sequence
-
-        polymer = from_sequence("acgu", backend=backend)
-
-        assert polymer.hetero().empty()

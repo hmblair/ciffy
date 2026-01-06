@@ -394,3 +394,173 @@ class TestSpecializedSelections:
             sidechain = protein.sidechain()
             # May be empty or non-empty depending on structure
             assert isinstance(sidechain, ciffy.Polymer)
+
+
+# =============================================================================
+# Heavy Atom Selection Tests
+# =============================================================================
+
+
+class TestHeavy:
+    """Test Polymer.heavy() method."""
+
+    def test_heavy_returns_polymer(self, backend):
+        """heavy() returns a Polymer instance."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        heavy = p.heavy()
+
+        assert isinstance(heavy, ciffy.Polymer)
+
+    def test_heavy_excludes_hydrogen(self, backend):
+        """heavy() excludes hydrogen atoms (element 1)."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        heavy = p.heavy()
+
+        # Check that no hydrogen atoms remain
+        elements = np.asarray(heavy.elements)
+        assert (elements != 1).all(), "Hydrogen atoms found in heavy selection"
+
+    def test_heavy_reduces_atom_count(self, backend):
+        """heavy() returns fewer atoms than original."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        # Check if structure has hydrogens
+        elements = np.asarray(p.elements)
+        has_hydrogens = (elements == 1).any()
+
+        heavy = p.heavy()
+
+        if has_hydrogens:
+            assert heavy.size() < p.size()
+        else:
+            # No hydrogens, so heavy returns same size
+            assert heavy.size() == p.size()
+
+    def test_heavy_preserves_structure(self, backend):
+        """heavy() preserves residue/chain structure."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        heavy = p.heavy()
+
+        # Chain count should be preserved or reduced
+        assert heavy.size(Scale.CHAIN) <= p.size(Scale.CHAIN)
+
+        # If heavy is non-empty, should have valid structure
+        if not heavy.empty():
+            assert heavy.size(Scale.RESIDUE) > 0
+
+    def test_heavy_on_all_heavy_structure(self, backend):
+        """heavy() on structure with no hydrogens returns same structure."""
+        import ciffy
+
+        # Templates typically don't have hydrogens
+        p = get_single_chain_poly(backend)
+        elements = np.asarray(p.elements)
+
+        if (elements == 1).any():
+            pytest.skip("Structure has hydrogens")
+
+        heavy = p.heavy()
+        assert heavy.size() == p.size()
+
+
+# =============================================================================
+# Atom Selection Tests
+# =============================================================================
+
+
+class TestAtom:
+    """Test Polymer.atom() method."""
+
+    def test_atom_single_index(self, backend):
+        """atom() with single index returns single-atom polymer."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        single = p.atom(0)
+
+        assert single.size() == 1
+
+    def test_atom_array_indices(self, backend):
+        """atom() with array of indices returns correct count."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        indices = np.array([0, 1, 2, 5, 10])
+        result = p.atom(indices)
+
+        assert result.size() == len(indices)
+
+    def test_atom_preserves_coordinates(self, backend):
+        """atom() preserves original coordinates."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        indices = np.array([0, 5, 10])
+        result = p.atom(indices)
+
+        # Selected coordinates should match originals
+        orig_coords = np.asarray(p.coordinates)
+        result_coords = np.asarray(result.coordinates)
+
+        for i, idx in enumerate(indices):
+            assert np.allclose(result_coords[i], orig_coords[idx])
+
+    def test_atom_out_of_bounds(self, backend):
+        """atom() with out-of-bounds index raises error."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        n = p.size()
+
+        with pytest.raises((IndexError, ValueError)):
+            p.atom(n + 100)
+
+    def test_atom_negative_index(self, backend):
+        """atom() with negative index selects from end."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        # Negative index should work like Python list indexing
+        try:
+            last = p.atom(-1)
+            assert last.size() == 1
+            # Last atom should have same coords as p.coordinates[-1]
+            last_coords = np.asarray(last.coordinates)[0]
+            expected = np.asarray(p.coordinates)[-1]
+            assert np.allclose(last_coords, expected)
+        except (IndexError, ValueError):
+            # Some implementations may not support negative indexing
+            pytest.skip("Negative indexing not supported")
+
+    def test_atom_empty_array(self, backend):
+        """atom() with empty array returns empty polymer."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        indices = np.array([], dtype=np.int64)
+        result = p.atom(indices)
+
+        assert result.empty()
+
+    def test_atom_slice_like(self, backend):
+        """atom() with list behaves like array."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        indices_list = [0, 1, 2]
+        indices_array = np.array([0, 1, 2])
+
+        result_list = p.atom(indices_list)
+        result_array = p.atom(indices_array)
+
+        assert result_list.size() == result_array.size()

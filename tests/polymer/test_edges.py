@@ -846,3 +846,179 @@ class TestCanonical:
         canonical = p.canonical()
 
         assert canonical.sequence_str() == p.sequence_str()
+
+
+# =============================================================================
+# VdW Radii Tests
+# =============================================================================
+
+
+class TestVdwRadii:
+    """Test Polymer.vdw_radii property."""
+
+    def test_vdw_radii_shape(self, backend):
+        """vdw_radii returns array with shape (n_atoms,)."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        radii = p.vdw_radii
+
+        assert radii.shape == (p.size(),)
+
+    def test_vdw_radii_positive(self, backend):
+        """vdw_radii values are all positive."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        radii = np.asarray(p.vdw_radii)
+
+        assert (radii > 0).all()
+
+    def test_vdw_radii_reasonable_range(self, backend):
+        """vdw_radii values are in reasonable range (0.5-3.0 Angstroms)."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        radii = np.asarray(p.vdw_radii)
+
+        assert radii.min() >= 0.5
+        assert radii.max() <= 3.0
+
+    def test_vdw_radii_known_values(self, backend):
+        """vdw_radii has expected values for common elements."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        radii = np.asarray(p.vdw_radii)
+        elements = np.asarray(p.elements)
+
+        # Carbon (element 6) should have ~1.7 A radius
+        carbon_mask = elements == 6
+        if carbon_mask.any():
+            carbon_radii = radii[carbon_mask]
+            assert np.allclose(carbon_radii, 1.7, atol=0.1)
+
+        # Nitrogen (element 7) should have ~1.55 A radius
+        nitrogen_mask = elements == 7
+        if nitrogen_mask.any():
+            nitrogen_radii = radii[nitrogen_mask]
+            assert np.allclose(nitrogen_radii, 1.55, atol=0.1)
+
+    def test_vdw_radii_empty_polymer(self, backend):
+        """vdw_radii on empty polymer returns empty array."""
+        import ciffy
+
+        template = ciffy.from_sequence("a", backend=backend)
+        empty = template[template.atoms < 0]  # Impossible mask
+
+        radii = empty.vdw_radii
+        assert radii.shape == (0,)
+
+
+# =============================================================================
+# Extended Resolved/Strip Tests
+# =============================================================================
+
+
+class TestResolvedExtended:
+    """Extended tests for resolved() method."""
+
+    def test_resolved_chain_scale(self, backend):
+        """resolved() at CHAIN scale returns per-chain mask."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("9GCM"), backend=backend)
+        resolved = p.resolved(Scale.CHAIN)
+
+        # Should have one entry per chain
+        assert len(resolved) == p.size(Scale.CHAIN)
+
+    def test_resolved_with_unresolved(self, backend):
+        """resolved() correctly identifies unresolved residues."""
+        from tests.utils import get_test_cif
+        import ciffy
+        from ciffy import Scale
+
+        # 2F8S has 4 unresolved residues
+        p = ciffy.load(get_test_cif("2F8S"), backend=backend)
+        resolved = np.asarray(p.resolved(Scale.RESIDUE))
+
+        # Not all residues are resolved
+        n_resolved = resolved.sum()
+        n_total = len(resolved)
+        assert n_resolved < n_total
+
+    def test_resolved_empty_polymer(self, backend):
+        """resolved() on empty polymer returns empty mask."""
+        import ciffy
+        from ciffy import Scale
+
+        template = ciffy.from_sequence("a", backend=backend)
+        empty = template[template.atoms < 0]
+
+        resolved = empty.resolved(Scale.RESIDUE)
+        assert len(resolved) == 0
+
+
+class TestStripExtended:
+    """Extended tests for strip() method."""
+
+    def test_strip_with_unresolved(self, backend):
+        """strip() removes unresolved residues."""
+        from tests.utils import get_test_cif
+        import ciffy
+        from ciffy import Scale
+
+        # 2F8S has 4 unresolved residues
+        p = ciffy.load(get_test_cif("2F8S"), backend=backend)
+        n_before = p.size(Scale.RESIDUE)
+
+        stripped = p.strip(Scale.RESIDUE)
+        n_after = stripped.size(Scale.RESIDUE)
+
+        assert n_after < n_before
+        assert n_after == 1452  # Known value from earlier test
+
+    def test_strip_chain_scale(self, backend):
+        """strip() at CHAIN scale removes empty chains."""
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        n_chains_before = p.size(Scale.CHAIN)
+
+        stripped = p.strip(Scale.CHAIN)
+        n_chains_after = stripped.size(Scale.CHAIN)
+
+        # 3SKW should have no empty chains, so size unchanged
+        assert n_chains_after == n_chains_before
+
+    def test_strip_empty_polymer(self, backend):
+        """strip() on empty polymer returns empty polymer."""
+        import ciffy
+        from ciffy import Scale
+
+        template = ciffy.from_sequence("a", backend=backend)
+        empty = template[template.atoms < 0]
+
+        stripped = empty.strip(Scale.RESIDUE)
+        assert stripped.empty()
+
+    def test_strip_preserves_resolved_coordinates(self, backend):
+        """strip() preserves coordinates of resolved residues."""
+        from tests.utils import get_test_cif
+        import ciffy
+        from ciffy import Scale
+
+        p = ciffy.load(get_test_cif("2F8S"), backend=backend)
+
+        # Get coordinates of first chain (fully resolved)
+        chain0_before = p.chain(0)
+        coords_before = np.asarray(chain0_before.coordinates).copy()
+
+        stripped = p.strip(Scale.RESIDUE)
+        chain0_after = stripped.chain(0)
+        coords_after = np.asarray(chain0_after.coordinates)
+
+        assert np.allclose(coords_before, coords_after)

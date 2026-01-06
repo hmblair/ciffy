@@ -844,3 +844,277 @@ class TestAlignFunction:
 
         with pytest.raises(ValueError, match="same size"):
             ciffy.align(p1, p2)
+
+
+# =============================================================================
+# Gather Tests
+# =============================================================================
+
+
+class TestGather:
+    """Test Polymer.gather() method."""
+
+    def test_gather_returns_coordinates(self, backend):
+        """gather() returns coordinate array."""
+        from ciffy.biochemistry.constants import Sugar
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        coords = rna.gather([Sugar.C1p])
+        assert coords is not None
+        assert len(coords.shape) == 3  # (n_residues, n_groups, 3)
+
+    def test_gather_shape(self, backend):
+        """gather() returns (n_residues, n_groups, 3) shape."""
+        from ciffy.biochemistry.constants import Sugar
+        from ciffy import Scale
+        import ciffy
+
+        # Use helper which creates polymer with coordinates
+        p = get_single_chain_poly(backend)
+
+        groups = [Sugar.C1p]
+        coords = p.gather(groups)
+
+        assert coords.shape == (p.size(Scale.RESIDUE), len(groups), 3)
+
+    def test_gather_single_group(self, backend):
+        """gather() with single group returns (n_residues, 1, 3)."""
+        from ciffy.biochemistry.constants import Sugar
+        from ciffy import Scale
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        coords = rna.gather([Sugar.C1p])
+        assert coords.shape[0] == rna.size(Scale.RESIDUE)
+        assert coords.shape[1] == 1
+        assert coords.shape[2] == 3
+
+    def test_gather_coordinates_match_polymer(self, backend):
+        """gather() coordinates are valid 3D coordinates."""
+        from ciffy.biochemistry.constants import Sugar
+        import ciffy
+
+        p = get_single_chain_poly(backend)
+        coords = p.gather([Sugar.C1p])
+        gathered_coords = np.asarray(coords)[:, 0, :]
+
+        # Should have one coordinate per residue
+        from ciffy import Scale
+        assert gathered_coords.shape[0] == p.size(Scale.RESIDUE)
+
+        # Coordinates should be finite
+        assert np.isfinite(gathered_coords).all()
+
+        # Coordinates should be within polymer bounds
+        poly_coords = np.asarray(p.coordinates)
+        coord_min = poly_coords.min(axis=0)
+        coord_max = poly_coords.max(axis=0)
+        assert (gathered_coords >= coord_min - 0.1).all()
+        assert (gathered_coords <= coord_max + 0.1).all()
+
+    def test_gather_multiple_groups(self, backend):
+        """gather() with multiple groups extracts all correctly."""
+        from ciffy.biochemistry.constants import Sugar, PurineBase
+        import ciffy
+
+        # Use a structure with purines
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        # Filter to just adenosine residues (purines with N9)
+        from ciffy import Residue
+        adenosine = rna.residue_type(Residue.A)
+
+        if adenosine.empty():
+            pytest.skip("No adenosine residues")
+
+        groups = [Sugar.C1p, PurineBase.N9]
+        coords = adenosine.gather(groups)
+
+        # Should have 2 groups
+        assert coords.shape[1] == 2
+        # Both coordinates should be different (different atoms)
+        c1p = np.asarray(coords)[:, 0, :]
+        n9 = np.asarray(coords)[:, 1, :]
+        assert not np.allclose(c1p, n9)
+
+
+# =============================================================================
+# Frames Tests
+# =============================================================================
+
+
+class TestFrames:
+    """Test Polymer.frames() method."""
+
+    def test_frames_returns_6d(self, backend):
+        """frames() returns (n_residues, 6) array."""
+        from ciffy import Scale
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        frames = rna.frames()
+        assert frames.shape == (rna.size(Scale.RESIDUE), 6)
+
+    def test_frames_shape_single_residue(self, backend):
+        """frames() on single residue returns (1, 6)."""
+        import ciffy
+
+        p = get_single_chain_poly(backend, "a")  # Single adenosine
+        frames = p.frames()
+
+        assert frames.shape == (1, 6)
+
+    def test_frames_axis_angle_magnitude(self, backend):
+        """frames() axis-angle part has reasonable magnitude (< 2*pi)."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        frames = np.asarray(rna.frames())
+        axis_angles = frames[:, :3]
+
+        # Magnitude of axis-angle should be < 2*pi (rotation angle)
+        magnitudes = np.linalg.norm(axis_angles, axis=1)
+        assert (magnitudes < 2 * np.pi + 0.1).all()
+
+    def test_frames_origin_reasonable(self, backend):
+        """frames() origin part is within coordinate bounds."""
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        frames = np.asarray(rna.frames())
+        origins = frames[:, 3:]  # Last 3 components
+
+        # Origins should be within the coordinate bounds of the structure
+        coords = np.asarray(rna.coordinates)
+        coord_min = coords.min(axis=0)
+        coord_max = coords.max(axis=0)
+
+        # Allow some slack for numerical precision
+        slack = 5.0
+        assert (origins >= coord_min - slack).all()
+        assert (origins <= coord_max + slack).all()
+
+    def test_frames_default_glycosidic(self, backend):
+        """frames() uses GLYCOSIDIC_FRAME by default for RNA."""
+        from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        # Default and explicit should match
+        frames_default = np.asarray(rna.frames())
+        frames_explicit = np.asarray(rna.frames(GLYCOSIDIC_FRAME))
+
+        assert np.allclose(frames_default, frames_explicit)
+
+    def test_frames_custom_definition(self, backend):
+        """frames() accepts custom FrameDefinition."""
+        from ciffy.biochemistry.linking import (
+            FrameDefinition,
+            PURINE_GLYCOSIDIC_FRAME,
+        )
+        from ciffy import Residue
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        rna = p.molecule_type(__import__('ciffy').Molecule.RNA)
+
+        if rna.empty():
+            pytest.skip("No RNA chains in structure")
+
+        # Filter to purines only for purine-specific frame
+        adenosine = rna.residue_type(Residue.A)
+        guanosine = rna.residue_type(Residue.G)
+
+        if adenosine.empty() and guanosine.empty():
+            pytest.skip("No purine residues")
+
+        # Use the purine-specific frame
+        target = adenosine if not adenosine.empty() else guanosine
+        frames = target.frames(PURINE_GLYCOSIDIC_FRAME)
+
+        from ciffy import Scale
+        assert frames.shape == (target.size(Scale.RESIDUE), 6)
+
+
+# =============================================================================
+# Adjacency Tests (Edge Cases)
+# =============================================================================
+
+
+class TestAdjacency:
+    """Test Polymer.adjacency() edge cases."""
+
+    def test_adjacency_dtype_bool(self, backend):
+        """adjacency(dtype='bool') returns boolean matrix."""
+        import ciffy
+
+        p = get_single_chain_poly(backend)
+        adj = p.adjacency(dtype='bool')
+
+        adj_np = np.asarray(adj)
+        assert adj_np.dtype == np.bool_ or adj_np.dtype == bool
+
+    def test_adjacency_dtype_float32(self, backend):
+        """adjacency(dtype='float32') returns float matrix."""
+        import ciffy
+
+        p = get_single_chain_poly(backend)
+        adj = p.adjacency(dtype='float32')
+
+        adj_np = np.asarray(adj)
+        assert adj_np.dtype == np.float32
+
+    def test_adjacency_shape(self, backend):
+        """adjacency() returns (n_atoms, n_atoms) matrix."""
+        import ciffy
+
+        p = get_single_chain_poly(backend)
+        adj = p.adjacency()
+
+        n = p.size()
+        assert adj.shape == (n, n)
+
+    def test_adjacency_empty_polymer(self, backend):
+        """adjacency() on empty polymer returns empty matrix."""
+        import ciffy
+
+        template = ciffy.from_sequence("a", backend=backend)
+        empty = template[template.atoms < 0]  # Impossible mask
+
+        adj = empty.adjacency()
+        assert adj.shape == (0, 0)

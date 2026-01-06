@@ -252,45 +252,6 @@ class Polymer(AtomContainer):
 
         return self.copy(**overrides)
 
-    def annotate(
-        self,
-        name: str,
-        data: Array,
-        scale: Scale = Scale.RESIDUE,
-    ) -> "Polymer":
-        """
-        Register a new dynamic field on this polymer.
-
-        Dynamic fields work exactly like built-in fields: they are accessible
-        as attributes, propagate through selections, and convert with backend changes.
-
-        Args:
-            name: Field name. Must not conflict with existing attributes.
-            data: Array data with first dimension matching scale size.
-            scale: Scale at which the field is defined (default: RESIDUE).
-
-        Returns:
-            Self, for method chaining.
-
-        Raises:
-            ValueError: If field already exists or name starts with underscore.
-            ValueError: If data size doesn't match scale.
-            TypeError: If backend/device doesn't match polymer.
-
-        Examples:
-            >>> # Add per-residue reactivity data
-            >>> polymer.annotate('reactivity', shape_tensor)
-            >>> polymer.reactivity  # Access like built-in field
-
-            >>> # Add per-atom embeddings
-            >>> polymer.annotate('embeddings', atom_features, Scale.ATOM)
-            >>> chain = polymer.chain(0)
-            >>> chain.embeddings  # Sliced automatically
-
-            >>> # Method chaining
-            >>> polymer.annotate('dms', dms_data).annotate('shape', shape_data)
-        """
-        return super().annotate(name, data, scale)
 
     def _copy_internal_state(self, instance: Polymer, overrides: dict) -> None:
         """Copy Polymer-specific internal state to new instance."""

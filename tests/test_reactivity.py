@@ -230,7 +230,7 @@ class TestAnnotateIntegration:
         result = index.match(polymer)
         assert result is not None
 
-        polymer.annotate("shape", result.reactivity)
+        polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
 
         assert hasattr(polymer, "shape")
         np.testing.assert_array_equal(polymer.shape, reactivity)
@@ -245,7 +245,7 @@ class TestAnnotateIntegration:
         index.add("test", seq, reactivity)
 
         result = index.match(polymer)
-        polymer.annotate("shape", result.reactivity)
+        polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
 
         # Select subset
         selected = polymer.residue(slice(5, 10))
@@ -289,7 +289,7 @@ class TestBackendConversion:
         assert isinstance(result.reactivity, torch.Tensor)
 
         # Should be directly usable with annotate
-        torch_polymer.annotate("shape", result.reactivity)
+        torch_polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
         assert isinstance(torch_polymer.shape, torch.Tensor)
 
     def test_gpu_polymer_returns_gpu_tensor(self, polymer):
@@ -315,7 +315,7 @@ class TestBackendConversion:
         assert result.reactivity.device.type == "cuda"
 
         # Should be directly usable with annotate
-        gpu_polymer.annotate("shape", result.reactivity)
+        gpu_polymer.annotate("shape", result.reactivity, Scale.RESIDUE)
         assert gpu_polymer.shape.device.type == "cuda"
 
     def test_match_all_converts_backend(self, polymer):

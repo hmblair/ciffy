@@ -16,12 +16,12 @@ def polymer():
 class TestAnnotateBasic:
     """Test basic annotate operations."""
 
-    def test_annotate_residue_default(self, polymer):
-        """Can annotate with residue-level data (default scale)."""
+    def test_annotate_residue(self, polymer):
+        """Can annotate with residue-level data."""
         n_res = polymer.size(Scale.RESIDUE)
         data = np.random.randn(n_res).astype(np.float32)
 
-        polymer.annotate('reactivity', data)
+        polymer.annotate('reactivity', data, Scale.RESIDUE)
 
         np.testing.assert_array_equal(polymer.reactivity, data)
 
@@ -49,7 +49,7 @@ class TestAnnotateBasic:
         data1 = np.random.randn(n_res).astype(np.float32)
         data2 = np.random.randn(n_res).astype(np.float32)
 
-        result = polymer.annotate('a', data1).annotate('b', data2)
+        result = polymer.annotate('a', data1, Scale.RESIDUE).annotate('b', data2, Scale.RESIDUE)
 
         assert result is polymer
         np.testing.assert_array_equal(polymer.a, data1)
@@ -64,10 +64,10 @@ class TestAnnotateBasic:
         """annotate() fails if field already exists."""
         n_res = polymer.size(Scale.RESIDUE)
         data = np.zeros(n_res)
-        polymer.annotate('temp', data)
+        polymer.annotate('temp', data, Scale.RESIDUE)
 
         with pytest.raises(ValueError, match="already exists"):
-            polymer.annotate('temp', data)
+            polymer.annotate('temp', data, Scale.RESIDUE)
 
     def test_annotate_builtin_raises(self, polymer):
         """annotate() fails for built-in field names."""
@@ -83,7 +83,7 @@ class TestAnnotateBasic:
         data = np.zeros(n_res)
 
         with pytest.raises(ValueError, match="underscore"):
-            polymer.annotate('_private', data)
+            polymer.annotate('_private', data, Scale.RESIDUE)
 
 
 class TestAnnotateValidation:
@@ -95,14 +95,14 @@ class TestAnnotateValidation:
         wrong_size = np.zeros(n_res + 10)
 
         with pytest.raises(ValueError, match="Shape mismatch"):
-            polymer.annotate('bad', wrong_size)
+            polymer.annotate('bad', wrong_size, Scale.RESIDUE)
 
     def test_multidimensional_data(self, polymer):
         """Multi-dimensional data works if first dim matches."""
         n_res = polymer.size(Scale.RESIDUE)
         data = np.random.randn(n_res, 5, 3).astype(np.float32)
 
-        polymer.annotate('multi', data)
+        polymer.annotate('multi', data, Scale.RESIDUE)
 
         assert polymer.multi.shape == (n_res, 5, 3)
 
@@ -114,7 +114,7 @@ class TestFieldSlicing:
         """Residue selection slices residue-level fields."""
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
-        polymer.annotate('idx', data)
+        polymer.annotate('idx', data, Scale.RESIDUE)
 
         # Select first 5 residues
         selected = polymer.residue(slice(0, 5))
@@ -133,7 +133,7 @@ class TestFieldSlicing:
         n_atoms = polymer.size(Scale.ATOM)
         n_res = polymer.size(Scale.RESIDUE)
         polymer.annotate('atom_data', np.arange(n_atoms).astype(np.float32), Scale.ATOM)
-        polymer.annotate('res_data', np.arange(n_res).astype(np.float32))
+        polymer.annotate('res_data', np.arange(n_res).astype(np.float32), Scale.RESIDUE)
         polymer.annotate('chain_data', np.arange(n_chains).astype(np.float32), Scale.CHAIN)
 
         # Select first chain
@@ -153,7 +153,7 @@ class TestFieldCloning:
         """copy() creates independent field copies."""
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
-        polymer.annotate('data', data)
+        polymer.annotate('data', data, Scale.RESIDUE)
 
         copy = polymer.copy()
 
@@ -175,7 +175,7 @@ class TestFieldBackendConversion:
 
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
-        polymer.annotate('data', data)
+        polymer.annotate('data', data, Scale.RESIDUE)
 
         torch_polymer = polymer.torch()
 
@@ -192,11 +192,11 @@ class TestFieldBackendConversion:
 
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
-        polymer.annotate('data', data)
+        polymer.annotate('data', data, Scale.RESIDUE)
 
         # Convert to torch, add field, convert back
         torch_polymer = polymer.torch()
-        torch_polymer.annotate('extra', torch.zeros(n_res))
+        torch_polymer.annotate('extra', torch.zeros(n_res), Scale.RESIDUE)
 
         numpy_polymer = torch_polymer.numpy()
 
@@ -222,7 +222,7 @@ class TestFieldSetattr:
         data1 = np.zeros(n_res).astype(np.float32)
         data2 = np.ones(n_res).astype(np.float32)
 
-        polymer.annotate('data', data1)
+        polymer.annotate('data', data1, Scale.RESIDUE)
         polymer.data = data2
 
         np.testing.assert_array_equal(polymer.data, data2)
@@ -230,7 +230,7 @@ class TestFieldSetattr:
     def test_update_wrong_size_raises(self, polymer):
         """Updating with wrong size raises ValueError."""
         n_res = polymer.size(Scale.RESIDUE)
-        polymer.annotate('data', np.zeros(n_res).astype(np.float32))
+        polymer.annotate('data', np.zeros(n_res).astype(np.float32), Scale.RESIDUE)
 
         with pytest.raises(ValueError, match="Shape mismatch"):
             polymer.data = np.zeros(n_res + 10)
@@ -250,7 +250,7 @@ class TestGetFields:
     def test_get_fields_includes_dynamic(self, polymer):
         """_get_fields() includes dynamic fields."""
         n_res = polymer.size(Scale.RESIDUE)
-        polymer.annotate('reactivity', np.zeros(n_res))
+        polymer.annotate('reactivity', np.zeros(n_res), Scale.RESIDUE)
 
         fields = polymer._get_fields()
 

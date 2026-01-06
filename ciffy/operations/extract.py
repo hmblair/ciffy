@@ -116,7 +116,7 @@ def extract(
     from ..biochemistry import Scale
 
     # Filter to residues of the target type and remove empty ones
-    sub = poly.by_residue(residue.value).strip()
+    sub = poly.residue_type(residue.value).strip()
 
     # Apply transformations at residue level (each implies centering)
     if align:

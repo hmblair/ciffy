@@ -31,53 +31,53 @@ def by_index(polymer: Polymer, ix: Array | int) -> Polymer:
     return polymer.select(ix, Scale.CHAIN)
 
 
-def by_atom(polymer: Polymer, name: Array | int) -> Polymer:
+def atom_type(polymer: Polymer, atom: Array | int) -> Polymer:
     """
     Select atoms by atom type index.
 
     Args:
         polymer: Source polymer.
-        name: Atom type index or indices.
+        atom: Atom type index or indices.
 
     Returns:
         New Polymer with matching atoms.
     """
-    name = ops.convert_backend(name, polymer.atoms)
-    mask = (polymer.atoms[:, None] == name).any(1)
+    atom = ops.convert_backend(atom, polymer.atoms)
+    mask = (polymer.atoms[:, None] == atom).any(1)
     return polymer[mask]
 
 
-def by_residue(polymer: Polymer, res: Array | int) -> Polymer:
+def residue_type(polymer: Polymer, residue: Array | int) -> Polymer:
     """
     Select residues by residue type index.
 
     Args:
         polymer: Source polymer.
-        res: Residue type index or indices (from Residue enum).
+        residue: Residue type index or indices (from Residue enum).
 
     Returns:
         New Polymer with matching residues.
 
     Example:
         >>> from ciffy.biochemistry import Residue
-        >>> adenosines = by_residue(polymer, Residue.A)
-        >>> purines = by_residue(polymer, [Residue.A, Residue.G])
+        >>> adenosines = residue_type(polymer, Residue.A)
+        >>> purines = residue_type(polymer, [Residue.A, Residue.G])
     """
     # Extract .value from Residue enums (which are AtomGroups)
-    if hasattr(res, 'value') and hasattr(res, 'atoms'):
+    if hasattr(residue, 'value') and hasattr(residue, 'atoms'):
         # Single Residue enum
-        res = res.value
-    elif isinstance(res, (list, tuple)):
+        residue = residue.value
+    elif isinstance(residue, (list, tuple)):
         # List of Residue enums or values
-        res = [r.value if hasattr(r, 'value') and hasattr(r, 'atoms') else r for r in res]
+        residue = [r.value if hasattr(r, 'value') and hasattr(r, 'atoms') else r for r in residue]
 
-    res = ops.convert_backend(res, polymer.sequence)
-    res_mask = (polymer.sequence[:, None] == res).any(1)
+    residue = ops.convert_backend(residue, polymer.sequence)
+    res_mask = (polymer.sequence[:, None] == residue).any(1)
     atom_mask = polymer.expand(res_mask, Scale.RESIDUE, Scale.ATOM)
     return polymer[atom_mask]
 
 
-def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
+def molecule_type(polymer: Polymer, mol: Molecule) -> Polymer:
     """
     Select chains by molecule type.
 
@@ -97,7 +97,7 @@ def by_type(polymer: Polymer, mol: Molecule) -> Polymer:
     return polymer.select(ix, Scale.CHAIN)
 
 
-def by_element(polymer: Polymer, element: Array | int) -> Polymer:
+def element_type(polymer: Polymer, element: Array | int) -> Polymer:
     """
     Select atoms by element index.
 
@@ -110,8 +110,8 @@ def by_element(polymer: Polymer, element: Array | int) -> Polymer:
 
     Example:
         >>> from ciffy.biochemistry import Element
-        >>> carbons = by_element(polymer, Element.C)
-        >>> organic = by_element(polymer, [Element.C, Element.N, Element.O])
+        >>> carbons = element_type(polymer, Element.C)
+        >>> organic = element_type(polymer, [Element.C, Element.N, Element.O])
     """
     element = ops.convert_backend(element, polymer.elements)
     mask = (polymer.elements[:, None] == element).any(1)

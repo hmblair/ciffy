@@ -356,9 +356,9 @@ class _Hierarchy:
     def reduce(
         self,
         features: Array,
-        out_scale: Scale,
-        rtype: Reduction = Reduction.MEAN,
-        in_scale: Scale = Scale.ATOM,
+        to_scale: Scale,
+        reduction: Reduction = Reduction.MEAN,
+        from_scale: Scale = Scale.ATOM,
     ) -> ReductionResult:
         """
         Reduce features from one scale to a coarser scale.
@@ -367,10 +367,10 @@ class _Hierarchy:
         using the chosen reduction operation.
 
         Args:
-            features: Feature tensor at in_scale.
-            out_scale: Target scale to reduce to.
-            rtype: Reduction type (MEAN, SUM, MIN, MAX, COLLATE).
-            in_scale: Scale of input features (default: ATOM).
+            features: Feature tensor at from_scale.
+            to_scale: Target scale to reduce to.
+            reduction: Reduction type (MEAN, SUM, MIN, MAX, COLLATE).
+            from_scale: Scale of input features (default: ATOM).
 
         Returns:
             Reduced features. For MIN/MAX, returns (values, indices).
@@ -378,27 +378,27 @@ class _Hierarchy:
         Examples:
             >>> # Atom -> residue (default)
             >>> res_feats = hierarchy.reduce(atom_feats, Scale.RESIDUE)
-            >>> # Residue -> chain (with explicit in_scale)
-            >>> chain_feats = hierarchy.reduce(res_feats, Scale.CHAIN, in_scale=Scale.RESIDUE)
+            >>> # Residue -> chain (with explicit from_scale)
+            >>> chain_feats = hierarchy.reduce(res_feats, Scale.CHAIN, from_scale=Scale.RESIDUE)
             >>> # Chain -> molecule
-            >>> mol_feats = hierarchy.reduce(chain_feats, Scale.MOLECULE, in_scale=Scale.CHAIN)
+            >>> mol_feats = hierarchy.reduce(chain_feats, Scale.MOLECULE, from_scale=Scale.CHAIN)
 
         Note:
             When reducing from ATOM to RESIDUE scale, non-polymer atoms are
             automatically excluded since they don't belong to any residue.
         """
-        count = self.size(out_scale)
-        sizes = self._per[(in_scale, out_scale)]
+        count = self.size(to_scale)
+        sizes = self._per[(from_scale, to_scale)]
         device = getattr(features, 'device', None)
         ix = create_reduction_index(count, sizes, device=device)
 
-        return REDUCTIONS[rtype](features, ix, dim=0, dim_size=count)
+        return REDUCTIONS[reduction](features, ix, dim=0, dim_size=count)
 
     def expand(
         self,
         features: Array,
-        source: Scale,
-        dest: Scale = Scale.ATOM,
+        from_scale: Scale,
+        to_scale: Scale = Scale.ATOM,
     ) -> Array:
         """
         Expand per-scale features to a finer scale.
@@ -407,18 +407,18 @@ class _Hierarchy:
         repeating each value for all units in the finer scale.
 
         Args:
-            features: Per-source-scale feature tensor.
-            source: Source scale.
-            dest: Destination scale (default: ATOM).
+            features: Per-from_scale feature tensor.
+            from_scale: Source scale (coarser).
+            to_scale: Destination scale (default: ATOM, finer).
 
         Returns:
             Expanded feature tensor.
         """
-        if dest == Scale.ATOM:
-            return ops.repeat_interleave(features, self._per[(Scale.ATOM, source)])
-        if dest == Scale.RESIDUE:
-            return ops.repeat_interleave(features, self._per[(Scale.RESIDUE, source)])
-        raise ValueError(f"Cannot expand to {dest.name}")
+        if to_scale == Scale.ATOM:
+            return ops.repeat_interleave(features, self._per[(Scale.ATOM, from_scale)])
+        if to_scale == Scale.RESIDUE:
+            return ops.repeat_interleave(features, self._per[(Scale.RESIDUE, from_scale)])
+        raise ValueError(f"Cannot expand to {to_scale.name}")
 
     def count(self, mask: Array, scale: Scale) -> Array:
         """
@@ -431,7 +431,7 @@ class _Hierarchy:
         Returns:
             Count tensor with one value per scale unit.
         """
-        return self.reduce(ops.to_int64(mask), scale, Reduction.SUM, in_scale=Scale.ATOM)
+        return self.reduce(ops.to_int64(mask), scale, Reduction.SUM, from_scale=Scale.ATOM)
 
     def membership(self, scale: Scale) -> Array:
         """
@@ -537,7 +537,7 @@ class _Hierarchy:
                 # For chains: check if any atoms/residues remain
                 prev_scale = scales_present[i - 1]
                 prev_counts = self.reduce(
-                    ops.to_int64(masks[prev_scale]), scale, Reduction.SUM, in_scale=prev_scale
+                    ops.to_int64(masks[prev_scale]), scale, Reduction.SUM, from_scale=prev_scale
                 )
                 masks[scale] = prev_counts > 0
 
@@ -580,7 +580,7 @@ class _Hierarchy:
                 # inner per outer (e.g., RESIDUE per CHAIN)
                 # = reduce inner mask over outer, then filter by outer mask
                 inner_per_outer = self.reduce(
-                    ops.to_int64(masks[inner]), outer, Reduction.SUM, in_scale=inner
+                    ops.to_int64(masks[inner]), outer, Reduction.SUM, from_scale=inner
                 )
                 per[(inner, outer)] = inner_per_outer[masks[outer]]
 

@@ -9,7 +9,7 @@ Two types of groups:
 1. **Flat groups** (Backbone, Nucleobase, Phosphate, Sidechain):
    - Simple collections of atoms across residue types
    - Use: `Backbone.index()` for all backbone atom values
-   - Use: `polymer.by_atom(Backbone.index())`
+   - Use: `polymer.atom_type(Backbone.index())`
 
 2. **Hierarchical groups** (Sugar, PurineBase, etc.):
    - Nested structure for accessing atoms by position and residue

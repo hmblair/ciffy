@@ -39,10 +39,10 @@ def _get_representative_coords(polymer: "Polymer", mol_type: Molecule) -> Array:
 
     if mol_type == Molecule.PROTEIN:
         atom_name = "Cα"
-        rep_atoms = polymer.by_atom(ProteinBackbone.CA.index())
+        rep_atoms = polymer.atom_type(ProteinBackbone.CA.index())
     else:
         atom_name = "C1'"
-        rep_atoms = polymer.by_atom(Sugar.C1p.index())
+        rep_atoms = polymer.atom_type(Sugar.C1p.index())
 
     n_found = rep_atoms.size()
     if n_found != n_residues:

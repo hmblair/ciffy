@@ -62,7 +62,7 @@ class LatentEncodingDataset(Dataset):
         from ciffy.backend import ops, to_numpy
 
         # Filter to only expected atom types
-        filtered = polymer.by_atom(self._all_atoms)
+        filtered = polymer.atom_type(self._all_atoms)
 
         # Compute expected sizes per residue (backend-agnostic)
         seq = filtered.sequence

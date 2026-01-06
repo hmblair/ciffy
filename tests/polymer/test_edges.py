@@ -258,12 +258,12 @@ class TestChainsGenerator:
         assert len(chains) == p.size(Scale.CHAIN)
 
     def test_chains_with_filter_rna(self, backend):
-        """by_type(RNA).chains() yields only RNA chains."""
+        """molecule_type(RNA).chains() yields only RNA chains."""
         import ciffy
         from ciffy import Molecule
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)  # RNA + protein
-        rna_chains = list(p.by_type(Molecule.RNA).chains())
+        rna_chains = list(p.molecule_type(Molecule.RNA).chains())
         all_chains = list(p.chains())
 
         assert len(rna_chains) <= len(all_chains)
@@ -272,13 +272,13 @@ class TestChainsGenerator:
             assert chain.istype(Molecule.RNA)
 
     def test_chains_filter_no_match(self, backend):
-        """by_type() with non-matching filter yields nothing."""
+        """molecule_type() with non-matching filter yields nothing."""
         import ciffy
         from ciffy import Molecule
 
         # Use real CIF with known molecule types (9MDS is all RNA)
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)
-        dna_chains = list(p.by_type(Molecule.DNA).chains())
+        dna_chains = list(p.molecule_type(Molecule.DNA).chains())
 
         assert len(dna_chains) == 0
 

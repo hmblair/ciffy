@@ -43,7 +43,7 @@ class HeteroAtoms(AtomContainer):
         >>> p = load("file.cif")
         >>> hetero = p.hetero()
         >>> if not hetero.empty():
-        ...     waters = hetero.by_element(8)  # Oxygen atoms (likely water)
+        ...     waters = hetero.element_type(8)  # Oxygen atoms (likely water)
         ...     print(f"Found {waters.size()} oxygen atoms")
     """
 
@@ -61,7 +61,7 @@ class HeteroAtoms(AtomContainer):
     # HeteroAtoms-specific Selection Methods
     # ─────────────────────────────────────────────────────────────────────────
 
-    def by_element(self, element: int | Array) -> "HeteroAtoms":
+    def element_type(self, element: int | Array) -> "HeteroAtoms":
         """
         Filter by element type.
 
@@ -72,8 +72,8 @@ class HeteroAtoms(AtomContainer):
             New HeteroAtoms with only atoms of the specified element(s).
 
         Example:
-            >>> hetero.by_element(8)   # Oxygen atoms
-            >>> hetero.by_element(11)  # Sodium ions
+            >>> hetero.element_type(8)   # Oxygen atoms
+            >>> hetero.element_type(11)  # Sodium ions
         """
         # Handle single int vs array
         if isinstance(element, (int, np.integer)):
@@ -83,7 +83,7 @@ class HeteroAtoms(AtomContainer):
             mask = (self.elements[:, None] == element).any(1)
         return self[mask]
 
-    def by_chain(self, chain_idx: int) -> "HeteroAtoms":
+    def chain(self, chain_idx: int) -> "HeteroAtoms":
         """
         Select atoms belonging to a specific chain.
 
@@ -94,7 +94,7 @@ class HeteroAtoms(AtomContainer):
             New HeteroAtoms with only atoms from the specified chain.
 
         Example:
-            >>> hetero_chain0 = hetero.by_chain(0)
+            >>> hetero_chain0 = hetero.chain(0)
         """
         mask = self.chains == chain_idx
         return self[mask]

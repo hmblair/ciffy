@@ -66,7 +66,7 @@ def extract_rna_dihedrals(pdb_dir: str | Path) -> dict[DihedralType, np.ndarray]
             polymer = ciffy.load(str(cif_path))
 
             # Get RNA chains only
-            rna = polymer.by_type(Molecule.RNA)
+            rna = polymer.molecule_type(Molecule.RNA)
             if rna.size() == 0:
                 continue
 

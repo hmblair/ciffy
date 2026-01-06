@@ -31,7 +31,7 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
         >>> p = load("file.cif")
         >>> hetero_atoms = hetero(p)  # Get waters/ions/ligands
         >>> if not hetero_atoms.empty():
-        ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
+        ...     waters = hetero_atoms.element_type(8)  # Oxygen atoms
     """
     from ..polymer import HeteroAtoms
 
@@ -47,7 +47,7 @@ def chains(polymer: Polymer) -> Generator[Polymer, None, None]:
     """
     Iterate over chains.
 
-    To filter by molecule type, use `polymer.by_type(mol).chains()`.
+    To filter by molecule type, use `polymer.molecule_type(mol).chains()`.
 
     Args:
         polymer: Source polymer.

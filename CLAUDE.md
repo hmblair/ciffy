@@ -68,12 +68,12 @@ polymer.sequence_str()       # "acgu"
 ### Selection
 
 ```python
-polymer.chain(0)               # First chain
-polymer.residue([0, 5])        # Residues by index
-polymer.by_residue(Residue.A)  # By residue type
-polymer.by_type(Molecule.RNA)  # By molecule type
-polymer.backbone()             # Backbone atoms
-polymer.strip()                # Remove unresolved residues
+polymer.chain(0)                    # First chain
+polymer.residue([0, 5])             # Residues by index
+polymer.residue_type(Residue.A)     # By residue type
+polymer.molecule_type(Molecule.RNA) # By molecule type
+polymer.backbone()                  # Backbone atoms
+polymer.strip()                     # Remove unresolved residues
 ```
 
 ### Hierarchy Operations

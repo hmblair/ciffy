@@ -96,7 +96,7 @@ class TestIstype:
         polymer = load(cif, backend=backend)
 
         # Get a single RNA chain
-        rna = polymer.by_type(Molecule.RNA)
+        rna = polymer.molecule_type(Molecule.RNA)
         if rna.size(Scale.CHAIN) > 0:
             single_rna = rna.chain(0)
             assert single_rna.istype(Molecule.RNA)
@@ -109,7 +109,7 @@ class TestIstype:
         polymer = load(cif, backend=backend)
 
         # Get a single protein chain
-        protein = polymer.by_type(Molecule.PROTEIN)
+        protein = polymer.molecule_type(Molecule.PROTEIN)
         if protein.size(Scale.CHAIN) > 0:
             single_protein = protein.chain(0)
             assert single_protein.istype(Molecule.PROTEIN)
@@ -134,7 +134,7 @@ class TestIstype:
         polymer = load(cif, backend=backend)
 
         # Get a single RNA chain and check if it's protein (should be False)
-        rna = polymer.by_type(Molecule.RNA)
+        rna = polymer.molecule_type(Molecule.RNA)
         if rna.size(Scale.CHAIN) > 0:
             single_rna = rna.chain(0)
             assert not single_rna.istype(Molecule.PROTEIN)

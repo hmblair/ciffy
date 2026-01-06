@@ -1,7 +1,7 @@
 """
 Tests for Polymer selection method edge cases.
 
-Tests by_atom, by_residue, by_type, chain, mask, and __getitem__.
+Tests atom_type, residue_type, molecule_type, chain, mask, and __getitem__.
 """
 
 import pytest
@@ -10,31 +10,31 @@ import numpy as np
 from tests.utils import get_test_cif, BACKENDS, get_single_chain_poly
 
 
-class TestByAtom:
-    """Test by_atom() edge cases."""
+class TestAtomType:
+    """Test atom_type() edge cases."""
 
-    def test_by_atom_nonexistent_index(self, backend):
-        """by_atom with non-existent index returns empty polymer."""
+    def test_atom_type_nonexistent_index(self, backend):
+        """atom_type with non-existent index returns empty polymer."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        result = p.by_atom(99999)  # Non-existent atom type
+        result = p.atom_type(99999)  # Non-existent atom type
 
         assert result.empty()
 
-    def test_by_atom_single_match(self, backend):
-        """by_atom with valid index returns non-empty polymer."""
+    def test_atom_type_single_match(self, backend):
+        """atom_type with valid index returns non-empty polymer."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
         # Get first atom type present
         first_atom = p.atoms[0].item() if hasattr(p.atoms[0], 'item') else p.atoms[0]
 
-        result = p.by_atom(first_atom)
+        result = p.atom_type(first_atom)
         assert not result.empty()
 
-    def test_by_atom_array_input(self, backend):
-        """by_atom accepts array of indices."""
+    def test_atom_type_array_input(self, backend):
+        """atom_type accepts array of indices."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
@@ -42,60 +42,60 @@ class TestByAtom:
         atoms_np = np.asarray(p.atoms)
         unique_atoms = np.unique(atoms_np)[:3]
 
-        result = p.by_atom(unique_atoms)
+        result = p.atom_type(unique_atoms)
         assert isinstance(result, ciffy.Polymer)
         assert not result.empty()
 
-    def test_by_atom_negative_index(self, backend):
-        """by_atom with negative index (unknown atoms)."""
+    def test_atom_type_negative_index(self, backend):
+        """atom_type with negative index (unknown atoms)."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        result = p.by_atom(-1)
+        result = p.atom_type(-1)
 
         # Should return empty or atoms with -1 (unknown)
         # Depending on structure, may be empty
         assert isinstance(result, ciffy.Polymer)
 
 
-class TestByResidue:
-    """Test by_residue() edge cases."""
+class TestResidueType:
+    """Test residue_type() edge cases."""
 
-    def test_by_residue_nonexistent_index(self, backend):
-        """by_residue with non-existent index returns empty polymer."""
+    def test_residue_type_nonexistent_index(self, backend):
+        """residue_type with non-existent index returns empty polymer."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
-        result = p.by_residue(99999)  # Non-existent residue type
+        result = p.residue_type(99999)  # Non-existent residue type
 
         assert result.empty()
 
-    def test_by_residue_valid_index(self, backend):
-        """by_residue with valid index returns matching residues."""
+    def test_residue_type_valid_index(self, backend):
+        """residue_type with valid index returns matching residues."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
         # Adenosine is residue type 0
-        result = p.by_residue(0)
+        result = p.residue_type(0)
 
         assert not result.empty()
         # Should have atoms from adenosine residue
         assert result.size() < p.size()  # Only 1 of 4 residues
 
-    def test_by_residue_array_input(self, backend):
-        """by_residue accepts array of residue indices."""
+    def test_residue_type_array_input(self, backend):
+        """residue_type accepts array of residue indices."""
         import ciffy
 
         p = ciffy.from_sequence("acgu", backend=backend)
         # Select adenosine (type 0) and cytidine (type 1)
-        result = p.by_residue(np.array([0, 1]))
+        result = p.residue_type(np.array([0, 1]))
 
         assert not result.empty()
         # Should return residues (non-empty result means selection worked)
         assert isinstance(result, ciffy.Polymer)
 
-    def test_by_residue_all_residues(self, backend):
-        """by_residue with all types returns same polymer."""
+    def test_residue_type_all_residues(self, backend):
+        """residue_type with all types returns same polymer."""
         import ciffy
         from ciffy import Scale
 
@@ -103,49 +103,49 @@ class TestByResidue:
         seq_np = np.asarray(p.sequence)
         all_types = np.unique(seq_np)
 
-        result = p.by_residue(all_types)
+        result = p.residue_type(all_types)
         assert result.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
 
 
-class TestByType:
-    """Test by_type() edge cases."""
+class TestMoleculeType:
+    """Test molecule_type() edge cases."""
 
-    def test_by_type_no_match(self, backend):
-        """by_type returns empty when no chains match."""
+    def test_molecule_type_no_match(self, backend):
+        """molecule_type returns empty when no chains match."""
         import ciffy
         from ciffy import Molecule
 
         # Use real CIF with known molecule types (9MDS is all RNA)
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)
-        result = p.by_type(Molecule.DNA)
+        result = p.molecule_type(Molecule.DNA)
 
         assert result.empty()
 
-    # Note: test_by_type_requires_molecule_types removed - templates now have molecule_types
+    # Note: test_molecule_type_requires_molecule_types removed - templates now have molecule_types
 
-    def test_by_type_all_match(self, backend):
-        """by_type on matching type returns full structure."""
+    def test_molecule_type_all_match(self, backend):
+        """molecule_type on matching type returns full structure."""
         import ciffy
         from ciffy import Molecule
 
         # Use real CIF with known molecule types
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)  # All RNA
-        result = p.by_type(Molecule.RNA)
+        result = p.molecule_type(Molecule.RNA)
 
         assert not result.empty()
         # All chains are RNA, so should get all
         from ciffy import Scale
         assert result.size(Scale.CHAIN) == p.size(Scale.CHAIN)
 
-    def test_by_type_mixed_structure(self, backend):
-        """by_type on mixed RNA+protein returns subset."""
+    def test_molecule_type_mixed_structure(self, backend):
+        """molecule_type on mixed RNA+protein returns subset."""
         import ciffy
         from ciffy import Molecule, Scale
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)  # RNA + protein
 
-        rna = p.by_type(Molecule.RNA)
-        protein = p.by_type(Molecule.PROTEIN)
+        rna = p.molecule_type(Molecule.RNA)
+        protein = p.molecule_type(Molecule.PROTEIN)
 
         assert not rna.empty()
         assert not protein.empty()
@@ -388,7 +388,7 @@ class TestSpecializedSelections:
         from ciffy import Molecule
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
-        protein = p.by_type(Molecule.PROTEIN)
+        protein = p.molecule_type(Molecule.PROTEIN)
 
         if not protein.empty():
             sidechain = protein.sidechain()

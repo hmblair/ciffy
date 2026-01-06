@@ -17,8 +17,8 @@ from ..biochemistry import Scale, Backbone, Nucleobase, Phosphate, Sidechain
 def mask(
     polymer: Polymer,
     indices: Array | int,
-    source: Scale,
-    dest: Scale = Scale.ATOM,
+    from_scale: Scale,
+    to_scale: Scale = Scale.ATOM,
 ) -> Array:
     """
     Create a boolean mask selecting specific units.
@@ -26,16 +26,16 @@ def mask(
     Args:
         polymer: Source polymer.
         indices: Indices of units to select.
-        source: Scale of the indices.
-        dest: Scale of the output mask.
+        from_scale: Scale of the indices.
+        to_scale: Scale of the output mask.
 
     Returns:
-        Boolean array at dest scale.
+        Boolean array at to_scale.
     """
-    counts = polymer.size(source)
+    counts = polymer.size(from_scale)
     objects = ops.zeros(counts, like=polymer._hierarchy._ref, dtype='bool')
     objects[indices] = True
-    return polymer.expand(objects, source, dest)
+    return polymer.expand(objects, from_scale, to_scale)
 
 
 def resolved(polymer: Polymer, scale: Scale = Scale.RESIDUE) -> Array:
@@ -79,8 +79,8 @@ def backbone(polymer: Polymer) -> Polymer:
     Returns:
         New Polymer with only backbone atoms.
     """
-    from .filters import by_atom
-    return by_atom(polymer, Backbone.index())
+    from .filters import atom_type
+    return atom_type(polymer, Backbone.index())
 
 
 def nucleobase(polymer: Polymer) -> Polymer:
@@ -93,8 +93,8 @@ def nucleobase(polymer: Polymer) -> Polymer:
     Returns:
         New Polymer with only nucleobase atoms.
     """
-    from .filters import by_atom
-    return by_atom(polymer, Nucleobase.index())
+    from .filters import atom_type
+    return atom_type(polymer, Nucleobase.index())
 
 
 def phosphate(polymer: Polymer) -> Polymer:
@@ -107,8 +107,8 @@ def phosphate(polymer: Polymer) -> Polymer:
     Returns:
         New Polymer with only phosphate atoms.
     """
-    from .filters import by_atom
-    return by_atom(polymer, Phosphate.index())
+    from .filters import atom_type
+    return atom_type(polymer, Phosphate.index())
 
 
 def sidechain(polymer: Polymer) -> Polymer:
@@ -121,8 +121,8 @@ def sidechain(polymer: Polymer) -> Polymer:
     Returns:
         New Polymer with only sidechain atoms.
     """
-    from .filters import by_atom
-    return by_atom(polymer, Sidechain.index())
+    from .filters import atom_type
+    return atom_type(polymer, Sidechain.index())
 
 
 def heavy(polymer: Polymer) -> Polymer:

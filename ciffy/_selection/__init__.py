@@ -7,10 +7,10 @@ Provides functions for filtering, iterating, and selecting molecular structures.
 # Filter functions
 from .filters import (
     by_index,
-    by_atom,
-    by_residue,
-    by_type,
-    by_element,
+    atom_type,
+    residue_type,
+    molecule_type,
+    element_type,
 )
 
 # Iteration functions
@@ -34,10 +34,10 @@ from .masks import (
 __all__ = [
     # Filters
     "by_index",
-    "by_atom",
-    "by_residue",
-    "by_type",
-    "by_element",
+    "atom_type",
+    "residue_type",
+    "molecule_type",
+    "element_type",
     # Iterators
     "hetero",
     "chains",

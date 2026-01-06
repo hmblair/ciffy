@@ -266,7 +266,7 @@ class AtomContainer:
         scale: Scale = Scale.ATOM,
     ) -> "AtomContainer":
         """
-        Register a new dynamic field on this container.
+        Create a new container with an additional dynamic field.
 
         Dynamic fields work exactly like built-in fields: they are accessible
         as attributes, propagate through selections, and convert with backend changes.
@@ -277,7 +277,7 @@ class AtomContainer:
             scale: Scale at which the field is defined (default: ATOM).
 
         Returns:
-            Self, for method chaining.
+            New container with the field added. Original is unchanged.
 
         Raises:
             ValueError: If field already exists, name starts with underscore,
@@ -309,10 +309,11 @@ class AtomContainer:
         # Validate size
         self._validate_field_size(name, data, scale)
 
-        # Create and store Field
+        # Create a copy and add the field to it
+        new_container = self.copy()
         field = Field(data, scale)
-        object.__setattr__(self, name, field)
-        return self
+        object.__setattr__(new_container, name, field)
+        return new_container
 
     # ─────────────────────────────────────────────────────────────────────────
     # Field/Metadata Helpers

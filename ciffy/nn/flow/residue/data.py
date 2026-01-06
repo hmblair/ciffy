@@ -114,7 +114,7 @@ def extract_residues_with_links(
 
         try:
             poly = ciffy.load(str(path))
-            poly = poly.by_type(Molecule(residue_type.molecule_type)).canonical()
+            poly = poly.molecule_type(Molecule(residue_type.molecule_type)).canonical()
             if poly.size() == 0:
                 if verbose:
                     print("skip")

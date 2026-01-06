@@ -345,6 +345,7 @@ class Polymer(AtomContainer):
         """
         return self._connection_types
 
+    @property
     def vdw_radii(self) -> Array:
         """
         Van der Waals radius for each atom (Angstroms).
@@ -429,9 +430,9 @@ class Polymer(AtomContainer):
     def reduce(
         self: Polymer,
         features: Array,
-        out_scale: Scale,
-        rtype: Reduction = Reduction.MEAN,
-        in_scale: Scale = Scale.ATOM,
+        to_scale: Scale,
+        reduction: Reduction = Reduction.MEAN,
+        from_scale: Scale = Scale.ATOM,
     ) -> ReductionResult:
         """
         Reduce features from one scale to a coarser scale.
@@ -440,10 +441,10 @@ class Polymer(AtomContainer):
         using the chosen reduction operation.
 
         Args:
-            features: Feature tensor at in_scale.
-            out_scale: Target scale to reduce to.
-            rtype: Reduction type (MEAN, SUM, MIN, MAX, COLLATE).
-            in_scale: Scale of input features (default: ATOM).
+            features: Feature tensor at from_scale.
+            to_scale: Target scale to reduce to.
+            reduction: Reduction type (MEAN, SUM, MIN, MAX, COLLATE).
+            from_scale: Scale of input features (default: ATOM).
 
         Returns:
             Reduced features. For MIN/MAX, returns (values, indices).
@@ -451,22 +452,22 @@ class Polymer(AtomContainer):
         Examples:
             >>> # Atom -> residue (default)
             >>> res_feats = polymer.reduce(coords, Scale.RESIDUE)
-            >>> # Residue -> chain (with explicit in_scale)
-            >>> chain_feats = polymer.reduce(res_feats, Scale.CHAIN, in_scale=Scale.RESIDUE)
+            >>> # Residue -> chain (with explicit from_scale)
+            >>> chain_feats = polymer.reduce(res_feats, Scale.CHAIN, from_scale=Scale.RESIDUE)
             >>> # Chain -> molecule
-            >>> mol_feats = polymer.reduce(chain_feats, Scale.MOLECULE, in_scale=Scale.CHAIN)
+            >>> mol_feats = polymer.reduce(chain_feats, Scale.MOLECULE, from_scale=Scale.CHAIN)
 
         Note:
             When reducing from ATOM to RESIDUE scale, non-polymer atoms are
             automatically excluded since they don't belong to any residue.
         """
-        return self._hierarchy.reduce(features, out_scale, rtype, in_scale)
+        return self._hierarchy.reduce(features, to_scale, reduction, from_scale)
 
     def expand(
         self: Polymer,
         features: Array,
-        source: Scale,
-        dest: Scale = Scale.ATOM,
+        from_scale: Scale,
+        to_scale: Scale = Scale.ATOM,
     ) -> Array:
         """
         Expand per-scale features to a finer scale.
@@ -475,14 +476,14 @@ class Polymer(AtomContainer):
         repeating each value for all units in the finer scale.
 
         Args:
-            features: Per-source-scale feature tensor.
-            source: Source scale.
-            dest: Destination scale (default: ATOM).
+            features: Per-from_scale feature tensor.
+            from_scale: Source scale (coarser).
+            to_scale: Destination scale (default: ATOM, finer).
 
         Returns:
             Expanded feature tensor.
         """
-        return self._hierarchy.expand(features, source, dest)
+        return self._hierarchy.expand(features, from_scale, to_scale)
 
     def count(
         self: Polymer,
@@ -845,8 +846,8 @@ class Polymer(AtomContainer):
     def _mask(
         self: Polymer,
         indices: Array | int,
-        source: Scale,
-        dest: Scale = Scale.ATOM,
+        from_scale: Scale,
+        to_scale: Scale = Scale.ATOM,
     ) -> Array:
         """
         Create a boolean mask selecting specific units.
@@ -855,14 +856,14 @@ class Polymer(AtomContainer):
 
         Args:
             indices: Indices of units to select.
-            source: Scale of the indices.
-            dest: Scale of the output mask.
+            from_scale: Scale of the indices.
+            to_scale: Scale of the output mask.
 
         Returns:
-            Boolean array at dest scale.
+            Boolean array at to_scale.
         """
         from .._selection import mask
-        return mask(self, indices, source, dest)
+        return mask(self, indices, from_scale, to_scale)
 
     def _select_contiguous(self: Polymer, ix: int, scale: Scale) -> Polymer:
         """
@@ -956,36 +957,36 @@ class Polymer(AtomContainer):
         """
         return self.select(ix, Scale.ATOM)
 
-    def by_atom(self: Polymer, name: Array | int) -> Polymer:
+    def atom_type(self: Polymer, atom: Array | int) -> Polymer:
         """
         Select atoms by atom type index.
 
         Args:
-            name: Atom type index or indices.
+            atom: Atom type index or indices.
 
         Returns:
             New Polymer with matching atoms.
         """
-        from .._selection import by_atom
-        return by_atom(self, name)
+        from .._selection import atom_type
+        return atom_type(self, atom)
 
-    def by_residue(self: Polymer, res: Array | int) -> Polymer:
+    def residue_type(self: Polymer, residue: Array | int) -> Polymer:
         """
         Select residues by residue type index.
 
         Args:
-            res: Residue type index or indices (from Residue enum).
+            residue: Residue type index or indices (from Residue enum).
 
         Returns:
             New Polymer with matching residues.
 
         Example:
             >>> from ciffy.biochemistry import Residue
-            >>> adenosines = polymer.by_residue(Residue.A)
-            >>> purines = polymer.by_residue([Residue.A, Residue.G])
+            >>> adenosines = polymer.residue_type(Residue.A)
+            >>> purines = polymer.residue_type([Residue.A, Residue.G])
         """
-        from .._selection import by_residue
-        return by_residue(self, res)
+        from .._selection import residue_type
+        return residue_type(self, residue)
 
     def canonical(self: Polymer) -> Polymer:
         """
@@ -1008,9 +1009,9 @@ class Polymer(AtomContainer):
             >>> latents = model.encode(polymer)
         """
         from ..biochemistry import CANONICAL_ALL
-        return self.by_residue(CANONICAL_ALL)
+        return self.residue_type(CANONICAL_ALL)
 
-    def by_type(self: Polymer, mol: Molecule) -> Polymer:
+    def molecule_type(self: Polymer, mol: Molecule) -> Polymer:
         """
         Select chains by molecule type.
 
@@ -1020,8 +1021,8 @@ class Polymer(AtomContainer):
         Returns:
             New Polymer with chains of that type.
         """
-        from .._selection import by_type
-        return by_type(self, mol)
+        from .._selection import molecule_type
+        return molecule_type(self, mol)
 
     def hetero(self: Polymer) -> "HeteroAtoms":
         """
@@ -1038,7 +1039,7 @@ class Polymer(AtomContainer):
             >>> p = load("file.cif")
             >>> hetero_atoms = p.hetero()  # Get waters/ions/ligands
             >>> if not hetero_atoms.empty():
-            ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
+            ...     waters = hetero_atoms.element_type(8)  # Oxygen atoms
         """
         from .._selection import hetero
         return hetero(self)
@@ -1047,7 +1048,7 @@ class Polymer(AtomContainer):
         """
         Iterate over chains.
 
-        To filter by molecule type, use `polymer.by_type(mol).chains()`.
+        To filter by molecule type, use `polymer.molecule_type(mol).chains()`.
 
         Yields:
             Individual chain Polymers.
@@ -1086,27 +1087,90 @@ class Polymer(AtomContainer):
     # ─────────────────────────────────────────────────────────────────────────
 
     def backbone(self: Polymer) -> Polymer:
-        """Select backbone atoms (sugar-phosphate for RNA/DNA, N-CA-C-O for protein)."""
+        """
+        Select backbone atoms.
+
+        For RNA/DNA: selects sugar-phosphate backbone atoms (P, OP1, OP2, O5',
+        C5', C4', C3', O3', C2', O2', C1', O4').
+        For protein: selects N-CA-C-O backbone atoms.
+
+        Returns:
+            New Polymer containing only backbone atoms. Residues with no
+            backbone atoms are removed.
+
+        Example:
+            >>> backbone_only = polymer.backbone()
+            >>> print(f"Backbone: {backbone_only.size()} atoms")
+        """
         from .._selection import backbone
         return backbone(self)
 
     def nucleobase(self: Polymer) -> Polymer:
-        """Select RNA nucleobase atoms."""
+        """
+        Select nucleobase atoms from RNA/DNA residues.
+
+        Selects the nitrogenous base atoms (purines: N1, C2, N3, C4, C5, C6,
+        N7, C8, N9; pyrimidines: N1, C2, N3, C4, C5, C6, O2, O4/N4).
+        Protein chains are excluded entirely.
+
+        Returns:
+            New Polymer containing only nucleobase atoms.
+
+        Example:
+            >>> bases = rna.nucleobase()
+            >>> print(f"Base atoms: {bases.size()}")
+        """
         from .._selection import nucleobase
         return nucleobase(self)
 
     def phosphate(self: Polymer) -> Polymer:
-        """Select RNA/DNA phosphate atoms."""
+        """
+        Select phosphate group atoms from RNA/DNA residues.
+
+        Selects P, OP1, OP2, and O5' atoms that form the phosphate group.
+        Protein chains are excluded entirely.
+
+        Returns:
+            New Polymer containing only phosphate atoms.
+
+        Example:
+            >>> phosphates = rna.phosphate()
+        """
         from .._selection import phosphate
         return phosphate(self)
 
     def sidechain(self: Polymer) -> Polymer:
-        """Select protein sidechain atoms."""
+        """
+        Select sidechain atoms from protein residues.
+
+        Selects all atoms except the backbone (N, CA, C, O) and hydrogen.
+        For glycine, returns an empty selection. RNA/DNA chains are
+        excluded entirely.
+
+        Returns:
+            New Polymer containing only sidechain atoms.
+
+        Example:
+            >>> sidechains = protein.sidechain()
+        """
         from .._selection import sidechain
         return sidechain(self)
 
     def heavy(self: Polymer) -> Polymer:
-        """Select heavy (non-hydrogen) atoms."""
+        """
+        Select heavy (non-hydrogen) atoms.
+
+        Filters out all hydrogen atoms, keeping only C, N, O, P, S, and
+        other heavy elements. Useful for reducing computational cost or
+        when hydrogen positions are unreliable.
+
+        Returns:
+            New Polymer containing only heavy atoms.
+
+        Example:
+            >>> heavy_atoms = polymer.heavy()
+            >>> print(f"Heavy atoms: {heavy_atoms.size()}")
+        """
         from .._selection import heavy
         return heavy(self)
 

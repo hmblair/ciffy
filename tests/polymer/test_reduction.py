@@ -98,7 +98,7 @@ class TestReduce:
 
 
 class TestResidueReduce:
-    """Test reduce() with in_scale=RESIDUE edge cases."""
+    """Test reduce() with from_scale=RESIDUE edge cases."""
 
     def test_reduce_residue_single(self, backend):
         """reduce from residue scale on single-residue polymer."""
@@ -109,7 +109,7 @@ class TestResidueReduce:
         # Create per-residue feature
         residue_feature = p.sequence.float() if backend == "torch" else p.sequence.astype(np.float32)
 
-        result = p.reduce(residue_feature, Scale.CHAIN, Reduction.MEAN, in_scale=Scale.RESIDUE)
+        result = p.reduce(residue_feature, Scale.CHAIN, Reduction.MEAN, from_scale=Scale.RESIDUE)
         assert result.shape[0] == 1
 
     def test_reduce_residue_to_chain(self, backend):
@@ -126,7 +126,7 @@ class TestResidueReduce:
         else:
             residue_feat = np.ones(p.size(Scale.RESIDUE), dtype=np.float32)
 
-        result = p.reduce(residue_feat, Scale.CHAIN, Reduction.SUM, in_scale=Scale.RESIDUE)
+        result = p.reduce(residue_feat, Scale.CHAIN, Reduction.SUM, from_scale=Scale.RESIDUE)
 
         # Single chain, so result should be sum of all residues
         assert result.shape[0] == 1
@@ -147,8 +147,8 @@ class TestResidueReduce:
         else:
             seq_float = p.sequence.astype(np.float32)
 
-        min_val, min_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MIN, in_scale=Scale.RESIDUE)
-        max_val, max_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MAX, in_scale=Scale.RESIDUE)
+        min_val, min_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MIN, from_scale=Scale.RESIDUE)
+        max_val, max_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MAX, from_scale=Scale.RESIDUE)
 
         assert min_val.shape[0] == p.size(Scale.CHAIN)
         assert max_val.shape[0] == p.size(Scale.CHAIN)

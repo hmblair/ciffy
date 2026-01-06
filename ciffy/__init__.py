@@ -54,7 +54,7 @@ except ImportError as e:
 
 # Core types
 from .polymer import Polymer, Field, Metadata, from_sequence, from_extract
-from .hetero import HeteroAtoms
+from .polymer import HeteroAtoms
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
 

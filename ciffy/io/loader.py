@@ -235,8 +235,8 @@ def load(
 
     hetero = None
     if hetatm_coords is not None and len(hetatm_coords) > 0:
-        from ..hetero import HeteroAtoms
-        hetero = HeteroAtoms(
+        from ..polymer.hetero import HeteroAtoms
+        hetero = HeteroAtoms.from_arrays(
             coordinates=hetatm_coords,
             elements=hetatm_elements,
             chains=hetatm_chains,

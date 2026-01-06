@@ -18,134 +18,25 @@ from ..biochemistry._generated_molecule import molecule_type
 
 if TYPE_CHECKING:
     import torch
-    from ..hetero import HeteroAtoms
+    from .hetero import HeteroAtoms
     from ..biochemistry.linking import FrameDefinition
 from ..operations.reduction import Reduction, ReductionResult
 from .hierarchy import _Hierarchy
+from .base import AtomContainer, Field, Metadata, _KNOWN_FIELDS
 from ..biochemistry import (
     Residue,
     Atom,
     AtomGroup,
     ELEMENT_NAMES,
 )
-from ..utils import all_equal, filter_by_mask
+from ..utils import filter_by_mask
 from ..utils.formatting import format_chain_table
 
 
 UNKNOWN = "UNKNOWN"
 
-# Known field scales for creating missing fields in copy()/_clone()
-# Only used when adding fields that don't yet exist on the instance
-_KNOWN_FIELDS: dict[str, Scale] = {
-    'coordinates': Scale.ATOM,
-    'atoms': Scale.ATOM,
-    'elements': Scale.ATOM,
-    'bfactors': Scale.ATOM,
-    'sequence': Scale.RESIDUE,
-    'molecule_types': Scale.CHAIN,
-}
 
-
-class Field:
-    """
-    Container for Polymer array fields with scale metadata.
-
-    Fields are stored as instance attributes on Polymer objects. Accessing a Field
-    via attribute access returns its data (unwrapped by Polymer.__getattribute__).
-    Setting a Field validates backend/device compatibility and size.
-
-    Attributes:
-        data: The array data.
-        scale: Scale at which the field is defined (ATOM, RESIDUE, CHAIN).
-
-    Example:
-        >>> field = Field(coords_array, Scale.ATOM)
-        >>> field.data  # The raw array
-        >>> field.scale  # Scale.ATOM
-    """
-
-    __slots__ = ('data', 'scale')
-
-    def __init__(self, data: Array, scale: Scale):
-        self.data = data
-        self.scale = scale
-
-    def __repr__(self):
-        return f"Field({self.scale.name}, shape={self.data.shape})"
-
-
-class _MetadataDescriptor:
-    """Base class for Metadata descriptors (for non-array data)."""
-
-    __slots__ = ('scale', 'is_list', 'name', 'private_name')
-
-    def __init__(
-        self,
-        scale: Scale,
-        is_list: bool = False,
-    ):
-        self.scale = scale
-        self.is_list = is_list
-        self.name = ""
-        self.private_name = ""
-
-    def __set_name__(self, owner, name):
-        self.name = name
-        self.private_name = f"_{name}"
-
-    def __get__(self, obj, objtype=None):
-        if obj is None:
-            return self  # Class-level access returns descriptor
-        # Metadata returns None if not set (unlike Field which raises)
-        return getattr(obj, self.private_name, None)
-
-    def __set__(self, obj, value):
-        setattr(obj, self.private_name, value)
-
-
-class Metadata(_MetadataDescriptor):
-    """
-    Descriptor for Polymer metadata (non-array values passed through without conversion).
-
-    Metadata describes simple values like scalars, strings, or lists that don't need
-    backend conversion but still need proper slicing behavior.
-
-    Unlike Field, accessing metadata that is None returns None (not an error).
-
-    Args:
-        scale: Scale at which the metadata is defined (Scale.CHAIN, MOLECULE).
-        is_list: True for Python list fields (names, strands, descriptions).
-
-    Example:
-        >>> pdb_id = Metadata(Scale.MOLECULE)
-        >>> names = Metadata(Scale.CHAIN, is_list=True)
-    """
-
-    def __set__(self, obj, value):
-        # Validate size for list metadata at non-molecule scales
-        if value is not None and self.scale != Scale.MOLECULE:
-            hierarchy = getattr(obj, '_hierarchy', None)
-            if hierarchy is not None and hasattr(value, '__len__'):
-                expected = hierarchy.size(self.scale)
-                actual = len(value)
-                if actual != expected:
-                    raise ValueError(
-                        f"Size mismatch for '{self.name}': got {actual} elements, "
-                        f"expected {expected} ({self.scale.name} scale)"
-                    )
-        setattr(obj, self.private_name, value)
-
-    def __get__(self, obj, objtype=None):
-        if obj is None:
-            return self  # Class-level access returns descriptor
-        # Metadata returns None if not set (unlike Field which raises)
-        return getattr(obj, self.private_name, None)
-
-    def __repr__(self):
-        return f"Metadata({self.scale.name}, is_list={self.is_list})"
-
-
-class Polymer:
+class Polymer(AtomContainer):
     """
     A molecular structure with coordinates, atom types, and hierarchy.
 
@@ -167,12 +58,14 @@ class Polymer:
         lengths: (C,) tensor of residues per chain.
     """
 
+    # Scales this container supports
+    _allowed_scales = {Scale.ATOM, Scale.RESIDUE, Scale.CHAIN, Scale.MOLECULE}
+
     # ─────────────────────────────────────────────────────────────────────────
     # Metadata Descriptors - values passed through without conversion
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Molecule-level
-    pdb_id = Metadata(Scale.MOLECULE)
+    # Molecule-level (pdb_id is inherited from AtomContainer)
     resolution = Metadata(Scale.MOLECULE)
     date = Metadata(Scale.MOLECULE)
 
@@ -181,63 +74,12 @@ class Polymer:
     strands = Metadata(Scale.CHAIN, is_list=True)
     descriptions = Metadata(Scale.CHAIN, is_list=True)
 
-    def __init__(
-        self: Polymer,
-        hierarchy: _Hierarchy | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Initialize a Polymer structure.
-
-        This is an internal constructor. Users should use ciffy.load() or
-        ciffy.from_sequence() to create Polymers.
-
-        Args:
-            hierarchy: _Hierarchy object containing scale bookkeeping.
-                If None, creates an empty polymer.
-            **kwargs: Field objects, Metadata values, and internal state:
-                - Field objects are stored directly as attributes
-                - Metadata values are assigned to their descriptors
-                - connections/connection_types are stored as internal state
-
-        Example:
-            >>> empty = Polymer()
-            >>> empty.size()
-            0
-        """
+    def _init_from_kwargs(self, kwargs: dict) -> None:
+        """Handle Polymer-specific initialization."""
         # Extract internal state (not Field or Metadata)
         connections = kwargs.pop('connections', None)
         connection_types = kwargs.pop('connection_types', None)
         hetero = kwargs.pop('hetero', None)
-
-        # Handle empty polymer case
-        if hierarchy is None:
-            # Only pdb_id allowed without hierarchy
-            invalid = [k for k in kwargs if k != 'pdb_id']
-            if invalid:
-                raise TypeError(
-                    f"Cannot pass {invalid} without hierarchy. "
-                    f"Only 'pdb_id' is allowed for empty polymers."
-                )
-            hierarchy = _Hierarchy()
-
-        # Must set hierarchy first (needed for validation)
-        object.__setattr__(self, '_hierarchy', hierarchy)
-
-        # Store Field objects directly as attributes (only if data is not None)
-        for name, value in list(kwargs.items()):
-            if isinstance(value, Field):
-                if value.data is not None:
-                    object.__setattr__(self, name, value)
-                kwargs.pop(name)
-
-        # Assign Metadata descriptors from remaining kwargs
-        for name, desc in self._get_metadata().items():
-            if name in kwargs:
-                value = kwargs.pop(name)
-                setattr(self, desc.private_name, value)
-            else:
-                setattr(self, desc.private_name, None)
 
         if kwargs:
             raise TypeError(
@@ -249,357 +91,14 @@ class Polymer:
         object.__setattr__(self, '_connection_types', connection_types)
         object.__setattr__(self, '_hetero', hetero)
 
-        # Validate field sizes match hierarchy
-        self._validate_sizes()
-
     @property
     def lengths(self) -> Array:
         """Residues per chain (C,) array. Delegated to hierarchy."""
         return self._hierarchy.lengths
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Attribute Access - for Field unwrapping and validation
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def __getattribute__(self, name: str):
-        """Intercept attribute access to unwrap Field data.
-
-        For Field objects, returns the data array.
-        All other attributes are returned normally.
-        """
-        value = object.__getattribute__(self, name)
-        if isinstance(value, Field):
-            return value.data
-        return value
-
-    def __setattr__(self, name: str, value) -> None:
-        """Intercept attribute assignment to validate and update Field data.
-
-        For existing Field objects, validates backend/device compatibility
-        and size, then updates the data. For known field names that don't
-        exist yet, creates a new Field. For other attributes, uses normal
-        setattr (only allowed for private attributes during init).
-        """
-        # Check if this is an existing Field
-        try:
-            existing = object.__getattribute__(self, name)
-            if isinstance(existing, Field):
-                # Validate if value is not None
-                if value is not None:
-                    hierarchy = object.__getattribute__(self, '_hierarchy')
-                    check_compatible(hierarchy._ref, value, name)
-                    expected = hierarchy.size(existing.scale)
-                    actual = value.shape[0] if hasattr(value, 'shape') else len(value)
-                    if actual != expected:
-                        raise ValueError(
-                            f"Shape mismatch for '{name}': got {actual} elements, "
-                            f"expected {expected} ({existing.scale.name} scale)"
-                        )
-                existing.data = value
-                return
-        except AttributeError:
-            pass
-
-        # Check if this is a known field name that doesn't exist yet
-        if name in _KNOWN_FIELDS and value is not None:
-            hierarchy = object.__getattribute__(self, '_hierarchy')
-            scale = _KNOWN_FIELDS[name]
-            check_compatible(hierarchy._ref, value, name)
-            expected = hierarchy.size(scale)
-            actual = value.shape[0] if hasattr(value, 'shape') else len(value)
-            if actual != expected:
-                raise ValueError(
-                    f"Shape mismatch for '{name}': got {actual} elements, "
-                    f"expected {expected} ({scale.name} scale)"
-                )
-            new_field = Field(value, scale)
-            object.__setattr__(self, name, new_field)
-            return
-
-        # Not a Field - use normal setattr
-        object.__setattr__(self, name, value)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Dynamic Fields - user-registered per-scale data
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def annotate(
-        self: Polymer,
-        name: str,
-        data: Array,
-        scale: Scale = Scale.RESIDUE,
-    ) -> Polymer:
-        """
-        Register a new dynamic field on this polymer.
-
-        Dynamic fields work exactly like built-in fields (coordinates, atoms, etc.):
-        they are accessible as attributes, propagate through selections, and convert
-        with backend changes.
-
-        Args:
-            name: Field name. Must not conflict with existing attributes.
-            data: Array data with first dimension matching scale size.
-            scale: Scale at which the field is defined (default: RESIDUE).
-
-        Returns:
-            Self, for method chaining.
-
-        Raises:
-            ValueError: If field already exists or name starts with underscore.
-            ValueError: If data size doesn't match scale.
-            TypeError: If backend/device doesn't match polymer.
-
-        Examples:
-            >>> # Add per-residue reactivity data
-            >>> polymer.annotate('reactivity', shape_tensor)
-            >>> polymer.reactivity  # Access like built-in field
-
-            >>> # Add per-atom embeddings
-            >>> polymer.annotate('embeddings', atom_features, Scale.ATOM)
-            >>> chain = polymer.chain(0)
-            >>> chain.embeddings  # Sliced automatically
-
-            >>> # Method chaining
-            >>> polymer.annotate('dms', dms_data).annotate('shape', shape_data)
-        """
-        # Check if already exists
-        try:
-            object.__getattribute__(self, name)
-            raise ValueError(f"Field '{name}' already exists.")
-        except AttributeError:
-            pass
-
-        if name.startswith('_'):
-            raise ValueError("Field names cannot start with underscore")
-
-        # Validate backend/device compatibility
-        hierarchy = object.__getattribute__(self, '_hierarchy')
-        check_compatible(hierarchy._ref, data, name)
-
-        # Validate size
-        expected = hierarchy.size(scale)
-        actual = data.shape[0] if hasattr(data, 'shape') else len(data)
-        if actual != expected:
-            raise ValueError(
-                f"Shape mismatch for '{name}': got {actual} elements, "
-                f"expected {expected} ({scale.name} scale)"
-            )
-
-        # Create and store Field
-        field = Field(data, scale)
-        object.__setattr__(self, name, field)
-        return self
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Field/Metadata Helpers - for automatic slicing and backend conversion
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _get_field_data(self, name: str) -> Array | None:
-        """Get field data, returning None if field doesn't exist.
-
-        Useful for checking field availability without raising AttributeError.
-
-        Args:
-            name: Field name.
-
-        Returns:
-            Field data or None if field not set.
-        """
-        try:
-            field = object.__getattribute__(self, name)
-            if isinstance(field, Field):
-                return field.data
-        except AttributeError:
-            pass
-        return None
-
-    def _get_fields(self) -> dict[str, Field]:
-        """Return all Field objects on this instance (built-in and dynamic)."""
-        return {
-            name: attr
-            for name, attr in object.__getattribute__(self, '__dict__').items()
-            if isinstance(attr, Field)
-        }
-
-    @classmethod
-    def _get_metadata(cls) -> dict[str, Metadata]:
-        """Return all Metadata descriptors (class-level, values passed through)."""
-        return {
-            name: attr for name, attr in vars(cls).items()
-            if isinstance(attr, Metadata)
-        }
-
-    def _validate_sizes(self) -> None:
-        """Validate that field sizes and devices match hierarchy.
-
-        Raises:
-            ValueError: If any field size doesn't match the hierarchy.
-            TypeError: If any field backend doesn't match.
-            ValueError: If any field device doesn't match.
-        """
-        from ..backend import check_compatible
-
-        hierarchy = object.__getattribute__(self, '_hierarchy')
-        ref = hierarchy._ref
-
-        # Validate Field objects
-        for name, field in self._get_fields().items():
-            if field.data is None:
-                continue
-
-            # Validate device/backend
-            if ref is not None:
-                check_compatible(ref, field.data, name)
-
-            # Validate size
-            expected = hierarchy.size(field.scale)
-            actual = field.data.shape[0] if hasattr(field.data, 'shape') else len(field.data)
-            if actual != expected:
-                raise ValueError(
-                    f"Size mismatch for '{name}': got {actual}, "
-                    f"expected {expected} ({field.scale.name} scale)"
-                )
-
-        # Validate Metadata descriptors
-        for name, desc in self._get_metadata().items():
-            value = getattr(self, desc.private_name, None)
-            if value is None:
-                continue
-
-            # Skip molecule-scale (no size constraint)
-            if desc.scale == Scale.MOLECULE:
-                continue
-
-            expected = hierarchy.size(desc.scale)
-
-            # Get actual size
-            if desc.is_list:
-                actual = len(value)
-            elif hasattr(value, '__len__'):
-                actual = len(value)
-            else:
-                continue  # Scalar metadata
-
-            if actual != expected:
-                raise ValueError(
-                    f"Size mismatch for '{name}': got {actual}, "
-                    f"expected {expected} ({desc.scale.name} scale)"
-                )
-
-    @staticmethod
-    def _index_copy(arr: Array, selector) -> Array:
-        """Index array with selector, ensuring a copy is returned.
-
-        For boolean masks, indexing already returns a copy.
-        For slices, indexing returns a view, so we explicitly copy.
-        """
-        result = arr[selector]
-        if isinstance(selector, slice):
-            # Slice returns view - copy for consistency
-            return result.copy() if hasattr(result, 'copy') else result.clone()
-        return result
-
-    def _slice_all(
-        self,
-        atom_sel: Array | slice,
-        res_sel: Array | slice,
-        chain_sel: Array | slice,
-        new_hierarchy: _Hierarchy | None = None,
-    ) -> dict:
-        """
-        Slice all Field and Metadata attributes according to their scale.
-
-        Args:
-            atom_sel: Boolean mask or slice for atoms.
-            res_sel: Boolean mask or slice for residues.
-            chain_sel: Boolean mask or slice for chains.
-            new_hierarchy: Hierarchy for the sliced polymer.
-
-        Returns:
-            Dict mapping field/metadata names to sliced values, plus '_field_meta'
-            for reconstructing Field objects in _clone.
-        """
-        result = {}
-        field_meta = {}  # Store scale for each field
-
-        # Slice Field objects (only Fields with data exist on instance)
-        for name, field in self._get_fields().items():
-            field_meta[name] = field.scale
-            if field.scale == Scale.ATOM:
-                result[name] = self._index_copy(field.data, atom_sel)
-            elif field.scale == Scale.RESIDUE:
-                result[name] = self._index_copy(field.data, res_sel)
-            elif field.scale == Scale.CHAIN:
-                result[name] = self._index_copy(field.data, chain_sel)
-            else:  # Scale.MOLECULE - no slicing
-                result[name] = field.data
-
-        # Slice Metadata descriptors
-        for name, desc in self._get_metadata().items():
-            value = getattr(self, desc.private_name, None)
-            if value is None:
-                result[name] = None
-            elif desc.scale == Scale.CHAIN:
-                if desc.is_list:
-                    if isinstance(chain_sel, slice):
-                        result[name] = value[chain_sel]  # list slicing copies
-                    else:
-                        result[name] = filter_by_mask(value, chain_sel)
-                else:
-                    result[name] = self._index_copy(value, chain_sel)
-            else:  # Scale.MOLECULE - scalars, no slicing
-                result[name] = value
-
-        result['_field_meta'] = field_meta
-        return result
-
-    def _derive_masks(
-        self: Polymer,
-        input_mask: Array,
-        input_scale: Scale,
-        remove_empty_residues: bool = False,
-    ) -> tuple[Array, Array, Array]:
-        """
-        Derive masks at all scales from an input mask at a specific scale.
-
-        Args:
-            input_mask: Boolean mask at input_scale.
-            input_scale: Scale of the input mask (ATOM, RESIDUE, or CHAIN).
-            remove_empty_residues: If True, remove residues with 0 atoms
-                (ATOM scale behavior).
-
-        Returns:
-            Tuple of (atom_mask, res_mask, chn_mask).
-        """
-        return self._hierarchy.derive_masks(input_mask, input_scale, remove_empty_residues)
-
     def _convert_backend(self, to_func, new_hierarchy: _Hierarchy | None = None) -> dict:
-        """
-        Convert all Field arrays to a target backend, pass through Metadata.
-
-        Args:
-            to_func: Function to convert arrays (e.g., to_numpy, to_torch).
-            new_hierarchy: Hierarchy for the converted polymer.
-
-        Returns:
-            Dict mapping all field/metadata names to converted/passed values,
-            plus '_field_meta' for reconstructing Field objects in _clone.
-        """
-        result = {}
-        field_meta = {}  # Store scale for each field
-
-        # Convert Field arrays (only Fields with data exist on instance)
-        for name, field in self._get_fields().items():
-            field_meta[name] = field.scale
-            result[name] = to_func(field.data)
-
-        # Pass through Metadata unchanged (copy lists)
-        for name, meta in self._get_metadata().items():
-            value = getattr(self, meta.private_name, None)
-            if meta.is_list and value is not None:
-                result[name] = value.copy()
-            else:
-                result[name] = value
+        """Override to also convert HETATM data."""
+        result = super()._convert_backend(to_func, new_hierarchy)
 
         # Convert HETATM data if present
         hetero = object.__getattribute__(self, '_hetero')
@@ -610,7 +109,6 @@ class Polymer:
             else:
                 result['hetero'] = hetero.torch()
 
-        result['_field_meta'] = field_meta
         return result
 
     def _residue_coords(
@@ -796,6 +294,46 @@ class Polymer:
                 f"chains ({chn_count}), molecule ({mol_count}){id_str}."
             )
 
+    def annotate(
+        self,
+        name: str,
+        data: Array,
+        scale: Scale = Scale.RESIDUE,
+    ) -> "Polymer":
+        """
+        Register a new dynamic field on this polymer.
+
+        Dynamic fields work exactly like built-in fields: they are accessible
+        as attributes, propagate through selections, and convert with backend changes.
+
+        Args:
+            name: Field name. Must not conflict with existing attributes.
+            data: Array data with first dimension matching scale size.
+            scale: Scale at which the field is defined (default: RESIDUE).
+
+        Returns:
+            Self, for method chaining.
+
+        Raises:
+            ValueError: If field already exists or name starts with underscore.
+            ValueError: If data size doesn't match scale.
+            TypeError: If backend/device doesn't match polymer.
+
+        Examples:
+            >>> # Add per-residue reactivity data
+            >>> polymer.annotate('reactivity', shape_tensor)
+            >>> polymer.reactivity  # Access like built-in field
+
+            >>> # Add per-atom embeddings
+            >>> polymer.annotate('embeddings', atom_features, Scale.ATOM)
+            >>> chain = polymer.chain(0)
+            >>> chain.embeddings  # Sliced automatically
+
+            >>> # Method chaining
+            >>> polymer.annotate('dms', dms_data).annotate('shape', shape_data)
+        """
+        return super().annotate(name, data, scale)
+
     def _clone(self, **overrides) -> Polymer:
         """
         Create a copy of this Polymer with optional field overrides.
@@ -823,6 +361,12 @@ class Polymer:
 
         # Extract field metadata (for dynamic fields from slicing/conversion)
         field_meta = overrides.pop('_field_meta', None)
+
+        # Extract Polymer-specific internal state
+        if 'hetero' in overrides:
+            hetero = overrides.pop('hetero')
+        else:
+            hetero = object.__getattribute__(self, '_hetero')
 
         # Create new instance bypassing __init__ for efficiency
         polymer = object.__new__(Polymer)
@@ -869,16 +413,10 @@ class Polymer:
                 value = list(value)
             setattr(polymer, desc.private_name, value)
 
-        # Copy internal state
+        # Copy Polymer-specific internal state
         object.__setattr__(polymer, '_bonds', None)  # Bonds need recomputation
         object.__setattr__(polymer, '_connections', object.__getattribute__(self, '_connections'))
         object.__setattr__(polymer, '_connection_types', object.__getattribute__(self, '_connection_types'))
-
-        # Handle HETATM data
-        if 'hetero' in overrides:
-            hetero = overrides.pop('hetero')
-        else:
-            hetero = object.__getattribute__(self, '_hetero')
         object.__setattr__(polymer, '_hetero', hetero)
 
         return polymer
@@ -1013,78 +551,6 @@ class Polymer:
     # ─────────────────────────────────────────────────────────────────────────
     # Size and Structure
     # ─────────────────────────────────────────────────────────────────────────
-
-    def empty(self: Polymer) -> bool:
-        """Check if the polymer has no atoms."""
-        return self._hierarchy.empty()
-
-    def size(self: Polymer, scale: Scale = Scale.ATOM) -> int:
-        """
-        Get the count at a specific scale.
-
-        Args:
-            scale: Scale level (ATOM, RESIDUE, CHAIN, MOLECULE).
-
-        Returns:
-            Number of units at the specified scale.
-        """
-        return self._hierarchy.size(scale)
-
-    def __len__(self: Polymer) -> int:
-        """Return the number of atoms."""
-        return self.size()
-
-    def copy(self: Polymer, **overrides) -> Polymer:
-        """
-        Return a copy of this Polymer, optionally with field overrides.
-
-        When called with no arguments, returns a deep copy with all arrays
-        cloned. When called with keyword arguments, those fields use the
-        provided values instead of being cloned.
-
-        Args:
-            **overrides: Field values to override. Can be any field name:
-                coordinates, atoms, elements, sequence, bfactors, pdb_id,
-                resolution, date, names, strands, descriptions, molecule_types,
-                or any dynamic fields added via annotate().
-
-        Returns:
-            New Polymer with specified fields overridden (or all cloned if none).
-
-        Raises:
-            ValueError: If override value has different device than polymer.
-
-        Examples:
-            >>> # Deep copy
-            >>> copy = polymer.copy()
-
-            >>> # Replace coordinates (e.g., after prediction)
-            >>> result = template.copy(coordinates=predicted_coords)
-
-            >>> # Replace multiple fields
-            >>> modified = polymer.copy(coordinates=new_coords, bfactors=new_bfactors)
-        """
-        from ..backend import ops
-
-        # Validate device compatibility for array overrides
-        hierarchy = object.__getattribute__(self, '_hierarchy')
-        for name, value in overrides.items():
-            if value is not None and hasattr(value, 'shape'):
-                check_compatible(hierarchy._ref, value, name)
-
-        # Clone all Field data (only Fields with data exist on instance)
-        cloned = {}
-        for name, field in self._get_fields().items():
-            if name in overrides:
-                # User override takes precedence
-                cloned[name] = overrides.pop(name)
-            else:
-                cloned[name] = ops.clone(field.data)
-
-        # Apply remaining overrides (metadata, etc.)
-        cloned.update(overrides)
-
-        return self._clone(**cloned)
 
     def counts(self: Polymer, scale: Scale, per: Scale | None = None) -> Array:
         """
@@ -1637,11 +1103,12 @@ class Polymer:
         """
         # Step 1: Derive masks at all scales
         remove_empty = (scale == Scale.ATOM)
-        atom_mask, res_mask, chn_mask = self._derive_masks(mask, scale, remove_empty)
+        atom_mask, res_mask, chn_mask = self._hierarchy.derive_masks(mask, scale, remove_empty)
 
         # Step 2: Compute new hierarchy for selection
         new_per = self._hierarchy.compute_per(atom_mask, res_mask, chn_mask, scale)
-        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
+        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref,
+                                   with_residues=self._hierarchy.has_residues)
 
         # Step 3: Slice all fields and annotations
         sliced = self._slice_all(atom_mask, res_mask, chn_mask, new_hierarchy)
@@ -1723,22 +1190,6 @@ class Polymer:
         # Convert indices to mask if needed
         mask = self._to_mask(selector, scale)
         return self._select(mask, scale)
-
-    def __getitem__(self: Polymer, key: Array | slice) -> Polymer:
-        """
-        Select atoms by boolean mask or slice.
-
-        Residues with 0 atoms after masking are removed. For selection
-        that preserves unresolved residues, use select() with the
-        appropriate scale.
-
-        Args:
-            key: Boolean mask of atoms to keep, or slice for contiguous range.
-
-        Returns:
-            New Polymer with selected atoms.
-        """
-        return self.select(key, Scale.ATOM)
 
     def chain(self: Polymer, ix: Array | int) -> Polymer:
         """
@@ -2361,63 +1812,6 @@ class Polymer:
     # Backend Conversion
     # ─────────────────────────────────────────────────────────────────────────
 
-    @property
-    def backend(self: Polymer) -> str:
-        """
-        Get the array backend type.
-
-        Returns:
-            'numpy' if arrays are NumPy, 'torch' if PyTorch tensors.
-        """
-        from ..backend import get_backend
-        return get_backend(self._hierarchy._ref).value
-
-    @property
-    def device(self: Polymer) -> str | None:
-        """
-        Get the device of the polymer's arrays.
-
-        Returns:
-            Device string (e.g., 'cpu', 'cuda:0', 'mps:0') for PyTorch tensors,
-            None for NumPy arrays.
-        """
-        from ..backend import get_device
-        return get_device(self._hierarchy._ref)
-
-    def numpy(self: Polymer) -> Polymer:
-        """
-        Convert all arrays to NumPy.
-
-        Returns:
-            New Polymer with NumPy arrays. If already NumPy, returns self.
-        """
-        if self.backend == "numpy":
-            return self
-
-        new_hierarchy = self._hierarchy.numpy()
-        converted = self._convert_backend(to_numpy, new_hierarchy)
-        converted['hierarchy'] = new_hierarchy
-        return self._clone(**converted)
-
-    def torch(self: Polymer) -> Polymer:
-        """
-        Convert all arrays to PyTorch tensors.
-
-        Returns:
-            New Polymer with PyTorch tensors. If already PyTorch, returns self.
-
-        Raises:
-            ImportError: If PyTorch is not installed.
-        """
-        from ..backend import to_torch
-        if self.backend == "torch":
-            return self
-
-        new_hierarchy = self._hierarchy.torch()
-        converted = self._convert_backend(to_torch, new_hierarchy)
-        converted['hierarchy'] = new_hierarchy
-        return self._clone(**converted)
-
     def to(
         self: Polymer,
         device: "str | torch.device | None" = None,
@@ -2473,43 +1867,6 @@ class Polymer:
             converted['hetero'] = hetero.to(device, dtype)
 
         return self._clone(**converted)
-
-    def cuda(self: Polymer) -> Polymer:
-        """
-        Move tensors to CUDA device (torch backend only).
-
-        Shorthand for `polymer.to("cuda")`.
-
-        Returns:
-            New Polymer with tensors on CUDA device.
-
-        Raises:
-            ValueError: If called on NumPy backend.
-            RuntimeError: If CUDA is not available.
-
-        Example:
-            >>> p = load("file.cif", backend="torch")
-            >>> p_gpu = p.cuda()
-        """
-        return self.to("cuda")
-
-    def cpu(self: Polymer) -> Polymer:
-        """
-        Move tensors to CPU (torch backend only).
-
-        Shorthand for `polymer.to("cpu")`.
-
-        Returns:
-            New Polymer with tensors on CPU.
-
-        Raises:
-            ValueError: If called on NumPy backend.
-
-        Example:
-            >>> p_gpu = load("file.cif", backend="torch").cuda()
-            >>> p_cpu = p_gpu.cpu()
-        """
-        return self.to("cpu")
 
     def detach(self: Polymer) -> Polymer:
         """

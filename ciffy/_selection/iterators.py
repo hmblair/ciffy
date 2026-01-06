@@ -8,8 +8,7 @@ from __future__ import annotations
 from typing import Generator, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..polymer import Polymer
-    from ..hetero import HeteroAtoms
+    from ..polymer import Polymer, HeteroAtoms
 
 from ..biochemistry import Scale
 
@@ -34,7 +33,7 @@ def hetero(polymer: Polymer) -> "HeteroAtoms":
         >>> if not hetero_atoms.empty():
         ...     waters = hetero_atoms.by_element(8)  # Oxygen atoms
     """
-    from ..hetero import HeteroAtoms
+    from ..polymer import HeteroAtoms
 
     # Return stored HETATM data if available
     if polymer._hetero is not None:

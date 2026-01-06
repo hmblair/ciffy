@@ -103,20 +103,16 @@ def _info_command(args):
 
 def _geometry_command(args):
     """Handle the geometry subcommand."""
-    from ciffy import load, rg, clashes, Scale
+    from ciffy import rg, clashes, Scale
+    from .helpers import load_structure
 
     for i, filepath in enumerate(args.files):
         # Add blank line between multiple files
         if i > 0:
             print()
 
-        try:
-            polymer = load(filepath)
-        except FileNotFoundError:
-            print(f"Error: File not found: {filepath}", file=sys.stderr)
-            continue
-        except Exception as e:
-            print(f"Error loading {filepath}: {e}", file=sys.stderr)
+        polymer = load_structure(filepath)
+        if polymer is None:
             continue
 
         # Header
@@ -142,16 +138,9 @@ def _geometry_command(args):
 def _split_command(args):
     """Handle the split subcommand."""
     import os
-    from ciffy import load
+    from .helpers import load_structure_or_exit
 
-    try:
-        polymer = load(args.file)
-    except FileNotFoundError:
-        print(f"Error: File not found: {args.file}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error loading {args.file}: {e}", file=sys.stderr)
-        sys.exit(1)
+    polymer = load_structure_or_exit(args.file)
 
     # Check for polymer chains
     if polymer.size() == 0:
@@ -182,17 +171,13 @@ def _split_command(args):
 
 def _map_command(args):
     """Handle the map subcommand."""
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print(
-            "Error: matplotlib is required for contact maps.\n"
-            "Install with: pip install matplotlib",
-            file=sys.stderr
-        )
+    from .helpers import require_matplotlib, load_structure_or_exit
+
+    if not require_matplotlib():
         sys.exit(1)
 
-    from ciffy import load, Scale
+    import matplotlib.pyplot as plt
+    from ciffy import Scale
     from ciffy.visualize import contact_map
 
     # Parse scale
@@ -202,14 +187,7 @@ def _map_command(args):
     }
     scale = scale_map.get(args.scale.lower(), Scale.RESIDUE)
 
-    try:
-        polymer = load(args.file)
-    except FileNotFoundError:
-        print(f"Error: File not found: {args.file}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error loading {args.file}: {e}", file=sys.stderr)
-        sys.exit(1)
+    polymer = load_structure_or_exit(args.file)
 
     # Filter by chain if specified
     if args.chain is not None:
@@ -284,16 +262,19 @@ def _template_command(args):
 
 def _train_flow_command(args):
     """Handle the train flow subcommand."""
-    try:
-        import lightning as L
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch and Lightning are required for training.\n"
-            "Install with: pip install torch lightning",
-            file=sys.stderr,
-        )
+    from .helpers import (
+        require_torch_lightning,
+        resolve_accelerator,
+        setup_wandb_logger,
+        print_training_header,
+        print_training_complete,
+    )
+
+    if not require_torch_lightning():
         sys.exit(1)
+
+    import lightning as L
+    import torch
 
     from glob import glob
     from pathlib import Path
@@ -349,35 +330,24 @@ def _train_flow_command(args):
     )
 
     # Determine accelerator
-    accelerator = args.accelerator
-    if accelerator == "auto":
-        if torch.cuda.is_available():
-            accelerator = "gpu"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            accelerator = "mps"
-        else:
-            accelerator = "cpu"
+    accelerator = resolve_accelerator(args.accelerator)
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Ciffy Flow Model Training")
-        print("=" * 60)
-        print(f"Data: {len(cif_paths)} CIF files")
-        print(f"Residues: {residue_chars}")
-        print(f"Output: {output_dir}")
-        print(f"Epochs: {args.epochs}")
-        print(f"Accelerator: {accelerator}")
-        print()
+    print_training_header(
+        "Flow Model",
+        quiet=args.quiet,
+        Data=f"{len(cif_paths)} CIF files",
+        Residues=residue_chars,
+        Output=output_dir,
+        Epochs=args.epochs,
+        Accelerator=accelerator,
+    )
 
     # Set up W&B logging if requested
-    logger = None
-    if args.wandb:
-        from lightning.pytorch.loggers import WandbLogger
-        logger = WandbLogger(
-            project=args.wandb_project or "ciffy-flow",
-            name=args.wandb_name,
-        )
+    logger = setup_wandb_logger(
+        args.wandb,
+        args.wandb_project or "ciffy-flow",
+        args.wandb_name,
+    )
 
     # Train each residue type
     models = {}
@@ -433,27 +403,28 @@ def _train_flow_command(args):
     save_path = output_dir / "model"
     polymer_model.save(save_path)
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Training Complete")
-        print("=" * 60)
-        print(f"Trained {len(models)} residue models: {[r.name for r in models.keys()]}")
-        print(f"Saved to: {save_path}")
+    print_training_complete(
+        save_path,
+        quiet=args.quiet,
+        Trained=f"{len(models)} residue models: {[r.name for r in models.keys()]}",
+    )
 
 
 def _train_latent_diffusion_command(args):
     """Handle the train latent-diffusion subcommand."""
-    try:
-        import lightning as L
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch and Lightning are required for training.\n"
-            "Install with: pip install torch lightning",
-            file=sys.stderr,
-        )
+    from .helpers import (
+        require_torch_lightning,
+        resolve_accelerator,
+        setup_wandb_logger,
+        print_training_header,
+        print_training_complete,
+    )
+
+    if not require_torch_lightning():
         sys.exit(1)
+
+    import lightning as L
+    import torch
 
     from pathlib import Path
 
@@ -478,14 +449,7 @@ def _train_latent_diffusion_command(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine accelerator
-    accelerator = args.accelerator
-    if accelerator == "auto":
-        if torch.cuda.is_available():
-            accelerator = "gpu"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            accelerator = "mps"
-        else:
-            accelerator = "cpu"
+    accelerator = resolve_accelerator(args.accelerator)
 
     # Load flow model
     if not args.quiet:
@@ -516,26 +480,22 @@ def _train_latent_diffusion_command(args):
         ),
     )
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Ciffy Latent Diffusion Training")
-        print("=" * 60)
-        print(f"Data: {data_dir}")
-        print(f"Output: {output_dir}")
-        print(f"Epochs: {args.epochs}")
-        print(f"Accelerator: {accelerator}")
-        print(f"Flow model: {args.flow_model or 'pretrained RNA'}")
-        print()
+    print_training_header(
+        "Latent Diffusion",
+        quiet=args.quiet,
+        Data=data_dir,
+        Output=output_dir,
+        Epochs=args.epochs,
+        Accelerator=accelerator,
+        Flow_model=args.flow_model or "pretrained RNA",
+    )
 
     # Set up W&B logging if requested
-    logger = None
-    if args.wandb:
-        from lightning.pytorch.loggers import WandbLogger
-        logger = WandbLogger(
-            project=args.wandb_project or "ciffy-latent-diffusion",
-            name=args.wandb_name,
-        )
+    logger = setup_wandb_logger(
+        args.wandb,
+        args.wandb_project or "ciffy-latent-diffusion",
+        args.wandb_name,
+    )
 
     # Create data module
     dm = LatentDiffusionDataModule(
@@ -566,26 +526,24 @@ def _train_latent_diffusion_command(args):
     save_path = output_dir / "model.safetensors"
     module.model.save(save_path)
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Training Complete")
-        print("=" * 60)
-        print(f"Saved to: {save_path}")
+    print_training_complete(save_path, quiet=args.quiet)
 
 
 def _train_coord_diffusion_command(args):
     """Handle the train coord-diffusion subcommand."""
-    try:
-        import lightning as L
-        import torch
-    except ImportError:
-        print(
-            "Error: PyTorch and Lightning are required for training.\n"
-            "Install with: pip install torch lightning",
-            file=sys.stderr,
-        )
+    from .helpers import (
+        require_torch_lightning,
+        resolve_accelerator,
+        setup_wandb_logger,
+        print_training_header,
+        print_training_complete,
+    )
+
+    if not require_torch_lightning():
         sys.exit(1)
+
+    import lightning as L
+    import torch
 
     from pathlib import Path
 
@@ -609,14 +567,7 @@ def _train_coord_diffusion_command(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine accelerator
-    accelerator = args.accelerator
-    if accelerator == "auto":
-        if torch.cuda.is_available():
-            accelerator = "gpu"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            accelerator = "mps"
-        else:
-            accelerator = "cpu"
+    accelerator = resolve_accelerator(args.accelerator)
 
     # Create config
     config = CoordinateDiffusionFullConfig(
@@ -637,25 +588,21 @@ def _train_coord_diffusion_command(args):
         ),
     )
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Ciffy Coordinate Diffusion Training")
-        print("=" * 60)
-        print(f"Data: {data_dir}")
-        print(f"Output: {output_dir}")
-        print(f"Epochs: {args.epochs}")
-        print(f"Accelerator: {accelerator}")
-        print()
+    print_training_header(
+        "Coordinate Diffusion",
+        quiet=args.quiet,
+        Data=data_dir,
+        Output=output_dir,
+        Epochs=args.epochs,
+        Accelerator=accelerator,
+    )
 
     # Set up W&B logging if requested
-    logger = None
-    if args.wandb:
-        from lightning.pytorch.loggers import WandbLogger
-        logger = WandbLogger(
-            project=args.wandb_project or "ciffy-coord-diffusion",
-            name=args.wandb_name,
-        )
+    logger = setup_wandb_logger(
+        args.wandb,
+        args.wandb_project or "ciffy-coord-diffusion",
+        args.wandb_name,
+    )
 
     # Create data module
     dm = CoordinateDiffusionDataModule(
@@ -685,12 +632,7 @@ def _train_coord_diffusion_command(args):
     save_path = output_dir / "model.safetensors"
     module.model.save(save_path)
 
-    if not args.quiet:
-        print()
-        print("=" * 60)
-        print("Training Complete")
-        print("=" * 60)
-        print(f"Saved to: {save_path}")
+    print_training_complete(save_path, quiet=args.quiet)
 
 
 def _predict_flow_command(args):
@@ -699,6 +641,7 @@ def _predict_flow_command(args):
 
     from ciffy import from_sequence
     from ciffy.nn.flow import PolymerFlowModel
+    from .helpers import save_samples
 
     # Load model
     model_path = Path(args.model)
@@ -729,21 +672,7 @@ def _predict_flow_command(args):
     samples = model.sample(template, n_samples=args.n_samples)
 
     # Save outputs
-    output = Path(args.output)
-    if args.n_samples == 1:
-        # Single file
-        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
-        samples[0].write(str(out_path))
-        if not args.quiet:
-            print(f"Saved to {out_path}")
-    else:
-        # Multiple files
-        output.mkdir(parents=True, exist_ok=True)
-        for i, polymer in enumerate(samples):
-            out_path = output / f"sample_{i:03d}.cif"
-            polymer.write(str(out_path))
-            if not args.quiet:
-                print(f"Saved {out_path}")
+    save_samples(samples, Path(args.output), quiet=args.quiet)
 
 
 def _predict_latent_diffusion_command(args):
@@ -755,20 +684,14 @@ def _predict_latent_diffusion_command(args):
     from ciffy import from_sequence
     from ciffy.nn.flow import PolymerFlowModel, load_pretrained
     from ciffy.nn.diffusion.latent_diffusion import LatentDiffusionModel
+    from .helpers import resolve_device, save_samples
 
     # Determine device
-    device = args.device
-    if device == "auto":
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+    device = resolve_device(args.device)
 
     # Load flow model (for decoding)
     if not args.quiet:
-        print(f"Loading flow model...")
+        print("Loading flow model...")
 
     if args.flow_model:
         flow_model = PolymerFlowModel.load(args.flow_model, device=device)
@@ -803,19 +726,7 @@ def _predict_latent_diffusion_command(args):
         samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
 
     # Save outputs
-    output = Path(args.output)
-    if args.n_samples == 1:
-        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
-        samples[0].write(str(out_path))
-        if not args.quiet:
-            print(f"Saved to {out_path}")
-    else:
-        output.mkdir(parents=True, exist_ok=True)
-        for i, polymer in enumerate(samples):
-            out_path = output / f"sample_{i:03d}.cif"
-            polymer.write(str(out_path))
-            if not args.quiet:
-                print(f"Saved {out_path}")
+    save_samples(samples, Path(args.output), quiet=args.quiet)
 
 
 def _predict_coord_diffusion_command(args):
@@ -826,16 +737,10 @@ def _predict_coord_diffusion_command(args):
 
     from ciffy import from_sequence
     from ciffy.nn.diffusion.coordinate_diffusion import CoordinateDiffusionModel
+    from .helpers import resolve_device, save_samples
 
     # Determine device
-    device = args.device
-    if device == "auto":
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+    device = resolve_device(args.device)
 
     # Load model
     model_path = Path(args.model)
@@ -865,19 +770,7 @@ def _predict_coord_diffusion_command(args):
         samples = model.sample(template, n_samples=args.n_samples, num_steps=args.steps)
 
     # Save outputs
-    output = Path(args.output)
-    if args.n_samples == 1:
-        out_path = output if output.suffix == ".cif" else output.with_suffix(".cif")
-        samples[0].write(str(out_path))
-        if not args.quiet:
-            print(f"Saved to {out_path}")
-    else:
-        output.mkdir(parents=True, exist_ok=True)
-        for i, polymer in enumerate(samples):
-            out_path = output / f"sample_{i:03d}.cif"
-            polymer.write(str(out_path))
-            if not args.quiet:
-                print(f"Saved {out_path}")
+    save_samples(samples, Path(args.output), quiet=args.quiet)
 
 
 def _download_command(args):

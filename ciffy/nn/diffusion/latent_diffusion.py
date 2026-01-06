@@ -54,7 +54,7 @@ import numpy as np
 
 from .latent_denoiser import LatentDenoiser, LatentDenoiserConfig
 from .process import CosineNoiseSchedule, DiffusionProcess, LinearNoiseSchedule
-from ..model_registry import register_model
+from ..io.registry import register_model
 
 
 @dataclass

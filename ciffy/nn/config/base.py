@@ -27,9 +27,35 @@ except ImportError:
     YAML_AVAILABLE = False
     yaml = None
 
-from .diagnostics import DiagnosticsConfig
-
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DiagnosticsConfig:
+    """Configuration for training diagnostics.
+
+    Args:
+        track_gradients: Whether to track gradient statistics.
+        track_parameters: Whether to track parameter statistics.
+        track_activations: Whether to track activation statistics.
+        track_learning_rate: Whether to track learning rate.
+        gradient_per_layer: Track per-layer gradient norms (vs global only).
+        parameter_per_layer: Track per-layer parameter stats (vs global only).
+        activation_layers: List of layer names/types to track activations for.
+            If None, tracks all layers with activations.
+        prefix: Prefix for metric names (e.g., "train/" or "diag/").
+        log_frequency: Log every N steps (1 = every step).
+    """
+
+    track_gradients: bool = True
+    track_parameters: bool = True
+    track_activations: bool = False  # Off by default (requires hooks)
+    track_learning_rate: bool = True
+    gradient_per_layer: bool = True
+    parameter_per_layer: bool = True
+    activation_layers: list[str] | None = None
+    prefix: str = "diag/"
+    log_frequency: int = 1
 
 
 # =============================================================================

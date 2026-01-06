@@ -73,16 +73,16 @@ def register_model_type(
 
 def _register_builtin_models():
     """Register built-in model types."""
-    from .lightning.modules.residue_flow import (
+    from ..lightning.modules.residue_flow import (
         ResidueFlowModule,
         ResidueFlowFullConfig,
     )
-    from .lightning.modules.consolidated_vae import (
+    from ..lightning.modules.consolidated_vae import (
         ConsolidatedVAEModule,
         ConsolidatedVAEFullConfig,
     )
-    from .flow.residue.model import ResidueFlowModel
-    from .vae.residue.consolidated import ConsolidatedResidueVAE
+    from ..flow.residue.model import ResidueFlowModel
+    from ..vae.residue.consolidated import ConsolidatedResidueVAE
 
     register_model_type(
         "flow",
@@ -226,8 +226,8 @@ def train(
         >>> polymer.write("output.cif")
     """
     import lightning as L
-    from .polymer import PolymerModel
-    from .lightning import FlowDataModule as ResidueDataModule
+    from ..polymer import PolymerModel
+    from ..lightning import FlowDataModule as ResidueDataModule
 
     # Validate model type
     if model_type not in _MODEL_REGISTRY:
@@ -337,8 +337,8 @@ def _train_consolidated(
 ) -> "PolymerModel":
     """Train a consolidated model (all residues together)."""
     import lightning as L
-    from .polymer import PolymerModel
-    from .lightning.data import ConsolidatedDataModule
+    from ..polymer import PolymerModel
+    from ..lightning.data import ConsolidatedDataModule
 
     if verbose:
         print(f"\nTraining consolidated model for all residues...")
@@ -394,13 +394,13 @@ def _train_consolidated(
 
 def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float, n_epochs: int, **kwargs):
     """Build config for a model type, handling type-specific parameters."""
-    from .config import TrainingConfig
+    from ..config import TrainingConfig
 
     # Extract model-specific kwargs
     config_cls_name = config_cls.__name__
 
     if "Flow" in config_cls_name:
-        from .lightning.modules.residue_flow import (
+        from ..lightning.modules.residue_flow import (
             ResidueFlowModelConfig,
             ResidueFlowDataConfig,
         )
@@ -425,7 +425,7 @@ def _build_config(config_cls: type, latent_dim: int, batch_size: int, lr: float,
         )
 
     elif "Consolidated" in config_cls_name:
-        from .lightning.modules.consolidated_vae import (
+        from ..lightning.modules.consolidated_vae import (
             ConsolidatedVAEModelConfig,
             ConsolidatedVAEDataConfig,
         )
@@ -478,7 +478,7 @@ def load(
         >>> model = residue.load("models/rna_vae")
         >>> polymer = model.sample_from_sequence("acgu")
     """
-    from .polymer import PolymerModel
+    from ..polymer import PolymerModel
     return PolymerModel.load(path, device=device)
 
 

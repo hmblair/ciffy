@@ -6,8 +6,12 @@ Provides PyTorch-compatible modules for deep learning on molecular structures.
 Modules:
     - layers: Reusable neural network building blocks (DenseNetwork, Transformer, etc.)
     - diffusion: Noise schedules, diffusion processes, and EMA utilities
-    - runners: Multi-job experiment and inference runners
+    - config: Configuration framework for training
+    - training: Training infrastructure and utilities
+    - io: Model saving, loading, and Hub integration
     - flow: Normalizing flow models for polymer conformations
+    - vae: Variational autoencoder models
+    - autoregressive: Autoregressive models for polymer generation
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
 """
 
@@ -43,86 +47,108 @@ def configure_precision(
     torch.set_float32_matmul_precision(matmul_precision)
 
 
+# Core
 from .dataset import PolymerDataset
 
-# Layers (moved from root to layers/)
+# Layers
 from .layers import (
+    CausalMultiHeadAttention,
+    CausalTransformer,
+    CausalTransformerBlock,
     DenseNetwork,
-    PolymerEmbedding,
-    Transformer,
-    TransformerBlock,
     MultiHeadAttention,
+    PolymerEmbedding,
     RMSNorm,
     RotaryPositionEmbedding,
     SwiGLU,
+    Transformer,
+    TransformerBlock,
+    create_causal_mask,
 )
 
-# Shared building blocks for residue models
+# Shared building blocks
 from .blocks import (
-    InputNorm,
-    ResidualBlock,
     CoordinateDecoder,
+    InputNorm,
     RBFDistanceEncoder,
+    ResidualBlock,
 )
 
+# Config (from config/ submodule)
 from .config import (
     BaseConfig,
-    TrainingConfig,
-    OutputConfig,
-    WandbConfig,
-    MetricsLogger,
-    SchedulerConfig,
-    ValidationConfig,
-)
-from .loggers import (
-    WandbLogger,
-    NoOpLogger,
-    create_logger,
-)
-from .diagnostics import (
-    GradientTracker,
-    ParameterTracker,
-    ActivationTracker,
-    LearningRateTracker,
-    TrainingDiagnostics,
+    DataConfig,
     DiagnosticsConfig,
-    diagnose_gradients,
+    InferenceConfig,
+    MetricsLogger,
+    OutputConfig,
+    SchedulerConfig,
+    TrainingConfig,
+    ValidationConfig,
+    WandbConfig,
+    get_device,
 )
 
+# Training (from training/ submodule)
+from .training import (
+    ActivationTracker,
+    DataScalingSplit,
+    DataSplit,
+    GradientTracker,
+    LearningRateTracker,
+    NoOpLogger,
+    ParameterTracker,
+    TrainingDiagnostics,
+    WandbLogger,
+    create_logger,
+    create_scaling_split,
+    diagnose_gradients,
+    split_by_structure,
+)
 
-from .protocols import PolymerGenerativeModel, PolymerEncoder, PolymerPropertyPredictor
-from .model_registry import register_model, get_model_class, list_registered_models
-from .model_io import save_model, load_model, get_model_info, SaveableModel
-from .inference import load_model_from_checkpoint, generate_samples
-from .inference_config import InferenceConfig
-from .split import DataSplit, DataScalingSplit, split_by_structure, create_scaling_split
+# I/O (from io/ submodule)
+from .io import (
+    HubMixin,
+    SaveableModel,
+    generate_samples,
+    get_cache_dir,
+    get_model_class,
+    get_model_info,
+    list_registered_models,
+    load_model,
+    load_model_from_checkpoint,
+    register_model,
+    save_model,
+    set_cache_dir,
+)
 
-# Diffusion (moved from root to diffusion/)
+# Protocols
+from .protocols import PolymerEncoder, PolymerGenerativeModel, PolymerPropertyPredictor
+
+# Diffusion
 from .diffusion import (
-    FixedSinusoidalEmbedding,
-    NoiseSchedule,
-    LinearNoiseSchedule,
-    CosineNoiseSchedule,
-    DiffusionProcess,
-    TimestepEmbedding,
-    EMA,
-    create_ema_model,
-    update_ema_model,
-    DiffusionConfig,
-    # Latent diffusion
-    LatentDenoiserConfig,
-    LatentDenoiser,
-    LatentDiffusionConfig,
-    LatentDiffusionModel,
-    # Coordinate diffusion
-    CoordinateDenoiserConfig,
     CoordinateDenoiser,
+    CoordinateDenoiserConfig,
     CoordinateDiffusionConfig,
     CoordinateDiffusionModel,
+    CosineNoiseSchedule,
+    DiffusionConfig,
+    DiffusionProcess,
+    EMA,
+    FixedSinusoidalEmbedding,
+    LatentDenoiser,
+    LatentDenoiserConfig,
+    LatentDiffusionConfig,
+    LatentDiffusionModel,
+    LinearNoiseSchedule,
+    NoiseSchedule,
+    TimestepEmbedding,
+    create_ema_model,
+    update_ema_model,
 )
 
-# Polymer model and protocol (generic, works with Flow/VAE)
-from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
+# Polymer model (works with Flow/VAE)
+from .polymer import PolymerFlowModel, PolymerModel, ResidueGenerativeCore
 
 # VAE models
 from .vae import (
@@ -132,63 +158,64 @@ from .vae import (
 
 # PCA + Quantile Spline model
 from .pca_quantile import (
-    PCAQuantileResidueModel,
     PCAQuantileConfig,
-    fit_pca_quantile,
+    PCAQuantileResidueModel,
     fit_all_residues,
+    fit_pca_quantile,
 )
 
 # Autoregressive models
 from .autoregressive import (
-    ResidueLatentAR,
-    ResidueLatentARConfig,
-    PolymerLatentAR,
+    AtomAR,
+    AtomARConfig,
     CoordinateAR,
     CoordinateARConfig,
+    PolymerLatentAR,
+    ResidueLatentAR,
+    ResidueLatentARConfig,
 )
 
-# Causal transformer components
-from .layers import (
-    CausalTransformer,
-    CausalTransformerBlock,
-    CausalMultiHeadAttention,
-    create_causal_mask,
-)
-
-# Hub integration for model distribution
-from .hub import HubMixin, get_cache_dir, set_cache_dir
-
-# Unified residue model training API
-from . import residue
+# Unified residue model training API (alias for training.api)
+from .training import api as residue
 
 __all__ = [
     # Precision configuration
     "configure_precision",
     # Dataset
     "PolymerDataset",
-    # Layers (from layers/)
+    # Layers
     "DenseNetwork",
     "PolymerEmbedding",
-    # Transformer components (from layers/)
     "Transformer",
     "TransformerBlock",
     "MultiHeadAttention",
     "RMSNorm",
     "RotaryPositionEmbedding",
     "SwiGLU",
-    # Config framework
+    "CausalTransformer",
+    "CausalTransformerBlock",
+    "CausalMultiHeadAttention",
+    "create_causal_mask",
+    # Blocks
+    "InputNorm",
+    "ResidualBlock",
+    "CoordinateDecoder",
+    "RBFDistanceEncoder",
+    # Config
     "BaseConfig",
+    "DataConfig",
     "TrainingConfig",
     "OutputConfig",
     "WandbConfig",
     "MetricsLogger",
     "SchedulerConfig",
     "ValidationConfig",
-    # Loggers
+    "InferenceConfig",
+    "get_device",
+    # Training
     "WandbLogger",
     "NoOpLogger",
     "create_logger",
-    # Training diagnostics
     "GradientTracker",
     "ParameterTracker",
     "ActivationTracker",
@@ -196,51 +223,47 @@ __all__ = [
     "TrainingDiagnostics",
     "DiagnosticsConfig",
     "diagnose_gradients",
-    # Inference protocols and models
-    "PolymerGenerativeModel",
-    "PolymerEncoder",
-    "PolymerPropertyPredictor",
-    "SaveableModel",
-    "register_model",
-    "get_model_class",
-    "list_registered_models",
-    # Model I/O
-    "save_model",
-    "load_model",
-    "get_model_info",
-    # Inference utilities
-    "load_model_from_checkpoint",
-    "generate_samples",
-    "InferenceConfig",
-    # Data splitting
     "DataSplit",
     "DataScalingSplit",
     "split_by_structure",
     "create_scaling_split",
-    # Diffusion utilities (from diffusion/)
+    # I/O
+    "save_model",
+    "load_model",
+    "get_model_info",
+    "SaveableModel",
+    "register_model",
+    "get_model_class",
+    "list_registered_models",
+    "load_model_from_checkpoint",
+    "generate_samples",
+    "HubMixin",
+    "get_cache_dir",
+    "set_cache_dir",
+    # Protocols
+    "PolymerGenerativeModel",
+    "PolymerEncoder",
+    "PolymerPropertyPredictor",
+    # Diffusion
     "FixedSinusoidalEmbedding",
     "NoiseSchedule",
     "LinearNoiseSchedule",
     "CosineNoiseSchedule",
     "DiffusionProcess",
     "TimestepEmbedding",
-    # EMA utilities (from diffusion/)
     "EMA",
     "create_ema_model",
     "update_ema_model",
-    # Diffusion config (from diffusion/)
     "DiffusionConfig",
-    # Latent diffusion (from diffusion/)
     "LatentDenoiserConfig",
     "LatentDenoiser",
     "LatentDiffusionConfig",
     "LatentDiffusionModel",
-    # Coordinate diffusion (from diffusion/)
     "CoordinateDenoiserConfig",
     "CoordinateDenoiser",
     "CoordinateDiffusionConfig",
     "CoordinateDiffusionModel",
-    # Polymer model (generic, works with Flow/VAE)
+    # Polymer model
     "PolymerModel",
     "PolymerFlowModel",  # Deprecated alias
     "ResidueGenerativeCore",
@@ -258,15 +281,8 @@ __all__ = [
     "PolymerLatentAR",
     "CoordinateAR",
     "CoordinateARConfig",
-    # Causal transformer components
-    "CausalTransformer",
-    "CausalTransformerBlock",
-    "CausalMultiHeadAttention",
-    "create_causal_mask",
-    # Hub integration
-    "HubMixin",
-    "get_cache_dir",
-    "set_cache_dir",
+    "AtomAR",
+    "AtomARConfig",
     # Unified residue training API
     "residue",
 ]
@@ -275,18 +291,18 @@ __all__ = [
 # Requires sphericart: pip install ciffy[geometric]
 try:
     from .geometric import (
-        Repr,
-        ProductRepr,
-        Irrep,
-        ProductIrrep,
-        MatrixOutput,
-        LowRankMatrixOutput,
+        EquivariantAttention,
         EquivariantLinear,
         EquivariantTransformer,
-        EquivariantAttention,
         EquivariantTransformerBlock,
-        SphericalHarmonic,
+        Irrep,
+        LowRankMatrixOutput,
+        MatrixOutput,
+        ProductIrrep,
+        ProductRepr,
         RadialBasisFunctions,
+        Repr,
+        SphericalHarmonic,
         build_knn_graph,
     )
     GEOMETRIC_AVAILABLE = True

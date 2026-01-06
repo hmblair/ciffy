@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 from .coordinate_denoiser import CoordinateDenoiser, CoordinateDenoiserConfig
 from .process import CosineNoiseSchedule, DiffusionProcess, LinearNoiseSchedule
-from ..model_registry import register_model
+from ..io.registry import register_model
 
 
 @dataclass

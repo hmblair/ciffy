@@ -15,7 +15,7 @@ import torch.nn as nn
 
 from ciffy.backend import convert_backend
 from ciffy.geometry import project_bond_lengths
-from ciffy.nn.hub import HubMixin
+from ciffy.nn.io.hub import HubMixin
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue, AtomGroup

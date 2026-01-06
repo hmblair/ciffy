@@ -33,8 +33,8 @@ import torch
 import torch.nn as nn
 
 from ciffy.polymer import Polymer
-from ciffy.nn.hub import HubMixin
-from ciffy.nn.model_registry import register_model
+from ciffy.nn.io.hub import HubMixin
+from ciffy.nn.io.registry import register_model
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import AtomGroup, Residue

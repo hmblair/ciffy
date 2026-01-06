@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     pass
 
 import ciffy
-from .model_registry import get_model_class
+from .registry import get_model_class
 
 
 @runtime_checkable

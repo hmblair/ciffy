@@ -17,9 +17,9 @@ try:
 except ImportError:
     torch = None
 
-from .config import get_device
-from .protocols import PolymerGenerativeModel
-from .model_registry import get_model_class, create_model_from_config
+from ..config import get_device
+from ..protocols import PolymerGenerativeModel
+from .registry import get_model_class, create_model_from_config
 
 if TYPE_CHECKING:
     import torch.nn as nn

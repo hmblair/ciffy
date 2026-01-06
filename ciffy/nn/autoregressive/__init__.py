@@ -8,6 +8,7 @@ Models:
     - ResidueLatentAR: Predicts latent vectors autoregressively
     - PolymerLatentAR: End-to-end latent generation with decoders
     - CoordinateAR: Direct coordinate prediction with global conditioning
+    - AtomAR: All-atom conditioned, residue-level output (recommended)
 """
 
 from .latent import (
@@ -21,12 +22,20 @@ from .coordinate import (
     CoordinateARConfig,
 )
 
+from .atom import (
+    AtomAR,
+    AtomARConfig,
+)
+
 __all__ = [
     # Latent-space models
     "ResidueLatentAR",
     "ResidueLatentARConfig",
     "PolymerLatentAR",
-    # Coordinate-space models
+    # Coordinate-space models (residue-level)
     "CoordinateAR",
     "CoordinateARConfig",
+    # All-atom conditioned model (recommended)
+    "AtomAR",
+    "AtomARConfig",
 ]

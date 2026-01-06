@@ -1252,12 +1252,6 @@ class Polymer(AtomContainer):
             >>> abs_coords = model.predict_absolute(...)
             >>> poly = poly.extend(Residue.G, abs_coords, atoms=atoms, elements=elements)
         """
-        # Convert list inputs to arrays
-        if 'atoms' in fields and isinstance(fields['atoms'], list):
-            fields['atoms'] = np.asarray(fields['atoms'])
-        if 'elements' in fields and isinstance(fields['elements'], list):
-            fields['elements'] = np.asarray(fields['elements'])
-
         # Handle empty polymer case
         if self.empty():
             return self._extend_from_empty(residue, coordinates, name, **fields)

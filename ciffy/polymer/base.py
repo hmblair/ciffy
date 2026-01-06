@@ -755,7 +755,19 @@ class AtomContainer:
         if device is not None:
             converted['hierarchy'] = hierarchy.to(device)
 
+        # Hook for subclasses to convert internal state
+        self._convert_internal_state_to(converted, device, dtype)
+
         return self._clone(**converted)
+
+    def _convert_internal_state_to(
+        self,
+        converted: dict,
+        device: "str | torch.device | None",
+        dtype: "torch.dtype | None",
+    ) -> None:
+        """Hook for subclasses to convert internal state during to()."""
+        pass
 
     def cpu(self) -> "AtomContainer":
         """Move tensors to CPU (torch backend only)."""

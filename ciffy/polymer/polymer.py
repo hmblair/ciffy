@@ -1523,61 +1523,16 @@ class Polymer(AtomContainer):
     # Backend Conversion
     # ─────────────────────────────────────────────────────────────────────────
 
-    def to(
-        self: Polymer,
-        device: "str | torch.device | None" = None,
-        dtype: "torch.dtype | None" = None,
-    ) -> Polymer:
-        """
-        Move tensors to device and/or convert dtype (torch backend only).
-
-        Args:
-            device: Target device (e.g., 'cuda', 'cpu', torch.device).
-            dtype: Target dtype for float tensors only (e.g., torch.float16).
-                   Integer tensors (atoms, elements, sequence, etc.) remain long.
-
-        Returns:
-            New Polymer with tensors on the specified device/dtype.
-            Returns self if no changes needed.
-
-        Raises:
-            ValueError: If called on NumPy backend.
-
-        Example:
-            >>> p = load("file.cif", backend="torch")
-            >>> p_gpu = p.to("cuda")
-            >>> p_fp16 = p.to(dtype=torch.float16)
-            >>> p_gpu_fp16 = p.to("cuda", torch.float16)
-        """
-        if self.backend != "torch":
-            raise ValueError("to() is only supported for torch backend. "
-                           "Use polymer.torch().to(...) to convert first.")
-
-        if device is None and dtype is None:
-            return self
-
-        # Convert Fields based on array dtype (float vs int)
-        converted = {}
-        for name, field in self._get_fields().items():
-            result = field.data
-            if device is not None:
-                result = result.to(device)
-            # Only apply dtype conversion to float tensors
-            if dtype is not None and result.is_floating_point():
-                result = result.to(dtype)
-            converted[name] = result
-
-        # Move hierarchy to device (int tensors only, no dtype change)
-        hierarchy = self._get_hierarchy()
-        if device is not None:
-            converted['hierarchy'] = hierarchy.to(device)
-
-        # Move HETATM data to device if present
+    def _convert_internal_state_to(
+        self,
+        converted: dict,
+        device: "str | torch.device | None",
+        dtype: "torch.dtype | None",
+    ) -> None:
+        """Convert Polymer-specific internal state during to()."""
         hetero = object.__getattribute__(self, '_hetero')
         if hetero is not None:
             converted['hetero'] = hetero.to(device, dtype)
-
-        return self._clone(**converted)
 
     def detach(self: Polymer) -> Polymer:
         """

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..backend import Array, is_torch
-from ..backend.ops import to_backend, stack, unsqueeze
+from ..backend.ops import to_backend, stack, unsqueeze, sin, acos, clamp
 
 if TYPE_CHECKING:
     from ..biochemistry import Residue
@@ -86,56 +86,41 @@ def rotation_to_axis_angle(R: Array) -> Array:
     """
     Convert rotation matrix to axis-angle representation.
 
-    Uses the Rodrigues formula inverse. Handles edge cases for identity
-    and 180-degree rotations.
+    Uses the Rodrigues formula inverse.
 
     Args:
-        R: (3, 3) rotation matrix.
+        R: (3, 3) single rotation matrix or (..., 3, 3) batch of matrices.
 
     Returns:
-        (3,) axis-angle vector where direction is axis and magnitude is angle.
+        (3,) or (..., 3) axis-angle vector(s) where direction is axis
+        and magnitude is angle.
     """
-    angle = _acos_safe((_trace(R) - 1) / 2)
-    angle_scalar = to_scalar(angle)
+    single_input = R.ndim == 2
+    if single_input:
+        R = R[None]
 
-    if angle_scalar < 1e-6:
-        # Near identity - return zero vector
-        if is_torch(R):
-            import torch
-            return torch.zeros(3, dtype=R.dtype, device=R.device)
-        return np.zeros(3, dtype=np.float32)
+    batch_shape = R.shape[:-2]
+    R_flat = R.reshape(-1, 3, 3)  # (N, 3, 3)
 
-    if np.pi - angle_scalar < 1e-6:
-        # Near 180 degrees - extract axis from R + I
-        M = R + _eye3(R)
-        if is_torch(R):
-            col_norms = M.norm(dim=0)
-            k = col_norms.argmax().item()
-            axis = M[:, k] / col_norms[k]
-        else:
-            col_norms = np.linalg.norm(M, axis=0)
-            k = np.argmax(col_norms)
-            axis = M[:, k] / col_norms[k]
-        return axis * angle
+    # angle = acos((trace(R) - 1) / 2)
+    traces = R_flat[..., 0, 0] + R_flat[..., 1, 1] + R_flat[..., 2, 2]
+    angles = acos(clamp((traces - 1) / 2, -1.0, 1.0))
 
-    # Standard case
-    if is_torch(R):
-        import torch
-        axis = torch.stack([
-            R[2, 1] - R[1, 2],
-            R[0, 2] - R[2, 0],
-            R[1, 0] - R[0, 1],
-        ])
-        axis = axis / (2 * torch.sin(angle) + 1e-8)
-    else:
-        axis = np.array([
-            R[2, 1] - R[1, 2],
-            R[0, 2] - R[2, 0],
-            R[1, 0] - R[0, 1],
-        ])
-        axis = axis / (2 * np.sin(angle) + 1e-8)
+    # axis from skew-symmetric part: [R[2,1]-R[1,2], R[0,2]-R[2,0], R[1,0]-R[0,1]]
+    axis = stack([
+        R_flat[..., 2, 1] - R_flat[..., 1, 2],
+        R_flat[..., 0, 2] - R_flat[..., 2, 0],
+        R_flat[..., 1, 0] - R_flat[..., 0, 1],
+    ], axis=-1)
+    axis = axis / (2 * sin(angles)[..., None] + 1e-8)
 
-    return axis * angle
+    result = axis * angles[..., None]
+    result = result.reshape(*batch_shape, 3)
+
+    if single_input:
+        result = result[0]
+
+    return result
 
 
 def rodrigues(axis_angles: Array) -> Array:

@@ -745,6 +745,22 @@ def cos(arr: Array) -> Array:
     return np.cos(arr)
 
 
+def acos(arr: Array) -> Array:
+    """
+    Element-wise arc cosine (inverse cosine).
+
+    Args:
+        arr: Input array with values in [-1, 1].
+
+    Returns:
+        Arc cosine values in radians, in original backend.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.acos(arr)
+    return np.arccos(arr)
+
+
 def log(arr: Array) -> Array:
     """
     Element-wise natural logarithm.

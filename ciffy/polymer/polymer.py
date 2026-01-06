@@ -150,6 +150,65 @@ class Polymer(AtomContainer):
 
         return coords, atoms, residue
 
+    def _compute_frame_matrices(
+        self: Polymer,
+        frame: "FrameDefinition | None" = None,
+    ) -> tuple[Array, Array]:
+        """
+        Compute local coordinate frame origins and rotation matrices.
+
+        Args:
+            frame: FrameDefinition specifying origin, axis_ref, and plane_ref.
+                Defaults to GLYCOSIDIC_FRAME.
+
+        Returns:
+            Tuple of (origins, Rs) where:
+            - origins: (n_residues, 3) frame origin positions
+            - Rs: (n_residues, 3, 3) rotation matrices
+        """
+        from ..geometry.transforms import frame_from_positions
+
+        if frame is None:
+            from ..biochemistry.linking import GLYCOSIDIC_FRAME
+            frame = GLYCOSIDIC_FRAME
+
+        frame_atoms = [frame.origin, frame.axis_ref, frame.plane_ref]
+        positions = self.gather(frame_atoms)
+        return frame_from_positions(positions)
+
+    def frames(
+        self: Polymer,
+        frame: "FrameDefinition | None" = None,
+    ) -> Array:
+        """
+        Compute local coordinate frames for each residue.
+
+        Args:
+            frame: FrameDefinition specifying origin, axis_ref, and plane_ref.
+                Defaults to GLYCOSIDIC_FRAME (C1' origin, Z toward N9/N1).
+                Common frames from ciffy.biochemistry.linking:
+                - GLYCOSIDIC_FRAME: For nucleotides (C1' origin, Z toward N9/N1)
+                - PROTEIN_BACKBONE_FRAME: For proteins (CA origin, Z toward N)
+
+        Returns:
+            (n_residues, 6) frames as [axis_angle (3), origin (3)] where
+            axis_angle encodes the rotation (direction is axis, magnitude
+            is angle in radians).
+
+        Raises:
+            ValueError: If required frame atoms are missing from any residue.
+
+        Example:
+            >>> frames = polymer.strip().frames()
+            >>> # frames[i, :3] is axis-angle rotation for residue i
+            >>> # frames[i, 3:] is origin position for residue i
+        """
+        from ..geometry.transforms import rotation_to_axis_angle
+
+        origins, Rs = self._compute_frame_matrices(frame)
+        axis_angles = rotation_to_axis_angle(Rs)
+        return ops.cat([axis_angles, origins], axis=1)
+
     def align(
         self: Polymer,
         frame: "FrameDefinition | None" = None,
@@ -180,30 +239,15 @@ class Polymer(AtomContainer):
             >>> aligned, Rs = polymer.strip().align()
             >>> # Rs[i] is the rotation matrix for residue i
         """
-        from ..geometry.transforms import frame_from_positions
-
-        if frame is None:
-            from ..biochemistry.linking import GLYCOSIDIC_FRAME
-            frame = GLYCOSIDIC_FRAME
-
-        # Gather frame positions for all residues: (n_residues, 3, 3)
-        frame_atoms = [frame.origin, frame.axis_ref, frame.plane_ref]
-        positions = self.gather(frame_atoms)
-
-        # Compute frames in batch: origins (n_residues, 3), Rs (n_residues, 3, 3)
-        origins, Rs = frame_from_positions(positions)
+        origins, Rs = self._compute_frame_matrices(frame)
 
         # Expand origins and rotations to atom level for vectorized alignment
-        # membership[i] = residue index for atom i
         membership = self.membership(Scale.RESIDUE)
-        origins_expanded = origins[membership]  # (n_atoms, 3)
-        Rs_expanded = Rs[membership]  # (n_atoms, 3, 3)
+        origins_expanded = origins[membership]
+        Rs_expanded = Rs[membership]
 
         # Apply alignment: (coords - origin) @ R
-        # For each atom: (1, 3) @ (3, 3) -> (1, 3), squeeze to (3,)
         centered = self.coordinates - origins_expanded
-        # Batched matrix multiply: einsum or manual
-        # centered[:, None, :] @ Rs_expanded -> (n_atoms, 1, 3) -> squeeze
         aligned_coords = (centered[:, None, :] @ Rs_expanded).squeeze(1)
 
         return self.copy(coordinates=aligned_coords), Rs

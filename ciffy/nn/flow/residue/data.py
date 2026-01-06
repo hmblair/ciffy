@@ -1,8 +1,8 @@
 """
 Data extraction for residue flow models.
 
-Extracts aligned residue coordinates and link transforms from CIF files.
-Uses Polymer.align() for consistent frame computation.
+Extracts aligned residue coordinates and link transforms from polymers.
+Uses Polymer API for clean, maintainable extraction.
 """
 
 from __future__ import annotations
@@ -15,54 +15,11 @@ import numpy as np
 
 import ciffy
 from ciffy.backend import to_numpy
-from ciffy.backend.ops import isin
 from ciffy.biochemistry import Scale, Molecule
-from ciffy.operations.reduction import Reduction
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
-    from ciffy.biochemistry.linking import FrameDefinition
-
-
-# =============================================================================
-# Filtering
-# =============================================================================
-
-
-def filter_complete_residues(
-    polymer: "ciffy.Polymer",
-    frame_def: "FrameDefinition",
-) -> "ciffy.Polymer":
-    """Filter to residues with all frame atoms present."""
-    all_frame_atoms = np.concatenate([
-        frame_def.origin.index(),
-        frame_def.axis_ref.index(),
-        frame_def.plane_ref.index(),
-    ])
-    is_frame_atom = isin(polymer.atoms, to_numpy(all_frame_atoms))
-    counts = polymer.reduce(is_frame_atom.astype(np.int64), Scale.RESIDUE, Reduction.SUM)
-    complete_mask = to_numpy(counts) >= 3
-
-    if not complete_mask.all():
-        return polymer.select(complete_mask, Scale.RESIDUE)
-    return polymer
-
-
-# =============================================================================
-# Core Extraction
-# =============================================================================
-
-
-def _remap_to_common(coords: np.ndarray, atoms: list[int], common_atoms: list[int]) -> np.ndarray:
-    """Remap coords to common atom ordering, taking first occurrence of duplicates."""
-    out = np.zeros((len(common_atoms), 3), dtype=np.float32)
-    atom_to_idx = {a: i for i, a in enumerate(common_atoms)}
-    seen = set()
-    for coord, atom in zip(coords, atoms):
-        if atom in atom_to_idx and atom not in seen:
-            out[atom_to_idx[atom]] = coord
-            seen.add(atom)
-    return out
+    from ciffy.polymer import Polymer
 
 
 def extract_residues_with_links(
@@ -94,88 +51,30 @@ def extract_residues_with_links(
         atoms: (n_atoms,) atom type indices.
     """
     from ciffy.biochemistry.linking import LINKING_BY_TYPE, GLYCOSIDIC_FRAME
-    from ciffy.geometry.transforms import (
-        extract_frame_positions,
-        frame_from_positions,
-        compute_relative_transform,
-    )
+    from ciffy.geometry.transforms import compute_relative_transform
 
     link_def = LINKING_BY_TYPE[residue_type.molecule_type]
-    o3p_values = link_def.prev_atom.index()
-    p_values = link_def.next_atom.index()
 
-    # Phase 1: Collect all residue instances
-    all_instances = []  # (aligned_coords, atoms, origin_i, R_i, origin_j, R_j)
+    # Collect all valid residue pairs
+    all_coords = []  # List of (n_atoms,) coord arrays for residue j
+    all_atoms = []   # List of atom index lists for residue j
+    all_transforms = []  # List of (6,) transforms
 
     for path in cif_paths:
         if verbose:
             print(f"{path.name}...", end=" ", flush=True)
 
         try:
-            poly = ciffy.load(str(path))
-            poly = poly.molecule_type(Molecule(residue_type.molecule_type)).canonical()
-            if poly.size() == 0:
-                if verbose:
-                    print("skip")
-                continue
-
-            # Filter to complete residues
-            poly = filter_complete_residues(poly, GLYCOSIDIC_FRAME)
-            poly = filter_complete_residues(poly, link_def.prev_frame)
-            poly = filter_complete_residues(poly, link_def.next_frame)
-
-            n_res = poly.size(Scale.RESIDUE)
-            if n_res < 2:
-                if verbose:
-                    print("0")
-                continue
-
-            # Align to glycosidic frame
-            aligned, Rs = poly.align(GLYCOSIDIC_FRAME)
-            Rs = to_numpy(Rs)
-            origins = to_numpy(poly.gather([GLYCOSIDIC_FRAME.origin])[:, 0])
-
-            # Get per-residue data
-            seq = to_numpy(poly.sequence)
-            counts = to_numpy(aligned.counts(Scale.RESIDUE))
-            offsets = np.concatenate([[0], np.cumsum(counts)])
-            coords = to_numpy(aligned.coordinates)
-            atoms = to_numpy(aligned.atoms)
-            orig_coords = to_numpy(poly.coordinates)
-
-            count = 0
-            for i in range(n_res - 1):
-                j = i + 1
-                # Filter for residue_type at position j (the residue being positioned)
-                if seq[j] != residue_type.value:
-                    continue
-                s1, e1 = offsets[i], offsets[i + 1]
-                s2, e2 = offsets[j], offsets[j + 1]
-
-                # Check bond length
-                atoms_i, atoms_j = atoms[s1:e1], atoms[s2:e2]
-                o3p_mask = np.isin(atoms_i, o3p_values)
-                p_mask = np.isin(atoms_j, p_values)
-                if not (o3p_mask.any() and p_mask.any()):
-                    continue
-
-                dist = np.linalg.norm(
-                    orig_coords[s2:e2][p_mask.argmax()] -
-                    orig_coords[s1:e1][o3p_mask.argmax()]
-                )
-                if dist > max_bond_length:
-                    continue
-
-                all_instances.append((
-                    coords[s1:e1].copy(),
-                    atoms_i.tolist(),
-                    coords[s2:e2].copy(),
-                    atoms[s2:e2].tolist(),
-                    origins[i], Rs[i],
-                    origins[j], Rs[j],
-                ))
-                count += 1
-
+            count = _extract_from_polymer(
+                ciffy.load(str(path)),
+                residue_type,
+                link_def,
+                GLYCOSIDIC_FRAME,
+                max_bond_length,
+                all_coords,
+                all_atoms,
+                all_transforms,
+            )
             if verbose:
                 print(count)
 
@@ -183,64 +82,139 @@ def extract_residues_with_links(
             if verbose:
                 print(f"error: {e}")
 
-    if not all_instances:
+    if not all_coords:
         raise ValueError(f"No {residue_type.name} pairs found")
 
     if verbose:
-        print(f"\nTotal: {len(all_instances)} pairs")
+        print(f"\nTotal: {len(all_coords)} pairs")
 
-    # Phase 2: Find common atoms (from residue j, which is residue_type)
+    # Find common atoms across all instances
     atom_counts = Counter()
-    for c_i, a_i, c_j, a_j, *_ in all_instances:
-        atom_counts.update(a_j)
+    for atoms in all_atoms:
+        atom_counts.update(atoms)
 
-    min_count = int(len(all_instances) * min_coverage)
+    min_count = int(len(all_coords) * min_coverage)
     common_atoms = sorted([a for a, c in atom_counts.items() if c >= min_count])
     common_set = set(common_atoms)
 
     if verbose:
         print(f"Common atoms: {len(common_atoms)}")
 
-    # Phase 3: Build output arrays
-    # Filter to instances where j (residue_type) has all common atoms
-    valid = [(c_i, a_i, c_j, a_j, o_i, R_i, o_j, R_j)
-             for c_i, a_i, c_j, a_j, o_i, R_i, o_j, R_j in all_instances
-             if common_set.issubset(a_j)]
+    # Filter to instances with all common atoms and build output
+    n_atoms = len(common_atoms)
+    atom_to_idx = {a: i for i, a in enumerate(common_atoms)}
+
+    coords_list = []
+    transforms_list = []
+
+    for coords, atoms, transform in zip(all_coords, all_atoms, all_transforms):
+        if not common_set.issubset(atoms):
+            continue
+
+        # Reorder to common atom ordering
+        reordered = np.zeros((n_atoms, 3), dtype=np.float32)
+        for coord, atom in zip(coords, atoms):
+            if atom in atom_to_idx:
+                reordered[atom_to_idx[atom]] = coord
+
+        coords_list.append(reordered)
+        transforms_list.append(transform)
 
     if verbose:
-        print(f"Valid pairs: {len(valid)}")
+        print(f"Valid pairs: {len(coords_list)}")
 
-    n = len(valid)
-    n_atoms = len(common_atoms)
-    atoms_arr = np.array(common_atoms, dtype=np.int64)
+    return (
+        np.stack(coords_list),
+        np.stack(transforms_list),
+        np.array(common_atoms, dtype=np.int64),
+    )
 
-    coords_out = np.zeros((n, n_atoms, 3), dtype=np.float32)
-    transforms_out = np.zeros((n, 6), dtype=np.float32)
 
-    for idx, (c_i, a_i, c_j, a_j, o_i, R_i, o_j, R_j) in enumerate(valid):
-        # Remap to common atom ordering (take first occurrence of each atom type)
-        coords_i = _remap_to_common(c_i, a_i, common_atoms)
-        coords_j = _remap_to_common(c_j, a_j, common_atoms)
+def _extract_from_polymer(
+    polymer: "Polymer",
+    residue_type: "Residue",
+    link_def,
+    frame_def,
+    max_bond_length: float,
+    out_coords: list,
+    out_atoms: list,
+    out_transforms: list,
+) -> int:
+    """Extract residue pairs from a single polymer. Returns count added."""
+    from ciffy.geometry.transforms import compute_relative_transform
 
-        # Output coords_j (the residue being positioned, which is residue_type)
-        coords_out[idx] = coords_j
+    # Filter to target molecule type and strip incomplete residues
+    mol_type = Molecule(residue_type.molecule_type)
+    polymer = polymer.molecule_type(mol_type).strip()
 
-        # Transform j's coords to i's frame for link transform computation
-        R_j_to_i = R_j.T @ R_i
-        t_j_to_i = (o_j - o_i) @ R_i
-        coords_j_in_i = coords_j @ R_j_to_i + t_j_to_i
+    if polymer.size() == 0 or polymer.size(Scale.RESIDUE) < 2:
+        return 0
 
-        # Compute link transform (O3' frame of i -> P frame of j)
-        # This transform positions residue j relative to residue i
-        prev_pos = extract_frame_positions(coords_i, atoms_arr, link_def.prev_frame)
-        o3p_origin, o3p_R = frame_from_positions(prev_pos)
+    # Align to canonical frame (skip if missing frame atoms)
+    try:
+        aligned, Rs = polymer.align(frame_def)
+    except ValueError:
+        return 0
+    Rs = to_numpy(Rs)
 
-        next_pos = extract_frame_positions(coords_j_in_i, atoms_arr, link_def.next_frame)
-        p_origin, p_R = frame_from_positions(next_pos)
+    # Get frame origins for transform computation
+    origins = to_numpy(polymer.gather([frame_def.origin])[:, 0])
 
-        transforms_out[idx] = compute_relative_transform(o3p_origin, o3p_R, p_origin, p_R)
+    # Get sequence to find target residue type
+    sequence = to_numpy(polymer.sequence)
+    n_residues = polymer.size(Scale.RESIDUE)
 
-    return coords_out, transforms_out, atoms_arr
+    count = 0
+    for j in range(1, n_residues):
+        # Only extract residues of target type
+        if sequence[j] != residue_type.value:
+            continue
+
+        i = j - 1  # Predecessor
+
+        # Get aligned residue
+        aligned_j = aligned.residue(j)
+
+        # Check bond connectivity (O3' of i to P of j)
+        if not _check_bond_length(polymer, i, j, link_def, max_bond_length):
+            continue
+
+        # Get aligned coordinates and atoms for residue j
+        coords_j = to_numpy(aligned_j.coordinates)
+        atoms_j = to_numpy(aligned_j.atoms).tolist()
+
+        # Compute transform: positions residue j relative to residue i
+        transform = compute_relative_transform(
+            origins[i], Rs[i], origins[j], Rs[j]
+        )
+
+        out_coords.append(coords_j)
+        out_atoms.append(atoms_j)
+        out_transforms.append(to_numpy(transform))
+        count += 1
+
+    return count
+
+
+def _check_bond_length(
+    polymer: "Polymer",
+    i: int,
+    j: int,
+    link_def,
+    max_bond_length: float,
+) -> bool:
+    """Check if residues i and j are connected with valid bond length."""
+    o3p_atoms = link_def.prev_atom.index()
+    p_atoms = link_def.next_atom.index()
+
+    # Get the two-residue segment and check O3'-P bond distance
+    pair = polymer.residue([i, j])
+    distances = pair.bonded_distances(o3p_atoms, p_atoms)
+
+    if len(distances) == 0:
+        return False
+
+    return float(to_numpy(distances).min()) <= max_bond_length
 
 
 # =============================================================================

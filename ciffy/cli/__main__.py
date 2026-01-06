@@ -8,7 +8,6 @@ Usage:
     ciffy geometry <file.cif>        # Compute geometric properties (Rg, etc.)
     ciffy map <file.cif>             # Display contact map
     ciffy split <file.cif>           # Split into per-chain files
-    ciffy template <sequence>        # Create template from sequence with sampled dihedrals
     ciffy cluster data/*.cif         # Cluster structures by similarity, return representatives
 
     # Training
@@ -229,35 +228,6 @@ def _map_command(args):
         print(f"Saved to {args.output}")
     else:
         plt.show()
-
-
-def _template_command(args):
-    """Handle the template subcommand."""
-    from ciffy import from_sequence
-
-    try:
-        # Create polymer from sequence with sampled dihedrals
-        # By default, use clash-free sampling unless --no-clash-free is specified
-        clash_free = not args.no_clash_free
-
-        polymer = from_sequence(
-            args.sequence,
-            sample_dihedrals=True,
-            clash_free=clash_free,
-            seed=args.seed,
-        )
-
-        # Write output
-        if args.output:
-            polymer.write(args.output)
-            print(f"Wrote template to {args.output}")
-        else:
-            # Print to stdout
-            print(polymer)
-
-    except Exception as e:
-        print(f"Error creating template: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 def _train_flow_command(args):
@@ -1047,34 +1017,6 @@ def main():
         help="Include all chains (default: polymer chains only)",
     )
 
-    # Template subcommand
-    template_parser = subparsers.add_parser(
-        "template",
-        help="Create a template structure from a sequence",
-        description="Generate a polymer template from a sequence string with sampled backbone dihedrals.",
-    )
-    template_parser.add_argument(
-        "sequence",
-        help="Sequence string (e.g., 'MGKLF' for protein, 'acgu' for RNA)",
-    )
-    template_parser.add_argument(
-        "--output", "-o",
-        help="Output file path (.cif format)",
-    )
-    template_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducible sampling (default: None)",
-    )
-    template_parser.add_argument(
-        "--no-clash-free",
-        action="store_true",
-        help="Disable clash-free sampling. By default, backbone sampling uses "
-             "autoregressive sampling with clash detection to avoid steric "
-             "overlaps. Use this flag for faster (but potentially overlapping) sampling.",
-    )
-
     # Train subcommand with subparsers for model types
     train_parser = subparsers.add_parser(
         "train",
@@ -1586,8 +1528,6 @@ def main():
             _train_coord_diffusion_command(args)
         else:
             train_parser.print_help()
-    elif args.command == "template":
-        _template_command(args)
     elif args.command == "predict":
         if args.predict_type == "flow":
             _predict_flow_command(args)

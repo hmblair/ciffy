@@ -182,7 +182,6 @@ class TestPolymerFlowModel:
         with pytest.raises(ValueError, match="numpy backend"):
             polymer_model.sample(template_torch)
 
-    @pytest.mark.xfail(reason="from_sequence atom count bug with multi-residue chains")
     def test_sample_protocol_returns_polymers(self, polymer_model):
         """Test sample() returns list of Polymers."""
         # Create template - use full atoms

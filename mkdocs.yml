@@ -1,5 +1,5 @@
 site_name: ciffy
-site_description: Fast CIF file parsing for molecular structures
+site_description: Fast library for loading and manipulating macromolecular structures
 site_url: https://github.com/hmblair/ciffy
 
 repo_name: hmblair/ciffy
@@ -70,5 +70,4 @@ nav:
     - Protein Analysis: guides/protein.md
     - RNA Analysis: guides/rna.md
     - Visualization: guides/visualization.md
-    - Deep Learning: guides/deep-learning.md
   - API Reference: api.md

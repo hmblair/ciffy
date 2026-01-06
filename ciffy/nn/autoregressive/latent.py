@@ -30,6 +30,7 @@ from ..layers import CausalTransformer
 
 if TYPE_CHECKING:
     from ...biochemistry import Residue
+    from ...polymer import Polymer
 
 
 @dataclass
@@ -492,6 +493,90 @@ class PolymerLatentARModel(nn.Module if TORCH_AVAILABLE else object):
         latents = self.generate_latents(seq_tensor, temperature)
 
         return latents
+
+    def sample(
+        self,
+        template: "Polymer",
+        n_samples: int = 1,
+        temperature: float = 1.0,
+        **kwargs,
+    ) -> list["Polymer"]:
+        """
+        Generate polymer conformations from a template.
+
+        Implements the PolymerGenerativeModel protocol.
+
+        Args:
+            template: Template Polymer with sequence and atom topology.
+            n_samples: Number of samples to generate.
+            temperature: Sampling temperature.
+
+        Returns:
+            List of Polymers with generated coordinates.
+        """
+        from ...biochemistry import Scale, Residue
+        from ...polymer import Polymer
+
+        # Convert template to torch
+        if template.backend != "torch":
+            template = template.torch()
+        template = template.to(self.device)
+
+        # Get sequence from template
+        sequence = template.sequence  # (n_residues,)
+        n_residues = len(sequence)
+
+        # Expand for n_samples
+        seq_batch = sequence.unsqueeze(0).expand(n_samples, -1)
+
+        # Generate latents
+        latents = self.generate_latents(seq_batch, temperature)
+        # latents: (n_samples, n_residues, latent_dim)
+
+        template_np = template.numpy()
+        results = []
+
+        for s in range(n_samples):
+            # Build polymer residue by residue
+            poly = Polymer()
+
+            for i in range(n_residues):
+                res_val = sequence[i].item()
+                res = Residue(res_val)
+                decoder_key = str(res_val)
+
+                if decoder_key not in self.residue_decoders:
+                    raise ValueError(f"No decoder for residue {res.name}")
+
+                decoder = self.residue_decoders[decoder_key]
+                z = latents[s, i:i+1]  # (1, latent_dim)
+
+                # Decode latent to coordinates (and optionally transform)
+                # Decoders typically have decode() returning (coords, transform) or just coords
+                if hasattr(decoder, 'decode'):
+                    result = decoder.decode(z)
+                    if isinstance(result, tuple):
+                        coords_i, transform_i = result
+                        coords_i = coords_i.squeeze(0).cpu().numpy()
+                        transform_i = transform_i.squeeze(0).cpu().numpy()
+                    else:
+                        coords_i = result.squeeze(0).cpu().numpy()
+                        transform_i = None
+                else:
+                    raise ValueError(f"Decoder for {res.name} has no decode() method")
+
+                # Get atom group from template residue
+                template_res = template_np.residue(i)
+                atom_group = res.subset(set(template_res.atoms.tolist()))
+
+                if i == 0:
+                    poly = poly.extend_new(atom_group, coords_i, residue=res)
+                else:
+                    poly = poly.extend_new(atom_group, coords_i, transform_i, residue=res)
+
+            results.append(poly)
+
+        return results
 
     @property
     def device(self) -> "torch.device":

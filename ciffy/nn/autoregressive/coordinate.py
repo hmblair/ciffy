@@ -24,6 +24,7 @@ from ..layers import CausalTransformer
 
 if TYPE_CHECKING:
     from ...biochemistry import Residue
+    from ...polymer import Polymer
 
 
 @dataclass
@@ -400,6 +401,84 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
                         current_R[b] = new_R
 
         return local_coords, transforms
+
+    def sample(
+        self,
+        template: "Polymer",
+        n_samples: int = 1,
+        temperature: float = 0.0,
+        **kwargs,
+    ) -> list["Polymer"]:
+        """
+        Generate polymer conformations from a template.
+
+        Implements the PolymerGenerativeModel protocol.
+
+        Args:
+            template: Template Polymer with sequence and atom topology.
+                Must have atoms that match what the model was trained on.
+            n_samples: Number of samples to generate.
+            temperature: Sampling temperature (0 = deterministic).
+
+        Returns:
+            List of Polymers with generated coordinates.
+        """
+        from ...biochemistry import Scale, Residue
+        from ...polymer import Polymer
+
+        device = next(self.parameters()).device
+
+        # Get sequence from template
+        if template.backend != "torch":
+            template = template.torch()
+        template = template.to(device)
+
+        sequence = template.sequence  # (n_residues,)
+        n_residues = len(sequence)
+
+        # Expand sequence for n_samples
+        seq_batch = sequence.unsqueeze(0).expand(n_samples, -1)
+
+        # Generate local coordinates and transforms
+        local_coords, transforms = self.generate(seq_batch, temperature=temperature)
+        # local_coords: (n_samples, n_residues, max_atoms, 3)
+        # transforms: (n_samples, n_residues, 6)
+
+        # Get per-residue info from template
+        counts = template.counts(Scale.RESIDUE).cpu().numpy()
+        template_np = template.numpy()
+
+        results = []
+        for s in range(n_samples):
+            # Build polymer residue by residue using extend_new
+            poly = Polymer()
+            offset = 0
+
+            for i in range(n_residues):
+                n_atoms = counts[i]
+                res_val = sequence[i].item()
+                res = Residue(res_val)
+
+                # Get atom group from template residue
+                template_res = template_np.residue(i)
+                atom_group = res.subset(set(template_res.atoms.tolist()))
+
+                # Get generated coords for this residue
+                coords_i = local_coords[s, i, :n_atoms].cpu().numpy()
+
+                if i == 0:
+                    # First residue: absolute coordinates
+                    poly = poly.extend_new(atom_group, coords_i, residue=res)
+                else:
+                    # Subsequent residues: relative transform
+                    transform_i = transforms[s, i].cpu().numpy()
+                    poly = poly.extend_new(atom_group, coords_i, transform_i, residue=res)
+
+                offset += n_atoms
+
+            results.append(poly)
+
+        return results
 
     def save(self, path: str) -> None:
         """Save model to disk."""

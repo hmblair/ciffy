@@ -36,7 +36,7 @@ from ..blocks import RBFDistanceEncoder, build_mlp_stack, ResidualBlock
 from ...biochemistry import NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
 
 if TYPE_CHECKING:
-    pass
+    from ...polymer import Polymer
 
 
 @dataclass
@@ -642,6 +642,79 @@ class AtomARModel(nn.Module if TORCH_AVAILABLE else object):
             all_coords.append(pred_coords)
 
         return generated_coords
+
+    def sample(
+        self,
+        template: "Polymer",
+        n_samples: int = 1,
+        temperature: float = 0.0,
+        **kwargs,
+    ) -> list["Polymer"]:
+        """
+        Generate polymer conformations from a template.
+
+        Implements the PolymerGenerativeModel protocol.
+
+        Args:
+            template: Template Polymer with sequence and atom topology.
+            n_samples: Number of samples to generate.
+            temperature: Sampling temperature (0 = deterministic).
+
+        Returns:
+            List of Polymers with generated coordinates.
+        """
+        from ...biochemistry import Scale
+        import numpy as np
+
+        device = next(self.parameters()).device
+
+        # Convert template to torch
+        if template.backend != "torch":
+            template = template.torch()
+        template = template.to(device)
+
+        # Get sequence and per-residue atom info from template
+        sequence = template.sequence  # (n_residues,)
+        n_residues = len(sequence)
+        counts = template.counts(Scale.RESIDUE)
+
+        # Build atoms_per_residue and elements_per_residue lists
+        atoms_per_residue = []
+        elements_per_residue = []
+        offset = 0
+
+        for i in range(n_residues):
+            n_atoms = counts[i].item()
+            res_atoms = template.atoms[offset:offset + n_atoms]
+            res_elements = template.elements[offset:offset + n_atoms]
+
+            # Expand for n_samples
+            atoms_per_residue.append(res_atoms.unsqueeze(0).expand(n_samples, -1))
+            elements_per_residue.append(res_elements.unsqueeze(0).expand(n_samples, -1))
+            offset += n_atoms
+
+        # Expand sequence for n_samples
+        seq_batch = sequence.unsqueeze(0).expand(n_samples, -1)
+
+        # Generate coordinates
+        coords_per_residue = self.generate(
+            seq_batch, atoms_per_residue, elements_per_residue, temperature=temperature
+        )
+
+        # Assemble into Polymers
+        template_np = template.numpy()
+        results = []
+
+        for s in range(n_samples):
+            # Concatenate all residue coords
+            all_coords = [coords_per_residue[i][s].cpu().numpy() for i in range(n_residues)]
+            coords = np.concatenate(all_coords, axis=0)
+
+            # Create polymer with new coordinates
+            poly = template_np.copy(coordinates=coords)
+            results.append(poly)
+
+        return results
 
     def save(self, path: str) -> None:
         """Save model to disk."""

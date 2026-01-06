@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ciffy"
 dynamic = ["version"]
-description = "Fast mmCIF parser for structural biology"
+description = "Fast library for loading and manipulating macromolecular structures"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"

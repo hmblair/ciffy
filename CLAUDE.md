@@ -11,7 +11,9 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 - **Enums for readability** - `Residue.A`, `Molecule.RNA`, `Scale.ATOM`
 - **Hierarchical scales** - Atoms → Residues → Chains → Molecules
 
-## Environment
+## Development
+
+### Environment
 
 ```bash
 # Python
@@ -24,7 +26,7 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 /Users/hmblair/mambaforge/bin/python -m pytest tests/ -n auto
 ```
 
-## Data Locations
+### Data Locations
 
 ```
 Local RNA DB:    /Users/hmblair/academic/data/structures/rna
@@ -32,14 +34,14 @@ Remote RNA DB:   /home/hmblair/data/rna
 Output dir:      outputs/
 ```
 
-## Git Safety
+### Git Safety
 
 **NEVER discard unstaged changes** unrelated to the current task. Use worktrees for complex changes:
 ```bash
 git worktree add ../ciffy-<feature> -b <feature>
 ```
 
-## Polymer API
+## Core API
 
 ### Loading & Creating
 
@@ -96,7 +98,7 @@ polymer.to('cuda')
 polymer.write('output.cif')
 ```
 
-## Building Chains
+### Building Chains
 
 ```python
 from ciffy import Polymer, Residue
@@ -115,7 +117,46 @@ p = p.append(Residue.C, LocalCoordinates(coords2, transform)) # Relative positio
 
 `LocalCoordinates`: Bundles (n_atoms, 3) coordinates with (6,) SE(3) transform [axis-angle, translation].
 
-## PolymerDataset
+## Code Conventions
+
+### Backend-Agnostic Code
+
+Use operations from `ciffy.backend.ops` instead of manual type checking:
+
+```python
+# GOOD - use backend ops
+from ciffy.backend import ops
+
+result = ops.cat([a, b])
+indices = ops.nonzero(mask)
+
+# BAD - manual isinstance branches
+import torch
+import numpy as np
+
+if isinstance(a, torch.Tensor):
+    result = torch.cat([a, b])
+else:
+    result = np.concatenate([a, b])
+```
+
+Key ops: `cat`, `stack`, `cdist`, `scatter_sum/mean/max/min`, `repeat_interleave`, `nonzero`, `argwhere`, `svd`, `eigh`, `pinv`, `norm`, `where`, `topk`, `arange`, `zeros/ones/empty` (with `like=` param), `to_backend`, `convert_backend`.
+
+### Training Practices
+
+1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.
+
+2. **Always save sample predictions** - Save sample predictions/generations to `outputs/` so the user can visually inspect model quality. Use `polymer.write('outputs/sample_001.cif')` to write structures.
+
+3. **Avoid batching complexity** - Structures have different sizes. Process one structure at a time rather than implementing complex batching logic.
+
+4. **Keep training loops simple** - Focus on getting results fast. Avoid premature optimization or over-engineering.
+
+5. **Use ciffy's built-in features** - `PolymerDataset`, `PolymerEmbedding`, and `Polymer` methods are battle-tested and handle the many edge cases in .cif files. Don't reimplement this functionality.
+
+## Neural Network API
+
+### PolymerDataset
 
 ```python
 from ciffy.nn import PolymerDataset
@@ -132,7 +173,7 @@ dataset = PolymerDataset(
 polymer = dataset[0]
 ```
 
-## PolymerEmbedding
+### PolymerEmbedding
 
 ```python
 from ciffy.nn import PolymerEmbedding
@@ -153,7 +194,7 @@ features = embed(polymer)  # (num_residues, 64)
 embed.output_dim  # Total embedding dimension
 ```
 
-## RMSD Loss
+### RMSD Loss
 
 **Use `ciffy.rmsd` as the default loss function for structure prediction models.** It computes Kabsch-aligned RMSD with gradient support.
 
@@ -170,15 +211,3 @@ loss = ciffy.rmsd(pred_coords, target_coords, eps=1e-8) # Gradient-stable near 0
 ```
 
 The `eps` parameter adds numerical stability when RMSD approaches zero during training.
-
-## Training Practices
-
-1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.
-
-2. **Always save sample predictions** - Save sample predictions/generations to `outputs/` so the user can visually inspect model quality. Use `polymer.write('outputs/sample_001.cif')` to write structures.
-
-3. **Avoid batching complexity** - Structures have different sizes. Process one structure at a time rather than implementing complex batching logic.
-
-4. **Keep training loops simple** - Focus on getting results fast. Avoid premature optimization or over-engineering.
-
-5. **Use ciffy's built-in features** - `PolymerDataset`, `PolymerEmbedding`, and `Polymer` methods are battle-tested and handle the many edge cases in .cif files. Don't reimplement this functionality.

@@ -53,56 +53,18 @@ pytest tests/test_loader.py
 
 ## Repository Structure
 
-```
-ciffy/
-├── ciffy/                  # Main Python package
-│   ├── __init__.py
-│   ├── polymer.py          # Core Polymer class
-│   ├── backend/            # NumPy/PyTorch abstraction layer
-│   │   ├── numpy_ops.py    # NumPy implementations
-│   │   ├── torch_ops.py    # PyTorch implementations
-│   │   └── dispatch.py     # Backend selection logic
-│   ├── types/              # Enums and type definitions
-│   │   ├── scale.py        # Scale enum (ATOM, RESIDUE, CHAIN, MOLECULE)
-│   │   ├── molecule.py     # Molecule enum (auto-generated)
-│   │   └── dihedral.py     # DihedralType enum
-│   ├── biochemistry/       # Chemical definitions (mostly auto-generated)
-│   │   ├── _generated_*.py # Auto-generated from CCD
-│   │   └── ...
-│   ├── operations/         # Geometric operations
-│   │   ├── alignment.py    # Kabsch alignment, RMSD
-│   │   └── reduction.py    # Aggregation operations
-│   ├── io/                 # File I/O
-│   │   ├── loader.py       # CIF loading
-│   │   └── writer.py       # CIF writing
-│   ├── nn/                 # Neural network utilities
-│   ├── visualize/          # Visualization tools
-│   └── src/                # C source code
-│       ├── module.c        # Python C extension entry point
-│       ├── cif/            # CIF parsing (C)
-│       ├── internal/       # Graph algorithms (C)
-│       │   ├── geometry.c  # Geometry calculations
-│       │   └── batch.c     # Batch operations
-│       └── hash/           # Hash tables (auto-generated)
-│           ├── *.gperf     # gperf input files (auto-generated)
-│           └── *.c         # gperf output files (auto-generated)
-│
-├── codegen/                # Code generation from PDB CCD
-│   ├── __init__.py         # Main entry point (generate_all)
-│   ├── generate.py         # CLI entry point
-│   ├── config.py           # Constants, residue whitelist
-│   ├── ccd.py              # CCD file parsing
-│   ├── c_codegen.py        # C/gperf code generation
-│   ├── python_codegen.py   # Python enum generation
-│   └── residue.py          # Residue definition class
-│
-├── tests/                  # Test suite
-├── docs/                   # Documentation (MkDocs)
-├── examples/               # Example scripts
-│
-├── setup.py                # C extension build
-└── pyproject.toml          # Package metadata
-```
+- **`ciffy/`** - Main Python package
+  - `polymer/` - Core Polymer class and hierarchy operations
+  - `biochemistry/` - Chemical definitions (mostly auto-generated from CCD)
+  - `backend/` - NumPy/PyTorch abstraction layer
+  - `operations/` - Geometric operations (alignment, RMSD, etc.)
+  - `nn/` - Neural network utilities (datasets, embeddings, models)
+  - `io/` - CIF file reading and writing
+  - `visualize/` - ChimeraX visualization tools
+  - `src/` - C source code for fast parsing
+- **`codegen/`** - Code generation from PDB Chemical Component Dictionary
+- **`tests/`** - Test suite
+- **`docs/`** - Documentation (MkDocs)
 
 ## Code Generation
 

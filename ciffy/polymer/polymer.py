@@ -1145,52 +1145,6 @@ class Polymer(AtomContainer):
 
         return self._clone(**sliced)
 
-    def select(self: Polymer, selector: Array | int | list | slice, scale: Scale) -> Polymer:
-        """
-        Select units at the specified scale.
-
-        This is the unified selection method that handles different scales
-        with appropriate semantics for unresolved (0-atom) residues.
-
-        Args:
-            selector: Selection criteria. Can be:
-                - Boolean mask array (True = keep)
-                - Integer index (single unit)
-                - List/array of integer indices
-                - Slice for contiguous range
-            scale: Scale of selection (ATOM, RESIDUE, or CHAIN).
-
-        Returns:
-            New Polymer with selected units.
-
-        Raises:
-            IndexError: If any index is out of range (when using indices).
-
-        Semantics by scale:
-            - ATOM: Residues with 0 atoms after masking are REMOVED.
-            - RESIDUE: Selected residues are KEPT even if they have 0 atoms.
-            - CHAIN: All residues in selected chains are KEPT.
-
-        Example:
-            >>> # Select by boolean mask
-            >>> backbone = polymer.select(backbone_mask, Scale.ATOM)
-            >>> adenines = polymer.select(polymer.sequence == Residue.A, Scale.RESIDUE)
-            >>>
-            >>> # Select by index
-            >>> first_residue = polymer.select(0, Scale.RESIDUE)
-            >>> first_chain = polymer.select(0, Scale.CHAIN)
-            >>>
-            >>> # Select by index list or slice
-            >>> residues = polymer.select([0, 2, 4], Scale.RESIDUE)
-            >>> first_100_atoms = polymer.select(slice(100), Scale.ATOM)
-        """
-        if scale not in (Scale.ATOM, Scale.RESIDUE, Scale.CHAIN):
-            raise ValueError(f"Selection not supported at {scale.name} scale")
-
-        # Convert indices to mask if needed
-        mask = self._to_mask(selector, scale)
-        return self._select(mask, scale)
-
     def chain(self: Polymer, ix: Array | int) -> Polymer:
         """
         Select chains by index.

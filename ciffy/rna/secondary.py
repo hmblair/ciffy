@@ -25,9 +25,14 @@ Example:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-__all__ = ["dotbracket_to_pairs", "pairs_to_dotbracket"]
+if TYPE_CHECKING:
+    from ..polymer import Polymer
+
+__all__ = ["dotbracket_to_pairs", "pairs_to_dotbracket", "secondary_structure"]
 
 # Bracket pairs for extended notation (pseudoknots)
 _OPEN_BRACKETS = "([{<"
@@ -158,3 +163,108 @@ def pairs_to_dotbracket(pairs: np.ndarray, length: int) -> str:
         result[right] = _CLOSE_BRACKETS[bracket_idx]
 
     return "".join(result)
+
+
+def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
+    """Extract secondary structure from polymer connections as dot-bracket.
+
+    Determines base pairs from hydrogen bond connections in the polymer
+    and returns the secondary structure in dot-bracket notation.
+
+    Args:
+        polymer: RNA polymer with connections loaded. Must be loaded with
+            ``ciffy.load(file, skip=[])`` or ``skip=["descriptions"]`` to
+            include connections.
+        min_loop_size: Minimum number of residues between paired positions.
+            Pairs with |i - j| <= min_loop_size are filtered out. Default 3.
+
+    Returns:
+        Dot-bracket string of length equal to the number of residues.
+        Uses extended notation ([{<) for pseudoknots if present.
+
+    Raises:
+        ValueError: If polymer has no connections loaded.
+
+    Example:
+        >>> import ciffy
+        >>> polymer = ciffy.load("structure.cif", skip=[])
+        >>> from ciffy.rna import secondary_structure
+        >>> ss = secondary_structure(polymer)
+        >>> print(ss)
+        '(((...)))'
+    """
+    from ..biochemistry import Scale
+
+    if polymer.connections is None:
+        raise ValueError(
+            "Polymer has no connections. Load with skip=[] to include connections."
+        )
+
+    connections = np.asarray(polymer.connections)
+    n_residues = polymer.size(Scale.RESIDUE)
+
+    if connections.size == 0:
+        return "." * n_residues
+
+    # Get residue membership for each atom
+    residue_membership = np.asarray(polymer.membership(Scale.RESIDUE))
+    n_atoms = polymer.size()
+
+    # Filter connections to only include atoms in this polymer
+    # (handles case where polymer is a selection from larger structure)
+    valid_mask = (connections[:, 0] < n_atoms) & (connections[:, 1] < n_atoms)
+    connections = connections[valid_mask]
+
+    if connections.size == 0:
+        return "." * n_residues
+
+    # Convert atom pairs to residue pairs
+    residue_pairs = residue_membership[connections]  # (n_connections, 2)
+
+    # Keep only inter-residue pairs (different residues)
+    inter_residue_mask = residue_pairs[:, 0] != residue_pairs[:, 1]
+    residue_pairs = residue_pairs[inter_residue_mask]
+
+    if residue_pairs.size == 0:
+        return "." * n_residues
+
+    # Ensure i < j for each pair
+    residue_pairs = np.sort(residue_pairs, axis=1)
+
+    # Filter by minimum loop size (removes backbone H-bonds)
+    distances = residue_pairs[:, 1] - residue_pairs[:, 0]
+    residue_pairs = residue_pairs[distances > min_loop_size]
+
+    if residue_pairs.size == 0:
+        return "." * n_residues
+
+    # Deduplicate pairs (multiple H-bonds between same residue pair)
+    unique_pairs = np.unique(residue_pairs, axis=0)
+
+    # Each residue can only be in one base pair - keep longest range pairs
+    # Count how many pairs each residue participates in
+    paired = {}  # residue -> (partner, distance)
+    for i, j in unique_pairs:
+        dist = j - i
+        # For position i, keep pair with largest distance
+        if i not in paired or dist > paired[i][1]:
+            paired[i] = (j, dist)
+        # For position j, keep pair with largest distance
+        if j not in paired or dist > paired[j][1]:
+            paired[j] = (i, dist)
+
+    # Reconstruct pairs ensuring each residue is in at most one pair
+    final_pairs = set()
+    for res, (partner, _) in paired.items():
+        if res < partner:
+            # Check if partner also points back to res
+            if partner in paired and paired[partner][0] == res:
+                final_pairs.add((res, partner))
+
+    if not final_pairs:
+        return "." * n_residues
+
+    final_pairs = np.array(sorted(final_pairs), dtype=np.int64)
+
+    # Convert to dot-bracket
+    return pairs_to_dotbracket(final_pairs, n_residues)

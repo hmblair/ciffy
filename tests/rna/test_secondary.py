@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from ciffy.rna import dotbracket_to_pairs, pairs_to_dotbracket
+from ciffy.rna import dotbracket_to_pairs, pairs_to_dotbracket, secondary_structure
 
 
 class TestDotbracketToPairs:
@@ -114,3 +114,49 @@ class TestRoundTrip:
         pairs = dotbracket_to_pairs(dotbracket)
         result = pairs_to_dotbracket(pairs, len(dotbracket))
         assert result == dotbracket
+
+
+class TestSecondaryStructure:
+    """Test secondary_structure function."""
+
+    def test_extracts_from_polymer(self):
+        import ciffy
+
+        # Load RNA with connections
+        polymer = ciffy.load("tests/data/3SKW.cif", skip=[])
+        ss = secondary_structure(polymer)
+
+        # Should have same length as residue count
+        assert len(ss) == polymer.size(ciffy.RESIDUE)
+
+        # Should have some base pairs
+        n_pairs = ss.count("(") + ss.count("[") + ss.count("{") + ss.count("<")
+        assert n_pairs > 0
+
+        # Should be valid dot-bracket (round-trip test)
+        pairs = dotbracket_to_pairs(ss)
+        reconstructed = pairs_to_dotbracket(pairs, len(ss))
+        assert reconstructed == ss
+
+    def test_raises_without_connections(self):
+        import ciffy
+
+        # Load without connections (default)
+        polymer = ciffy.load("tests/data/3SKW.cif")
+        assert polymer.connections is None
+
+        with pytest.raises(ValueError, match="no connections"):
+            secondary_structure(polymer)
+
+    def test_single_chain(self):
+        import ciffy
+
+        # Load and select single chain
+        polymer = ciffy.load("tests/data/3SKW.cif", skip=[]).chain(0)
+        ss = secondary_structure(polymer)
+
+        assert len(ss) == polymer.size(ciffy.RESIDUE)
+        # Single chain should still have valid structure
+        pairs = dotbracket_to_pairs(ss)
+        reconstructed = pairs_to_dotbracket(pairs, len(ss))
+        assert reconstructed == ss

@@ -18,7 +18,6 @@ from ciffy.backend import to_numpy
 from ciffy.backend.ops import isin
 from ciffy.biochemistry import Scale, Molecule
 from ciffy.operations.reduction import Reduction
-from ciffy.geometry.transforms import is_purine
 
 if TYPE_CHECKING:
     from ciffy.biochemistry import Residue
@@ -271,26 +270,6 @@ def compute_pca(
         Vt = Vt[:n_components]
 
     return Vt.astype(np.float32), mean.astype(np.float32), s, var_explained
-
-
-def check_bond_lengths(
-    coords: np.ndarray,
-    atoms: np.ndarray,
-    residue: "Residue",
-) -> dict[str, float]:
-    """Check glycosidic bond length statistics."""
-    atoms_list = atoms.tolist() if hasattr(atoms, 'tolist') else list(atoms)
-    c1p_idx = atoms_list.index(residue.C1p.value)
-
-    if is_purine(residue):
-        n_idx = atoms_list.index(residue.N9.value)
-        bond_name = "C1'-N9"
-    else:
-        n_idx = atoms_list.index(residue.N1.value)
-        bond_name = "C1'-N1"
-
-    dists = np.linalg.norm(coords[:, c1p_idx] - coords[:, n_idx], axis=-1)
-    return {"bond": bond_name, "mean": float(dists.mean()), "std": float(dists.std())}
 
 
 # =============================================================================

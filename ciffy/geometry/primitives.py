@@ -128,36 +128,7 @@ def sin(x: float | Array) -> float | Array:
 # Array Utilities
 # =============================================================================
 
-def zeros_like(shape: tuple, like: Array) -> Array:
-    """
-    Create zeros array matching backend of reference array.
-
-    Args:
-        shape: Shape of output array
-        like: Reference array to match dtype/device
-
-    Returns:
-        Zeros array with same backend as `like`
-    """
-    if is_torch(like):
-        import torch
-        return torch.zeros(shape, dtype=like.dtype, device=like.device)
-    return np.zeros(shape, dtype=like.dtype)
-
-
-def clone(arr: Array) -> Array:
-    """
-    Clone/copy an array.
-
-    Args:
-        arr: Input array
-
-    Returns:
-        Deep copy of array
-    """
-    if is_torch(arr):
-        return arr.clone()
-    return arr.copy()
+# Note: zeros_like and clone are available from ciffy.backend
 
 
 def to_scalar(x: Array) -> float:

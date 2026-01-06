@@ -20,7 +20,8 @@ from ..backend.ops import to_backend, stack, unsqueeze, sin, acos, clamp
 if TYPE_CHECKING:
     from ..biochemistry import Residue
     from ..biochemistry.linking import FrameDefinition
-from .primitives import cross, dot, normalize, clone, to_scalar
+from ..backend import clone
+from .primitives import cross, dot, normalize, to_scalar
 
 
 # =============================================================================
@@ -179,27 +180,6 @@ def rodrigues(axis_angles: Array) -> Array:
     return result
 
 
-def axis_angle_to_rotation(axis_angle: Array) -> Array:
-    """
-    Convert axis-angle to rotation matrix (Rodrigues' formula).
-
-    R = I + sin(t)K + (1-cos(t))K^2
-
-    where K is the skew-symmetric matrix of the unit axis.
-
-    Args:
-        axis_angle: (3,) axis-angle vector (direction is axis, magnitude is angle).
-
-    Returns:
-        (3, 3) rotation matrix.
-
-    Note:
-        This is a convenience wrapper around :func:`rodrigues` for single vectors.
-        For batched inputs, use :func:`rodrigues` directly.
-    """
-    return rodrigues(axis_angle)
-
-
 def compute_relative_transform(
     origin1: Array,
     R1: Array,
@@ -253,7 +233,7 @@ def apply_relative_transform(
     """
     axis_angle = transform[:3]
     t_local = transform[3:]
-    R_rel = axis_angle_to_rotation(axis_angle)
+    R_rel = rodrigues(axis_angle)
     R2 = R @ R_rel
     t_world = R @ t_local
     origin2 = origin + t_world
@@ -391,22 +371,3 @@ def rigid_align(
     return positioned
 
 
-# =============================================================================
-# Residue Type Detection
-# =============================================================================
-
-
-def is_purine(residue: "Residue") -> bool:
-    """
-    Check if a residue is a purine (has N9 atom).
-
-    Purines (A, G, DA, DG) have an N9 atom connecting the base to the sugar.
-    Pyrimidines (C, U, DC, DT) have an N1 atom instead.
-
-    Args:
-        residue: Residue type to check.
-
-    Returns:
-        True if purine (has N9), False if pyrimidine (has N1).
-    """
-    return hasattr(residue, 'N9')

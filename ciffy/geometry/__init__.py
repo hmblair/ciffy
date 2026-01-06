@@ -7,6 +7,8 @@ backends. All functions are stateless and testable in isolation.
 Submodules:
 - primitives: Vector operations, Rodrigues rotation, CCD optimization, ring closure
 - transforms: SE(3) transforms, frame computation, residue positioning
+- alignment: Kabsch alignment algorithm
+- rmsd: Coordinate RMSD computation
 """
 
 # Vector operations
@@ -24,12 +26,9 @@ from .primitives import (
     sin,
 )
 
-# Array utilities
-from .primitives import (
-    zeros_like,
-    clone,
-    to_scalar,
-)
+# Array utilities (re-export from backend for convenience)
+from ..backend import zeros_like, clone
+from .primitives import to_scalar
 
 # Rotation
 from .primitives import rodrigues_rotate
@@ -51,23 +50,25 @@ from .transforms import (
     LocalCoordinates,
     rodrigues,
     rotation_to_axis_angle,
-    axis_angle_to_rotation,
     compute_relative_transform,
     apply_relative_transform,
 )
 
-# Frame computation (new unified API)
+# Frame computation
 from .transforms import (
     extract_frame_positions,
     frame_from_positions,
-    is_purine,
+    rigid_align,
 )
 
-# Frame computation functions
-from .frames import (
-    compute_glycosidic_frame,
-    align_and_compute_transform,
+# Kabsch alignment
+from .alignment import (
+    kabsch_rotation,
+    kabsch_align,
 )
+
+# RMSD
+from .rmsd import rmsd_coords
 
 # Geometry projection (torch-only, differentiable)
 from .projection import project_bond_lengths
@@ -101,16 +102,17 @@ __all__ = [
     "LocalCoordinates",
     "rodrigues",
     "rotation_to_axis_angle",
-    "axis_angle_to_rotation",
     "compute_relative_transform",
     "apply_relative_transform",
-    # Frame computation (new unified API)
+    # Frame computation
     "extract_frame_positions",
     "frame_from_positions",
-    "is_purine",
-    # Frame computation functions
-    "compute_glycosidic_frame",
-    "align_and_compute_transform",
+    "rigid_align",
+    # Kabsch alignment
+    "kabsch_rotation",
+    "kabsch_align",
+    # RMSD
+    "rmsd_coords",
     # Geometry projection
     "project_bond_lengths",
     # Geometry constraints

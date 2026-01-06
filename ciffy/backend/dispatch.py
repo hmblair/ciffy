@@ -24,4 +24,4 @@ from .graph import (
 )
 
 # Kabsch rotation for coordinate alignment
-from ..operations.alignment import kabsch_rotation
+from ..geometry.alignment import kabsch_rotation

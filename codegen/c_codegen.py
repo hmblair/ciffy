@@ -285,38 +285,33 @@ def generate_reverse_header(
         '}',
         '',
         '/* ATOM REVERSE LOOKUP */',
-        'typedef struct {',
-        '    const char *res;',
-        '    const char *atom;',
-        '} AtomInfo;',
-        '',
+        '/* Note: Only stores atom names. Residue context comes from cif->sequence[]. */',
         f'#define ATOM_MAX {atom_max}',
         '',
-        'static const AtomInfo ATOM_INFO[ATOM_MAX] = {',
+        'static const char *ATOM_NAMES[ATOM_MAX] = {',
     ])
 
     for i in range(atom_max):
         if i in UNIFIED_BACKBONE_NAMES:
-            # Backbone atoms have no residue context (shared across residues)
-            atom_name = UNIFIED_BACKBONE_NAMES[i]
-            lines.append(f'    [{i}] = {{NULL, "{atom_name}"}},')
+            # Backbone atoms (shared across residues)
+            atom_str = UNIFIED_BACKBONE_NAMES[i]
+            lines.append(f'    [{i}] = "{atom_str}",')
         elif i in atoms:
-            # Sidechain atoms have residue context
-            res, atom = atoms[i]
-            lines.append(f'    [{i}] = {{"{res}", "{atom}"}},')
+            # Sidechain/base atoms (may be shared via parent inheritance)
+            _, atom_str = atoms[i]
+            lines.append(f'    [{i}] = "{atom_str}",')
         else:
-            lines.append(f'    [{i}] = {{NULL, NULL}},')
+            lines.append(f'    [{i}] = NULL,')
 
     lines.extend([
         '};',
         '',
-        'static inline const AtomInfo *atom_info(int idx) {',
-        '    static const AtomInfo UNKNOWN = {UNKNOWN_RESIDUE, UNKNOWN_ATOM};',
-        '    if (idx < 0 || idx >= ATOM_MAX || ATOM_INFO[idx].atom == NULL) {',
+        'static inline const char *atom_name(int idx) {',
+        '    if (idx < 0 || idx >= ATOM_MAX || ATOM_NAMES[idx] == NULL) {',
         '        LOG_WARNING("Unknown atom index %d", idx);',
-        '        return &UNKNOWN;',
+        '        return UNKNOWN_ATOM;',
         '    }',
-        '    return &ATOM_INFO[idx];',
+        '    return ATOM_NAMES[idx];',
         '}',
         '',
         '/* MOLECULE TYPE REVERSE LOOKUP */',

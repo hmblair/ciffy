@@ -461,12 +461,12 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
                 /* element_name() logs warning automatically for unknown indices */
                 const char *elem = element_name(cif->elements[atom_idx]);
 
-                /* atom_info() logs warning automatically for unknown indices */
-                const AtomInfo *ainfo = atom_info(cif->types[atom_idx]);
+                /* atom_name() logs warning automatically for unknown indices */
+                const char *aname = atom_name(cif->types[atom_idx]);
 
                 /* Format atom name, quoting if it contains a prime (') */
                 char atom_buf[MAX_ATOM_NAME_BUF];
-                const char *atom_name = _format_atom_name(ainfo->atom, atom_buf);
+                const char *atom_str = _format_atom_name(aname, atom_buf);
 
                 /* Get coordinates (bounds already checked by CIF_CHECK_BOUNDS above) */
                 int coord_idx = 3 * atom_idx;
@@ -493,11 +493,11 @@ static CifError _write_atom_site(FILE *file, const mmCIF *cif, CifErrorContext *
 
                 if (has_bfactors) {
                     CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f %-8.2f 1\n",
-                        group, serial, elem, atom_name,
+                        group, serial, elem, atom_str,
                         res_name, chain_name, seq_str, x, y, z, bfactor);
                 } else {
                     CIF_FPRINTF(file, ctx, "%-6s %-7d %-2.2s %-6s . %-4.4s %-4.4s %-6s %-10.3f %-10.3f %-10.3f 1\n",
-                        group, serial, elem, atom_name,
+                        group, serial, elem, atom_str,
                         res_name, chain_name, seq_str, x, y, z);
                 }
 

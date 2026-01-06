@@ -48,6 +48,7 @@ class ResidueDefinition:
     ideal_coords: dict[str, tuple[float, float, float]]  # Atom name -> (x, y, z)
     bonds: list[tuple[str, str]]  # List of (atom1, atom2) bonded pairs
     torsions: dict[str, tuple[str, str, str, str]] | None = None  # Torsion name -> (a1,a2,a3,a4)
+    parent_comp_id: str = ""  # Parent residue ID for modified residues (e.g., "A" for 1MA)
     class_name: str = ""  # Python class name
 
     def __post_init__(self):

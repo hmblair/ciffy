@@ -63,6 +63,8 @@ residue_whitelist:
   - I     # Inosine
   - 2MA   # 2-methyladenosine-5'-monophosphate (RNA)
   - 6MZ   # N6-methyladenosine-5'-monophosphate (RNA)
+  - 1MA   # 1-methyladenosine (parent: A)
+  - YYG   # Wybutosine (parent: G)
 
   # Additional modified amino acids
   - MEQ   # N5-methylglutamine
@@ -144,6 +146,8 @@ purine_residues:
   - PPU    # Puromycin (modified adenosine)
   - GTP    # Guanosine triphosphate
   - GNG    # Guanine
+  - 1MA    # 1-methyladenosine (parent: A)
+  - YYG    # Wybutosine (parent: G)
 
 # Pyrimidine nucleotides (use CHI_PYRIMIDINE glycosidic angle: O4'-C1'-N1-C2)
 pyrimidine_residues:

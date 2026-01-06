@@ -187,14 +187,41 @@ def _build_indices(data: LoadedData) -> IndexedData:
                     atom_index[key] = UNIFIED_BACKBONE_VALUES[atom]
                     backbone_count += 1
 
-    # Phase B: Assign sidechain/base atoms unique values starting after backbone
+    # Phase B: Assign sidechain/base atoms
+    # Modified residues inherit atom indices from their parent where atom names match
     current_idx = NUM_UNIFIED_BACKBONE + 1
     sidechain_count = 0
+    inherited_count = 0
+
+    # First pass: assign indices to canonical (non-modified) residues
     for res in residues:
+        if res.parent_comp_id:  # Skip modified residues in first pass
+            continue
         primary_cif = res.cif_names[0]
         for atom in res.atoms:
             key = (primary_cif, atom)
             if key not in atom_index:  # Not a backbone atom
+                atom_index[key] = current_idx
+                current_idx += 1
+                sidechain_count += 1
+
+    # Second pass: modified residues inherit from parent or get new indices
+    for res in residues:
+        if not res.parent_comp_id:  # Skip canonical residues
+            continue
+        primary_cif = res.cif_names[0]
+        parent_cif = res.parent_comp_id
+        for atom in res.atoms:
+            key = (primary_cif, atom)
+            if key in atom_index:  # Already assigned (backbone)
+                continue
+            # Try to inherit from parent
+            parent_key = (parent_cif, atom)
+            if parent_key in atom_index:
+                atom_index[key] = atom_index[parent_key]
+                inherited_count += 1
+            else:
+                # New atom unique to this modification
                 atom_index[key] = current_idx
                 current_idx += 1
                 sidechain_count += 1
@@ -210,7 +237,8 @@ def _build_indices(data: LoadedData) -> IndexedData:
                     atom_index[alias_key] = atom_index[primary_key]
 
     print(f"Assigned {NUM_UNIFIED_BACKBONE} unified backbone + {sidechain_count} sidechain atoms")
-    print(f"Total: {len(atom_index)} entries (backbone atoms shared across residues)")
+    print(f"Inherited {inherited_count} atoms from parent residues")
+    print(f"Total: {len(atom_index)} entries (backbone + inherited atoms shared)")
 
     # Compute derived arrays
     atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(

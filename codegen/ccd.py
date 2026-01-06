@@ -178,6 +178,7 @@ class ComponentState:
     comp_type: str = ""
     status: str = ""
     one_letter: str = ""
+    parent_comp_id: str = ""  # Parent residue for modified residues (from CCD)
     atoms: list[str] = field(default_factory=list)
     ideal_coords: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     bonds: list[tuple[str, str]] = field(default_factory=list)
@@ -190,6 +191,7 @@ class ComponentState:
         self.comp_type = ""
         self.status = ""
         self.one_letter = ""
+        self.parent_comp_id = ""
         self.atoms = []
         self.ideal_coords = {}
         self.bonds = []
@@ -208,6 +210,7 @@ class ComponentState:
             ideal_coords=self.ideal_coords.copy(),
             bonds=self.bonds.copy(),
             torsions=self.torsions.copy() if self.torsions else None,
+            parent_comp_id=self.parent_comp_id,
         )
 
 
@@ -274,6 +277,10 @@ class CCDParser:
             val = line.split()[-1].strip()
             if val != '?':
                 self._state.one_letter = val
+        elif line.startswith('_chem_comp.mon_nstd_parent_comp_id '):
+            val = line.split()[-1].strip()
+            if val != '?' and val:
+                self._state.parent_comp_id = val
 
     def _update_atom_coordinate(self, atom_name: str, coord_index: int, value: str) -> None:
         """

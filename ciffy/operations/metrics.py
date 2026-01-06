@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
-from ..backend import Array, is_torch, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp
+from ..backend import (
+    Array, is_torch, svdvals, det, multiply, has_nan, has_inf, sqrt, clamp,
+    to_float64, to_dtype_of, clone,
+)
 from ..biochemistry import Scale, Molecule
 from ..geometry.rmsd import rmsd_coords as _rmsd_coords
 
@@ -354,6 +357,10 @@ def _rmsd_polymer(
         matrices, leading to numerical instability in the SVD. Use .poly()
         to exclude non-polymer atoms before computing RMSD if your structure
         contains such molecules.
+
+        On MPS (Apple Silicon), float64 is not supported so the computation
+        uses float32, which has reduced precision (~0.01Å error on self-RMSD).
+        For precise evaluation, move tensors to CPU first.
     """
     if scale is None:
         scale = Scale.MOLECULE
@@ -365,11 +372,29 @@ def _rmsd_polymer(
     # Compute coordinate covariance
     cov = coordinate_covariance(polymer1_c, polymer2_c, scale)
 
+    # Use float64 for numerical stability in SVD computation.
+    # Float32 SVD can produce singular values that don't sum to the trace,
+    # causing non-zero self-RMSD and asymmetric results.
+    # Some devices (MPS) don't support float64, so we fall back to float32.
+    use_f64 = True
+    if is_torch(cov):
+        # MPS doesn't support float64
+        use_f64 = cov.device.type != 'mps'
+
+    if use_f64:
+        cov_compute = to_float64(cov)
+        var1 = to_float64(polymer1_c.moment(2, scale).mean(-1))
+        var2 = to_float64(polymer2_c.moment(2, scale).mean(-1))
+    else:
+        cov_compute = cov
+        var1 = polymer1_c.moment(2, scale).mean(-1)
+        var2 = polymer2_c.moment(2, scale).mean(-1)
+
     # SVD to find optimal rotation
     try:
-        sigma = svdvals(cov)
+        sigma = svdvals(cov_compute)
     except Exception as e:
-        if has_nan(cov) or has_inf(cov):
+        if has_nan(cov_compute) or has_inf(cov_compute):
             raise ValueError(
                 "RMSD failed: covariance matrix contains NaN or infinity. "
                 "Check input coordinates for invalid values."
@@ -378,24 +403,19 @@ def _rmsd_polymer(
             "RMSD failed: SVD did not converge. "
             "This may indicate extreme coordinate values causing overflow."
         ) from e
-    cov_det = det(cov)
+    cov_det = det(cov_compute)
 
-    # Handle reflection case
-    if is_torch(sigma):
-        sigma = sigma.clone()
-        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
-    else:
-        sigma = sigma.copy()
-        sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
+    # Handle reflection case: negate smallest singular value if det < 0
+    sigma = clone(sigma)
+    sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
     sigma = sigma.mean(-1)
-
-    # Get variances of both point clouds
-    var1 = polymer1_c.moment(2, scale).mean(-1)
-    var2 = polymer2_c.moment(2, scale).mean(-1)
 
     # Compute Kabsch distance (RMSD)
     msd = var1 + var2 - 2 * sigma
-    return sqrt(clamp(msd, min_val=0.0) + eps)
+    result = sqrt(clamp(msd, min_val=0.0) + eps)
+
+    # Convert back to original dtype
+    return to_dtype_of(result, cov)
 
 
 # =============================================================================

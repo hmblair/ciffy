@@ -80,6 +80,9 @@ from .ops import (
     fill_diagonal,
     to_backend,
     convert_backend,
+    # Dtype conversion
+    to_float64,
+    to_dtype_of,
 )
 
 __all__ = [
@@ -146,4 +149,7 @@ __all__ = [
     "fill_diagonal",
     "to_backend",
     "convert_backend",
+    # Dtype conversion
+    "to_float64",
+    "to_dtype_of",
 ]

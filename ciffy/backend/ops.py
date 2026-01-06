@@ -672,6 +672,37 @@ def to_int64(arr: Array) -> Array:
     return arr.astype(np.int64)
 
 
+def to_float64(arr: Array) -> Array:
+    """
+    Convert array to float64 dtype.
+
+    Args:
+        arr: Input array.
+
+    Returns:
+        Array with float64 dtype in original backend.
+    """
+    if is_torch(arr):
+        return arr.double()
+    return arr.astype(np.float64)
+
+
+def to_dtype_of(arr: Array, like: Array) -> Array:
+    """
+    Convert array to match the dtype of another array.
+
+    Args:
+        arr: Input array to convert.
+        like: Reference array whose dtype to match.
+
+    Returns:
+        Array with same dtype as `like`.
+    """
+    if is_torch(arr):
+        return arr.to(like.dtype)
+    return arr.astype(like.dtype)
+
+
 def isin(arr: Array, values: Array) -> Array:
     """
     Check if elements of arr are in values.

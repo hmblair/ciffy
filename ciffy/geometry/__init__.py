@@ -26,8 +26,7 @@ from .primitives import (
     sin,
 )
 
-# Array utilities (re-export from backend for convenience)
-from ..backend import zeros_like, clone
+# Array utilities
 from .primitives import to_scalar
 
 # Rotation
@@ -87,8 +86,6 @@ __all__ = [
     "cos",
     "sin",
     # Array utilities
-    "zeros_like",
-    "clone",
     "to_scalar",
     # Rotation
     "rodrigues_rotate",

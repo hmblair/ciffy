@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 
@@ -11,6 +13,53 @@ from ciffy.polymer import Polymer
 
 from .encoder import ResidueEncoder
 from .decoder import ResidueDecoder
+
+
+def kl_divergence(
+    mu: torch.Tensor,
+    logvar: torch.Tensor,
+    free_bits: float = 0.0,
+    reduction: Literal["mean", "sum", "none"] = "mean",
+) -> torch.Tensor:
+    """
+    Compute KL divergence from N(mu, sigma) to N(0, 1).
+
+    Supports "free bits" regularization which sets a minimum KL per latent
+    dimension, preventing posterior collapse where some dimensions encode
+    no information.
+
+    Args:
+        mu: (*, latent_dim) latent means.
+        logvar: (*, latent_dim) latent log-variances.
+        free_bits: Minimum KL per dimension in nats. Dimensions with KL below
+            this threshold are clamped. 0.0 disables (default). Typical values:
+            0.1-0.5 nats.
+        reduction: How to reduce the loss:
+            - "mean": Mean over all elements (default)
+            - "sum": Sum over all elements
+            - "none": No reduction, returns per-element KL
+
+    Returns:
+        KL divergence loss.
+
+    Example:
+        >>> mu, logvar = encoder(x)
+        >>> kl_loss = kl_divergence(mu, logvar, free_bits=0.25)
+        >>> loss = recon_loss + beta * kl_loss
+    """
+    # KL per dimension: 0.5 * (mu^2 + exp(logvar) - logvar - 1)
+    kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1)
+
+    # Free bits: clamp minimum KL per dimension
+    if free_bits > 0:
+        kl_per_dim = torch.clamp(kl_per_dim, min=free_bits)
+
+    if reduction == "mean":
+        return kl_per_dim.mean()
+    elif reduction == "sum":
+        return kl_per_dim.sum()
+    else:
+        return kl_per_dim
 
 
 class ResidueVAE(nn.Module):

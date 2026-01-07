@@ -27,10 +27,11 @@ Example:
 
 from .encoder import ResidueEncoder
 from .decoder import ResidueDecoder
-from .vae import ResidueVAE
+from .vae import ResidueVAE, kl_divergence
 
 __all__ = [
     "ResidueEncoder",
     "ResidueDecoder",
     "ResidueVAE",
+    "kl_divergence",
 ]

@@ -252,6 +252,73 @@ class Polymer(AtomContainer):
 
         return self.copy(coordinates=aligned_coords), Rs
 
+    def apply_transforms(
+        self: Polymer,
+        transforms: Array,
+    ) -> Polymer:
+        """
+        Apply relative per-residue transforms to build a chain.
+
+        This is the inverse of align() - it takes a polymer with local-frame
+        coordinates and chains residues together using relative transforms.
+
+        Each transform specifies how to position residue i relative to residue i-1.
+        The first residue stays at the origin; subsequent residues are positioned
+        by chaining the transforms.
+
+        Args:
+            transforms: (n_residues, 6) array where each row is
+                [axis-angle (3), translation (3)] specifying the relative
+                SE(3) transform from the previous residue's frame.
+                transforms[0] is ignored (first residue stays at origin).
+
+        Returns:
+            New Polymer with global coordinates.
+
+        Example:
+            >>> # Roundtrip: align then apply_transforms
+            >>> aligned, _ = polymer.align()
+            >>> transforms = model.predict_transforms(aligned)
+            >>> rebuilt = aligned.apply_transforms(transforms)
+        """
+        from ..geometry.transforms import apply_relative_transform
+
+        n_residues = self.size(Scale.RESIDUE)
+        if transforms.shape[0] != n_residues:
+            raise ValueError(
+                f"transforms has {transforms.shape[0]} rows but polymer has "
+                f"{n_residues} residues"
+            )
+
+        coords = self.coordinates
+        counts = self.counts(Scale.RESIDUE)
+
+        # Build global coordinates
+        global_coords = ops.clone(coords)
+        current_R = ops.eye(3, like=coords)
+        current_origin = ops.zeros_nd((3,), like=coords)
+
+        # Chain residues together
+        atom_offset = 0
+        for i in range(n_residues):
+            n_atoms_i = int(counts[i])
+            local_coords = coords[atom_offset:atom_offset + n_atoms_i]
+
+            # Transform to global frame: local @ R.T + origin
+            global_coords[atom_offset:atom_offset + n_atoms_i] = (
+                local_coords @ current_R.T + current_origin
+            )
+
+            # Update frame for next residue
+            if i < n_residues - 1:
+                current_origin, current_R = apply_relative_transform(
+                    current_origin, current_R, transforms[i]
+                )
+
+            atom_offset += n_atoms_i
+
+        return self.copy(coordinates=global_coords)
+
     def sort_atoms(self: Polymer) -> Polymer:
         """
         Sort atoms within each residue by atom type enum value.

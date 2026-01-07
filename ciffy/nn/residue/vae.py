@@ -8,7 +8,6 @@ import torch.nn as nn
 import ciffy
 from ciffy import Scale
 from ciffy.polymer import Polymer
-from ciffy.geometry.transforms import apply_relative_transform
 
 from .encoder import ResidueEncoder
 from .decoder import ResidueDecoder
@@ -148,7 +147,6 @@ class ResidueVAE(nn.Module):
         self,
         sequence: str,
         temperature: float = 1.0,
-        device: str | torch.device | None = None,
     ) -> Polymer:
         """
         Sample a polymer conformation from the prior.
@@ -159,10 +157,9 @@ class ResidueVAE(nn.Module):
         Args:
             sequence: Polymer sequence (e.g., "acguacgu" for RNA).
             temperature: Sampling temperature. Higher = more diverse.
-            device: Device for computation. If None, uses model's device.
 
         Returns:
-            Polymer with sampled coordinates.
+            Polymer with sampled coordinates (on model's device).
 
         Example:
             >>> model = ResidueVAE(latent_dim=32)
@@ -171,38 +168,15 @@ class ResidueVAE(nn.Module):
         """
         self.eval()
 
-        # Get device from model parameters if not specified
-        if device is None:
-            device = next(self.parameters()).device
-
-        # Create template polymer (heavy atoms only)
+        device = next(self.parameters()).device
         template = ciffy.from_sequence(sequence).torch().heavy().to(device)
         n_residues = template.size(Scale.RESIDUE)
 
-        # Sample from prior
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
-
-        # Decode to local coords and transforms
         local_coords, transforms = self.decode(z, template)
 
-        # Chain residues together using transforms
-        counts = template.counts(Scale.RESIDUE)
-        global_coords = local_coords.clone()
-
-        current_R = torch.eye(3, device=device)
-        current_origin = torch.zeros(3, device=device)
-
-        atom_offset = 0
-        for i in range(n_residues):
-            n_atoms_i = counts[i].item()
-            res_coords = local_coords[atom_offset:atom_offset + n_atoms_i]
-            global_coords[atom_offset:atom_offset + n_atoms_i] = res_coords @ current_R.T + current_origin
-
-            if i < n_residues - 1:
-                current_origin, current_R = apply_relative_transform(
-                    current_origin, current_R, transforms[i]
-                )
-
-            atom_offset += n_atoms_i
-
-        return template.cpu().copy(coordinates=global_coords.cpu())
+        return (
+            template
+            .copy(coordinates=local_coords)
+            .apply_transforms(transforms)
+        )

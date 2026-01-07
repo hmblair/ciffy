@@ -7,7 +7,6 @@ import torch.nn as nn
 
 from ciffy import Scale
 from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
-from ciffy.geometry.transforms import compute_relative_transform
 from ciffy.nn import PolymerEmbedding
 from ciffy.nn.layers.transformer import Transformer, RMSNorm
 from ciffy.polymer import Polymer
@@ -111,20 +110,12 @@ class ResidueEncoder(nn.Module):
         return self.latent_dim
 
     def _compute_transforms(self, polymer: Polymer) -> torch.Tensor:
-        """Compute inter-residue SE(3) transforms from polymer coordinates."""
-        n_residues = polymer.size(Scale.RESIDUE)
-        device = polymer.coordinates.device
+        """Compute inter-residue SE(3) transforms from polymer coordinates.
 
-        aligned, Rs = polymer.align()
-        origins = polymer.gather([GLYCOSIDIC_FRAME.origin])[:, 0]
-
-        transforms = torch.zeros(n_residues, 6, device=device)
-        for i in range(n_residues - 1):
-            transforms[i] = compute_relative_transform(
-                origins[i], Rs[i],
-                origins[i + 1], Rs[i + 1],
-            )
-        return transforms
+        Uses the LOCAL FRAME paradigm with GLYCOSIDIC_FRAME for both source and
+        target frames. This computes transforms from frame(i) -> frame(i+1).
+        """
+        return polymer.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
 
     def forward(
         self,

@@ -212,12 +212,15 @@ class Polymer(AtomContainer):
     def align(
         self: Polymer,
         frame: "FrameDefinition | None" = None,
-    ) -> tuple[Polymer, Array]:
+        *,
+        return_origins: bool = False,
+    ) -> "tuple[Polymer, Array] | tuple[Polymer, Array, Array]":
         """
         Align all residues to a specified local coordinate frame.
 
-        This is the preprocessing step for training generative models - it puts
-        each residue in a consistent local frame independent of global position.
+        This is the GLOBAL FRAME paradigm - it puts each residue in a consistent
+        local frame independent of global position. Use for per-residue analysis
+        and ML models that operate on individual residues.
 
         Args:
             frame: FrameDefinition specifying origin, axis_ref, and plane_ref
@@ -226,18 +229,31 @@ class Polymer(AtomContainer):
                 ciffy.biochemistry.linking:
                 - GLYCOSIDIC_FRAME: For nucleotides (C1' origin, Z toward N9/N1)
                 - PROTEIN_BACKBONE_FRAME: For proteins (CA origin, Z toward N)
+            return_origins: If True, also return the frame origins needed for
+                unalign(). Default False for backward compatibility.
 
         Returns:
-            Tuple of (aligned_polymer, Rs) where:
-            - aligned_polymer: New Polymer with aligned coordinates
-            - Rs: (n_residues, 3, 3) rotation matrices used for alignment
+            If return_origins=False (default):
+                Tuple of (aligned_polymer, Rs) where:
+                - aligned_polymer: New Polymer with aligned coordinates
+                - Rs: (n_residues, 3, 3) rotation matrices used for alignment
+
+            If return_origins=True:
+                Tuple of (aligned_polymer, Rs, origins) where:
+                - origins: (n_residues, 3) frame origin positions needed for unalign()
 
         Raises:
             ValueError: If required frame atoms are missing from any residue.
 
         Example:
+            >>> # Basic usage (backward compatible)
             >>> aligned, Rs = polymer.strip().align()
             >>> # Rs[i] is the rotation matrix for residue i
+
+            >>> # Full usage with origins for unalign()
+            >>> aligned, Rs, origins = polymer.align(return_origins=True)
+            >>> restored = aligned.unalign(Rs, origins)
+            >>> ciffy.rmsd(restored, polymer) < 0.001  # True
         """
         origins, Rs = self._compute_frame_matrices(frame)
 
@@ -250,7 +266,144 @@ class Polymer(AtomContainer):
         centered = self.coordinates - origins_expanded
         aligned_coords = (centered[:, None, :] @ Rs_expanded).squeeze(1)
 
-        return self.copy(coordinates=aligned_coords), Rs
+        aligned_polymer = self.copy(coordinates=aligned_coords)
+
+        if return_origins:
+            return aligned_polymer, Rs, origins
+        return aligned_polymer, Rs
+
+    def unalign(
+        self: Polymer,
+        Rs: Array,
+        origins: Array,
+    ) -> Polymer:
+        """
+        Reverse the alignment operation: restore residues to their original positions.
+
+        This is the inverse of align(). Takes a polymer with local-frame coordinates
+        (each residue centered at origin) and restores the original global positions.
+
+        This is the GLOBAL FRAME paradigm - use for restoring aligned coordinates
+        back to their original spatial arrangement.
+
+        Args:
+            Rs: (n_residues, 3, 3) rotation matrices from align().
+            origins: (n_residues, 3) frame origin positions from align(return_origins=True).
+
+        Returns:
+            Polymer with coordinates restored to original global frame.
+
+        Contract:
+            >>> aligned, Rs, origins = polymer.align(return_origins=True)
+            >>> restored = aligned.unalign(Rs, origins)
+            >>> ciffy.rmsd(restored, polymer) < 0.001  # True
+
+        Note:
+            The Rs matrices encode how each residue was rotated during alignment.
+            The origins encode where each residue's frame was located.
+            Both are required to fully reverse the alignment.
+        """
+        n_residues = self.size(Scale.RESIDUE)
+        if Rs.shape[0] != n_residues:
+            raise ValueError(
+                f"Rs has {Rs.shape[0]} rows but polymer has {n_residues} residues"
+            )
+        if origins.shape[0] != n_residues:
+            raise ValueError(
+                f"origins has {origins.shape[0]} rows but polymer has {n_residues} residues"
+            )
+
+        # Expand to atom level
+        membership = self.membership(Scale.RESIDUE)
+        origins_expanded = origins[membership]
+        Rs_expanded = Rs[membership]
+
+        # Reverse alignment: coords @ R.T + origin
+        # align does: (coords - origin) @ R
+        # unalign does: aligned_coords @ R.T + origin
+        # Rs_expanded is (N_atoms, 3, 3), transpose last two dims to get R.T
+        Rs_T = ops.transpose(Rs_expanded, (0, 2, 1))
+        unaligned_coords = (self.coordinates[:, None, :] @ Rs_T).squeeze(1) + origins_expanded
+
+        return self.copy(coordinates=unaligned_coords)
+
+    def local_transforms(
+        self: Polymer,
+        source_frame: "FrameDefinition",
+        target_frame: "FrameDefinition",
+    ) -> Array:
+        """
+        Compute inter-residue SE(3) transforms using specified source and target frames.
+
+        This is the LOCAL FRAME paradigm - each transform[i] describes how to go from
+        source_frame in residue i to target_frame in residue i+1. Use for chain
+        reconstruction and backbone sampling.
+
+        Args:
+            source_frame: Frame definition for residue i (5'/N-terminal side).
+                REQUIRED - no default to make frame choice explicit.
+            target_frame: Frame definition for residue i+1 (3'/C-terminal side).
+                REQUIRED - no default to make frame choice explicit.
+
+        Returns:
+            (n_residues, 6) array where:
+            - transforms[i] = SE(3) from source_frame[i] TO target_frame[i+1]
+            - transforms[-1] = zeros (no successor residue)
+            - Each transform is [axis_angle (3), translation (3)]
+
+        Raises:
+            TypeError: If source_frame or target_frame is None (fail-fast).
+
+        Common Frame Pairs:
+            - GLYCOSIDIC→GLYCOSIDIC: For ML models (same frame, canonical orientation)
+            - O3P_FRAME→P_FRAME: For physical backbone modeling (actual bond geometry)
+
+        Example:
+            >>> from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, O3P_FRAME, P_FRAME
+            >>>
+            >>> # ML use case: same frame for both
+            >>> transforms = polymer.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+            >>>
+            >>> # Physical modeling: different frames at bond site
+            >>> transforms = polymer.local_transforms(O3P_FRAME, P_FRAME)
+
+        Invariant:
+            Transforms are INVARIANT to global rotation/translation of polymer.
+            The same structure in different poses produces identical transforms.
+
+        Contract:
+            >>> transforms = polymer.local_transforms(src, tgt)
+            >>> aligned, _ = polymer.align(frame=tgt)
+            >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
+            >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
+        """
+        from ..geometry.transforms import compute_relative_transform
+
+        # Fail-fast: require both frames
+        if source_frame is None:
+            raise TypeError("source_frame is required (got None)")
+        if target_frame is None:
+            raise TypeError("target_frame is required (got None)")
+
+        n_residues = self.size(Scale.RESIDUE)
+
+        # Compute frames for source and target
+        src_origins, src_Rs = self._compute_frame_matrices(source_frame)
+        if source_frame is target_frame:
+            # Optimization: same frame for both, reuse
+            tgt_origins, tgt_Rs = src_origins, src_Rs
+        else:
+            tgt_origins, tgt_Rs = self._compute_frame_matrices(target_frame)
+
+        # Compute transforms: source_frame[i] -> target_frame[i+1]
+        transforms = ops.zeros_nd((n_residues, 6), like=self.coordinates)
+        for i in range(n_residues - 1):
+            transforms[i] = compute_relative_transform(
+                src_origins[i], src_Rs[i],
+                tgt_origins[i + 1], tgt_Rs[i + 1],
+            )
+
+        return transforms
 
     def apply_transforms(
         self: Polymer,
@@ -258,6 +411,11 @@ class Polymer(AtomContainer):
     ) -> Polymer:
         """
         Apply relative per-residue transforms to build a chain.
+
+        .. deprecated::
+            Use `apply_local_transforms(transforms, source_frame, target_frame)` instead.
+            This method does not specify which frames are used for the transforms,
+            leading to ambiguity. The new method requires explicit frame specification.
 
         This is the inverse of align() - it takes a polymer with local-frame
         coordinates and chains residues together using relative transforms.
@@ -276,11 +434,26 @@ class Polymer(AtomContainer):
             New Polymer with global coordinates.
 
         Example:
-            >>> # Roundtrip: align then apply_transforms
+            >>> # Old API (deprecated):
             >>> aligned, _ = polymer.align()
-            >>> transforms = model.predict_transforms(aligned)
             >>> rebuilt = aligned.apply_transforms(transforms)
+            >>>
+            >>> # New API (preferred):
+            >>> from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+            >>> transforms = polymer.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+            >>> aligned, _ = polymer.align(frame=GLYCOSIDIC_FRAME)
+            >>> rebuilt = aligned.apply_local_transforms(
+            ...     transforms, GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME
+            ... )
         """
+        import warnings
+        warnings.warn(
+            "apply_transforms() is deprecated. Use apply_local_transforms() with "
+            "explicit source_frame and target_frame parameters instead. "
+            "See docstring for migration example.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from ..geometry.transforms import apply_relative_transform
 
         n_residues = self.size(Scale.RESIDUE)
@@ -316,6 +489,110 @@ class Polymer(AtomContainer):
                 )
 
             atom_offset += n_atoms_i
+
+        return self.copy(coordinates=global_coords)
+
+    def apply_local_transforms(
+        self: Polymer,
+        transforms: Array,
+        source_frame: "FrameDefinition",
+        target_frame: "FrameDefinition",
+    ) -> Polymer:
+        """
+        Chain residues together using inter-residue transforms.
+
+        This is the LOCAL FRAME paradigm - takes a polymer with LOCAL coordinates
+        (each residue in its own frame, typically aligned to target_frame) and
+        chains them using the transforms.
+
+        Args:
+            transforms: (n_residues, 6) array from local_transforms().
+            source_frame: Frame definition for residue i (must match local_transforms).
+                REQUIRED - no default to make frame choice explicit.
+            target_frame: Frame definition for residue i+1 (must match local_transforms).
+                REQUIRED - no default to make frame choice explicit.
+
+        Returns:
+            Polymer with GLOBAL coordinates (chain assembled in world frame).
+
+        Raises:
+            TypeError: If source_frame or target_frame is None (fail-fast).
+
+        Algorithm:
+            1. First residue placed at global origin
+            2. For each subsequent residue i:
+               a. Compute source_frame in residue i-1 (now in global coords)
+               b. Apply transforms[i-1] to get target_frame position for residue i
+               c. Compute target_frame in residue i's local coords
+               d. Align local target_frame to global target_frame position
+
+        Contract:
+            >>> transforms = polymer.local_transforms(src, tgt)
+            >>> aligned, _ = polymer.align(frame=tgt)
+            >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
+            >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
+        """
+        from ..geometry.transforms import (
+            apply_relative_transform,
+            extract_frame_positions,
+            frame_from_positions,
+            rigid_align,
+        )
+
+        # Fail-fast: require both frames
+        if source_frame is None:
+            raise TypeError("source_frame is required (got None)")
+        if target_frame is None:
+            raise TypeError("target_frame is required (got None)")
+
+        n_residues = self.size(Scale.RESIDUE)
+        if transforms.shape[0] != n_residues:
+            raise ValueError(
+                f"transforms has {transforms.shape[0]} rows but polymer has "
+                f"{n_residues} residues"
+            )
+
+        coords = self.coordinates
+        counts = self.counts(Scale.RESIDUE)
+
+        # Build global coordinates
+        global_coords = ops.clone(coords)
+
+        # Compute atom offsets
+        atom_offsets = [0]
+        for i in range(n_residues):
+            atom_offsets.append(atom_offsets[-1] + int(counts[i]))
+
+        # First residue stays at origin (its local coords are already aligned)
+        # For subsequent residues, compute frame alignment
+        for i in range(1, n_residues):
+            # Get previous residue's atoms (now in global coords)
+            prev_start, prev_end = atom_offsets[i - 1], atom_offsets[i]
+            prev_global = global_coords[prev_start:prev_end]
+            prev_atoms = self.atoms[prev_start:prev_end]
+
+            # Compute source_frame in previous residue (in global coords)
+            src_positions = extract_frame_positions(prev_global, prev_atoms, source_frame)
+            src_origin, src_R = frame_from_positions(src_positions)
+
+            # Apply transform to get target_frame position for current residue
+            target_origin, target_R = apply_relative_transform(
+                src_origin, src_R, transforms[i - 1]
+            )
+
+            # Get current residue's atoms (still in local coords)
+            curr_start, curr_end = atom_offsets[i], atom_offsets[i + 1]
+            curr_local = coords[curr_start:curr_end]
+            curr_atoms = self.atoms[curr_start:curr_end]
+
+            # Compute target_frame in current residue's local coords
+            tgt_positions = extract_frame_positions(curr_local, curr_atoms, target_frame)
+            tgt_local_origin, tgt_local_R = frame_from_positions(tgt_positions)
+
+            # Align local target_frame to global target_frame position
+            global_coords[curr_start:curr_end] = rigid_align(
+                curr_local, tgt_local_origin, tgt_local_R, target_origin, target_R
+            )
 
         return self.copy(coordinates=global_coords)
 
@@ -1409,6 +1686,8 @@ class Polymer(AtomContainer):
         coordinates: Array | None = None,
         transform: Array | None = None,
         name: str = "A",
+        source_frame: "FrameDefinition | None" = None,
+        target_frame: "FrameDefinition | None" = None,
         **fields,
     ) -> Polymer:
         """
@@ -1435,6 +1714,10 @@ class Polymer(AtomContainer):
                 If provided, positions the residue relative to the previous one.
                 If None, coordinates are used as absolute positions.
             name: Chain name (only used when extending from empty polymer).
+            source_frame: Frame definition for the last residue (where transform
+                originates). If None, uses the default from LINKING_BY_TYPE.
+            target_frame: Frame definition for the new residue (where transform
+                targets). If None, uses the default from LINKING_BY_TYPE.
             **fields: Field arrays to concatenate (atoms, elements, etc.).
                 Must match fields on this polymer at ATOM/RESIDUE scale.
 
@@ -1454,7 +1737,8 @@ class Polymer(AtomContainer):
             if transform is not None:
                 # Position relative to previous residue using transform
                 fields['coordinates'] = self._position_new_residue(
-                    coordinates, transform, fields.get('atoms')
+                    coordinates, transform, fields.get('atoms'),
+                    source_frame=source_frame, target_frame=target_frame,
                 )
             else:
                 # Use coordinates as absolute positions
@@ -1525,12 +1809,18 @@ class Polymer(AtomContainer):
         *,
         residue: Residue | None = None,
         name: str = "A",
+        source_frame: "FrameDefinition | None" = None,
+        target_frame: "FrameDefinition | None" = None,
     ) -> Polymer:
         """
         Append a residue to the polymer chain.
 
         Automatically derives atoms and elements from an AtomGroup. This is the
         primary method for building chains autoregressively.
+
+        This method uses the LOCAL FRAME paradigm when positioning residues:
+        - source_frame: Frame in the last residue (5'/N-terminal side)
+        - target_frame: Frame in the new residue (3'/C-terminal side)
 
         Args:
             atom_group: AtomGroup defining the atoms (Residue.A, model.atoms, etc.)
@@ -1541,6 +1831,12 @@ class Polymer(AtomContainer):
             residue: Residue type for sequence field. Required for AtomGroup
                 subsets that don't have a .value attribute.
             name: Chain name (only used for first residue).
+            source_frame: Frame definition for the last residue (where transform
+                originates). If None, uses the default from LINKING_BY_TYPE
+                (e.g., O3P_FRAME for RNA/DNA).
+            target_frame: Frame definition for the new residue (where transform
+                targets). If None, uses the default from LINKING_BY_TYPE
+                (e.g., P_FRAME for RNA/DNA).
 
         Returns:
             New Polymer with the residue appended.
@@ -1564,6 +1860,15 @@ class Polymer(AtomContainer):
             >>>
             >>> # Build with model's atom subset
             >>> p = p.append(model.atoms, LocalCoordinates(coords, transform), residue=model.residue)
+            >>>
+            >>> # Build with explicit frames (ML-style same-frame transforms)
+            >>> from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+            >>> p = p.append(
+            ...     Residue.C,
+            ...     LocalCoordinates(coords, transform),
+            ...     source_frame=GLYCOSIDIC_FRAME,
+            ...     target_frame=GLYCOSIDIC_FRAME,
+            ... )
         """
         from ..geometry import LocalCoordinates
 
@@ -1590,7 +1895,8 @@ class Polymer(AtomContainer):
 
         return self._append(
             residue, actual_coords, actual_transform,
-            atoms=atom_arr, elements=elem_arr, name=name
+            atoms=atom_arr, elements=elem_arr, name=name,
+            source_frame=source_frame, target_frame=target_frame,
         )
 
     def _position_new_residue(
@@ -1598,8 +1904,29 @@ class Polymer(AtomContainer):
         coords: Array,
         transform: Array,
         atoms: Array | None,
+        *,
+        source_frame: "FrameDefinition | None" = None,
+        target_frame: "FrameDefinition | None" = None,
     ) -> Array:
-        """Position a new residue relative to the last residue using transform."""
+        """
+        Position a new residue relative to the last residue using transform.
+
+        This method uses the LOCAL FRAME paradigm:
+        - source_frame: Frame in the last residue (where transform originates)
+        - target_frame: Frame in the new residue (where transform targets)
+
+        Args:
+            coords: (n_atoms, 3) local coordinates of the new residue.
+            transform: (6,) SE(3) transform [axis_angle, translation].
+            atoms: (n_atoms,) atom type indices for the new residue.
+            source_frame: Frame definition for the last residue. If None,
+                uses link_def.prev_frame (e.g., O3P_FRAME for RNA).
+            target_frame: Frame definition for the new residue. If None,
+                uses link_def.next_frame (e.g., P_FRAME for RNA).
+
+        Returns:
+            (n_atoms, 3) global coordinates of the new residue.
+        """
         from ..biochemistry.linking import LINKING_BY_TYPE
         from ..geometry.transforms import (
             apply_relative_transform,
@@ -1611,21 +1938,34 @@ class Polymer(AtomContainer):
         # Get last residue's state
         last_coords, last_atoms, last_res_type = self._residue_coords(-1)
 
-        # Get linking definition
+        # Get linking definition for default frames
         link_def = LINKING_BY_TYPE.get(last_res_type.molecule_type)
-        if link_def is None:
-            raise ValueError(
-                f"No linking definition for molecule type {last_res_type.molecule_type}. "
-                f"Cannot extend chains of this type."
-            )
 
-        # Compute prev frame (e.g., O3' for RNA) from last residue
+        # Determine source frame (in last residue)
+        if source_frame is None:
+            if link_def is None:
+                raise ValueError(
+                    f"No linking definition for molecule type {last_res_type.molecule_type}. "
+                    f"Pass source_frame= explicitly."
+                )
+            source_frame = link_def.prev_frame
+
+        # Determine target frame (in new residue)
+        if target_frame is None:
+            if link_def is None:
+                raise ValueError(
+                    f"No linking definition for molecule type {last_res_type.molecule_type}. "
+                    f"Pass target_frame= explicitly."
+                )
+            target_frame = link_def.next_frame
+
+        # Compute source frame (e.g., O3' for RNA) from last residue
         prev_positions = extract_frame_positions(
-            last_coords, last_atoms, link_def.prev_frame
+            last_coords, last_atoms, source_frame
         )
         prev_origin, prev_R = frame_from_positions(prev_positions)
 
-        # Apply transform to get target next frame position
+        # Apply transform to get target frame position
         target_origin, target_R = apply_relative_transform(prev_origin, prev_R, transform)
 
         # Position the new residue
@@ -1633,12 +1973,12 @@ class Polymer(AtomContainer):
             # Ensure atoms is an array
             if isinstance(atoms, list):
                 atoms = np.asarray(atoms)
-            # Compute next frame (e.g., P for RNA) from new residue
+            # Compute target frame (e.g., P for RNA) from new residue
             next_positions = extract_frame_positions(
-                coords, atoms, link_def.next_frame
+                coords, atoms, target_frame
             )
             next_origin, next_R = frame_from_positions(next_positions)
-            # Align new residue so its next frame matches target
+            # Align new residue so its target frame matches the computed position
             return rigid_align(coords, next_origin, next_R, target_origin, target_R)
         else:
             # No atoms provided - just translate to target origin

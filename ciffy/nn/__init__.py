@@ -154,14 +154,6 @@ from .residue import (
     ResidueVAE,
 )
 
-# PCA + Quantile Spline model
-from .pca_quantile import (
-    PCAQuantileConfig,
-    PCAQuantileResidueModel,
-    fit_all_residues,
-    fit_pca_quantile,
-)
-
 # Autoregressive models
 from .autoregressive import (
     AtomARModel,
@@ -262,11 +254,6 @@ __all__ = [
     "ResidueEncoder",
     "ResidueDecoder",
     "ResidueVAE",
-    # PCA + Quantile Spline model
-    "PCAQuantileResidueModel",
-    "PCAQuantileConfig",
-    "fit_pca_quantile",
-    "fit_all_residues",
     # Autoregressive models
     "ResidueLatentARModel",
     "ResidueLatentARModelConfig",

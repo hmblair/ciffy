@@ -27,16 +27,11 @@ class TestPackByResidue:
         d_features = 64
         features = torch.randn(n_atoms, d_features)
 
-        # Create mock counts/membership (5 residues with varying sizes)
+        # Create counts (5 residues with varying sizes)
         counts = torch.tensor([20, 25, 15, 30, 10])
-        membership = torch.repeat_interleave(
-            torch.arange(5), counts
-        )
 
         # Pack
-        packed, mask, sort_idx, positions, membership_sorted = pack_by_residue(
-            features, counts, membership
-        )
+        packed, mask = pack_by_residue(features, counts)
 
         # Check packed shape
         n_residues = 5
@@ -45,9 +40,7 @@ class TestPackByResidue:
         assert mask.shape == (n_residues, max_atoms)
 
         # Unpack
-        unpacked = unpack_by_residue(
-            packed, mask, sort_idx, positions, membership_sorted
-        )
+        unpacked = unpack_by_residue(packed, mask)
 
         # Should match original
         assert unpacked.shape == features.shape
@@ -64,11 +57,8 @@ class TestPackByResidue:
 
         # Unequal residue sizes
         counts = torch.tensor([10, 5, 20, 15])
-        membership = torch.repeat_interleave(
-            torch.arange(4), counts
-        )
 
-        packed, mask, _, _, _ = pack_by_residue(features, counts, membership)
+        packed, mask = pack_by_residue(features, counts)
 
         # Check mask sums match counts
         max_atoms = counts.max().item()

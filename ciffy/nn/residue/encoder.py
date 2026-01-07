@@ -142,10 +142,7 @@ class ResidueEncoder(nn.Module):
 
         # Pack for within-residue attention
         counts = polymer.counts(Scale.RESIDUE)
-        membership = polymer.membership(Scale.RESIDUE)
-        x_packed, mask, sort_idx, positions, membership_sorted = pack_by_residue(
-            x, counts, membership
-        )
+        x_packed, mask = pack_by_residue(x, counts)
 
         # Apply transformer layers
         for layer in self.encoder_layers:

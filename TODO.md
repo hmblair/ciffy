@@ -74,6 +74,42 @@ class MaskedPCAFlow(PCAFlow):
 
 ## MEDIUM Priority
 
+### Add Polymer.apply_transforms() Method
+
+**Goal**: Add a method to apply relative per-residue transforms to build/rebuild a chain.
+
+**Context**: Currently `align()` extracts per-residue frames, but there's no inverse operation to apply transforms back. This is needed for generative models that predict link transforms.
+
+**Proposed API**:
+```python
+def apply_transforms(self, transforms: Array) -> Polymer:
+    """
+    Apply relative per-residue transforms to build a chain.
+
+    Each transform specifies how to position residue i relative to residue i-1.
+    The first residue stays in place; subsequent residues are positioned by
+    applying the transform to the previous residue's linking frame.
+
+    Args:
+        transforms: (R, 6) array where R is the number of residues.
+            Each row is [axis-angle (3), translation (3)] specifying the
+            relative SE(3) transform from the previous residue's frame.
+            transforms[0] is ignored (first residue stays in place).
+
+    Returns:
+        New Polymer with transformed coordinates.
+    """
+```
+
+**Implementation**: See `_position_new_residue()` for reference - uses `extract_frame_positions`, `frame_from_positions`, `apply_relative_transform`, and `rigid_align` from `ciffy.geometry.transforms`.
+
+**Files affected**:
+- `ciffy/polymer/polymer.py` - Add `apply_transforms()` method after `align()`
+
+**Effort**: 1-2 hours
+
+---
+
 ### Consolidate Residue Extraction Code
 
 **Goal**: Reduce duplication between `ciffy/operations/extract.py` and `ciffy/nn/flow/residue/data.py`.

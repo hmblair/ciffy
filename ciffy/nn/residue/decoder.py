@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 
 from ciffy import Scale
-from ciffy.biochemistry import NUM_RESIDUES
 from ciffy.nn import PolymerEmbedding
+from ciffy.nn.layers.transformer import RMSNorm
 from ciffy.polymer import Polymer
 
 
@@ -67,7 +67,7 @@ class ResidueDecoder(nn.Module):
         # Coordinate decoder
         self.coord_decoder_proj = nn.Sequential(
             nn.Linear(latent_dim + embed_dim, d_model),
-            nn.LayerNorm(d_model),
+            RMSNorm(d_model),
             nn.SiLU(),
         )
 
@@ -75,7 +75,7 @@ class ResidueDecoder(nn.Module):
         for _ in range(n_layers - 1):
             coord_layers.extend([
                 nn.Linear(d_model, d_model),
-                nn.LayerNorm(d_model),
+                RMSNorm(d_model),
                 nn.SiLU(),
             ])
         coord_layers.append(nn.Linear(d_model, 3))
@@ -84,14 +84,17 @@ class ResidueDecoder(nn.Module):
         nn.init.zeros_(coord_layers[-1].bias)
         self.coord_head = nn.Sequential(*coord_layers)
 
-        # Transform decoder
-        self.residue_embed = nn.Embedding(NUM_RESIDUES, d_model // 4)
+        # Transform decoder (residue-level)
+        self.residue_embedding = PolymerEmbedding(
+            scale=Scale.RESIDUE,
+            residue_dim=d_model // 4,
+        )
         self.transform_decoder = nn.Sequential(
-            nn.Linear(latent_dim + d_model // 4, d_model),
-            nn.LayerNorm(d_model),
+            nn.Linear(latent_dim + self.residue_embedding.output_dim, d_model),
+            RMSNorm(d_model),
             nn.SiLU(),
             nn.Linear(d_model, d_model),
-            nn.LayerNorm(d_model),
+            RMSNorm(d_model),
             nn.SiLU(),
             nn.Linear(d_model, 6),
         )
@@ -126,7 +129,7 @@ class ResidueDecoder(nn.Module):
         coords = self.coord_head(x)
 
         # Decode transforms
-        res_emb = self.residue_embed(polymer.sequence)
+        res_emb = self.residue_embedding(polymer)
         t_input = torch.cat([z, res_emb], dim=-1)
         transforms = self.transform_decoder(t_input)
 

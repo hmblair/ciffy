@@ -98,6 +98,19 @@ polymer.to('cuda')
 polymer.write('output.cif')
 ```
 
+### Saving Predicted Coordinates
+
+To save predicted coordinates to a `.cif` file, create a template from the sequence and use `copy()` to assign coordinates:
+
+```python
+# Create template, assign predicted coords, save to file
+template = ciffy.from_sequence('acgu')
+predicted = template.copy(coordinates=pred_coords)
+predicted.write('output.cif')
+```
+
+Note: Polymers are immutable - `copy()` returns a new polymer rather than modifying in place.
+
 ### Building Chains
 
 ```python

@@ -50,6 +50,7 @@ class ResidueEncoder(nn.Module):
         super().__init__()
         self.latent_dim = latent_dim
         self.d_model = d_model
+        self.n_heads = n_heads
 
         # Default embedding dimensions
         if atom_dim is None:
@@ -83,6 +84,10 @@ class ResidueEncoder(nn.Module):
             )
             for _ in range(n_layers)
         ])
+
+        # Distance-based attention bias (per head)
+        self.distance_bias = nn.Linear(1, n_heads, bias=False)
+        nn.init.normal_(self.distance_bias.weight, std=0.1)
 
         # Transform encoder (always included)
         self.transform_encoder = nn.Sequential(
@@ -144,9 +149,29 @@ class ResidueEncoder(nn.Module):
         counts = polymer.counts(Scale.RESIDUE)
         x_packed, mask = pack_by_residue(x, counts)
 
-        # Apply transformer layers
+        # Pack coordinates and compute pairwise distances
+        coords_packed, _ = pack_by_residue(polymer.coordinates, counts)
+        diff = coords_packed.unsqueeze(2) - coords_packed.unsqueeze(1)
+        dists = diff.norm(dim=-1, keepdim=True)  # (n_res, max_atoms, max_atoms, 1)
+
+        # Convert distances to per-head attention bias
+        attn_bias = self.distance_bias(dists)  # (n_res, max_atoms, max_atoms, n_heads)
+        attn_bias = attn_bias.permute(0, 3, 1, 2)  # (n_res, n_heads, max_atoms, max_atoms)
+
+        # Mask padded positions (keys only - queries handled by output masking)
+        attn_bias = attn_bias.masked_fill(~mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+
+        # Reshape for transformer: (n_res * n_heads, max_atoms, max_atoms)
+        n_residues, max_atoms = x_packed.shape[:2]
+        attn_bias = attn_bias.reshape(n_residues * self.n_heads, max_atoms, max_atoms)
+
+        # Apply transformer layers with distance bias
         for layer in self.encoder_layers:
-            x_packed = layer(x_packed, src_key_padding_mask=~mask)
+            x_packed = layer(x_packed, src_mask=attn_bias)
+            # Zero out padded positions (use where to handle NaN)
+            x_packed = torch.where(
+                mask.unsqueeze(-1), x_packed, torch.zeros_like(x_packed)
+            )
 
         # Mean pool within residues
         x_packed = x_packed * mask.unsqueeze(-1).float()

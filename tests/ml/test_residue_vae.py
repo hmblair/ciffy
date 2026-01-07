@@ -261,3 +261,20 @@ class TestResidueVAE:
         for name, param in vae.named_parameters():
             if param.requires_grad:
                 assert param.grad is not None, f"No gradient for {name}"
+
+    def test_sample(self):
+        """Test sampling from prior."""
+        from ciffy.nn.residue import ResidueVAE
+
+        vae = ResidueVAE(latent_dim=16, d_model=32, encoder_layers=1, decoder_layers=1)
+
+        # Sample a short sequence
+        sampled = vae.sample("acguacgu", temperature=1.0)
+
+        # Check output is a valid Polymer
+        assert isinstance(sampled, ciffy.Polymer)
+        assert sampled.size(Scale.RESIDUE) == 8
+        assert sampled.sequence_str() == "acguacgu"
+
+        # Check coordinates are finite
+        assert sampled.coordinates.isfinite().all()

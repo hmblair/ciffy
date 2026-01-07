@@ -5,7 +5,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+import ciffy
+from ciffy import Scale
 from ciffy.polymer import Polymer
+from ciffy.geometry.transforms import apply_relative_transform
 
 from .encoder import ResidueEncoder
 from .decoder import ResidueDecoder
@@ -139,3 +142,67 @@ class ResidueVAE(nn.Module):
         z, mu, logvar = self.encode(polymer, transforms, return_distribution=True)
         coords, pred_transforms = self.decode(z, polymer)
         return coords, pred_transforms, mu, logvar
+
+    @torch.no_grad()
+    def sample(
+        self,
+        sequence: str,
+        temperature: float = 1.0,
+        device: str | torch.device | None = None,
+    ) -> Polymer:
+        """
+        Sample a polymer conformation from the prior.
+
+        Creates a template from the sequence, samples latent vectors from N(0,1),
+        decodes to local coordinates and transforms, then chains residues together.
+
+        Args:
+            sequence: Polymer sequence (e.g., "acguacgu" for RNA).
+            temperature: Sampling temperature. Higher = more diverse.
+            device: Device for computation. If None, uses model's device.
+
+        Returns:
+            Polymer with sampled coordinates.
+
+        Example:
+            >>> model = ResidueVAE(latent_dim=32)
+            >>> sampled = model.sample("acguacguacgu", temperature=0.8)
+            >>> sampled.write("sampled.cif")
+        """
+        self.eval()
+
+        # Get device from model parameters if not specified
+        if device is None:
+            device = next(self.parameters()).device
+
+        # Create template polymer (heavy atoms only)
+        template = ciffy.from_sequence(sequence).torch().heavy().to(device)
+        n_residues = template.size(Scale.RESIDUE)
+
+        # Sample from prior
+        z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
+
+        # Decode to local coords and transforms
+        local_coords, transforms = self.decode(z, template)
+
+        # Chain residues together using transforms
+        counts = template.counts(Scale.RESIDUE)
+        global_coords = local_coords.clone()
+
+        current_R = torch.eye(3, device=device)
+        current_origin = torch.zeros(3, device=device)
+
+        atom_offset = 0
+        for i in range(n_residues):
+            n_atoms_i = counts[i].item()
+            res_coords = local_coords[atom_offset:atom_offset + n_atoms_i]
+            global_coords[atom_offset:atom_offset + n_atoms_i] = res_coords @ current_R.T + current_origin
+
+            if i < n_residues - 1:
+                current_origin, current_R = apply_relative_transform(
+                    current_origin, current_R, transforms[i]
+                )
+
+            atom_offset += n_atoms_i
+
+        return template.cpu().copy(coordinates=global_coords.cpu())

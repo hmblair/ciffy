@@ -9,6 +9,7 @@ from ciffy import Scale
 from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
 from ciffy.geometry.transforms import compute_relative_transform
 from ciffy.nn import PolymerEmbedding
+from ciffy.nn.layers.transformer import Transformer, RMSNorm
 from ciffy.polymer import Polymer
 
 from .packing import pack_by_residue
@@ -21,6 +22,9 @@ class ResidueEncoder(nn.Module):
     Uses packed attention within residues to aggregate atom-level features,
     then adds inter-residue transform information before projecting to
     latent space.
+
+    Uses modern transformer architecture (RMSNorm, SwiGLU, Flash Attention)
+    with distance-based attention bias instead of positional encodings.
 
     Args:
         latent_dim: Dimension of the latent space per residue.
@@ -72,18 +76,18 @@ class ResidueEncoder(nn.Module):
         # Project to model dimension
         self.encoder_proj = nn.Sequential(
             nn.Linear(embed_dim, d_model),
-            nn.LayerNorm(d_model),
+            RMSNorm(d_model),
             nn.SiLU(),
         )
 
-        # Transformer layers for within-residue attention
-        self.encoder_layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(
-                d_model, n_heads, d_model * 4,
-                batch_first=True, norm_first=True, dropout=dropout,
-            )
-            for _ in range(n_layers)
-        ])
+        # Transformer for within-residue attention (no RoPE, uses distance bias)
+        self.transformer = Transformer(
+            d_model=d_model,
+            num_layers=n_layers,
+            num_heads=n_heads,
+            dropout=dropout,
+            use_rope=False,  # Use distance-based bias instead
+        )
 
         # Distance-based attention bias (per head)
         self.distance_bias = nn.Linear(1, n_heads, bias=False)
@@ -92,7 +96,7 @@ class ResidueEncoder(nn.Module):
         # Transform encoder (always included)
         self.transform_encoder = nn.Sequential(
             nn.Linear(6, d_model),
-            nn.LayerNorm(d_model),
+            RMSNorm(d_model),
             nn.SiLU(),
             nn.Linear(d_model, d_model),
         )
@@ -154,26 +158,19 @@ class ResidueEncoder(nn.Module):
         diff = coords_packed.unsqueeze(2) - coords_packed.unsqueeze(1)
         dists = diff.norm(dim=-1, keepdim=True)  # (n_res, max_atoms, max_atoms, 1)
 
-        # Convert distances to per-head attention bias
-        attn_bias = self.distance_bias(dists)  # (n_res, max_atoms, max_atoms, n_heads)
-        attn_bias = attn_bias.permute(0, 3, 1, 2)  # (n_res, n_heads, max_atoms, max_atoms)
+        # Convert distances to per-head attention bias: (n_res, n_heads, max_atoms, max_atoms)
+        attn_bias = self.distance_bias(dists).permute(0, 3, 1, 2)
 
-        # Mask padded positions (keys only - queries handled by output masking)
-        attn_bias = attn_bias.masked_fill(~mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+        # Mask padded positions in attention (set to -inf for keys)
+        # mask shape: (n_res, max_atoms) where True = valid
+        pad_mask = ~mask  # True = padded (to be masked out)
+        attn_bias = attn_bias.masked_fill(pad_mask.unsqueeze(1).unsqueeze(2), float('-inf'))
 
-        # Reshape for transformer: (n_res * n_heads, max_atoms, max_atoms)
-        n_residues, max_atoms = x_packed.shape[:2]
-        attn_bias = attn_bias.reshape(n_residues * self.n_heads, max_atoms, max_atoms)
+        # Apply transformer with distance-based attention bias
+        # Transformer expects: x (batch, seq, dim), mask (batch, seq), attn_bias (batch, heads, seq, seq)
+        x_packed = self.transformer(x_packed, mask=pad_mask, attn_bias=attn_bias)
 
-        # Apply transformer layers with distance bias
-        for layer in self.encoder_layers:
-            x_packed = layer(x_packed, src_mask=attn_bias)
-            # Zero out padded positions (use where to handle NaN)
-            x_packed = torch.where(
-                mask.unsqueeze(-1), x_packed, torch.zeros_like(x_packed)
-            )
-
-        # Mean pool within residues
+        # Mean pool within residues (mask already applied by transformer)
         x_packed = x_packed * mask.unsqueeze(-1).float()
         pooled = x_packed.sum(dim=1) / counts.unsqueeze(-1).float()
 

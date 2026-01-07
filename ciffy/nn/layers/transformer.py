@@ -308,9 +308,17 @@ class SwiGLU(nn.Module if TORCH_AVAILABLE else object):
 
 class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
     """
-    Multi-head attention with Rotary Position Embeddings.
+    Multi-head attention with optional Rotary Position Embeddings.
 
     Uses efficient scaled dot-product attention (Flash Attention) when available.
+
+    Args:
+        d_model: Model dimension.
+        num_heads: Number of attention heads.
+        dropout: Dropout probability.
+        max_seq_len: Maximum sequence length for RoPE.
+        use_rope: Whether to use Rotary Position Embeddings. Set to False
+            when using custom attention biases (e.g., distance-based).
     """
 
     def __init__(
@@ -319,6 +327,7 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         num_heads: int,
         dropout: float = 0.0,
         max_seq_len: int = 2048,
+        use_rope: bool = True,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required")
@@ -330,19 +339,32 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
+        self.use_rope = use_rope
 
         self.qkv_proj = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
-        self.rope = RotaryPositionEmbedding(self.head_dim, max_seq_len)
 
-    def forward(self, x: "torch.Tensor", mask: Optional["torch.Tensor"] = None) -> "torch.Tensor":
+        if use_rope:
+            self.rope = RotaryPositionEmbedding(self.head_dim, max_seq_len)
+        else:
+            self.rope = None
+
+    def forward(
+        self,
+        x: "torch.Tensor",
+        mask: Optional["torch.Tensor"] = None,
+        attn_bias: Optional["torch.Tensor"] = None,
+    ) -> "torch.Tensor":
         """
         Apply multi-head attention.
 
         Args:
             x: Input tensor of shape (batch, seq, d_model)
             mask: Padding mask of shape (batch, seq) where True = masked
+            attn_bias: Optional attention bias of shape (batch, heads, seq, seq)
+                or (batch, seq, seq) to be broadcast across heads. Added to
+                attention scores before softmax. Use -inf for hard masking.
 
         Returns:
             Output tensor of shape (batch, seq, d_model)
@@ -396,23 +418,37 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        q, k = self.rope(q, k, seq_len=L)
+        # Apply RoPE if enabled
+        if self.rope is not None:
+            q, k = self.rope(q, k, seq_len=L)
+
+        # Build combined attention mask from padding mask and custom bias
+        combined_mask = None
+
+        if mask is not None:
+            # Padding mask: (batch, seq) -> (batch, 1, 1, seq)
+            combined_mask = mask.unsqueeze(1).unsqueeze(2).expand(-1, -1, L, -1)
+            combined_mask = combined_mask.float().masked_fill(combined_mask, float("-inf"))
+
+        if attn_bias is not None:
+            # attn_bias: (batch, heads, seq, seq) or (batch, seq, seq)
+            if attn_bias.dim() == 3:
+                attn_bias = attn_bias.unsqueeze(1)  # Add heads dim
+            if combined_mask is not None:
+                combined_mask = combined_mask + attn_bias
+            else:
+                combined_mask = attn_bias
 
         if hasattr(F, "scaled_dot_product_attention"):
-            attn_mask = None
-            if mask is not None:
-                attn_mask = mask.unsqueeze(1).unsqueeze(2).expand(-1, -1, L, -1)
-                attn_mask = attn_mask.float().masked_fill(attn_mask, float("-inf"))
-
             out = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=attn_mask,
+                q, k, v, attn_mask=combined_mask,
                 dropout_p=self.dropout.p if self.training else 0.0,
             )
         else:
             scale = self.head_dim ** -0.5
             attn = torch.matmul(q, k.transpose(-2, -1)) * scale
-            if mask is not None:
-                attn = attn.masked_fill(mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+            if combined_mask is not None:
+                attn = attn + combined_mask
             attn = F.softmax(attn, dim=-1)
 
             # Check for NaN after softmax (can happen with all-masked sequences)
@@ -431,11 +467,19 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
 
 class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
     """
-    Pre-LN Transformer block with RMSNorm, RoPE, and SwiGLU.
+    Pre-LN Transformer block with RMSNorm, optional RoPE, and SwiGLU.
 
     Architecture:
         x = x + Attention(RMSNorm(x))
         x = x + SwiGLU(RMSNorm(x))
+
+    Args:
+        d_model: Model dimension.
+        num_heads: Number of attention heads.
+        d_ff: Feedforward hidden dimension (default: auto-computed for SwiGLU).
+        dropout: Dropout probability.
+        max_seq_len: Maximum sequence length for RoPE.
+        use_rope: Whether to use Rotary Position Embeddings.
     """
 
     def __init__(
@@ -445,6 +489,7 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
         max_seq_len: int = 2048,
+        use_rope: bool = True,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required")
@@ -452,12 +497,17 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
 
         self.norm1 = RMSNorm(d_model)
         self.norm2 = RMSNorm(d_model)
-        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope)
         self.ffn = SwiGLU(d_model, d_ff, dropout)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: "torch.Tensor", mask: Optional["torch.Tensor"] = None) -> "torch.Tensor":
-        x = x + self.dropout(self.attn(self.norm1(x), mask=mask))
+    def forward(
+        self,
+        x: "torch.Tensor",
+        mask: Optional["torch.Tensor"] = None,
+        attn_bias: Optional["torch.Tensor"] = None,
+    ) -> "torch.Tensor":
+        x = x + self.dropout(self.attn(self.norm1(x), mask=mask, attn_bias=attn_bias))
         x = x + self.dropout(self.ffn(self.norm2(x)))
         return x
 
@@ -587,7 +637,7 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
     """
     Modern Transformer encoder.
 
-    Uses Pre-LN architecture with RMSNorm, RoPE, and SwiGLU - following
+    Uses Pre-LN architecture with RMSNorm, optional RoPE, and SwiGLU - following
     best practices from LLaMA, GPT-NeoX, and PaLM.
 
     Args:
@@ -597,11 +647,18 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         d_ff: Feedforward hidden dimension (default: auto-computed for SwiGLU)
         dropout: Dropout probability
         max_seq_len: Maximum sequence length for RoPE
+        use_rope: Whether to use Rotary Position Embeddings. Set to False
+            when using custom attention biases (e.g., distance-based).
 
     Example:
         >>> model = Transformer(d_model=256, num_layers=4, num_heads=8)
         >>> x = torch.randn(2, 100, 256)
         >>> out = model(x)  # (2, 100, 256)
+        >>>
+        >>> # Without RoPE, with custom attention bias
+        >>> model = Transformer(d_model=256, num_layers=4, num_heads=8, use_rope=False)
+        >>> attn_bias = torch.randn(2, 8, 100, 100)  # distance-based bias
+        >>> out = model(x, attn_bias=attn_bias)
     """
 
     def __init__(
@@ -612,6 +669,7 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
         max_seq_len: int = 2048,
+        use_rope: bool = True,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required")
@@ -622,18 +680,25 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         self.num_heads = num_heads
 
         self.layers = nn.ModuleList([
-            TransformerBlock(d_model, num_heads, d_ff, dropout, max_seq_len)
+            TransformerBlock(d_model, num_heads, d_ff, dropout, max_seq_len, use_rope)
             for _ in range(num_layers)
         ])
         self.final_norm = RMSNorm(d_model)
 
-    def forward(self, x: "torch.Tensor", mask: Optional["torch.Tensor"] = None) -> "torch.Tensor":
+    def forward(
+        self,
+        x: "torch.Tensor",
+        mask: Optional["torch.Tensor"] = None,
+        attn_bias: Optional["torch.Tensor"] = None,
+    ) -> "torch.Tensor":
         """
         Process input through transformer layers.
 
         Args:
             x: Input tensor (batch, seq, d_model)
             mask: Padding mask (batch, seq) where True = masked/ignored
+            attn_bias: Optional attention bias of shape (batch, heads, seq, seq)
+                or (batch, seq, seq). Added to attention scores before softmax.
 
         Returns:
             Output tensor (batch, seq, d_model)
@@ -720,7 +785,7 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
 
         # Process through layers
         for i, layer in enumerate(self.layers):
-            x = layer(x, mask=mask)
+            x = layer(x, mask=mask, attn_bias=attn_bias)
 
             # Check for NaN propagation after each layer (debug mode only)
             if logger.isEnabledFor(logging.DEBUG) and torch.isnan(x).any():

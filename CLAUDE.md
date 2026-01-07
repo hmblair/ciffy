@@ -29,9 +29,10 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 ### Data Locations
 
 ```
-Local RNA DB:    /Users/hmblair/academic/data/structures/rna
-Remote RNA DB:   /home/hmblair/data/rna
-Output dir:      outputs/
+Local RNA DB:                     /Users/hmblair/academic/data/structures/rna
+Remote RNA DB (rex gpu):          /home/hmblair/data/rna
+Remote RNA DB (rex sherlock-gpu): /scratch/users/hmblair/structures/rna
+Output dir:                       outputs/
 ```
 
 ### Git Safety

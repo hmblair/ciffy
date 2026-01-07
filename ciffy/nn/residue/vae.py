@@ -224,8 +224,10 @@ class ResidueVAE(nn.Module):
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
         local_coords, transforms = self.decode(z, template)
 
+        from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+
         return (
             template
             .copy(coordinates=local_coords)
-            .apply_transforms(transforms)
+            .apply_local_transforms(transforms, GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
         )

@@ -1,19 +1,15 @@
-"""Variational Autoencoder models for ciffy.
+"""Variational Autoencoder utilities for ciffy.
 
-Provides VAE-based generative models that share the same interface
-as flow models, enabling use with PolymerModel for chain assembly.
+Provides shared loss functions and utilities for VAE-based models.
 
-Models:
-    ConsolidatedResidueVAEModel: Shared encoder VAE for all residue types.
+Note:
+    The residue-level VAE models have been replaced by ciffy.nn.residue.ResidueVAE.
+    Old models are archived in archive/nn/vae/residue/.
 
 Utilities:
     losses: Shared loss functions (KL divergence, ELBO, beta scheduling).
 """
 
-from .residue import (
-    ConsolidatedResidueVAEModel,
-    ConsolidatedVAEConfig,
-)
 from .losses import (
     compute_kl_divergence,
     get_beta_with_warmup,
@@ -22,9 +18,6 @@ from .losses import (
 )
 
 __all__ = [
-    # Models
-    "ConsolidatedResidueVAEModel",
-    "ConsolidatedVAEConfig",
     # Loss utilities
     "compute_kl_divergence",
     "get_beta_with_warmup",

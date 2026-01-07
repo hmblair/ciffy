@@ -3,6 +3,11 @@
 This module provides LightningModules, DataModules, and Callbacks for training
 ciffy's generative models with PyTorch Lightning.
 
+Note:
+    ResidueFlowModule and ConsolidatedVAEModule have been archived.
+    For new residue-level modeling, use ciffy.nn.residue.ResidueVAE directly.
+    Old code is in archive/nn/lightning/modules/.
+
 Example:
     >>> from ciffy.nn.lightning import LatentDiffusionModule, LatentDiffusionDataModule
     >>> from lightning import Trainer
@@ -22,15 +27,10 @@ from .modules import (
     CoordinateDiffusionDataConfig,
     CoordinateDiffusionFullConfig,
     CoordinateDiffusionModule,
-    ResidueFlowDataConfig,
-    ResidueFlowFullConfig,
-    ResidueFlowModelConfig,
-    ResidueFlowModule,
 )
 from .data import (
     LatentDiffusionDataModule,
     CoordinateDiffusionDataModule,
-    FlowDataModule,
 )
 from .callbacks import (
     EMACallback,
@@ -46,14 +46,9 @@ __all__ = [
     "CoordinateDiffusionDataConfig",
     "CoordinateDiffusionFullConfig",
     "CoordinateDiffusionModule",
-    "ResidueFlowDataConfig",
-    "ResidueFlowFullConfig",
-    "ResidueFlowModelConfig",
-    "ResidueFlowModule",
     # Data modules
     "LatentDiffusionDataModule",
     "CoordinateDiffusionDataModule",
-    "FlowDataModule",
     # Callbacks
     "EMACallback",
     "SampleGenerationCallback",

@@ -1,14 +1,13 @@
 """Training infrastructure for ciffy neural network models.
 
 Provides utilities for training, data splitting, logging, and diagnostics.
+
+Note:
+    The old unified training API (train, load, available_models, register_model_type)
+    has been archived along with the old residue models.
+    For new residue-level modeling, use ciffy.nn.residue.ResidueVAE directly.
 """
 
-from .api import (
-    available_models,
-    load,
-    register_model_type,
-    train,
-)
 from .diagnostics import (
     ActivationTracker,
     GradientTracker,
@@ -32,11 +31,6 @@ from .split import (
 )
 
 __all__ = [
-    # Training API
-    "train",
-    "load",
-    "available_models",
-    "register_model_type",
     # Data splitting
     "DataSplit",
     "DataScalingSplit",

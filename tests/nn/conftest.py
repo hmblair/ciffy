@@ -15,8 +15,6 @@ except ImportError:
 # Tell pytest to ignore all test files if nn module is not available
 if not NN_AVAILABLE:
     collect_ignore = [
-        "test_polymer_flow.py",
-        "test_residue_flow.py",
         "test_trainer_conformance.py",
         "test_training_runner.py",
     ]

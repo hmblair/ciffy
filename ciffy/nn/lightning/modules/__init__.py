@@ -1,4 +1,10 @@
-"""LightningModules for ciffy models."""
+"""LightningModules for ciffy models.
+
+Note:
+    ResidueFlowModule and ConsolidatedVAEModule have been archived.
+    See archive/nn/lightning/modules/ for the old implementations.
+    Use ciffy.nn.residue.ResidueVAE for new residue-level modeling.
+"""
 
 from .base import BaseCiffyModule
 from .vae_base import BaseVAEModule, BaseVAEModelConfig
@@ -11,18 +17,6 @@ from .coordinate_diffusion import (
     CoordinateDiffusionDataConfig,
     CoordinateDiffusionFullConfig,
     CoordinateDiffusionModule,
-)
-from .residue_flow import (
-    ResidueFlowDataConfig,
-    ResidueFlowFullConfig,
-    ResidueFlowModelConfig,
-    ResidueFlowModule,
-)
-from .consolidated_vae import (
-    ConsolidatedVAEDataConfig,
-    ConsolidatedVAEFullConfig,
-    ConsolidatedVAEModelConfig,
-    ConsolidatedVAEModule,
 )
 from .autoregressive import (
     ResidueLatentARModelTrainingConfig,
@@ -45,16 +39,6 @@ __all__ = [
     "CoordinateDiffusionDataConfig",
     "CoordinateDiffusionFullConfig",
     "CoordinateDiffusionModule",
-    # Residue flow
-    "ResidueFlowDataConfig",
-    "ResidueFlowFullConfig",
-    "ResidueFlowModelConfig",
-    "ResidueFlowModule",
-    # Consolidated VAE
-    "ConsolidatedVAEDataConfig",
-    "ConsolidatedVAEFullConfig",
-    "ConsolidatedVAEModelConfig",
-    "ConsolidatedVAEModule",
     # Autoregressive
     "ResidueLatentARModelTrainingConfig",
     "ResidueLatentARModelFullConfig",

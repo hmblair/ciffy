@@ -147,13 +147,11 @@ from .diffusion import (
     update_ema_model,
 )
 
-# Polymer model (works with Flow/VAE)
-from .polymer import PolymerFlowModel, PolymerModel, ResidueGenerativeCore
-
-# VAE models
-from .vae import (
-    ConsolidatedResidueVAEModel,
-    ConsolidatedVAEConfig,
+# Residue-level encoder/decoder (new vectorized implementation)
+from .residue import (
+    ResidueDecoder,
+    ResidueEncoder,
+    ResidueVAE,
 )
 
 # PCA + Quantile Spline model
@@ -174,9 +172,6 @@ from .autoregressive import (
     ResidueLatentARModel,
     ResidueLatentARModelConfig,
 )
-
-# Unified residue model training API (alias for training.api)
-from .training import api as residue
 
 __all__ = [
     # Precision configuration
@@ -263,13 +258,10 @@ __all__ = [
     "CoordinateDenoiser",
     "CoordinateDiffusionConfig",
     "CoordinateDiffusionModel",
-    # Polymer model
-    "PolymerModel",
-    "PolymerFlowModel",  # Deprecated alias
-    "ResidueGenerativeCore",
-    # VAE models
-    "ConsolidatedResidueVAEModel",
-    "ConsolidatedVAEConfig",
+    # Residue-level encoder/decoder
+    "ResidueEncoder",
+    "ResidueDecoder",
+    "ResidueVAE",
     # PCA + Quantile Spline model
     "PCAQuantileResidueModel",
     "PCAQuantileConfig",
@@ -283,8 +275,6 @@ __all__ = [
     "CoordinateARModelConfig",
     "AtomARModel",
     "AtomARModelConfig",
-    # Unified residue training API
-    "residue",
 ]
 
 # Optional geometric deep learning module

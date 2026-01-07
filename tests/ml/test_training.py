@@ -42,7 +42,6 @@ class TestLightningImports:
             BaseCiffyModule,
             LatentDiffusionModule,
             CoordinateDiffusionModule,
-            ResidueFlowModule,
         )
 
     def test_import_data_modules(self):
@@ -50,7 +49,6 @@ class TestLightningImports:
         from ciffy.nn.lightning import (
             LatentDiffusionDataModule,
             CoordinateDiffusionDataModule,
-            FlowDataModule,
         )
 
     def test_import_callbacks(self):
@@ -65,5 +63,4 @@ class TestLightningImports:
         from ciffy.nn.lightning import (
             LatentDiffusionFullConfig,
             CoordinateDiffusionFullConfig,
-            ResidueFlowFullConfig,
         )

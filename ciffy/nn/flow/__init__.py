@@ -1,52 +1,18 @@
 """
-Normalizing flow models for molecular conformations.
+Normalizing flow utilities.
 
-This module provides normalizing flow-based models for learning distributions
-over molecular conformations:
+Note:
+    The residue-level flow models (ResidueFlowModel, PCAFlow) and PolymerModel
+    have been archived. For new residue-level modeling, use:
 
-- `ResidueFlowModel`: Per-residue flow model (PCA + normalizing flow)
-- `load_pretrained`: Load pre-trained models
+        >>> from ciffy.nn.residue import ResidueVAE
 
-Note: `PolymerModel` (formerly `PolymerFlowModel`) has moved to `ciffy.nn.polymer`
-since it works with any residue-level model (Flow, VAE, etc.). Import from there:
+    The old code is preserved in archive/nn/flow/ for reference.
 
-    >>> from ciffy.nn import PolymerModel, ResidueGenerativeCore
-
-Quick Start:
-    >>> import ciffy
-    >>> from ciffy.nn import PolymerModel
-    >>>
-    >>> # Load pre-trained model (if available)
-    >>> model = ciffy.load_flow_model("rna", device="cuda")
-    >>>
-    >>> # Encode polymer coordinates
-    >>> polymer = ciffy.load("structure.cif").poly()
-    >>> latents = model.encode_polymer(polymer)
-    >>>
-    >>> # Sample new conformations
-    >>> samples = model.sample(polymer.sequence, n_samples=10)
-
-Training Custom Models:
-    >>> from ciffy.nn.lightning import ResidueFlowModule, ResidueDataModule
-    >>> from ciffy.biochemistry import Residue
-    >>> import lightning as L
-    >>>
-    >>> # Train a model for each residue type
-    >>> dm = ResidueDataModule(cif_paths, Residue.A)
-    >>> module = ResidueFlowModule(config, Residue.A)
-    >>> trainer = L.Trainer(max_epochs=200)
-    >>> trainer.fit(module, dm)
-    >>> model = module.get_model()
-    >>> model.save("models/A")
+Remaining utilities:
+    - FlowMetrics: Metrics for evaluating normalizing flow models
+    - load_pretrained: Load pre-trained models (if available)
 """
-
-from .residue import (
-    PCAFlow,
-    ResidueFlowModel,
-    ResidueFlowConfig,
-    extract_residues_with_links,
-    ResidueDataset,
-)
 
 from .metrics import (
     LatentMoments,
@@ -56,21 +22,9 @@ from .metrics import (
     compute_flow_metrics,
     estimate_kl_divergence,
 )
-
-# Re-export from new location (ciffy.nn.polymer) for backwards compatibility
-from .polymer import PolymerModel, PolymerFlowModel, ResidueGenerativeCore
 from .pretrained import load_pretrained, list_pretrained, is_pretrained_available
 
 __all__ = [
-    # Protocol for residue-level models (now in ciffy.nn.polymer)
-    "ResidueGenerativeCore",
-    # Residue flow
-    "PCAFlow",
-    "ResidueFlowModel",
-    "ResidueFlowConfig",
-    # Data extraction
-    "extract_residues_with_links",
-    "ResidueDataset",
     # Metrics
     "LatentMoments",
     "FlowMetrics",
@@ -78,9 +32,6 @@ __all__ = [
     "compute_latent_moments",
     "compute_flow_metrics",
     "estimate_kl_divergence",
-    # Polymer model (now in ciffy.nn.polymer, re-exported for backwards compat)
-    "PolymerModel",
-    "PolymerFlowModel",  # Deprecated alias
     # Pre-trained models
     "load_pretrained",
     "list_pretrained",

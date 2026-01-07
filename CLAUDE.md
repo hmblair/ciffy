@@ -94,6 +94,7 @@ polymer.expand(features, Scale.RESIDUE)    # Residue → atom features
 polymer.center()               # Center coordinates
 polymer.pairwise_distances()   # Distance matrix
 polymer.knn(k=16)              # K-nearest neighbors
+polymer.bonded_distances(Residue.A.O3p, Residue.A.P)  # Distances between bonded atom types
 polymer.numpy() / polymer.torch()
 polymer.to('cuda')
 polymer.write('output.cif')

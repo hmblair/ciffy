@@ -69,6 +69,7 @@ class ResidueDecoder(nn.Module):
             nn.Linear(latent_dim + embed_dim, d_model),
             RMSNorm(d_model),
             nn.SiLU(),
+            nn.Dropout(dropout),
         )
 
         coord_layers = []
@@ -77,6 +78,7 @@ class ResidueDecoder(nn.Module):
                 nn.Linear(d_model, d_model),
                 RMSNorm(d_model),
                 nn.SiLU(),
+                nn.Dropout(dropout),
             ])
         coord_layers.append(nn.Linear(d_model, 3))
         # Small initialization for output layer
@@ -93,9 +95,11 @@ class ResidueDecoder(nn.Module):
             nn.Linear(latent_dim + self.residue_embedding.output_dim, d_model),
             RMSNorm(d_model),
             nn.SiLU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_model),
             RMSNorm(d_model),
             nn.SiLU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, 6),
         )
         # Small initialization for output layer

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence, Union
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -109,18 +109,25 @@ def _process_file(args: tuple) -> list[tuple[str, int | None]]:
 
 class PolymerDataset(Dataset):
     """
-    PyTorch Dataset for loading CIF files from a directory.
+    PyTorch Dataset for loading CIF files.
 
-    Supports iteration at molecule or chain scale, with optional
-    filtering by atom count, molecule type, and PDB ID exclusion.
+    Accepts either a directory path or a sequence of file paths. Supports
+    iteration at molecule or chain scale, with optional filtering by atom
+    count, molecule type, and PDB ID exclusion.
 
     Example:
         >>> from ciffy.nn import PolymerDataset
         >>> from ciffy import Scale, Molecule
-        >>> # Basic usage
+        >>>
+        >>> # From directory
         >>> dataset = PolymerDataset("./structures/", scale=Scale.CHAIN, max_atoms=5000)
         >>> print(f"Found {len(dataset)} chains")
         >>> chain = dataset[0]  # Load first chain
+        >>>
+        >>> # From list of paths (e.g., from DataSplit)
+        >>> from ciffy.nn import DataSplit
+        >>> split = DataSplit.from_paths(paths, train=0.8, val=0.1, test=0.1)
+        >>> train_dataset = PolymerDataset(split.train, scale=Scale.CHAIN)
         >>>
         >>> # Only RNA chains with at least 10 atoms
         >>> dataset = PolymerDataset("./structures/", molecule_types=Molecule.RNA, min_atoms=10)
@@ -134,7 +141,7 @@ class PolymerDataset(Dataset):
 
     def __init__(
         self,
-        directory: str | Path,
+        paths: Union[str, Path, Sequence[Union[str, Path]]],
         scale: Scale = Scale.MOLECULE,
         min_atoms: int | None = None,
         max_atoms: int | None = None,
@@ -147,10 +154,11 @@ class PolymerDataset(Dataset):
         limit: int | None = None,
     ):
         """
-        Initialize dataset by scanning directory for CIF files.
+        Initialize dataset from a directory or list of CIF files.
 
         Args:
-            directory: Path to directory containing .cif files.
+            paths: Either a directory path (will glob for *.cif files), or a
+                sequence of .cif file paths (e.g., from DataSplit.train).
             scale: Iteration scale (MOLECULE or CHAIN only).
                 - MOLECULE: iterate over full structures
                 - CHAIN: iterate over individual chains
@@ -171,14 +179,14 @@ class PolymerDataset(Dataset):
                 held-out test sets or known problematic structures.
             num_workers: Number of worker processes for parallel file scanning.
                 0 = single-threaded (default). Higher values speed up scanning
-                of large directories.
+                of large directories (only used when paths is a directory).
             limit: Maximum number of samples to include. Useful for overfitting
                 tests or quick iteration. None = no limit (use all samples).
 
         Raises:
             ImportError: If PyTorch is not installed.
             ValueError: If scale is not MOLECULE or CHAIN.
-            FileNotFoundError: If directory does not exist.
+            FileNotFoundError: If directory does not exist or paths are invalid.
         """
         if not TORCH_AVAILABLE:
             raise ImportError(
@@ -191,9 +199,16 @@ class PolymerDataset(Dataset):
                 f"scale must be MOLECULE or CHAIN, got {scale.name}"
             )
 
-        directory = Path(directory)
-        if not directory.is_dir():
-            raise FileNotFoundError(f"Directory not found: {directory}")
+        # Determine if paths is a directory or a sequence of files
+        if isinstance(paths, (str, Path)):
+            # Single path: must be a directory
+            directory = Path(paths)
+            if not directory.is_dir():
+                raise FileNotFoundError(f"Directory not found: {directory}")
+            cif_files = sorted(directory.glob("*.cif"))
+        else:
+            # Sequence of file paths
+            cif_files = sorted(Path(p) for p in paths)
 
         self.scale = scale
         self.min_atoms = min_atoms
@@ -220,16 +235,14 @@ class PolymerDataset(Dataset):
 
         # Build index: list of (file_path, chain_idx or None)
         self._index: list[tuple[Path, int | None]] = []
-        self._build_index(directory)
+        self._build_index(cif_files)
 
         # Apply limit after building index
         if self.limit is not None and len(self._index) > self.limit:
             self._index = self._index[:self.limit]
 
-    def _build_index(self, directory: Path) -> None:
-        """Scan directory and build index of valid items."""
-        cif_files = sorted(directory.glob("*.cif"))
-
+    def _build_index(self, cif_files: list[Path]) -> None:
+        """Build index from list of CIF files."""
         if not cif_files:
             return
 

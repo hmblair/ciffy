@@ -346,6 +346,81 @@ class TestPolymerDatasetEdgeCases:
 
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestPolymerDatasetPathSequence:
+    """Tests for PolymerDataset with path sequence input."""
+
+    def test_dataset_from_path_list(self):
+        """Dataset accepts list of file paths."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+        from pathlib import Path
+
+        cif_files = list(Path(DATA_DIR).glob("*.cif"))
+        dataset = PolymerDataset(cif_files, scale=Scale.CHAIN)
+
+        # Should have same chains as directory input
+        dir_dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        assert len(dataset) == len(dir_dataset)
+
+    def test_dataset_from_path_subset(self):
+        """Dataset works with subset of files."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+        from pathlib import Path
+
+        cif_files = sorted(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 2:
+            pytest.skip("Need at least 2 CIF files")
+
+        # Use only first file
+        subset = cif_files[:1]
+        dataset = PolymerDataset(subset, scale=Scale.CHAIN)
+
+        full_dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        assert len(dataset) < len(full_dataset)
+
+    def test_dataset_datasplit_integration(self):
+        """Dataset integrates with DataSplit."""
+        from ciffy.nn import PolymerDataset, DataSplit
+        from ciffy import Scale
+        from pathlib import Path
+
+        cif_files = list(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 4:
+            pytest.skip("Need at least 4 CIF files")
+
+        split = DataSplit.from_paths(cif_files, train=0.5, val=0.25, test=0.25, seed=42)
+        train_ds = PolymerDataset(split.train, scale=Scale.CHAIN)
+        test_ds = PolymerDataset(split.test, scale=Scale.CHAIN)
+
+        # No file overlap between train and test
+        train_files = set(p for p, _ in train_ds._index)
+        test_files = set(p for p, _ in test_ds._index)
+        assert len(train_files & test_files) == 0
+
+    def test_dataset_empty_list(self):
+        """Dataset handles empty path list."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        dataset = PolymerDataset([], scale=Scale.CHAIN)
+        assert len(dataset) == 0
+
+    def test_dataset_path_list_with_filters(self):
+        """Filters work with path list input."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale, Molecule
+        from pathlib import Path
+
+        cif_files = list(Path(DATA_DIR).glob("*.cif"))
+        dataset = PolymerDataset(cif_files, scale=Scale.CHAIN, molecule_types=Molecule.RNA)
+
+        # Should match directory input with same filter
+        dir_dataset = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, molecule_types=Molecule.RNA)
+        assert len(dataset) == len(dir_dataset)
+
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestPolymerEmbeddingEdgeCases:
     """Edge case tests for PolymerEmbedding."""
 

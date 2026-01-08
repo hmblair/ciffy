@@ -336,6 +336,23 @@ def arange(n: int, like: Array) -> Array:
     return ops.arange(n)
 
 
+def cumsum(arr: Array, dim: int = 0) -> Array:
+    """
+    Compute cumulative sum along a dimension.
+
+    Args:
+        arr: Input array.
+        dim: Dimension along which to compute cumsum.
+
+    Returns:
+        Array with cumulative sums.
+    """
+    if is_torch(arr):
+        import torch
+        return torch.cumsum(arr, dim=dim)
+    return np.cumsum(arr, axis=dim)
+
+
 # =============================================================================
 # Backend Conversion
 # =============================================================================

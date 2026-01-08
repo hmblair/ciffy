@@ -129,6 +129,9 @@ class _Hierarchy:
         # Precompute scalar counts from available arrays
         self._n_atoms, self._n_residues, self._n_chains = self._compute_counts()
 
+        # Validate internal consistency
+        self._validate()
+
     @property
     def scales(self) -> frozenset[Scale]:
         """The scales this hierarchy supports (inferred from _per keys)."""
@@ -187,6 +190,85 @@ class _Hierarchy:
 
         return n_atoms, n_residues, n_chains
 
+    def _validate(self) -> None:
+        """Validate internal consistency of the hierarchy.
+
+        Checks that counts at different scales are consistent with each other.
+        This catches issues like atoms_per_chain being computed from one data
+        source while atoms_per_residue is computed from another.
+
+        Raises:
+            ValueError: If any consistency check fails.
+        """
+        atoms_per_res = self._per.get((Scale.ATOM, Scale.RESIDUE))
+        atoms_per_chain = self._per.get((Scale.ATOM, Scale.CHAIN))
+        atoms_per_mol = self._per.get((Scale.ATOM, Scale.MOLECULE))
+        res_per_chain = self._per.get((Scale.RESIDUE, Scale.CHAIN))
+        res_per_mol = self._per.get((Scale.RESIDUE, Scale.MOLECULE))
+
+        # Check 1: Global atom count consistency
+        # sum(atoms_per_res) == sum(atoms_per_chain) == atoms_per_mol[0]
+        if atoms_per_mol is not None:
+            expected_atoms = int(atoms_per_mol[0])
+
+            if atoms_per_res is not None:
+                sum_res = int(atoms_per_res.sum())
+                if sum_res != expected_atoms:
+                    raise ValueError(
+                        f"Hierarchy inconsistency: sum(atoms_per_residue)={sum_res} "
+                        f"!= atoms_per_molecule={expected_atoms}"
+                    )
+
+            if atoms_per_chain is not None:
+                sum_chain = int(atoms_per_chain.sum())
+                if sum_chain != expected_atoms:
+                    raise ValueError(
+                        f"Hierarchy inconsistency: sum(atoms_per_chain)={sum_chain} "
+                        f"!= atoms_per_molecule={expected_atoms}"
+                    )
+
+        # Check 2: Global residue count consistency
+        # len(atoms_per_res) == sum(res_per_chain) == res_per_mol[0]
+        if atoms_per_res is not None:
+            n_residues = arr_size(atoms_per_res, 0)
+
+            if res_per_chain is not None:
+                sum_res_chain = int(res_per_chain.sum())
+                if sum_res_chain != n_residues:
+                    raise ValueError(
+                        f"Hierarchy inconsistency: sum(residues_per_chain)={sum_res_chain} "
+                        f"!= len(atoms_per_residue)={n_residues}"
+                    )
+
+            if res_per_mol is not None:
+                res_mol = int(res_per_mol[0])
+                if res_mol != n_residues:
+                    raise ValueError(
+                        f"Hierarchy inconsistency: residues_per_molecule={res_mol} "
+                        f"!= len(atoms_per_residue)={n_residues}"
+                    )
+
+        # Check 3: Per-chain atom consistency
+        # For each chain i: sum(atoms_per_res[start:end]) == atoms_per_chain[i]
+        if atoms_per_res is not None and atoms_per_chain is not None and res_per_chain is not None:
+            res_cumsum = ops.cumsum(res_per_chain)
+            res_start = 0
+            n_chains = arr_size(atoms_per_chain, 0)
+            for chain_idx in range(n_chains):
+                res_end = int(res_cumsum[chain_idx])
+                atoms_from_residues = int(atoms_per_res[res_start:res_end].sum())
+                atoms_from_chain = int(atoms_per_chain[chain_idx])
+
+                if atoms_from_residues != atoms_from_chain:
+                    raise ValueError(
+                        f"Hierarchy inconsistency in chain {chain_idx}: "
+                        f"sum(atoms_per_residue[{res_start}:{res_end}])={atoms_from_residues} "
+                        f"!= atoms_per_chain[{chain_idx}]={atoms_from_chain}. "
+                        f"This typically indicates the CIF file has unresolved residues "
+                        f"in the sequence table that have no atoms in the coordinate section."
+                    )
+                res_start = res_end
+
     # ─────────────────────────────────────────────────────────────────────────
     # Factory Methods
     # ─────────────────────────────────────────────────────────────────────────
@@ -216,13 +298,15 @@ class _Hierarchy:
         arr_ref = ref if ref is not None else lengths
 
         # Build the _per dict - only include entries that exist
+        n_residues = int(lengths.sum()) if arr_size(lengths, 0) > 0 else 0
+        n_chains = arr_size(lengths, 0)
         per = {
             (Scale.ATOM, Scale.RESIDUE): sizes[Scale.RESIDUE],
             (Scale.ATOM, Scale.CHAIN): sizes[Scale.CHAIN],
             (Scale.ATOM, Scale.MOLECULE): sizes[Scale.MOLECULE],
             (Scale.RESIDUE, Scale.CHAIN): lengths,
-            (Scale.RESIDUE, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
-            (Scale.CHAIN, Scale.MOLECULE): ops.array([arr_size(lengths, 0)], like=arr_ref),
+            (Scale.RESIDUE, Scale.MOLECULE): ops.array([n_residues], like=arr_ref),
+            (Scale.CHAIN, Scale.MOLECULE): ops.array([n_chains], like=arr_ref),
         }
         marker = backend_marker(arr_ref)
         return cls(per, marker)

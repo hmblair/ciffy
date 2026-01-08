@@ -23,6 +23,7 @@ class ResidueDecoder(nn.Module):
         latent_dim: Dimension of the input latent space per residue.
         d_model: Hidden dimension for decoder layers.
         n_layers: Number of decoder layers.
+        n_heads: Number of attention heads.
         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
         dropout: Dropout probability.
@@ -39,6 +40,7 @@ class ResidueDecoder(nn.Module):
         latent_dim: int = 32,
         d_model: int = 128,
         n_layers: int = 3,
+        n_heads: int = 4,
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         dropout: float = 0.1,
@@ -46,6 +48,7 @@ class ResidueDecoder(nn.Module):
         super().__init__()
         self.latent_dim = latent_dim
         self.d_model = d_model
+        self.n_heads = n_heads
 
         # Default embedding dimensions
         if atom_dim is None:
@@ -64,7 +67,7 @@ class ResidueDecoder(nn.Module):
         )
         embed_dim = self.embedding.output_dim
 
-        # Coordinate decoder
+        # Coordinate decoder projection
         self.coord_decoder_proj = nn.Sequential(
             nn.Linear(latent_dim + embed_dim, d_model),
             RMSNorm(d_model),
@@ -72,6 +75,7 @@ class ResidueDecoder(nn.Module):
             nn.Dropout(dropout),
         )
 
+        # MLP decoder for coordinates
         coord_layers = []
         for _ in range(n_layers - 1):
             coord_layers.extend([
@@ -81,9 +85,6 @@ class ResidueDecoder(nn.Module):
                 nn.Dropout(dropout),
             ])
         coord_layers.append(nn.Linear(d_model, 3))
-        # Small initialization for output layer
-        nn.init.normal_(coord_layers[-1].weight, std=0.01)
-        nn.init.zeros_(coord_layers[-1].bias)
         self.coord_head = nn.Sequential(*coord_layers)
 
         # Transform decoder (residue-level)
@@ -102,9 +103,6 @@ class ResidueDecoder(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 6),
         )
-        # Small initialization for output layer
-        nn.init.normal_(self.transform_decoder[-1].weight, std=0.01)
-        nn.init.zeros_(self.transform_decoder[-1].bias)
 
     def forward(
         self,

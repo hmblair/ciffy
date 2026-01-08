@@ -6,8 +6,9 @@ import torch
 import torch.nn as nn
 
 from ciffy import Scale
-from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+from ciffy.biochemistry.linking import O3P_FRAME, P_FRAME
 from ciffy.nn import PolymerEmbedding
+from ciffy.nn.geometric import RadialBasisFunctions
 from ciffy.nn.layers.transformer import Transformer, RMSNorm
 from ciffy.polymer import Polymer
 
@@ -21,9 +22,6 @@ class ResidueEncoder(nn.Module):
     Uses packed attention within residues to aggregate atom-level features,
     then adds inter-residue transform information before projecting to
     latent space.
-
-    Uses modern transformer architecture (RMSNorm, SwiGLU, Flash Attention)
-    with distance-based attention bias instead of positional encodings.
 
     Args:
         latent_dim: Dimension of the latent space per residue.
@@ -61,9 +59,6 @@ class ResidueEncoder(nn.Module):
         if residue_dim is None:
             residue_dim = d_model // 2
 
-        self._atom_dim = atom_dim
-        self._residue_dim = residue_dim
-
         # Atom embeddings
         self.embedding = PolymerEmbedding(
             scale=Scale.ATOM,
@@ -85,14 +80,20 @@ class ResidueEncoder(nn.Module):
             num_layers=n_layers,
             num_heads=n_heads,
             dropout=dropout,
-            use_rope=False,  # Use distance-based bias instead
+            use_rope=False,
         )
 
-        # Distance-based attention bias (per head)
-        self.distance_bias = nn.Linear(1, n_heads, bias=False)
-        nn.init.normal_(self.distance_bias.weight, std=0.1)
+        # Distance-based attention bias using radial basis functions
+        num_rbf = 16
+        self.distance_rbf = RadialBasisFunctions(
+            num_functions=num_rbf,
+            r_min=0.0,
+            r_max=10.0,  # Max intra-residue distance ~10 Å
+            rbf_type="gaussian",
+        )
+        self.distance_to_bias = nn.Linear(num_rbf, n_heads, bias=False)
 
-        # Transform encoder (always included)
+        # Transform encoder
         self.transform_encoder = nn.Sequential(
             nn.Linear(6, d_model),
             RMSNorm(d_model),
@@ -110,12 +111,8 @@ class ResidueEncoder(nn.Module):
         return self.latent_dim
 
     def _compute_transforms(self, polymer: Polymer) -> torch.Tensor:
-        """Compute inter-residue SE(3) transforms from polymer coordinates.
-
-        Uses the LOCAL FRAME paradigm with GLYCOSIDIC_FRAME for both source and
-        target frames. This computes transforms from frame(i) -> frame(i+1).
-        """
-        return polymer.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+        """Compute inter-residue SE(3) transforms from polymer coordinates."""
+        return polymer.local_transforms(O3P_FRAME, P_FRAME)
 
     def forward(
         self,
@@ -129,14 +126,17 @@ class ResidueEncoder(nn.Module):
         Args:
             polymer: Input polymer (torch backend).
             transforms: Optional (n_residues, 6) inter-residue transforms.
-                       If None, computed automatically from polymer.align().
+                       If None, computed automatically.
             return_distribution: If True, return (z, mu, logvar).
 
         Returns:
             z: (n_residues, latent_dim) latent vectors.
             If return_distribution: (z, mu, logvar) tuple.
         """
-        # Embed atoms
+        if transforms is None:
+            transforms = self._compute_transforms(polymer)
+
+        # Embed atoms and project
         atom_emb = self.embedding(polymer)
         x = self.encoder_proj(atom_emb)
 
@@ -144,30 +144,27 @@ class ResidueEncoder(nn.Module):
         counts = polymer.counts(Scale.RESIDUE)
         x_packed, mask = pack_by_residue(x, counts)
 
-        # Pack coordinates and compute pairwise distances
+        # Compute pairwise distances for attention bias
         coords_packed, _ = pack_by_residue(polymer.coordinates, counts)
         diff = coords_packed.unsqueeze(2) - coords_packed.unsqueeze(1)
-        dists = diff.norm(dim=-1, keepdim=True)  # (n_res, max_atoms, max_atoms, 1)
+        dists = diff.norm(dim=-1)  # (batch, seq, seq)
 
-        # Convert distances to per-head attention bias: (n_res, n_heads, max_atoms, max_atoms)
-        attn_bias = self.distance_bias(dists).permute(0, 3, 1, 2)
+        # Expand distances with RBF and convert to per-head attention bias
+        rbf_features = self.distance_rbf(dists)  # (batch, seq, seq, num_rbf)
+        attn_bias = self.distance_to_bias(rbf_features).permute(0, 3, 1, 2)  # (batch, heads, seq, seq)
 
-        # Mask padded positions in attention (set to -inf for keys)
-        # mask shape: (n_res, max_atoms) where True = valid
-        pad_mask = ~mask  # True = padded (to be masked out)
+        # Mask padded positions
+        pad_mask = ~mask
         attn_bias = attn_bias.masked_fill(pad_mask.unsqueeze(1).unsqueeze(2), float('-inf'))
 
-        # Apply transformer with distance-based attention bias
-        # Transformer expects: x (batch, seq, dim), mask (batch, seq), attn_bias (batch, heads, seq, seq)
+        # Apply transformer
         x_packed = self.transformer(x_packed, mask=pad_mask, attn_bias=attn_bias)
 
-        # Mean pool within residues (mask already applied by transformer)
+        # Mean pool within residues
         x_packed = x_packed * mask.unsqueeze(-1).float()
         pooled = x_packed.sum(dim=1) / counts.unsqueeze(-1).float()
 
         # Add transform features
-        if transforms is None:
-            transforms = self._compute_transforms(polymer)
         transform_feat = self.transform_encoder(transforms)
         pooled = pooled + transform_feat
 

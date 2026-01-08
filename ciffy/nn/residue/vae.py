@@ -47,10 +47,8 @@ def kl_divergence(
         >>> kl_loss = kl_divergence(mu, logvar, free_bits=0.25)
         >>> loss = recon_loss + beta * kl_loss
     """
-    # KL per dimension: 0.5 * (mu^2 + exp(logvar) - logvar - 1)
     kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1)
 
-    # Free bits: clamp minimum KL per dimension
     if free_bits > 0:
         kl_per_dim = torch.clamp(kl_per_dim, min=free_bits)
 
@@ -121,6 +119,7 @@ class ResidueVAE(nn.Module):
             latent_dim=latent_dim,
             d_model=d_model,
             n_layers=decoder_layers,
+            n_heads=n_heads,
             atom_dim=atom_dim,
             residue_dim=residue_dim,
             dropout=dropout,
@@ -224,10 +223,10 @@ class ResidueVAE(nn.Module):
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
         local_coords, transforms = self.decode(z, template)
 
-        from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME
+        from ciffy.biochemistry.linking import O3P_FRAME, P_FRAME
 
         return (
             template
             .copy(coordinates=local_coords)
-            .apply_local_transforms(transforms, GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+            .apply_local_transforms(transforms, O3P_FRAME, P_FRAME)
         )

@@ -28,10 +28,14 @@ Example:
 from .encoder import ResidueEncoder
 from .decoder import ResidueDecoder
 from .vae import ResidueVAE, kl_divergence
+from .training import ResidueVAEConfig, precompute_targets, create_batches
 
 __all__ = [
     "ResidueEncoder",
     "ResidueDecoder",
     "ResidueVAE",
     "kl_divergence",
+    "ResidueVAEConfig",
+    "precompute_targets",
+    "create_batches",
 ]

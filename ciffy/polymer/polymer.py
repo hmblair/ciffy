@@ -1470,6 +1470,35 @@ class Polymer(AtomContainer):
         from .._selection import strip
         return strip(self, scale)
 
+    def has_internal_gaps(self: Polymer) -> bool:
+        """
+        Check if polymer has unresolved residues between resolved ones.
+
+        Internal gaps occur when there are unresolved residues flanked by
+        resolved residues on both sides. After strip(), these would create
+        discontinuities where adjacent residues in the array are not actually
+        bonded in the original structure.
+
+        Returns:
+            True if internal gaps exist, False otherwise.
+
+        Example:
+            >>> polymer = ciffy.load("structure.cif")
+            >>> if polymer.has_internal_gaps():
+            ...     # Split into contiguous segments or skip
+            ...     pass
+            >>> else:
+            ...     stripped = polymer.strip()  # Safe to use
+        """
+        resolved = self.resolved()
+        in_gap = False
+        for i in range(len(resolved)):
+            if resolved[i] and in_gap:
+                return True  # Found: resolved -> unresolved -> resolved
+            elif not resolved[i] and not in_gap and i > 0 and resolved[i - 1]:
+                in_gap = True
+        return False
+
     # ─────────────────────────────────────────────────────────────────────────
     # Specialized Selections
     # ─────────────────────────────────────────────────────────────────────────

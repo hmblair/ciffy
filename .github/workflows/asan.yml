@@ -1,0 +1,41 @@
+name: AddressSanitizer
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gperf
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pytest pytest-xdist
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Build with AddressSanitizer
+        run: |
+          CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1" \
+          LDFLAGS="-fsanitize=address" \
+          pip install -e .
+
+      - name: Run tests with ASan
+        env:
+          ASAN_OPTIONS: abort_on_error=0:print_stacktrace=1:detect_leaks=0
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libasan.so.6
+        run: pytest tests/ -v -n auto --ignore=tests/profile.py --ignore=tests/nn/test_residue_vae.py

@@ -35,3 +35,9 @@ configs/
 
 # Scratch directory for local experiments
 scratch/
+
+# Science notes and experiment logs
+science/
+
+# Sanitizer test venv
+.venv-asan/

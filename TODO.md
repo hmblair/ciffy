@@ -157,6 +157,40 @@ class Ensemble:
 
 ---
 
+### Properly Parse CIF Semicolon Multi-line Text Blocks
+
+**Goal**: Fully parse CIF files containing semicolon-delimited multi-line text values instead of skipping them.
+
+**Context**: CIF format uses lines starting with `;` to delimit multi-line text values. Example file: `3H5X.cif`.
+```
+_pdbx_entity_nonpoly.entity_id
+_pdbx_entity_nonpoly.name
+_pdbx_entity_nonpoly.comp_id
+4 'MANGANESE (II) ION'    MN
+5
+;2'-amino-2'-deoxycytidine 5'-(tetrahydrogen triphosphate)
+;
+CSG
+```
+
+Entity 5's name spans multiple lines. Currently, `_scan_lines()` in `io.c` skips these blocks entirely, meaning rows with multi-line values have missing fields.
+
+**Current workaround**: Rows with semicolon blocks are indexed but have incomplete data. `_get_field_ptr()` returns NULL for missing fields. Most structures don't use this format, so impact is minimal.
+
+**Proper fix**:
+1. Modify `_scan_lines()` to correctly index rows that span multiple lines
+2. Modify `_get_field_ptr()` to detect semicolon values and return the full multi-line content
+3. Store block boundaries (start pointer + length) rather than assuming single-line fields
+
+**Affected files**:
+- `ciffy/src/cif/io.c` - `_scan_lines()`, `_get_field_ptr()`, field parsing functions
+- `ciffy/src/cif/io.h` - May need new field type for multi-line values
+
+**Effort**: 4-8 hours
+**Impact**: Complete CIF format support, affects ~1% of PDB structures
+
+---
+
 ## LOW Priority
 
 ### Structured AtomGroup Access by Molecule Type

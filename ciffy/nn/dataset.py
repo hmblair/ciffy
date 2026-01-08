@@ -28,86 +28,6 @@ from ..biochemistry import Scale, Molecule
 logger = logging.getLogger(__name__)
 
 
-def _process_file(args: tuple) -> list[tuple[str, int | None]]:
-    """
-    Process a single CIF file for indexing (runs in worker process).
-
-    Returns list of (filepath_str, chain_idx or None) tuples that pass filters.
-    """
-    from ciffy import load_metadata
-
-    (filepath, scale_value, min_atoms, max_atoms, min_residues, max_residues,
-     type_filter_values, exclude_ids) = args
-
-    results = []
-    try:
-        meta = load_metadata(filepath)
-    except Exception as e:
-        logger.warning(f"Failed to load metadata from {filepath}: {e}")
-        return results
-
-    # Check exclude_ids
-    pdb_id = meta.get("id", "").upper()
-    if exclude_ids and pdb_id in exclude_ids:
-        return results
-
-    atoms_per_chain = meta["atoms_per_chain"]
-    res_per_chain = meta["residues_per_chain"]
-    mol_types = meta["molecule_types"]
-    total_atoms = meta["atoms"]
-    total_residues = meta["residues"]
-
-    # Convert type_filter_values back to set if provided
-    type_filter = set(type_filter_values) if type_filter_values else None
-
-    if scale_value == Scale.MOLECULE.value:
-        # For molecule scale, check if structure has any matching chains
-        if type_filter is not None:
-            has_matching = any(int(t) in type_filter for t in mol_types)
-            if not has_matching:
-                return results
-
-        # Check atom count bounds
-        if min_atoms is not None and total_atoms < min_atoms:
-            return results
-        if max_atoms is not None and total_atoms > max_atoms:
-            return results
-
-        # Check residue count bounds
-        if min_residues is not None and total_residues < min_residues:
-            return results
-        if max_residues is not None and total_residues > max_residues:
-            return results
-
-        results.append((filepath, None))
-
-    else:  # Scale.CHAIN
-        for chain_idx in range(meta["chains"]):
-            chain_mol_type = int(mol_types[chain_idx])
-
-            # Skip chains not matching molecule_types filter
-            if type_filter is not None and chain_mol_type not in type_filter:
-                continue
-
-            # Check atom count bounds
-            chain_atoms = int(atoms_per_chain[chain_idx])
-            if min_atoms is not None and chain_atoms < min_atoms:
-                continue
-            if max_atoms is not None and chain_atoms > max_atoms:
-                continue
-
-            # Check residue count bounds
-            chain_residues = int(res_per_chain[chain_idx])
-            if min_residues is not None and chain_residues < min_residues:
-                continue
-            if max_residues is not None and chain_residues > max_residues:
-                continue
-
-            results.append((filepath, chain_idx))
-
-    return results
-
-
 class PolymerDataset(Dataset):
     """
     PyTorch Dataset for loading CIF files.
@@ -250,38 +170,74 @@ class PolymerDataset(Dataset):
             self._index = self._index[:self.limit]
 
     def _build_index(self, cif_files: list[Path]) -> None:
-        """Build index from list of CIF files."""
-        if not cif_files:
-            return
+        """Build index by scanning CIF files and applying filters."""
+        from ciffy import load_metadata
 
-        # Pre-compute type filter values for serialization
-        type_filter_values = None
+        type_filter = None
         if self.molecule_types is not None:
-            type_filter_values = tuple(m.value for m in self.molecule_types)
+            type_filter = {m.value for m in self.molecule_types}
 
-        # Convert exclude_ids to frozenset for serialization
-        exclude_ids = frozenset(self.exclude_ids) if self.exclude_ids else None
-
-        self._build_index_sequential(cif_files, type_filter_values, exclude_ids)
-
-    def _build_index_sequential(self, cif_files: list[Path],
-                                 type_filter_values: tuple | None,
-                                 exclude_ids: frozenset | None) -> None:
-        """Build index using single-threaded scanning."""
         for path in cif_files:
-            args = (
-                str(path),
-                self.scale.value,
-                self.min_atoms,
-                self.max_atoms,
-                self.min_residues,
-                self.max_residues,
-                type_filter_values,
-                exclude_ids,
-            )
-            results = _process_file(args)
-            for filepath_str, chain_idx in results:
-                self._index.append((Path(filepath_str), chain_idx))
+            try:
+                meta = load_metadata(str(path))
+            except Exception as e:
+                logger.warning(f"Failed to load metadata from {path}: {e}")
+                continue
+
+            # Check exclude_ids
+            pdb_id = meta.get("id", "").upper()
+            if self.exclude_ids and pdb_id in self.exclude_ids:
+                continue
+
+            if self.scale == Scale.MOLECULE:
+                if self._file_passes_filters(meta, type_filter):
+                    self._index.append((path, None))
+            else:  # Scale.CHAIN
+                for chain_idx in range(meta["chains"]):
+                    if self._chain_passes_filters(meta, chain_idx, type_filter):
+                        self._index.append((path, chain_idx))
+
+    def _file_passes_filters(self, meta: dict, type_filter: set | None) -> bool:
+        """Check if a file passes molecule-level filters."""
+        if type_filter is not None:
+            has_matching = any(int(t) in type_filter for t in meta["molecule_types"])
+            if not has_matching:
+                return False
+
+        total_atoms = meta["atoms"]
+        if self.min_atoms is not None and total_atoms < self.min_atoms:
+            return False
+        if self.max_atoms is not None and total_atoms > self.max_atoms:
+            return False
+
+        total_residues = meta["residues"]
+        if self.min_residues is not None and total_residues < self.min_residues:
+            return False
+        if self.max_residues is not None and total_residues > self.max_residues:
+            return False
+
+        return True
+
+    def _chain_passes_filters(self, meta: dict, chain_idx: int, type_filter: set | None) -> bool:
+        """Check if a chain passes chain-level filters."""
+        if type_filter is not None:
+            chain_mol_type = int(meta["molecule_types"][chain_idx])
+            if chain_mol_type not in type_filter:
+                return False
+
+        chain_atoms = int(meta["atoms_per_chain"][chain_idx])
+        if self.min_atoms is not None and chain_atoms < self.min_atoms:
+            return False
+        if self.max_atoms is not None and chain_atoms > self.max_atoms:
+            return False
+
+        chain_residues = int(meta["residues_per_chain"][chain_idx])
+        if self.min_residues is not None and chain_residues < self.min_residues:
+            return False
+        if self.max_residues is not None and chain_residues > self.max_residues:
+            return False
+
+        return True
 
     def __len__(self) -> int:
         """Return number of valid items (structures or chains)."""

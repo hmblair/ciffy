@@ -37,7 +37,7 @@ Output dir:                       outputs/
 
 ### Git Safety
 
-**NEVER discard unstaged changes** unrelated to the current task. **NEVER use `git add -A`** — always stage specific files. Use worktrees for complex changes:
+**NEVER discard unstaged changes** unrelated to the current task. **NEVER use `git add -A`** — always stage specific files. **NEVER checkout a file** without first inspecting the full diff and confirming there are no unrelated changes that would be lost. Use worktrees for complex changes:
 ```bash
 git worktree add ../ciffy-<feature> -b <feature>
 ```

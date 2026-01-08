@@ -157,6 +157,21 @@ else:
 
 Key ops: `cat`, `stack`, `cdist`, `scatter_sum/mean/max/min`, `repeat_interleave`, `nonzero`, `argwhere`, `svd`, `eigh`, `pinv`, `norm`, `where`, `topk`, `arange`, `zeros/ones/empty` (with `like=` param), `to_backend`, `convert_backend`.
 
+### Enum Values
+
+Always use enum `.value` attributes instead of hardcoded integers. Enum values are implementation details and are not consecutive across residue types.
+
+```python
+# GOOD - use enum values
+from ciffy import Residue
+
+mask = polymer.sequence == Residue.A.value
+adenine_count = (polymer.sequence == Residue.A.value).sum()
+
+# BAD - hardcoded integers
+mask = polymer.sequence == 5  # What residue is this? Will it change?
+```
+
 ### Training Practices
 
 1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.

@@ -93,9 +93,9 @@ class TestResidueEncoder:
         encoder = ResidueEncoder(latent_dim=32, d_model=64, n_layers=1)
         encoder.eval()
 
-        # Load a small test structure
+        # Load a small test structure (skip first residue - lacks P atom at 5' terminus)
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None)).residue(slice(1, None))
 
         with torch.no_grad():
             z = encoder(chain)
@@ -112,7 +112,7 @@ class TestResidueEncoder:
         encoder.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         with torch.no_grad():
             z, mu, logvar = encoder(chain, return_distribution=True)
@@ -131,7 +131,7 @@ class TestResidueEncoder:
         encoder.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         # Pre-compute transforms using encoder's internal method
         transforms = encoder._compute_transforms(chain)
@@ -158,7 +158,7 @@ class TestResidueDecoder:
         decoder.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         n_residues = chain.size(Scale.RESIDUE)
         z = torch.randn(n_residues, 32)
@@ -180,7 +180,7 @@ class TestResidueDecoder:
         decoder.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         n_residues = chain.size(Scale.RESIDUE)
         z = torch.randn(n_residues, 32)
@@ -205,7 +205,7 @@ class TestResidueVAE:
         vae.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         with torch.no_grad():
             # Encode
@@ -227,7 +227,7 @@ class TestResidueVAE:
         vae.eval()
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         with torch.no_grad():
             coords, transforms, mu, logvar = vae(chain)
@@ -246,7 +246,7 @@ class TestResidueVAE:
         vae = ResidueVAE(latent_dim=16, d_model=32, encoder_layers=1, decoder_layers=1)
 
         p = ciffy.load(get_test_cif("3SKW")).torch()
-        chain = p.chain(0)
+        chain = p.chain(0).residue(slice(1, None))
 
         # Forward pass
         coords, transforms, mu, logvar = vae(chain)

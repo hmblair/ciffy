@@ -183,7 +183,6 @@ dataset = PolymerDataset(
     min_residues=10,             # or max
     max_atoms=5000,              # or min
     exclude_ids=["1ABC"],
-    num_workers=8,
     cache=True,                  # Cache structures in memory for faster epochs
 )
 polymer = dataset[0]

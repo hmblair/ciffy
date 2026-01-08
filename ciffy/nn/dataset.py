@@ -8,6 +8,7 @@ with filtering and optional caching support.
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Sequence, Union
 
@@ -134,9 +135,6 @@ class PolymerDataset(Dataset):
         >>>
         >>> # Exclude specific PDB IDs (e.g., test set)
         >>> dataset = PolymerDataset("./structures/", exclude_ids=["1ABC", "2XYZ"])
-        >>>
-        >>> # Parallel scanning for large directories
-        >>> dataset = PolymerDataset("./pdb/", num_workers=8)
     """
 
     def __init__(
@@ -178,9 +176,7 @@ class PolymerDataset(Dataset):
                 Common types: Molecule.PROTEIN, Molecule.RNA, Molecule.DNA
             exclude_ids: PDB IDs to exclude (case-insensitive). Useful for
                 held-out test sets or known problematic structures.
-            num_workers: Number of worker processes for parallel file scanning.
-                0 = single-threaded (default). Higher values speed up scanning
-                of large directories (only used when paths is a directory).
+            num_workers: Deprecated, does nothing. Kept for backward compatibility.
             limit: Maximum number of samples to include. Useful for overfitting
                 tests or quick iteration. None = no limit (use all samples).
             cache: If True, cache loaded structures in memory. Subsequent
@@ -203,6 +199,14 @@ class PolymerDataset(Dataset):
                 f"scale must be MOLECULE or CHAIN, got {scale.name}"
             )
 
+        if num_workers > 0:
+            warnings.warn(
+                "num_workers is deprecated and has no effect. "
+                "Single-threaded indexing is faster for typical datasets.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # Determine if paths is a directory or a sequence of files
         if isinstance(paths, (str, Path)):
             # Single path: must be a directory
@@ -220,7 +224,6 @@ class PolymerDataset(Dataset):
         self.min_residues = min_residues
         self.max_residues = max_residues
         self.backend = backend
-        self.num_workers = num_workers
         self.limit = limit
         self._cache: dict[int, "Polymer"] | None = {} if cache else None
 
@@ -259,19 +262,12 @@ class PolymerDataset(Dataset):
         # Convert exclude_ids to frozenset for serialization
         exclude_ids = frozenset(self.exclude_ids) if self.exclude_ids else None
 
-        if self.num_workers > 0:
-            self._build_index_parallel(cif_files, type_filter_values, exclude_ids)
-        else:
-            self._build_index_sequential(cif_files, type_filter_values, exclude_ids)
+        self._build_index_sequential(cif_files, type_filter_values, exclude_ids)
 
     def _build_index_sequential(self, cif_files: list[Path],
                                  type_filter_values: tuple | None,
                                  exclude_ids: frozenset | None) -> None:
-        """Build index using single-threaded scanning.
-
-        Reuses _process_file() to ensure filtering logic is consistent
-        with the parallel code path.
-        """
+        """Build index using single-threaded scanning."""
         for path in cif_files:
             args = (
                 str(path),
@@ -286,35 +282,6 @@ class PolymerDataset(Dataset):
             results = _process_file(args)
             for filepath_str, chain_idx in results:
                 self._index.append((Path(filepath_str), chain_idx))
-
-    def _build_index_parallel(self, cif_files: list[Path],
-                               type_filter_values: tuple | None,
-                               exclude_ids: frozenset | None) -> None:
-        """Build index using parallel worker processes."""
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-
-        # Prepare arguments for each file
-        args_list = [
-            (str(path), self.scale.value, self.min_atoms, self.max_atoms,
-             self.min_residues, self.max_residues, type_filter_values, exclude_ids)
-            for path in cif_files
-        ]
-
-        # Process files in parallel
-        with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-            futures = [executor.submit(_process_file, args) for args in args_list]
-
-            for future in as_completed(futures):
-                try:
-                    results = future.result()
-                    for filepath_str, chain_idx in results:
-                        self._index.append((Path(filepath_str), chain_idx))
-                except Exception as e:
-                    logger.warning(f"Worker process failed: {e}")
-                    continue
-
-        # Sort index by filepath for deterministic ordering
-        self._index.sort(key=lambda x: (x[0], x[1] if x[1] is not None else -1))
 
     def __len__(self) -> int:
         """Return number of valid items (structures or chains)."""

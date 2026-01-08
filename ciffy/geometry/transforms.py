@@ -240,6 +240,92 @@ def apply_relative_transform(
     return origin2, R2
 
 
+def geodesic_so3(
+    pred: Array,
+    target: Array,
+    reduction: str = "mean",
+) -> Array:
+    """
+    Compute geodesic distance on SO(3) between rotations.
+
+    The geodesic distance is the angle of the rotation needed to go from
+    one orientation to another: θ = arccos((trace(R_target^T @ R_pred) - 1) / 2).
+
+    This is the proper metric on SO(3), unlike Euclidean distance on axis-angle
+    which treats the curved rotation manifold as flat.
+
+    Args:
+        pred: (N, 3) predicted axis-angle rotations.
+        target: (N, 3) target axis-angle rotations.
+        reduction: "mean", "sum", or "none".
+
+    Returns:
+        Geodesic distance(s) in radians. If reduction="none", returns (N,) angles.
+    """
+    R_pred = rodrigues(pred)      # (N, 3, 3)
+    R_target = rodrigues(target)  # (N, 3, 3)
+
+    # R_diff = R_target^T @ R_pred
+    # For batched: transpose last two dims
+    if is_torch(pred):
+        R_diff = R_target.transpose(-1, -2) @ R_pred
+    else:
+        R_diff = np.swapaxes(R_target, -1, -2) @ R_pred
+
+    # trace(R) = 1 + 2*cos(θ), so θ = arccos((trace - 1) / 2)
+    trace = R_diff[..., 0, 0] + R_diff[..., 1, 1] + R_diff[..., 2, 2]
+    cos_angle = (trace - 1) / 2
+    cos_angle = clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+    angles = acos(cos_angle)
+
+    if reduction == "mean":
+        return angles.mean()
+    elif reduction == "sum":
+        return angles.sum()
+    return angles
+
+
+def se3_loss(
+    pred: Array,
+    target: Array,
+    rotation_weight: float = 1.0,
+    translation_weight: float = 1.0,
+) -> Array:
+    """
+    Compute SE(3) loss with geodesic distance for rotation and MSE for translation.
+
+    This is the proper loss for SE(3) transforms, using:
+    - Geodesic distance on SO(3) for the rotation component
+    - Mean squared error for the translation component
+
+    The geodesic distance returns angles in radians, so rotation_weight=1.0
+    means 1 radian of rotation error equals 1 unit of loss.
+
+    Args:
+        pred: (N, 6) predicted transforms [axis_angle(3), translation(3)].
+        target: (N, 6) target transforms [axis_angle(3), translation(3)].
+        rotation_weight: Weight for rotation loss (default 1.0).
+        translation_weight: Weight for translation loss (default 1.0).
+
+    Returns:
+        Scalar loss combining rotation geodesic and translation MSE.
+
+    Example:
+        >>> pred_transforms = model(polymer)
+        >>> loss = se3_loss(pred_transforms, target_transforms)
+    """
+    pred_rot, pred_trans = pred[..., :3], pred[..., 3:]
+    target_rot, target_trans = target[..., :3], target[..., 3:]
+
+    # Geodesic distance on SO(3) - returns mean angle in radians
+    rotation_loss = geodesic_so3(pred_rot, target_rot, reduction="mean")
+
+    # MSE for translation
+    translation_loss = ((pred_trans - target_trans) ** 2).mean()
+
+    return rotation_weight * rotation_loss + translation_weight * translation_loss
+
+
 # =============================================================================
 # Residue Frame Computation
 # =============================================================================

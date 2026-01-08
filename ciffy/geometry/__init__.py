@@ -51,6 +51,8 @@ from .transforms import (
     rotation_to_axis_angle,
     compute_relative_transform,
     apply_relative_transform,
+    geodesic_so3,
+    se3_loss,
 )
 
 # Frame computation
@@ -101,6 +103,8 @@ __all__ = [
     "rotation_to_axis_angle",
     "compute_relative_transform",
     "apply_relative_transform",
+    "geodesic_so3",
+    "se3_loss",
     # Frame computation
     "extract_frame_positions",
     "frame_from_positions",

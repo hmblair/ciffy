@@ -103,7 +103,7 @@ int _get_offset(char *buffer, char delimiter, int n) {
     bool dquotes = false;
 
     for (int ix = 0; ix < n; ix++) {
-        while ((*buffer != delimiter && *buffer != '\n' && *buffer != '\0') || squotes) {
+        while (*buffer != '\0' && ((*buffer != delimiter && *buffer != '\n') || squotes)) {
             if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
             if (*buffer == '\"') { dquotes = !dquotes; }
             buffer++;
@@ -150,7 +150,7 @@ char *_get_field(char *buffer, CifErrorContext *ctx) {
     bool dquotes = false;
 
     char *start = buffer;
-    while ((*buffer != ' ' && *buffer != '\n' && *buffer != '\0') || squotes) {
+    while (*buffer != '\0' && ((*buffer != ' ' && *buffer != '\n') || squotes)) {
         if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
         if (*buffer == '\"') { dquotes = !dquotes; }
         buffer++;
@@ -274,16 +274,63 @@ int _str_to_int(const char *str) {
  * Inline parsing functions (no allocation, cache-friendly)
  * ───────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * @brief Skip over a semicolon text block in CIF data.
+ *
+ * CIF uses lines starting with ';' to delimit multi-line text values.
+ * This function advances the pointer past the entire block.
+ *
+ * @param ptr Pointer to ';' at start of block (modified in place)
+ * @return true if block was properly terminated, false if unterminated
+ */
+static bool _skip_semicolon_block(char **ptr) {
+    /* Skip the opening ';' line */
+    while (**ptr != '\n' && **ptr != '\0') (*ptr)++;
+    if (**ptr == '\n') (*ptr)++;
+
+    /* Skip until we find a line starting with ';' (block end) */
+    int lines = 0;
+    const int MAX_LINES = 10000;
+    while (**ptr != '\0' && **ptr != ';' && lines < MAX_LINES) {
+        while (**ptr != '\n' && **ptr != '\0') (*ptr)++;
+        if (**ptr == '\n') (*ptr)++;
+        lines++;
+    }
+
+    if (**ptr == ';') {
+        /* Skip the closing ';' line */
+        while (**ptr != '\n' && **ptr != '\0') (*ptr)++;
+        if (**ptr == '\n') (*ptr)++;
+        return true;
+    }
+    return false;
+}
+
 CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
-    /* Count lines first by scanning for newlines */
+    const char *name = block->category ? block->category : "unknown";
+
+    /* Count lines first by scanning for newlines, skipping semicolon blocks */
     int count = 0;
+    int skipped_blocks = 0;
     char *ptr = block->data.ptr;
 
     while (*ptr != '\0' && !_is_section_end(ptr)) {
+        /* Skip semicolon text blocks (multi-line values) */
+        if (*ptr == ';') {
+            if (!_skip_semicolon_block(&ptr)) {
+                LOG_WARNING("Unterminated semicolon block in %s", name);
+            }
+            skipped_blocks++;
+            continue;
+        }
         count++;
         /* Advance to next line */
         while (*ptr != '\n' && *ptr != '\0') ptr++;
         if (*ptr == '\n') ptr++;
+    }
+
+    if (skipped_blocks > 0) {
+        LOG_INFO("Skipped %d semicolon text block(s) in %s", skipped_blocks, name);
     }
 
     block->end = ptr;
@@ -302,9 +349,13 @@ CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
         return CIF_ERR_ALLOC;
     }
 
-    /* Second pass: populate pointers */
+    /* Second pass: populate pointers, skipping semicolon blocks */
     ptr = block->data.ptr;
     for (int i = 0; i < count; i++) {
+        /* Skip any semicolon blocks */
+        while (*ptr == ';') {
+            _skip_semicolon_block(&ptr);
+        }
         block->lines[i] = ptr;
         while (*ptr != '\n' && *ptr != '\0') ptr++;
         if (*ptr == '\n') ptr++;
@@ -396,7 +447,7 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
             char *end = ptr;
             bool squotes = false;
             bool dquotes = false;
-            while ((*end != ' ' && *end != '\n' && *end != '\0') || squotes) {
+            while (*end != '\0' && ((*end != ' ' && *end != '\n') || squotes)) {
                 if (*end == '\'' && !dquotes) squotes = !squotes;
                 if (*end == '"') dquotes = !dquotes;
                 end++;
@@ -444,7 +495,8 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
         bool squotes = false;
         bool dquotes = false;
 
-        while ((*end != ' ' && *end != '\n' && *end != '\0') || squotes) {
+        /* Always check for '\0' first to prevent reading past buffer end */
+        while (*end != '\0' && ((*end != ' ' && *end != '\n') || squotes)) {
             if (*end == '\'' && !dquotes) squotes = !squotes;
             if (*end == '"') dquotes = !dquotes;
             end++;

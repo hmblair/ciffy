@@ -92,7 +92,6 @@ from .config import (
 # Training (from training/ submodule)
 from .training import (
     ActivationTracker,
-    DataScalingSplit,
     DataSplit,
     GradientTracker,
     LearningRateTracker,
@@ -101,9 +100,13 @@ from .training import (
     TrainingDiagnostics,
     WandbLogger,
     create_logger,
-    create_scaling_split,
     diagnose_gradients,
-    split_by_structure,
+    split_items,
+    split_train_test,
+    split_by_clusters,
+    split_by_sequence_identity,
+    split_by_sequence,
+    split_to_directories,
 )
 
 # I/O (from io/ submodule)
@@ -211,9 +214,12 @@ __all__ = [
     "DiagnosticsConfig",
     "diagnose_gradients",
     "DataSplit",
-    "DataScalingSplit",
-    "split_by_structure",
-    "create_scaling_split",
+    "split_items",
+    "split_train_test",
+    "split_by_clusters",
+    "split_by_sequence_identity",
+    "split_by_sequence",
+    "split_to_directories",
     # I/O
     "save_model",
     "load_model",

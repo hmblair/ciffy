@@ -402,7 +402,7 @@ class TestPolymerDatasetPathSequence:
 
     def test_dataset_datasplit_integration(self):
         """Dataset integrates with DataSplit."""
-        from ciffy.nn import PolymerDataset, DataSplit
+        from ciffy.nn import PolymerDataset, split_items
         from ciffy import Scale
         from pathlib import Path
 
@@ -410,7 +410,7 @@ class TestPolymerDatasetPathSequence:
         if len(cif_files) < 4:
             pytest.skip("Need at least 4 CIF files")
 
-        split = DataSplit.from_paths(cif_files, train=0.5, val=0.25, test=0.25, seed=42)
+        split = split_items(cif_files, train=0.5, val=0.25, test=0.25, seed=42)
         train_ds = PolymerDataset(split.train, scale=Scale.CHAIN)
         test_ds = PolymerDataset(split.test, scale=Scale.CHAIN)
 

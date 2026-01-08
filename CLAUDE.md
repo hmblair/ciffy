@@ -203,6 +203,16 @@ dataset = PolymerDataset(
 polymer = dataset[0]
 ```
 
+### Train/Test Splitting
+
+```python
+from ciffy.nn import split_items, PolymerDataset
+
+split = split_items(paths, train=0.8, val=0.1, test=0.1, seed=42)
+train_dataset = PolymerDataset(split.train, scale=Scale.CHAIN)
+val_dataset = PolymerDataset(split.val, scale=Scale.CHAIN)
+```
+
 ### PolymerEmbedding
 
 ```python

@@ -843,10 +843,10 @@ def _cluster_command(args):
 
     # Handle split mode
     if split_ratios:
-        from ciffy.nn.split import DataSplit
+        from ciffy.nn.training.split import split_by_clusters, split_to_directories
 
         train, val, test = split_ratios
-        split = DataSplit.from_clusters(
+        split = split_by_clusters(
             result.paths,
             result.labels.tolist(),
             train=train,
@@ -860,7 +860,8 @@ def _cluster_command(args):
 
         # Create directories
         try:
-            dirs = split.to_directories(
+            dirs = split_to_directories(
+                split,
                 args.output,
                 symlink=not args.copy,
                 exist_ok=False,

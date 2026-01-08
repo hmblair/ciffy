@@ -45,9 +45,9 @@ class PolymerDataset(Dataset):
         >>> print(f"Found {len(dataset)} chains")
         >>> chain = dataset[0]  # Load first chain
         >>>
-        >>> # From list of paths (e.g., from DataSplit)
-        >>> from ciffy.nn import DataSplit
-        >>> split = DataSplit.from_paths(paths, train=0.8, val=0.1, test=0.1)
+        >>> # From list of paths (e.g., from split_items)
+        >>> from ciffy.nn import split_items
+        >>> split = split_items(paths, train=0.8, val=0.1, test=0.1)
         >>> train_dataset = PolymerDataset(split.train, scale=Scale.CHAIN)
         >>>
         >>> # Only RNA chains with at least 10 atoms

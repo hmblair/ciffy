@@ -24,18 +24,24 @@ from .loggers import (
     create_logger,
 )
 from .split import (
-    DataScalingSplit,
     DataSplit,
-    create_scaling_split,
-    split_by_structure,
+    split_items,
+    split_train_test,
+    split_by_clusters,
+    split_by_sequence_identity,
+    split_by_sequence,
+    split_to_directories,
 )
 
 __all__ = [
     # Data splitting
     "DataSplit",
-    "DataScalingSplit",
-    "split_by_structure",
-    "create_scaling_split",
+    "split_items",
+    "split_train_test",
+    "split_by_clusters",
+    "split_by_sequence_identity",
+    "split_by_sequence",
+    "split_to_directories",
     # Diagnostics
     "GradientTracker",
     "ParameterTracker",

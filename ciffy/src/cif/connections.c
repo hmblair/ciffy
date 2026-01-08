@@ -259,15 +259,24 @@ AtomLookup *_build_atom_lookup_ctx(mmBlock *block, mmCIF *cif, CifErrorContext *
     uint32_t mask = CHAIN_HASH_SIZE - 1;
     for (int i = 0; i < cif->chains; i++) {
         char *name = cif->names[i];
+        if (name == NULL) {
+            LOG_WARNING("Chain %d has NULL name, skipping hash insertion", i);
+            continue;
+        }
         uint32_t h = _chain_hash(name, strlen(name));
 
+        bool inserted = false;
         for (int j = 0; j < CHAIN_HASH_SIZE; j++) {
             uint32_t idx = (h + j) & mask;
             if (lookup->chain_hash[idx].index < 0) {
                 lookup->chain_hash[idx].name = name;
                 lookup->chain_hash[idx].index = i;
+                inserted = true;
                 break;
             }
+        }
+        if (!inserted) {
+            LOG_WARNING("Chain hash table full, could not insert chain %d ('%s')", i, name);
         }
     }
 

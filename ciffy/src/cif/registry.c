@@ -1184,8 +1184,10 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
     char *_end2 = _p2; \
     while (*_end2 != ' ' && *_end2 != '\n' && *_end2 != '\0') _end2++; \
     size_t _len2 = (size_t)(_end2 - _p2); \
-    /* Combine and lookup */ \
-    if (_len1 > 0 && _len2 > 0 && _len1 + 1 + _len2 + 1 < MAX_INLINE_BUFFER) { \
+    /* Combine and lookup - check individual lengths first to prevent overflow */ \
+    if (_len1 > 0 && _len2 > 0 && \
+        _len1 < MAX_INLINE_BUFFER && _len2 < MAX_INLINE_BUFFER && \
+        _len1 + _len2 + 2 < MAX_INLINE_BUFFER) { \
         _strip_outer_quotes((const char **)&_p1, &_len1); \
         _strip_outer_quotes((const char **)&_p2, &_len2); \
         memcpy(buf, _p1, _len1); \

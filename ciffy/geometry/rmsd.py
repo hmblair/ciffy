@@ -86,7 +86,7 @@ def rmsd_coords(coords1: Array, coords2: Array, eps: float = 0.0) -> Array:
 
     # Handle reflection case (det(R) < 0)
     d = det(R)
-    Vt = clone(Vt)
+    Vt = clone(Vt, detach=False)  # Allow gradients through SVD
     if is_torch(Vt):
         mask = d < 0
         Vt[mask, -1, :] *= -1

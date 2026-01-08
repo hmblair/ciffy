@@ -637,21 +637,25 @@ def empty_like(arr: Array) -> Array:
     return np.empty_like(arr)
 
 
-def clone(arr: Array) -> Array:
+def clone(arr: Array, detach: bool = True) -> Array:
     """
-    Create a copy of an array, detached from any computation graph.
+    Create a copy of an array, optionally detached from any computation graph.
 
-    For PyTorch tensors, this returns a detached clone.
+    For PyTorch tensors, this returns a clone (detached by default).
     For NumPy arrays, this returns a copy.
 
     Args:
         arr: Array to clone.
+        detach: If True (default), detach from computation graph.
+            Set to False to allow gradients to flow through the clone.
 
     Returns:
-        Independent copy of the array.
+        Copy of the array.
     """
     if is_torch(arr):
-        return arr.detach().clone()
+        if detach:
+            return arr.detach().clone()
+        return arr.clone()
     return arr.copy()
 
 

@@ -406,7 +406,7 @@ def _rmsd_polymer(
     cov_det = det(cov_compute)
 
     # Handle reflection case: negate smallest singular value if det < 0
-    sigma = clone(sigma)
+    sigma = clone(sigma, detach=False)  # Allow gradients through SVD
     sigma[cov_det < 0, -1] = -sigma[cov_det < 0, -1]
     sigma = sigma.mean(-1)
 

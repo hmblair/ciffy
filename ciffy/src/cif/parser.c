@@ -42,6 +42,28 @@ static const char *ATTR_LABEL_ASYM    = "label_asym_id";
 
 
 /* ============================================================================
+ * CHAIN SEQ_ID MAPPING
+ * Maps (chain, seq_id) from atom table to global residue index.
+ * ============================================================================ */
+
+/**
+ * @brief Per-chain seq_id to residue index mapping.
+ *
+ * For each chain, stores the minimum seq_id from the sequence table
+ * and the global residue offset. This allows correct mapping of atoms
+ * to residues even when seq_id doesn't start at 1 (e.g., unresolved
+ * N-terminus residues).
+ *
+ * Given (chain_idx, seq_id), the global residue index is:
+ *   res_offset + (seq_id - min_seq_id)
+ */
+typedef struct {
+    int min_seq_id;   /**< First seq_id in sequence table for this chain */
+    int res_offset;   /**< Global residue index where this chain starts */
+} ChainSeqInfo;
+
+
+/* ============================================================================
  * ATOM DATA HELPERS
  * Allocate/free shared AtomData structures for polymer and HETATM atoms.
  * ============================================================================ */
@@ -496,6 +518,107 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
 
 
 /**
+ * Build chain seq_id mapping from sequence table.
+ *
+ * Creates mapping from (chain, seq_id) to global residue index using
+ * _pdbx_poly_seq_scheme data. This allows atoms in _atom_site to be
+ * correctly assigned to residues even when seq_id doesn't start at 1.
+ *
+ * @param cif Structure with chains count already set
+ * @param poly_block Sequence table block (BLOCK_POLY)
+ * @param ctx Error context
+ * @return Array of ChainSeqInfo[chains], or NULL on error. Caller must free.
+ */
+static ChainSeqInfo *_build_chain_seq_info(mmCIF *cif, mmBlock *poly_block,
+                                           CifErrorContext *ctx) {
+    /* Get attribute indices for asym_id (chain) and seq_id */
+    int asym_index = _get_attr_index(poly_block, "asym_id", ctx);
+    if (asym_index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing asym_id in sequence table");
+        return NULL;
+    }
+
+    int seq_index = _get_attr_index(poly_block, "seq_id", ctx);
+    if (seq_index == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing seq_id in sequence table");
+        return NULL;
+    }
+
+    int chain_count = cif->original_chains > 0 ? cif->original_chains : cif->chains;
+    ChainSeqInfo *info = calloc((size_t)chain_count, sizeof(ChainSeqInfo));
+    if (info == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate ChainSeqInfo array");
+        return NULL;
+    }
+
+    /* Initialize all min_seq_id to -1 (not yet set) */
+    for (int i = 0; i < chain_count; i++) {
+        info[i].min_seq_id = -1;
+        info[i].res_offset = 0;
+    }
+
+    /* Iterate through sequence table to find min_seq_id per chain */
+    int current_chain = 0;
+    int res_count = 0;
+    char *prev_asym_ptr = NULL;
+    size_t prev_asym_len = 0;
+
+    for (int line = 0; line < poly_block->size; line++) {
+        /* Get chain (asym_id) */
+        size_t asym_len;
+        char *asym_ptr = _get_field_ptr(poly_block, line, asym_index, &asym_len);
+        if (asym_ptr == NULL) {
+            LOG_WARNING("Failed to get asym_id at line %d in sequence table", line);
+            continue;
+        }
+
+        /* Detect chain change */
+        bool chain_changed = (prev_asym_ptr == NULL) ||
+            !_field_eq_field(prev_asym_ptr, prev_asym_len, asym_ptr, asym_len);
+
+        if (chain_changed) {
+            /* Find chain index by matching name */
+            int new_chain = -1;
+            for (int i = 0; i < chain_count; i++) {
+                if (cif->names[i] && strlen(cif->names[i]) == asym_len &&
+                    memcmp(cif->names[i], asym_ptr, asym_len) == 0) {
+                    new_chain = i;
+                    break;
+                }
+            }
+
+            if (new_chain >= 0) {
+                current_chain = new_chain;
+                info[current_chain].res_offset = res_count;
+            }
+
+            prev_asym_ptr = asym_ptr;
+            prev_asym_len = asym_len;
+        }
+
+        /* Get seq_id and record min for current chain */
+        int seq_id = _parse_int_inline(poly_block, line, seq_index);
+        if (current_chain >= 0 && current_chain < chain_count) {
+            if (info[current_chain].min_seq_id < 0 || seq_id < info[current_chain].min_seq_id) {
+                info[current_chain].min_seq_id = seq_id;
+            }
+        }
+
+        res_count++;
+    }
+
+    /* Set default min_seq_id=1 for chains that had no entries */
+    for (int i = 0; i < chain_count; i++) {
+        if (info[i].min_seq_id < 0) {
+            info[i].min_seq_id = 1;
+        }
+    }
+
+    return info;
+}
+
+
+/**
  * Count atoms per chain with exclusion and nonpoly support.
  *
  * Like _count_sizes_by_group but skips excluded and non-polymer atoms.
@@ -574,15 +697,21 @@ static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
 
 
 /**
- * Count atoms per residue with chain-aware indexing.
+ * Count atoms per residue using seq_id mapping.
  *
- * Handles non-polymer atoms (HETATM) by marking them in is_nonpoly mask.
- * Returns NULL-terminated sizes array indexed by global residue index.
+ * Maps each atom to its correct global residue index using the ChainSeqInfo
+ * mapping built from the sequence table. This correctly handles CIF files
+ * where seq_id doesn't start at 1 (e.g., unresolved N-terminus residues).
  *
- * Uses pointer-based comparison - minimal allocations.
+ * @param cif Structure with chains and names already set
+ * @param block Atom table block (BLOCK_ATOM)
+ * @param residue_count Total residue count from sequence table
+ * @param seq_info Per-chain seq_id mapping from _build_chain_seq_info
+ * @param ctx Error context
+ * @return Array of atom counts per residue, or NULL on error
  */
 static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_count,
-                                     int *res_per_chain, CifErrorContext *ctx) {
+                                     ChainSeqInfo *seq_info, CifErrorContext *ctx) {
     int seq_index = _get_attr_index(block, ATTR_SEQ_ID, ctx);
     if (seq_index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
@@ -602,12 +731,11 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
         return NULL;
     }
 
-    /* Note: cif->nonpoly and cif->polymer are already set by _prescan_group_pdb */
-
-    int chain_offset = 0;
+    /* Track current chain by detecting chain name changes */
+    int chain_count = cif->original_chains > 0 ? cif->original_chains : cif->chains;
+    int current_chain = 0;
     char *prev_chain_ptr = NULL;
     size_t prev_chain_len = 0;
-    int *chain_len_ptr = res_per_chain;
 
     for (int line = 0; line < block->size; line++) {
         /* Skip excluded atoms (from chain filter) */
@@ -616,42 +744,61 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
         }
 
         /* Skip non-polymer atoms (already classified during pre-scan) */
-        if (cif->is_nonpoly[line]) {
+        if (cif->is_nonpoly && cif->is_nonpoly[line]) {
             continue;
         }
 
-        /* Track chain changes to compute residue offset */
+        /* Get chain ID */
         size_t chain_len;
         char *chain_ptr = _get_field_ptr(block, line, chain_index, &chain_len);
         if (chain_ptr == NULL) {
             CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
-                "Failed to get label_asym_id at line %d/%d in atom block (lines=%s)",
-                line, block->size, block->lines ? "ok" : "NULL");
+                "Failed to get label_asym_id at line %d/%d in atom block",
+                line, block->size);
             free(sizes);
             return NULL;
         }
 
+        /* Track chain changes to update current_chain index */
         if (prev_chain_ptr == NULL) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
+            /* Find initial chain index */
+            for (int i = 0; i < chain_count; i++) {
+                if (cif->names[i] && strlen(cif->names[i]) == chain_len &&
+                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
+                    current_chain = i;
+                    break;
+                }
+            }
         } else if (!_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
-            chain_offset += *chain_len_ptr++;
+            /* Find new chain index */
+            for (int i = 0; i < chain_count; i++) {
+                if (cif->names[i] && strlen(cif->names[i]) == chain_len &&
+                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
+                    current_chain = i;
+                    break;
+                }
+            }
         }
 
-        /* Parse sequence ID inline without allocation */
-        int seq_id = _parse_int_inline(block, line, seq_index) - 1;
+        /* Parse sequence ID and compute global residue index */
+        int seq_id = _parse_int_inline(block, line, seq_index);
 
-        /* Skip atoms with invalid seq_id (shouldn't happen for ATOM records) */
-        if (seq_id < 0) {
-            LOG_WARNING("ATOM record with invalid seq_id at line %d", line);
-            continue;
-        }
+        if (current_chain >= 0 && current_chain < chain_count) {
+            ChainSeqInfo *info = &seq_info[current_chain];
+            int local_res_idx = seq_id - info->min_seq_id;
+            int global_res_idx = info->res_offset + local_res_idx;
 
-        int residue_idx = chain_offset + seq_id;
-        if (residue_idx >= 0 && residue_idx < residue_count) {
-            sizes[residue_idx]++;
+            /* Validate bounds and count atom */
+            if (global_res_idx >= 0 && global_res_idx < residue_count) {
+                sizes[global_res_idx]++;
+            } else {
+                LOG_DEBUG("Atom seq_id %d out of range for chain %d (offset=%d, min=%d)",
+                          seq_id, current_chain, info->res_offset, info->min_seq_id);
+            }
         }
     }
 
@@ -937,6 +1084,15 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         }
     }
 
+    /* Build chain seq_id mapping from sequence table before freeing lines */
+    ChainSeqInfo *seq_info = _build_chain_seq_info(cif, &blocks->b[BLOCK_POLY], ctx);
+    if (seq_info == NULL) {
+        _free_lines(&blocks->b[BLOCK_POLY]);
+        _free_lines(&blocks->b[BLOCK_CHAIN]);
+        free(cif->is_nonpoly);
+        return ctx->code;
+    }
+
     /* Free poly and chain line pointers - no longer needed */
     _free_lines(&blocks->b[BLOCK_POLY]);
     _free_lines(&blocks->b[BLOCK_CHAIN]);
@@ -957,9 +1113,12 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
 
     /* ── Residue/Chain Counting ────────────────────────────────────────────── */
 
-    /* Count atoms per residue (is_nonpoly already filled, nonpoly count already set) */
+    /* Count atoms per residue using seq_id mapping */
     cif->atoms_per_res = _count_atoms_per_residue(cif, &blocks->b[BLOCK_ATOM], cif->residues,
-                                                  cif->res_per_chain, ctx);
+                                                  seq_info, ctx);
+    free(seq_info);  /* No longer needed after counting */
+    seq_info = NULL;
+
     if (cif->atoms_per_res == NULL) {
         free(cif->is_nonpoly);
         return ctx->code;
@@ -1230,9 +1389,19 @@ static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx) {
         cif->res_per_chain = calloc(1, sizeof(int));
         if (cif->atoms_per_chain) free(cif->atoms_per_chain);
         cif->atoms_per_chain = calloc(1, sizeof(int));
+        if (cif->atoms_per_res) free(cif->atoms_per_res);
+        cif->atoms_per_res = calloc(1, sizeof(int));
         cif->chains = 0;
         cif->residues = 0;
         return CIF_OK;
+    }
+
+    /* Count total residues in included chains */
+    int new_residues = 0;
+    for (int i = 0; i < cif->original_chains; i++) {
+        if (cif->chain_mask[i] && cif->res_per_chain) {
+            new_residues += cif->res_per_chain[i];
+        }
     }
 
     /* Allocate new compacted arrays */
@@ -1241,33 +1410,51 @@ static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx) {
     int *new_mol_types = calloc(included, sizeof(int));
     int *new_res_per_chain = calloc(included, sizeof(int));
     int *new_atoms_per_chain = calloc(included, sizeof(int));
+    int *new_atoms_per_res = NULL;
+
+    if (cif->atoms_per_res && new_residues > 0) {
+        new_atoms_per_res = calloc(new_residues, sizeof(int));
+    }
 
     if (!new_names || !new_strands || !new_mol_types ||
-        !new_res_per_chain || !new_atoms_per_chain) {
+        !new_res_per_chain || !new_atoms_per_chain ||
+        (cif->atoms_per_res && new_residues > 0 && !new_atoms_per_res)) {
         free(new_names); free(new_strands); free(new_mol_types);
         free(new_res_per_chain); free(new_atoms_per_chain);
+        free(new_atoms_per_res);
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate compacted chain arrays");
         return CIF_ERR_ALLOC;
     }
 
     /* Copy included chains, free excluded ones */
     int j = 0;
-    int new_residues = 0;
+    int src_res_offset = 0;  /* Residue offset in source (uncompacted) arrays */
+    int dst_res_offset = 0;  /* Residue offset in destination (compacted) arrays */
     for (int i = 0; i < cif->original_chains; i++) {
+        int chain_res_count = cif->res_per_chain ? cif->res_per_chain[i] : 0;
+
         if (cif->chain_mask[i]) {
             /* Copy to new arrays */
             new_names[j] = cif->names ? cif->names[i] : NULL;
             new_strands[j] = cif->strands ? cif->strands[i] : NULL;
             new_mol_types[j] = cif->molecule_types ? cif->molecule_types[i] : 0;
-            new_res_per_chain[j] = cif->res_per_chain ? cif->res_per_chain[i] : 0;
+            new_res_per_chain[j] = chain_res_count;
             new_atoms_per_chain[j] = cif->atoms_per_chain ? cif->atoms_per_chain[i] : 0;
-            new_residues += new_res_per_chain[j];
+
+            /* Copy atoms_per_res for this chain */
+            if (cif->atoms_per_res && new_atoms_per_res) {
+                for (int r = 0; r < chain_res_count; r++) {
+                    new_atoms_per_res[dst_res_offset + r] = cif->atoms_per_res[src_res_offset + r];
+                }
+            }
+            dst_res_offset += chain_res_count;
             j++;
         } else {
             /* Free excluded chain's strings */
             if (cif->names && cif->names[i]) free(cif->names[i]);
             if (cif->strands && cif->strands[i]) free(cif->strands[i]);
         }
+        src_res_offset += chain_res_count;
     }
 
     /* Free old arrays (but not the strings we copied) */
@@ -1276,6 +1463,7 @@ static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx) {
     free(cif->molecule_types);
     free(cif->res_per_chain);
     free(cif->atoms_per_chain);
+    if (cif->atoms_per_res) free(cif->atoms_per_res);
 
     /* Assign new arrays */
     cif->names = new_names;
@@ -1283,6 +1471,7 @@ static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx) {
     cif->molecule_types = new_mol_types;
     cif->res_per_chain = new_res_per_chain;
     cif->atoms_per_chain = new_atoms_per_chain;
+    cif->atoms_per_res = new_atoms_per_res;
     cif->chains = included;
     cif->residues = new_residues;
 

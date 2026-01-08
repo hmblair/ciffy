@@ -152,6 +152,7 @@ class PolymerDataset(Dataset):
         exclude_ids: list[str] | set[str] | None = None,
         num_workers: int = 0,
         limit: int | None = None,
+        cache: bool = False,
     ):
         """
         Initialize dataset from a directory or list of CIF files.
@@ -182,6 +183,9 @@ class PolymerDataset(Dataset):
                 of large directories (only used when paths is a directory).
             limit: Maximum number of samples to include. Useful for overfitting
                 tests or quick iteration. None = no limit (use all samples).
+            cache: If True, cache loaded structures in memory. Subsequent
+                accesses to the same index return the cached polymer instead
+                of reloading from disk. Default False.
 
         Raises:
             ImportError: If PyTorch is not installed.
@@ -218,6 +222,7 @@ class PolymerDataset(Dataset):
         self.backend = backend
         self.num_workers = num_workers
         self.limit = limit
+        self._cache: dict[int, "Polymer"] | None = {} if cache else None
 
         # Normalize molecule_types to tuple or None
         if molecule_types is None:
@@ -337,6 +342,10 @@ class PolymerDataset(Dataset):
             Returns None instead of raising on errors to support
             DataLoader with num_workers > 0 without crashing workers.
         """
+        # Check cache first
+        if self._cache is not None and idx in self._cache:
+            return self._cache[idx]
+
         from .. import load
 
         try:
@@ -349,6 +358,10 @@ class PolymerDataset(Dataset):
             elif self.molecule_types is not None:
                 # Molecule scale: filter out non-matching chains
                 polymer = self._filter_by_molecule_type(polymer)
+
+            # Cache the result
+            if self._cache is not None:
+                self._cache[idx] = polymer
 
             return polymer
 

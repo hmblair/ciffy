@@ -6,7 +6,7 @@ from ciffy.backend import ops
 from ciffy.backend.core import Array
 
 
-def pack_by_residue(
+def pack(
     features: Array,
     counts: Array,
 ) -> tuple[Array, Array]:
@@ -41,14 +41,14 @@ def pack_by_residue(
     return packed, mask
 
 
-def unpack_by_residue(
+def unpack(
     packed: Array,
     mask: Array,
 ) -> Array:
     """
     Unpack residue-level batched features back to atom-level.
 
-    Inverse of pack_by_residue.
+    Inverse of pack.
 
     Args:
         packed: (n_residues, max_atoms, d) padded features.

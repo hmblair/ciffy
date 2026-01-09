@@ -11,8 +11,7 @@ from ciffy.nn import PolymerEmbedding
 from ciffy.nn.geometric import RadialBasisFunctions
 from ciffy.nn.layers.transformer import Transformer, RMSNorm
 from ciffy.polymer import Polymer
-
-from .packing import pack_by_residue
+from ciffy.operations.packing import pack
 
 
 class ResidueEncoder(nn.Module):
@@ -142,10 +141,10 @@ class ResidueEncoder(nn.Module):
 
         # Pack for within-residue attention
         counts = polymer.counts(Scale.RESIDUE)
-        x_packed, mask = pack_by_residue(x, counts)
+        x_packed, mask = pack(x, counts)
 
         # Compute pairwise distances for attention bias
-        coords_packed, _ = pack_by_residue(polymer.coordinates, counts)
+        coords_packed, _ = pack(polymer.coordinates, counts)
         diff = coords_packed.unsqueeze(2) - coords_packed.unsqueeze(1)
         dists = diff.norm(dim=-1)  # (batch, seq, seq)
 

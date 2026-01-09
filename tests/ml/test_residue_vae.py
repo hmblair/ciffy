@@ -14,13 +14,12 @@ from tests.utils import (
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestPackByResidue:
-    """Tests for internal pack_by_residue utility."""
+    """Tests for internal pack utility."""
 
     def test_pack_unpack_roundtrip(self):
         """Test that pack/unpack are inverse operations."""
         import torch
-        from ciffy.nn.residue.packing import pack_by_residue, unpack_by_residue
-
+        from ciffy.operations.packing import pack, unpack
         # Create test data
         torch.manual_seed(42)
         n_atoms = 100
@@ -31,7 +30,7 @@ class TestPackByResidue:
         counts = torch.tensor([20, 25, 15, 30, 10])
 
         # Pack
-        packed, mask = pack_by_residue(features, counts)
+        packed, mask = pack(features, counts)
 
         # Check packed shape
         n_residues = 5
@@ -40,7 +39,7 @@ class TestPackByResidue:
         assert mask.shape == (n_residues, max_atoms)
 
         # Unpack
-        unpacked = unpack_by_residue(packed, mask)
+        unpacked = unpack(packed, mask)
 
         # Should match original
         assert unpacked.shape == features.shape
@@ -49,7 +48,7 @@ class TestPackByResidue:
     def test_mask_correctness(self):
         """Test that mask correctly indicates valid positions."""
         import torch
-        from ciffy.nn.residue.packing import pack_by_residue
+        from ciffy.operations import pack
 
         n_atoms = 50
         d_features = 32
@@ -58,7 +57,7 @@ class TestPackByResidue:
         # Unequal residue sizes
         counts = torch.tensor([10, 5, 20, 15])
 
-        packed, mask = pack_by_residue(features, counts)
+        packed, mask = pack(features, counts)
 
         # Check mask sums match counts
         max_atoms = counts.max().item()

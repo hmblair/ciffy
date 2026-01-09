@@ -15,6 +15,7 @@ from .extract import extract
 from .gnm import GNM, contact_map, inverse_square_map
 from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg, clashes, sasa
 from .cluster import cluster, cluster_representatives, ClusterResult
+from .packing import pack, unpack
 
 # Legacy alias
 kabsch_distance = rmsd
@@ -43,4 +44,6 @@ __all__ = [
     "cluster",
     "cluster_representatives",
     "ClusterResult",
+    "pack",
+    "unpack",
 ]

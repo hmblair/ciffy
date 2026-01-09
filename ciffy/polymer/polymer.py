@@ -1169,7 +1169,7 @@ class Polymer(AtomContainer):
 
         Note:
             Principal components are only defined up to sign.
-            Use align() for stable, unique orientations.
+            Use pca() for stable, unique orientations.
         """
         cov = self.coordinates[:, None, :] * self.coordinates[:, :, None]
         cov = self.reduce(cov, scale)
@@ -2141,6 +2141,10 @@ class Polymer(AtomContainer):
     # ─────────────────────────────────────────────────────────────────────────
     # I/O
     # ─────────────────────────────────────────────────────────────────────────
+
+    def save(self: Polymer, filename: str) -> None:
+        """Alias for write."""
+        return self.write(filename)
 
     def write(self: Polymer, filename: str) -> None:
         """

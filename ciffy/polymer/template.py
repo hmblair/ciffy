@@ -154,7 +154,7 @@ def _generate_chain_name(index: int) -> str:
 # PUBLIC API
 # =============================================================================
 
-def from_sequence(
+def template(
     sequence: str | Sequence[str],
     backend: str = "numpy",
     id: str = "template",
@@ -183,17 +183,17 @@ def from_sequence(
         Polymer template (coordinates=None). Use copy(coordinates=...) to add coords.
 
     Examples:
-        >>> template = from_sequence("acgu")
+        >>> template = template("acgu")
         >>> template.size(Scale.RESIDUE)
         4
         >>> template.coordinates  # None - template has no coordinates
         >>> polymer = template.copy(coordinates=predicted_coords)
 
-        >>> protein = from_sequence("MGKLF")
+        >>> protein = template("MGKLF")
         >>> protein.size(Scale.RESIDUE)
         5
 
-        >>> multi = from_sequence(["acgu", "acgu"])
+        >>> multi = template(["acgu", "acgu"])
         >>> multi.size(Scale.CHAIN)
         2
     """

@@ -436,11 +436,11 @@ class TestCifSave:
 
     def test_write_empty_polymer_raises(self):
         """Test that writing an empty polymer raises ValueError."""
-        from ciffy import load, from_sequence
+        from ciffy import load, template
 
         # Create an empty polymer by subsetting with impossible mask
-        template = from_sequence("acgu")
-        empty = template[template.atoms < 0]  # Empty mask
+        _template = template("acgu")
+        empty = _template[_template.atoms < 0]  # Empty mask
 
         assert empty.empty()
 

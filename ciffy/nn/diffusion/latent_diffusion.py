@@ -489,10 +489,10 @@ class LatentDiffusionModel(nn.Module):
             return [template.copy(coordinates=coords) for coords in coords_list]
         else:
             # Template has different atoms (e.g., missing atoms) - build fresh polymers
-            from ciffy.polymer import from_sequence
+            from ciffy.polymer import template
 
             # Create template with encoder model's expected atoms
-            encoder_template = from_sequence(
+            encoder_template = template(
                 template.sequence_str(),
                 atoms=self.encoder_model.atom_filter,
                 id=template.pdb_id,
@@ -501,7 +501,7 @@ class LatentDiffusionModel(nn.Module):
                 encoder_template = encoder_template.torch().to(template.coordinates.device)
             return [encoder_template.copy(coordinates=coords) for coords in coords_list]
 
-    def sample_from_sequence(
+    def sample_template(
         self,
         sequence: str,
         n_samples: int = 1,
@@ -525,13 +525,13 @@ class LatentDiffusionModel(nn.Module):
 
         Example:
             >>> model = LatentDiffusionModel(config)
-            >>> polymers = model.sample_from_sequence("acgu", num_steps=50)
+            >>> polymers = model.sample_template("acgu", num_steps=50)
             >>> polymers[0].write("sampled.cif")
         """
-        from ciffy.polymer import from_sequence
+        from ciffy.polymer import template
 
         # Create template with correct atoms for the encoder model
-        template = from_sequence(
+        template = template(
             sequence,
             atoms=self.encoder_model.atom_filter,
             id=id,

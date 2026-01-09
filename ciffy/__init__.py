@@ -53,7 +53,7 @@ except ImportError as e:
     ) from e
 
 # Core types
-from .polymer import Polymer, Field, Metadata, from_sequence, from_extract
+from .polymer import Polymer, Field, Metadata, template, from_extract
 from .polymer import HeteroAtoms
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
@@ -119,7 +119,7 @@ __all__ = [
     "load_metadata",
     "write_cif",
     # Template
-    "from_sequence",
+    "template",
     "from_extract",
     # Ensemble
     "Ensemble",

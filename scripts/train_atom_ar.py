@@ -220,7 +220,7 @@ def sample_structures(model: AtomARModel, output_dir: Path, device: str = "cuda"
         print(f"\nSequence: {seq_str}")
 
         # Create template from sequence
-        template = ciffy.from_sequence(seq_str.lower())
+        template = ciffy.template(seq_str.lower())
 
         try:
             # Sample using the model

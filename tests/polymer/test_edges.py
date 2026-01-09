@@ -17,8 +17,8 @@ class TestEmptyPolymer:
         """Empty polymer reports empty() as True."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]  # Impossible mask
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]  # Impossible mask
 
         assert empty.empty()
         assert empty.size() == 0
@@ -28,8 +28,8 @@ class TestEmptyPolymer:
         import ciffy
         from ciffy import Scale
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         assert empty.size() == 0
         assert empty.size(Scale.RESIDUE) == 0
@@ -48,8 +48,8 @@ class TestEmptyPolymer:
         """Empty polymer __repr__ doesn't crash."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         repr_str = repr(empty)
         assert isinstance(repr_str, str)
@@ -58,8 +58,8 @@ class TestEmptyPolymer:
         """Empty polymer str() returns empty string."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         assert empty.sequence_str() == ""
 
@@ -71,8 +71,8 @@ class TestSingleAtomPolymer:
         """Single atom polymer is not empty."""
         import ciffy
 
-        template = ciffy.from_sequence("g", backend=backend)  # Glycine
-        single = template[:1]
+        _template = ciffy.template("g", backend=backend)  # Glycine
+        single = _template[:1]
 
         assert not single.empty()
         assert single.size() == 1
@@ -118,7 +118,7 @@ class TestSingleResiduePolymer:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         assert p.size(Scale.RESIDUE) == 1
         assert p.size(Scale.CHAIN) == 1
@@ -127,7 +127,7 @@ class TestSingleResiduePolymer:
         """Single residue polymer has length-1 sequence."""
         import ciffy
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         assert len(p.sequence) == 1
 
@@ -146,7 +146,7 @@ class TestSingleResiduePolymer:
         """Single residue str() returns single character."""
         import ciffy
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         assert p.sequence_str() == "a"
 
@@ -158,7 +158,7 @@ class TestSingleChainPolymer:
         """chain(0) returns same structure on single chain."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         chain = p.chain(0)
 
         assert chain.size() == p.size()
@@ -167,7 +167,7 @@ class TestSingleChainPolymer:
         """chains() generator yields once for single chain."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         chains = list(p.chains())
 
         assert len(chains) == 1
@@ -176,7 +176,7 @@ class TestSingleChainPolymer:
         """chain(1) raises IndexError on single chain."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
 
         with pytest.raises(IndexError):
             p.chain(1)
@@ -189,7 +189,7 @@ class TestPolyHeteroPartition:
         """poly() on all-polymer structure returns same size."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         poly = p
 
         assert poly.size() == p.size()
@@ -198,7 +198,7 @@ class TestPolyHeteroPartition:
         """hetero() on all-polymer structure returns empty."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         hetero = p.hetero()
 
         assert hetero.empty()
@@ -241,7 +241,7 @@ class TestChainsGenerator:
         """chains() on single-chain polymer yields once."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         chains = list(p.chains())
 
         assert len(chains) == 1
@@ -290,7 +290,7 @@ class TestResolvedStrip:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         resolved = p.resolved(Scale.RESIDUE)
 
         # All residues should be resolved (have atoms)
@@ -302,7 +302,7 @@ class TestResolvedStrip:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         stripped = p.strip(Scale.RESIDUE)
 
         assert stripped.size(Scale.RESIDUE) == p.size(Scale.RESIDUE)
@@ -315,7 +315,7 @@ class TestBackendConversion:
         """numpy() on numpy polymer returns same object."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend="numpy")
         p2 = p.numpy()
 
         # Should return self (or equivalent)
@@ -325,7 +325,7 @@ class TestBackendConversion:
         """torch() on torch polymer returns same object."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.template("acgu", backend="torch")
         p2 = p.torch()
 
         assert p2.backend == "torch"
@@ -426,7 +426,7 @@ class TestArraySetterValidation:
         """lengths is a read-only property delegating to hierarchy."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend="numpy")
 
         # Python 3.10: "can't set attribute", Python 3.11+: "has no setter"
         with pytest.raises(AttributeError, match="can't set attribute|has no setter"):
@@ -436,7 +436,7 @@ class TestArraySetterValidation:
         """Setting coordinates with same backend works."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend="numpy")
         new_coords = np.random.randn(p.size(), 3).astype(np.float32)
 
         p.coordinates = new_coords
@@ -447,7 +447,7 @@ class TestArraySetterValidation:
         import ciffy
         import torch
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.template("acgu", backend="torch")
         new_coords = torch.randn(p.size(), 3)
 
         p.coordinates = new_coords
@@ -461,21 +461,21 @@ class TestDeviceProperty:
         """device property returns None for numpy backend."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend="numpy")
         assert p.device is None
 
     def test_device_torch_returns_cpu(self):
         """device property returns 'cpu' for torch CPU tensor."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.template("acgu", backend="torch")
         assert p.device == "cpu"
 
     def test_device_after_backend_conversion(self):
         """device property updates after backend conversion."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend="numpy")
         assert p.device is None
 
         p_torch = p.torch()
@@ -490,7 +490,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
 
         assert idx.shape == (p.size(),)
@@ -500,7 +500,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
 
         # Convert to numpy for checking
@@ -513,7 +513,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
@@ -524,7 +524,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.CHAIN)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
@@ -535,7 +535,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence(["acgu", "MGKLF"], backend=backend)
+        p = ciffy.template(["acgu", "MGKLF"], backend=backend)
         idx = p.membership(Scale.CHAIN)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
@@ -548,7 +548,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.MOLECULE)
 
         idx_np = idx.numpy() if hasattr(idx, 'numpy') else idx
@@ -559,7 +559,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
 
         if backend == "torch":
@@ -573,7 +573,7 @@ class TestMembershipMethod:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
         sizes = p.counts(Scale.RESIDUE)
 
@@ -593,7 +593,7 @@ class TestAtomNames:
         """atom_names() returns a list."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         names = p.atom_names()
 
         assert isinstance(names, list)
@@ -602,7 +602,7 @@ class TestAtomNames:
         """atom_names() length equals number of atoms."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         names = p.atom_names()
 
         assert len(names) == p.size()
@@ -611,7 +611,7 @@ class TestAtomNames:
         """atom_names() entries are strings."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         names = p.atom_names()
 
         for name in names:
@@ -621,7 +621,7 @@ class TestAtomNames:
         """atom_names() includes known atom names."""
         import ciffy
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
         names = p.atom_names()
 
         # Adenine should have phosphate atoms
@@ -631,8 +631,8 @@ class TestAtomNames:
         """atom_names() on empty polymer returns empty list."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
         names = empty.atom_names()
 
         assert names == []
@@ -641,7 +641,7 @@ class TestAtomNames:
         """atom_names() returns '?' for unknown atom types."""
         import ciffy
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         # Set invalid atom value
         if backend == "torch":
@@ -711,11 +711,11 @@ class TestChainInfo:
         total = sum(entry['atoms'] for entry in info)
         assert total == p.size()
 
-    def test_chain_info_template_polymer(self, backend):
-        """chain_info() works on template polymers."""
+    def test_chain_info__template_polymer(self, backend):
+        """chain_info() works on _template polymers."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         info = p.chain_info()
 
         assert len(info) == 1
@@ -730,7 +730,7 @@ class TestDetach:
         """detach() returns self for method chaining."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         result = p.detach()
 
         assert result is p
@@ -781,7 +781,7 @@ class TestCanonical:
         """canonical() returns a Polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         result = p.canonical()
 
         assert isinstance(result, ciffy.Polymer)
@@ -791,7 +791,7 @@ class TestCanonical:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         canonical = p.canonical()
 
         # All standard, should be preserved
@@ -803,7 +803,7 @@ class TestCanonical:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("MGKLF", backend=backend)
+        p = ciffy.template("MGKLF", backend=backend)
         canonical = p.canonical()
 
         # All standard amino acids, should be preserved
@@ -826,7 +826,7 @@ class TestCanonical:
         import ciffy
         from ciffy.biochemistry import Residue
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         # Set to a non-canonical (modified) residue type - H2U is dihydrouridine
         if backend == "torch":
@@ -842,7 +842,7 @@ class TestCanonical:
         """canonical() preserves sequence string for standard residues."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         canonical = p.canonical()
 
         assert canonical.sequence_str() == p.sequence_str()
@@ -908,8 +908,8 @@ class TestVdwRadii:
         """vdw_radii on empty polymer returns empty array."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]  # Impossible mask
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]  # Impossible mask
 
         radii = empty.vdw_radii
         assert radii.shape == (0,)
@@ -954,8 +954,8 @@ class TestResolvedExtended:
         import ciffy
         from ciffy import Scale
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         resolved = empty.resolved(Scale.RESIDUE)
         assert len(resolved) == 0
@@ -999,8 +999,8 @@ class TestStripExtended:
         import ciffy
         from ciffy import Scale
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         stripped = empty.strip(Scale.RESIDUE)
         assert stripped.empty()

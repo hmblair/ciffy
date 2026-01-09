@@ -1113,8 +1113,8 @@ class TestAdjacency:
         """adjacency() on empty polymer returns empty matrix."""
         import ciffy
 
-        template = ciffy.from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]  # Impossible mask
+        _template = ciffy.template("a", backend=backend)
+        empty = _template[_template.atoms < 0]  # Impossible mask
 
         adj = empty.adjacency()
         assert adj.shape == (0, 0)

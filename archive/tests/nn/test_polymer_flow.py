@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from ciffy import from_sequence
+from ciffy import template
 from ciffy.nn.flow import PolymerFlowModel, PCAFlow, ResidueFlowModel
 from ciffy.nn.flow.residue.data import compute_pca
 from ciffy.biochemistry import Residue
@@ -175,7 +175,7 @@ class TestPolymerFlowModel:
     def test_sample_protocol(self, polymer_model):
         """Test sample() protocol requires numpy backend."""
         # Create a template with torch backend
-        template = from_sequence("ag", atoms=polymer_model.atom_filter)
+        template = template("ag", atoms=polymer_model.atom_filter)
         template_torch = template.torch()
 
         # Should raise for non-numpy backend
@@ -185,7 +185,7 @@ class TestPolymerFlowModel:
     def test_sample_protocol_returns_polymers(self, polymer_model):
         """Test sample() returns list of Polymers."""
         # Create template - use full atoms
-        template = from_sequence("ag")
+        template = template("ag")
         n_atoms_model = sum(polymer_model._get_atom_counts(template.sequence))
 
         samples = polymer_model.sample(template, n_samples=3)

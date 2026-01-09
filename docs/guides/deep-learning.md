@@ -335,13 +335,13 @@ for epoch in range(100):
 !!! tip "Use the Flow API for common workflows"
     For sampling conformations or training flow models, use the high-level `ciffy.flow` API shown at the top of this guide. The lower-level approach below is for custom model architectures.
 
-Use `from_sequence()` to create template structures for generative models that predict coordinates:
+Use `template()` to create template structures for generative models that predict coordinates:
 
 ```python
 import ciffy
 
 # Create template from sequence (zero coordinates)
-template = ciffy.from_sequence("acgu", backend="torch")
+template = ciffy.template("acgu", backend="torch")
 template = template.to("cuda")
 
 # Template has correct structure but zero coordinates
@@ -366,7 +366,7 @@ Generate complex structures with multiple chains:
 ```python
 # RNA-protein complex
 sequences = ["acguacgu", "MGKLF"]
-template = ciffy.from_sequence(sequences, backend="torch")
+template = ciffy.template(sequences, backend="torch")
 
 print(template.size(ciffy.CHAIN))  # 2
 print(template.names)  # ['A', 'B']
@@ -404,7 +404,7 @@ optimizer = optim.Adam(model.parameters())
 
 for sequence, target_cif in dataset:
     # Create template from sequence
-    template = ciffy.from_sequence(sequence, backend="torch").to("cuda")
+    template = ciffy.template(sequence, backend="torch").to("cuda")
 
     # Load ground truth
     target = ciffy.load(target_cif, backend="torch").to("cuda")

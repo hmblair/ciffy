@@ -217,10 +217,10 @@ class TestAtomGroup:
 
     def test_atom_groups_with_polymer(self):
         """Test using atom groups with Polymer.atom_type()."""
-        from ciffy import from_sequence
+        from ciffy import template
         from ciffy.biochemistry import Sugar, PurineBase, PyrimidineBase
 
-        polymer = from_sequence("acgu")
+        polymer = template("acgu")
         total_atoms = polymer.size()
 
         # Select sugar atoms - should be present in all 4 residues
@@ -243,10 +243,10 @@ class TestAtomGroup:
 
     def test_specific_atom_selection(self):
         """Test selecting specific atoms like all C5' or all N1."""
-        from ciffy import from_sequence
+        from ciffy import template
         from ciffy.biochemistry import Sugar, PurineBase
 
-        polymer = from_sequence("acgu")
+        polymer = template("acgu")
 
         # Select all C5' atoms (one per residue)
         c5p = polymer.atom_type(Sugar.C5p.index())

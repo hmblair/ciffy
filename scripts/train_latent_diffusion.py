@@ -184,7 +184,7 @@ def main():
 
         module.model.eval()
         with torch.no_grad():
-            polymers = module.model.sample_from_sequence(
+            polymers = module.model.sample_template(
                 sequence,
                 n_samples=args.n_samples,
                 num_steps=args.sample_steps,

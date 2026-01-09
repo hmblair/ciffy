@@ -115,7 +115,7 @@ def sample(
         >>> for i, p in enumerate(samples):
         ...     p.write(f"sample_{i}.cif")
     """
-    from .polymer import from_sequence
+    from .polymer import template
 
     # Load or use provided model
     if isinstance(model, str):
@@ -124,7 +124,7 @@ def sample(
         flow_model = model
 
     # Create template with correct atoms for this model
-    template = from_sequence(sequence, atoms=flow_model.atom_filter)
+    template = template(sequence, atoms=flow_model.atom_filter)
 
     # Sample coordinates
     coords = flow_model.sample(template.sequence, n_samples=n_samples)
@@ -369,7 +369,7 @@ def decode(
         >>> modified_latents = latents + noise
         >>> new_polymer = flow.decode(modified_latents, "acgu")
     """
-    from .polymer import from_sequence
+    from .polymer import template
 
     # Load or use provided model
     if isinstance(model, str):
@@ -379,7 +379,7 @@ def decode(
 
     # Handle string template
     if isinstance(template, str):
-        template = from_sequence(template, atoms=flow_model.atom_filter)
+        template = template(template, atoms=flow_model.atom_filter)
 
     return flow_model.decode_to_polymer(latents, template)
 

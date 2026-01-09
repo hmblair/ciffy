@@ -166,15 +166,15 @@ Create template structures from sequences:
 
 ```python
 # Single RNA chain
-rna = ciffy.from_sequence("acguacgu")
+rna = ciffy.template("acguacgu")
 print(rna.size())  # Atoms for 8-nucleotide RNA
 
 # Single protein chain
-protein = ciffy.from_sequence("MGKLF")
+protein = ciffy.template("MGKLF")
 print(protein.size())  # Atoms for 5-residue protein
 
 # Multi-chain complex
-complex = ciffy.from_sequence(["acgu", "MGKLF"])
+complex = ciffy.template(["acgu", "MGKLF"])
 print(complex.names)  # ['A', 'B']
 ```
 

@@ -10,7 +10,7 @@ For generating realistic conformations, use ciffy.nn.flow.PolymerFlowModel.
 """
 
 import numpy as np
-from ciffy import from_sequence, Scale, write_cif
+from ciffy import template, Scale, write_cif
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
     # =========================================================================
 
     # RNA sequence (lowercase)
-    rna = from_sequence("acgu")
+    rna = template("acgu")
     print(f"RNA 'acgu':")
     print(f"  Residues: {rna.size(Scale.RESIDUE)}")
     print(f"  Atoms: {rna.size()}")
@@ -27,7 +27,7 @@ def main():
     print()
 
     # Protein sequence (uppercase)
-    protein = from_sequence("MGKLF")
+    protein = template("MGKLF")
     print(f"Protein 'MGKLF':")
     print(f"  Residues: {protein.size(Scale.RESIDUE)}")
     print(f"  Atoms: {protein.size()}")
@@ -58,7 +58,7 @@ def main():
 
     # Create a protein template with ideal coordinates
     sequence = "ACDEFGHIKLMNPQRSTVWY"  # All 20 amino acids
-    polymer = from_sequence(sequence, id="ideal_protein")
+    polymer = template(sequence, id="ideal_protein")
 
     # Save to CIF file
     output_path = "/tmp/ideal_protein.cif"
@@ -78,7 +78,7 @@ def main():
 
     # 1. Create template from target sequence
     target_seq = "augcaugcaugc"  # 12-mer RNA
-    template = from_sequence(target_seq, id="generated_rna")
+    template = template(target_seq, id="generated_rna")
     n_atoms = template.size()
     print(f"  1. Created template for '{target_seq}' ({n_atoms} atoms)")
 
@@ -106,11 +106,11 @@ def main():
     # =========================================================================
 
     # NumPy backend (default)
-    np_polymer = from_sequence("acgu", backend="numpy")
+    np_polymer = template("acgu", backend="numpy")
     print(f"NumPy backend: {np_polymer.backend}")
 
     # PyTorch backend (for integration with deep learning)
-    torch_polymer = from_sequence("acgu", backend="torch")
+    torch_polymer = template("acgu", backend="torch")
     print(f"PyTorch backend: {torch_polymer.backend}")
 
     # Move to GPU if available
@@ -125,7 +125,7 @@ def main():
     # =========================================================================
 
     all_aa = "ACDEFGHIKLMNPQRSTVWY"
-    full_protein = from_sequence(all_aa)
+    full_protein = template(all_aa)
     print(f"All 20 amino acids with ideal coordinates:")
     print(f"  Sequence: {all_aa}")
     print(f"  Residues: {full_protein.size(Scale.RESIDUE)}")

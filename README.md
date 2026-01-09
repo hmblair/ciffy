@@ -206,16 +206,16 @@ Create template polymers (no coordinates) from sequence strings:
 import ciffy
 
 # RNA (lowercase with u)
-rna = ciffy.from_sequence("acguacgu")
+rna = ciffy.template("acguacgu")
 
 # DNA (lowercase with t)
-dna = ciffy.from_sequence("acgtacgt")
+dna = ciffy.template("acgtacgt")
 
 # Protein (uppercase)
-protein = ciffy.from_sequence("MGKLF")
+protein = ciffy.template("MGKLF")
 
 # Multi-chain
-multi = ciffy.from_sequence(["acgu", "MGKLF"])
+multi = ciffy.template(["acgu", "MGKLF"])
 ```
 
 ### Building Chains Residue-by-Residue

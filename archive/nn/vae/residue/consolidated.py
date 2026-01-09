@@ -21,7 +21,7 @@ Example with PolymerModel:
     >>>
     >>> # Use with PolymerModel for chain sampling
     >>> polymer_model = PolymerModel(model.as_residue_models())
-    >>> polymer = polymer_model.sample_from_sequence("acgu")
+    >>> polymer = polymer_model.sample_template("acgu")
 """
 
 from __future__ import annotations
@@ -404,7 +404,7 @@ class ConsolidatedResidueVAEModel(nn.Module):
         Example:
             >>> model = ConsolidatedResidueVAEModel(residue_atoms)
             >>> polymer_model = PolymerModel(model.as_residue_models())
-            >>> polymer = polymer_model.sample_from_sequence("acgu")
+            >>> polymer = polymer_model.sample_template("acgu")
         """
         return {
             residue: ConsolidatedResidueView(self, residue)

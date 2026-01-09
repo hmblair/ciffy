@@ -29,7 +29,7 @@ def assert_cif_roundtrip(
 
     Example:
         def test_cif_roundtrip(self, tmp_path):
-            polymer = from_sequence("acgu")
+            polymer = template("acgu")
             reloaded = assert_cif_roundtrip(polymer, tmp_path)
     """
     from ciffy import load

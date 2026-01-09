@@ -26,7 +26,7 @@ class TestAtomType:
         """atom_type with valid index returns non-empty polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         # Get first atom type present
         first_atom = p.atoms[0].item() if hasattr(p.atoms[0], 'item') else p.atoms[0]
 
@@ -37,7 +37,7 @@ class TestAtomType:
         """atom_type accepts array of indices."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         # Get first few unique atom types
         atoms_np = np.asarray(p.atoms)
         unique_atoms = np.unique(atoms_np)[:3]
@@ -50,7 +50,7 @@ class TestAtomType:
         """atom_type with negative index (unknown atoms)."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         result = p.atom_type(-1)
 
         # Should return empty or atoms with -1 (unknown)
@@ -65,7 +65,7 @@ class TestResidueType:
         """residue_type with non-existent index returns empty polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         result = p.residue_type(99999)  # Non-existent residue type
 
         assert result.empty()
@@ -74,7 +74,7 @@ class TestResidueType:
         """residue_type with valid index returns matching residues."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         # Adenosine is residue type 0
         result = p.residue_type(0)
 
@@ -86,7 +86,7 @@ class TestResidueType:
         """residue_type accepts array of residue indices."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         # Select adenosine (type 0) and cytidine (type 1)
         result = p.residue_type(np.array([0, 1]))
 
@@ -99,7 +99,7 @@ class TestResidueType:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         seq_np = np.asarray(p.sequence)
         all_types = np.unique(seq_np)
 
@@ -121,7 +121,7 @@ class TestMoleculeType:
 
         assert result.empty()
 
-    # Note: test_molecule_type_requires_molecule_types removed - templates now have molecule_types
+    # Note: test_molecule_type_requires_molecule_types removed - _templates now have molecule_types
 
     def test_molecule_type_all_match(self, backend):
         """molecule_type on matching type returns full structure."""
@@ -211,7 +211,7 @@ class TestMask:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         mask = p._mask(0, Scale.RESIDUE, Scale.ATOM)
 
         # Mask should be True for atoms of first residue only
@@ -225,7 +225,7 @@ class TestMask:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         last_idx = p.size(Scale.RESIDUE) - 1
 
         mask = p._mask(last_idx, Scale.RESIDUE, Scale.ATOM)
@@ -258,7 +258,7 @@ class TestGetItem:
         """__getitem__ with slice [:n//2] returns first half."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         n = p.size()
         result = p[:n // 2]
 
@@ -268,7 +268,7 @@ class TestGetItem:
         """__getitem__ with slice [n//2:] returns second half."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         n = p.size()
         result = p[n // 2:]
 
@@ -278,7 +278,7 @@ class TestGetItem:
         """__getitem__ with slice [::2] returns every other atom."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         n = p.size()
         result = p[::2]
 
@@ -289,7 +289,7 @@ class TestGetItem:
         """__getitem__ with negative slice [-10:]."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         n = p.size()
         result = p[-10:]
 
@@ -300,7 +300,7 @@ class TestGetItem:
         """__getitem__ with empty slice [5:5] returns empty polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         result = p[5:5]
 
         assert result.empty()
@@ -309,7 +309,7 @@ class TestGetItem:
         """__getitem__ with out-of-bounds slice is bounded."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         n = p.size()
         result = p[0:n + 100]  # Beyond end
 
@@ -320,7 +320,7 @@ class TestGetItem:
         """__getitem__ with all-True mask returns same polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         mask = p.atoms >= 0  # All True (atoms are non-negative)
 
         if backend == "torch":
@@ -336,7 +336,7 @@ class TestGetItem:
         """__getitem__ with all-False mask returns empty polymer."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
 
         if backend == "torch":
             import torch

@@ -501,12 +501,12 @@ class TestPolymerEmbeddingEdgeCases:
         features = embed(p)
         assert features.shape == (p.size(), 64 + 32 + 16)
 
-    def test_embedding_on_template_polymer(self):
-        """Embedding works on template polymer."""
+    def test_embedding_on__template_polymer(self):
+        """Embedding works on _template polymer."""
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.ATOM, atom_dim=32)
-        p = ciffy.from_sequence("acgu", backend="torch")
+        p = ciffy.template("acgu", backend="torch")
 
         features = embed(p)
         assert features.shape == (p.size(), 32)
@@ -516,7 +516,7 @@ class TestPolymerEmbeddingEdgeCases:
         from ciffy.nn import PolymerEmbedding
 
         embed = PolymerEmbedding(scale=Scale.RESIDUE, residue_dim=32)
-        p = ciffy.from_sequence("a", backend="torch")
+        p = ciffy.template("a", backend="torch")
 
         features = embed(p)
         assert features.shape == (1, 32)

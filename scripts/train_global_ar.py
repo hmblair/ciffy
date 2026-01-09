@@ -219,7 +219,7 @@ def sample_structures(model: CoordinateARModel, output_dir: Path, device: str = 
         print(f"\nSequence: {seq_str}")
 
         # Create template from sequence
-        template = ciffy.from_sequence(seq_str.lower())
+        template = ciffy.template(seq_str.lower())
 
         try:
             # Sample using the model

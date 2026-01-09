@@ -202,7 +202,7 @@ def generate_samples(
     templates = []
     for seq in sequences:
         try:
-            template = ciffy.from_sequence(seq, backend=backend)
+            template = ciffy.template(seq, backend=backend)
             template = template.to(device_obj)
             templates.append(template)
         except Exception as e:

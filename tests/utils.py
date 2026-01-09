@@ -170,7 +170,7 @@ def get_single_chain_poly(backend: str = "numpy", sequence: str = "acgu"):
     """Get a small single-chain polymer with random coordinates.
 
     Use this for tests that need a polymer with coordinates but aren't
-    specifically testing template generation.
+    specifically testing _template generation.
 
     Args:
         backend: "numpy" or "torch"
@@ -181,6 +181,6 @@ def get_single_chain_poly(backend: str = "numpy", sequence: str = "acgu"):
     """
     import ciffy
 
-    template = ciffy.from_sequence(sequence, backend=backend)
-    coords = random_coordinates(template.size(), backend, scale=10.0)
-    return template.copy(coordinates=coords)
+    _template = ciffy.template(sequence, backend=backend)
+    coords = random_coordinates(_template.size(), backend, scale=10.0)
+    return _template.copy(coordinates=coords)

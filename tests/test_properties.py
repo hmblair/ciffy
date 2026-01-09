@@ -36,11 +36,11 @@ class TestBfactors:
 
         assert polymer.bfactors.shape == (polymer.size(),)
 
-    def test_bfactors_raises_for_template(self, backend):
-        """bfactors raises AttributeError for template-generated polymers."""
-        from ciffy import from_sequence
+    def test_bfactors_raises_for__template(self, backend):
+        """bfactors raises AttributeError for _template-generated polymers."""
+        from ciffy import template
 
-        polymer = from_sequence("acgu", backend=backend)
+        polymer = template("acgu", backend=backend)
 
         # Templates don't have bfactors - accessing raises AttributeError
         with pytest.raises(AttributeError, match="bfactors"):
@@ -100,11 +100,11 @@ class TestResolution:
 
         assert polymer.resolution is None or isinstance(polymer.resolution, float)
 
-    def test_resolution_none_for_template(self, backend):
-        """resolution is None for template-generated polymers."""
-        from ciffy import from_sequence
+    def test_resolution_none_for__template(self, backend):
+        """resolution is None for _template-generated polymers."""
+        from ciffy import template
 
-        polymer = from_sequence("acgu", backend=backend)
+        polymer = template("acgu", backend=backend)
 
         assert polymer.resolution is None
 
@@ -239,11 +239,11 @@ class TestBonds:
         bonds2 = new_polymer.bonds
         assert bonds2 is not bonds1  # Different objects
 
-    def test_bonds_template_polymer(self, backend):
-        """bonds works on template-generated polymers."""
-        from ciffy import from_sequence
+    def test_bonds__template_polymer(self, backend):
+        """bonds works on _template-generated polymers."""
+        from ciffy import template
 
-        polymer = from_sequence("acgu", backend=backend)
+        polymer = template("acgu", backend=backend)
         bonds = polymer.bonds
 
         # Should have bonds (nucleotides have internal bonds)
@@ -256,10 +256,10 @@ class TestBonds:
 
     def test_bonds_empty_polymer(self, backend):
         """bonds on empty polymer returns empty array."""
-        from ciffy import from_sequence
+        from ciffy import template
 
-        template = from_sequence("a", backend=backend)
-        empty = template[template.atoms < 0]
+        _template = template("a", backend=backend)
+        empty = _template[_template.atoms < 0]
 
         bonds = empty.bonds
         if backend == "torch":

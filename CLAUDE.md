@@ -51,8 +51,8 @@ import ciffy
 from ciffy import Scale, Molecule, Residue
 
 polymer = ciffy.load('structure.cif')           # Load from file
-polymer = ciffy.from_sequence('acgu')           # Create template from sequence
-polymer = ciffy.from_sequence('MGKLF')          # Protein sequence
+polymer = ciffy.template('acgu')           # Create template from sequence
+polymer = ciffy.template('MGKLF')          # Protein sequence
 ```
 
 ### Properties
@@ -106,7 +106,7 @@ To save predicted coordinates to a `.cif` file, create a template from the seque
 
 ```python
 # Create template, assign predicted coords, save to file
-template = ciffy.from_sequence('acgu')
+template = ciffy.template('acgu')
 predicted = template.copy(coordinates=pred_coords)
 predicted.write('output.cif')
 ```

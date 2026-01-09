@@ -16,7 +16,7 @@ Example usage:
     >>> model = residue.train(["data/*.cif"], residues="ACGU", model_type="consolidated")
     >>>
     >>> # Sample from any trained model
-    >>> polymer = model.sample_from_sequence("acgu")
+    >>> polymer = model.sample_template("acgu")
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def train(
         ... )
         >>>
         >>> # Sample from trained model
-        >>> polymer = model.sample_from_sequence("acguacgu")
+        >>> polymer = model.sample_template("acguacgu")
         >>> polymer.write("output.cif")
     """
     import lightning as L
@@ -476,7 +476,7 @@ def load(
     Example:
         >>> from ciffy.nn import residue
         >>> model = residue.load("models/rna_vae")
-        >>> polymer = model.sample_from_sequence("acgu")
+        >>> polymer = model.sample_template("acgu")
     """
     from ..polymer import PolymerModel
     return PolymerModel.load(path, device=device)

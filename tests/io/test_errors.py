@@ -84,8 +84,8 @@ class TestWriteErrors:
         """write raises ValueError for empty polymer."""
         import ciffy
 
-        template = ciffy.from_sequence("a")
-        empty = template[template.atoms < 0]  # Empty mask
+        _template = ciffy.template("a")
+        empty = _template[_template.atoms < 0]  # Empty mask
 
         assert empty.empty()
 
@@ -96,7 +96,7 @@ class TestWriteErrors:
         """write raises ValueError for .pdb extension."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu")
+        p = ciffy.template("acgu")
 
         with pytest.raises(ValueError, match=".cif"):
             p.write(str(tmp_path / "test.pdb"))
@@ -105,7 +105,7 @@ class TestWriteErrors:
         """write raises ValueError for .txt extension."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu")
+        p = ciffy.template("acgu")
 
         with pytest.raises(ValueError, match=".cif"):
             p.write(str(tmp_path / "test.txt"))
@@ -114,7 +114,7 @@ class TestWriteErrors:
         """write raises ValueError when no extension provided."""
         import ciffy
 
-        p = ciffy.from_sequence("acgu")
+        p = ciffy.template("acgu")
 
         with pytest.raises(ValueError, match=".cif"):
             p.write(str(tmp_path / "test"))
@@ -137,8 +137,8 @@ class TestRoundTripEdgeCases:
         import ciffy
         from ciffy import Scale
 
-        p = ciffy.from_sequence("a", backend=backend)
-        # Attach non-zero coordinates (template has zeros)
+        p = ciffy.template("a", backend=backend)
+        # Attach non-zero coordinates (_template has zeros)
         coords = np.random.randn(p.size(), 3).astype(np.float32) * 10
         if backend == "torch":
             import torch

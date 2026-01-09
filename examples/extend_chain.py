@@ -14,7 +14,7 @@ transform from a flow model.
 
 import ciffy
 from ciffy import Residue, Scale
-from ciffy import from_sequence
+from ciffy import template
 
 
 def main():
@@ -23,7 +23,7 @@ def main():
     # =========================================================================
 
     # Start with a short RNA sequence
-    polymer = from_sequence("ac", id="extended_rna")
+    polymer = template("ac", id="extended_rna")
     print(f"Starting polymer:")
     print(f"  Sequence: {polymer.sequence_str()}")
     print(f"  Residues: {polymer.size(Scale.RESIDUE)}")

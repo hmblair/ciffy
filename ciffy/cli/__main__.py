@@ -609,7 +609,7 @@ def _predict_flow_command(args):
     """Handle the predict flow subcommand."""
     from pathlib import Path
 
-    from ciffy import from_sequence
+    from ciffy import template
     from ciffy.nn.flow import PolymerFlowModel
     from .helpers import save_samples
 
@@ -629,7 +629,7 @@ def _predict_flow_command(args):
         print(f"Latent dim: {model.latent_dim}")
 
     # Create template
-    template = from_sequence(args.sequence, atoms=model.atom_filter)
+    template = template(args.sequence, atoms=model.atom_filter)
 
     if not args.quiet:
         print(f"\nSampling {args.n_samples} conformation(s) for '{args.sequence}'...")
@@ -651,7 +651,7 @@ def _predict_latent_diffusion_command(args):
 
     import torch
 
-    from ciffy import from_sequence
+    from ciffy import template
     from ciffy.nn.flow import PolymerFlowModel, load_pretrained
     from ciffy.nn.diffusion.latent_diffusion import LatentDiffusionModel
     from .helpers import resolve_device, save_samples
@@ -682,7 +682,7 @@ def _predict_latent_diffusion_command(args):
     model.eval()
 
     # Create template
-    template = from_sequence(args.sequence, atoms=flow_model.atom_filter)
+    template = template(args.sequence, atoms=flow_model.atom_filter)
 
     if not args.quiet:
         print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")
@@ -705,7 +705,7 @@ def _predict_coord_diffusion_command(args):
 
     import torch
 
-    from ciffy import from_sequence
+    from ciffy import template
     from ciffy.nn.diffusion.coordinate_diffusion import CoordinateDiffusionModel
     from .helpers import resolve_device, save_samples
 
@@ -726,7 +726,7 @@ def _predict_coord_diffusion_command(args):
     model.eval()
 
     # Create template
-    template = from_sequence(args.sequence)
+    template = template(args.sequence)
 
     if not args.quiet:
         print(f"\nGenerating {args.n_samples} structure(s) for '{args.sequence}'...")

@@ -34,7 +34,7 @@ class PolymerGenerativeModel(Protocol):
         >>> vae = load_vae("checkpoint_best.pt", device="cuda")
         >>>
         >>> # Create template from sequence
-        >>> template = ciffy.from_sequence("MGKLF", backend="torch").to("cuda")
+        >>> template = ciffy.template("MGKLF", backend="torch").to("cuda")
         >>>
         >>> # Generate samples (model implements this method)
         >>> samples = vae.sample(template, n_samples=10, temperature=1.0)

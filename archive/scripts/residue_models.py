@@ -96,7 +96,7 @@ def train(args):
 
         for model_type, model in models.items():
             for i in range(args.n_samples):
-                polymer = model.sample_from_sequence(sequence, id=model_type)
+                polymer = model.sample_template(sequence, id=model_type)
                 output_file = chains_dir / f"{model_type}_{i}.cif"
                 polymer.write(str(output_file))
                 print(f"  Saved: {output_file.name} ({polymer.size()} atoms)")
@@ -127,7 +127,7 @@ def sample(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for i in range(args.n_samples):
-        polymer = model.sample_from_sequence(sequence, id=model_type)
+        polymer = model.sample_template(sequence, id=model_type)
         output_file = output_dir / f"chain_{i}.cif"
         polymer.write(str(output_file))
         print(f"  Saved: {output_file.name} ({polymer.size()} atoms, id={model_type})")
@@ -137,7 +137,7 @@ def sample(args):
         print("\nVerifying chain geometry...")
         from ciffy.biochemistry import Sugar, PhosphateGroup
 
-        polymer = model.sample_from_sequence(sequence, id=model_type)
+        polymer = model.sample_template(sequence, id=model_type)
         dists = polymer.bonded_distances(Sugar.O3p.index(), PhosphateGroup.P.index())
 
         if len(dists) > 0:
@@ -387,7 +387,7 @@ def analyze(args):
         np.random.seed(42)
         for _ in range(args.n_chains):
             sequence = "".join(np.random.choice(list("acgu"), 20))
-            polymer = model.sample_from_sequence(sequence)
+            polymer = model.sample_template(sequence)
 
             # Use Polymer.bonded_distances for geometry calculations
             o3p_p_dists = polymer.bonded_distances(Sugar.O3p.index(), PhosphateGroup.P.index())

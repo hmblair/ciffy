@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import ciffy
-from ciffy import Scale, from_sequence
+from ciffy import Scale, template
 from ciffy.biochemistry import Residue
 
 
@@ -14,17 +14,17 @@ from ciffy.biochemistry import Residue
 LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
 
-def template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
-    """Create a template with ideal coordinates for testing."""
-    template = from_sequence(sequence, backend=backend)
-    if template.empty():
-        return template
+def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
+    """Create a _template with ideal coordinates for testing."""
+    _template = template(sequence, backend=backend)
+    if _template.empty():
+        return _template
 
     poly = ciffy.Polymer()
     if backend == "torch":
         poly = poly.torch()
 
-    residue_indices = list(template.sequence[:len(sequence)])
+    residue_indices = list(_template.sequence[:len(sequence)])
     for i, res_idx in enumerate(residue_indices):
         residue = Residue.from_index(int(res_idx))
         is_first = (i == 0)
@@ -56,7 +56,7 @@ class TestAppendEdgeCases:
 
     def test_extend_with_identity_transform(self):
         """Extend with zero rotation places residue along backbone."""
-        p = template_with_coords("a")
+        p = _template_with_coords("a")
 
         atom_group = Residue.C.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
@@ -75,7 +75,7 @@ class TestAppendEdgeCases:
 
     def test_append_with_absolute_coords(self):
         """Append with absolute coordinates (no transform)."""
-        p = template_with_coords("a")
+        p = _template_with_coords("a")
 
         atom_group = Residue.C.terminal(start=False, end=False)
         atoms, elements = atom_group.index(), atom_group.elements()
@@ -96,7 +96,7 @@ class TestAppendEdgeCases:
 
     def test_append_sequence_updated(self):
         """Appended polymer has correct sequence."""
-        p = template_with_coords("acg")
+        p = _template_with_coords("acg")
 
         atom_group = Residue.U.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
@@ -114,7 +114,7 @@ class TestAppendEdgeCases:
 
     def test_append_chain_count_unchanged(self):
         """Append adds residue to existing chain, not new chain."""
-        p = template_with_coords("ac")
+        p = _template_with_coords("ac")
         assert p.size(Scale.CHAIN) == 1
 
         atom_group = Residue.G.terminal(start=False, end=False)
@@ -134,7 +134,7 @@ class TestAppendEdgeCases:
     def test_append_from_different_residue_types(self):
         """Can append from any RNA residue type."""
         for start_res in ['a', 'c', 'g', 'u']:
-            p = template_with_coords(start_res)
+            p = _template_with_coords(start_res)
 
             atom_group = Residue.A.terminal(start=False, end=False)
             atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
@@ -154,8 +154,8 @@ class TestAppendEdgeCases:
 class TestAppend:
     """Tests for Polymer.append() method."""
 
-    def test_append_template_mode(self):
-        """append() creates template without coordinates."""
+    def test_append__template_mode(self):
+        """append() creates _template without coordinates."""
         p = ciffy.Polymer()
         p = p.append(Residue.A)
 
@@ -176,8 +176,8 @@ class TestAppend:
         assert p.coordinates is not None
         assert p.coordinates.shape == coords.shape
 
-    def test_append_multi_residue_template(self):
-        """append() builds multi-residue template."""
+    def test_append_multi_residue__template(self):
+        """append() builds multi-residue _template."""
         p = ciffy.Polymer()
         for res in [Residue.A, Residue.C, Residue.G, Residue.U]:
             p = p.append(res)

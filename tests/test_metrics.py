@@ -148,7 +148,7 @@ class TestTMScoreEdgeCases:
         skip_if_no_torch(backend)
 
         # Create 5-residue structure
-        p = ciffy.from_sequence("acgua", backend=backend)
+        p = ciffy.template("acgua", backend=backend)
 
         # Attach random non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
@@ -165,7 +165,7 @@ class TestTMScoreEdgeCases:
         """TM-score handles single-residue structure (may return NaN for L<5)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         # Attach non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
@@ -181,7 +181,7 @@ class TestTMScoreEdgeCases:
         """TM-score handles two-residue structure."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("ac", backend=backend)
+        p = ciffy.template("ac", backend=backend)
 
         # Attach non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend)
@@ -193,11 +193,11 @@ class TestTMScoreEdgeCases:
         assert 0.0 <= score <= 1.0
 
     @pytest.mark.parametrize("backend", ["numpy", "torch"])
-    def test_tm_score_works_for_templates(self, backend):
-        """TM-score works for template-generated polymers (which have molecule_types)."""
+    def test_tm_score_works_for__templates(self, backend):
+        """TM-score works for _template-generated polymers (which have molecule_types)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
         p.coordinates = random_coordinates(p.size(), backend)
 
         # Templates have molecule_types, so this should work
@@ -225,7 +225,7 @@ class TestLDDTEdgeCases:
         """lDDT with very small cutoff (few/no pairs)."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("acgu", backend=backend)
+        p = ciffy.template("acgu", backend=backend)
 
         # Place atoms very far apart
         n = p.size()
@@ -269,7 +269,7 @@ class TestLDDTEdgeCases:
         """lDDT on single-residue structure."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("a", backend=backend)
+        p = ciffy.template("a", backend=backend)
 
         # Attach non-zero coordinates
         p.coordinates = random_coordinates(p.size(), backend, scale=1.0)
@@ -284,7 +284,7 @@ class TestLDDTEdgeCases:
         """lDDT on two-residue structure."""
         skip_if_no_torch(backend)
 
-        p = ciffy.from_sequence("ac", backend=backend)
+        p = ciffy.template("ac", backend=backend)
 
         # Attach coordinates close together
         p.coordinates = random_coordinates(p.size(), backend, scale=1.0)
@@ -403,9 +403,9 @@ class TestRmsdFunction:
 
     def test_rmsd_size_mismatch_raises(self):
         """RMSD raises ValueError for mismatched sizes."""
-        p1 = ciffy.from_sequence("acgu", backend="numpy")
-        p2 = ciffy.from_sequence("acguacgu", backend="numpy")
-        # Set coordinates (from_sequence doesn't populate them)
+        p1 = ciffy.template("acgu", backend="numpy")
+        p2 = ciffy.template("acguacgu", backend="numpy")
+        # Set coordinates (template doesn't populate them)
         p1.coordinates = random_coordinates(p1.size(), "numpy")
         p2.coordinates = random_coordinates(p2.size(), "numpy")
 

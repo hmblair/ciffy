@@ -454,7 +454,7 @@ class PolymerModel(nn.Module, HubMixin):
 
         return samples
 
-    def sample_from_sequence(
+    def sample_template(
         self,
         sequence: str,
         n_samples: int = 1,
@@ -482,18 +482,18 @@ class PolymerModel(nn.Module, HubMixin):
 
         Example:
             >>> model = PolymerModel.load("path/to/model")
-            >>> polymer = model.sample_from_sequence("acgu")
+            >>> polymer = model.sample_template("acgu")
             >>> polymer.write("sampled.cif")
             >>>
             >>> # Generate multiple samples
-            >>> samples = model.sample_from_sequence("acgu", n_samples=10)
+            >>> samples = model.sample_template("acgu", n_samples=10)
             >>> for i, p in enumerate(samples):
             ...     p.write(f"sample_{i}.cif")
         """
-        from ciffy import from_sequence
+        from ciffy import template
 
         # Create template with correct atoms for this model
-        template = from_sequence(sequence, atoms=self.atom_filter, id=id)
+        template = template(sequence, atoms=self.atom_filter, id=id)
 
         # Use protocol-compliant sample method
         samples = self.sample(
@@ -556,8 +556,8 @@ class PolymerModel(nn.Module, HubMixin):
 
         # Create output template with only atoms this model knows about
         # This ensures the output polymer matches the sampled coordinates
-        from ciffy import from_sequence as _from_sequence
-        output_template = _from_sequence(
+        from ciffy import template as _template
+        output_template = _template(
             template.sequence_str(),
             atoms=self.atom_filter,
             id=template.pdb_id or "sampled",
@@ -589,14 +589,14 @@ class PolymerModel(nn.Module, HubMixin):
     @property
     def atom_filter(self) -> dict[int, list[int]]:
         """
-        Get atom filter dict for use with ciffy.from_sequence(atoms=...).
+        Get atom filter dict for use with ciffy.template(atoms=...).
 
         Returns a dict mapping residue type (int) to the list of atom values
-        that this model uses. Pass this to from_sequence() to create templates
+        that this model uses. Pass this to template() to create templates
         with only the atoms the model knows about.
 
         Example:
-            >>> template = ciffy.from_sequence("acgu", atoms=polymer_model.atom_filter)
+            >>> template = ciffy.template("acgu", atoms=polymer_model.atom_filter)
             >>> # template now has only the atoms used by the residue models
         """
         return {

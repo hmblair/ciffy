@@ -133,17 +133,17 @@ def backend(request) -> str:
 @pytest.fixture
 def empty_polymer(backend):
     """Polymer with 0 atoms (via impossible mask)."""
-    from ciffy import from_sequence
-    template = from_sequence("a", backend=backend)
-    return template[template.atoms < 0]
+    from ciffy import template
+    _template = template("a", backend=backend)
+    return _template[_template.atoms < 0]
 
 
 @pytest.fixture
 def single_atom_polymer(backend):
     """Polymer with exactly 1 atom."""
-    from ciffy import from_sequence
-    template = from_sequence("g", backend=backend)  # Glycine has few atoms
-    return template[:1]
+    from ciffy import template
+    _template = template("g", backend=backend)  # Glycine has few atoms
+    return _template[:1]
 
 
 @pytest.fixture
@@ -193,56 +193,56 @@ def strict_tolerances():
 # =============================================================================
 # Polymer factory fixtures
 # =============================================================================
-# These provide common test polymers without needing to call from_sequence
+# These provide common test polymers without needing to call template
 # directly. They're automatically parametrized by backend via the backend fixture.
 
 @pytest.fixture
 def rna_polymer(backend):
     """4-residue RNA polymer (acgu)."""
-    from ciffy import from_sequence
-    return from_sequence("acgu", backend=backend)
+    from ciffy import template
+    return template("acgu", backend=backend)
 
 
 @pytest.fixture
 def protein_polymer(backend):
     """5-residue protein polymer (MGKLF)."""
-    from ciffy import from_sequence
-    return from_sequence("MGKLF", backend=backend)
+    from ciffy import template
+    return template("MGKLF", backend=backend)
 
 
 @pytest.fixture
 def dna_polymer(backend):
     """4-residue DNA polymer (acgt)."""
-    from ciffy import from_sequence
-    return from_sequence("acgt", backend=backend)
+    from ciffy import template
+    return template("acgt", backend=backend)
 
 
 @pytest.fixture
 def small_rna(backend):
     """Single nucleotide RNA (a)."""
-    from ciffy import from_sequence
-    return from_sequence("a", backend=backend)
+    from ciffy import template
+    return template("a", backend=backend)
 
 
 @pytest.fixture
 def small_protein(backend):
     """Single amino acid protein (G - glycine)."""
-    from ciffy import from_sequence
-    return from_sequence("G", backend=backend)
+    from ciffy import template
+    return template("G", backend=backend)
 
 
 @pytest.fixture
 def medium_rna(backend):
     """8-residue RNA polymer."""
-    from ciffy import from_sequence
-    return from_sequence("acguacgu", backend=backend)
+    from ciffy import template
+    return template("acguacgu", backend=backend)
 
 
 @pytest.fixture
 def medium_protein(backend):
     """10-residue protein polymer."""
-    from ciffy import from_sequence
-    return from_sequence("MGKLFAGKLF", backend=backend)
+    from ciffy import template
+    return template("MGKLFAGKLF", backend=backend)
 
 
 # =============================================================================
@@ -258,10 +258,10 @@ def make_polymer(backend):
             rna = make_polymer("acgu")
             protein = make_polymer("MGKLF")
     """
-    from ciffy import from_sequence
+    from ciffy import template
 
     def _make(sequence: str):
-        return from_sequence(sequence, backend=backend)
+        return template(sequence, backend=backend)
 
     return _make
 
@@ -289,15 +289,15 @@ def load_polymer(backend):
 @pytest.fixture
 def multi_chain_rna(backend):
     """Multi-chain RNA (2 chains)."""
-    from ciffy import from_sequence
-    return from_sequence("acgu/acgu", backend=backend)
+    from ciffy import template
+    return template("acgu/acgu", backend=backend)
 
 
 @pytest.fixture
 def multi_chain_protein(backend):
     """Multi-chain protein (2 chains)."""
-    from ciffy import from_sequence
-    return from_sequence("MGKLF/ARNDCE", backend=backend)
+    from ciffy import template
+    return template("MGKLF/ARNDCE", backend=backend)
 
 
 @pytest.fixture
@@ -321,15 +321,15 @@ def structure_with_ligands(backend):
 @pytest.fixture
 def large_rna(backend):
     """16-residue RNA for stress testing."""
-    from ciffy import from_sequence
-    return from_sequence("acguacguacguacgu", backend=backend)
+    from ciffy import template
+    return template("acguacguacguacgu", backend=backend)
 
 
 @pytest.fixture
 def large_protein(backend):
     """20-residue protein for stress testing."""
-    from ciffy import from_sequence
-    return from_sequence("MGKLFAGKLFMGKLFAGKLF", backend=backend)
+    from ciffy import template
+    return template("MGKLFAGKLFMGKLFAGKLF", backend=backend)
 
 
 # =============================================================================
@@ -339,12 +339,12 @@ def large_protein(backend):
 @pytest.fixture
 def all_same_residue_rna(backend):
     """RNA with all same residues (edge case for reduction)."""
-    from ciffy import from_sequence
-    return from_sequence("aaaa", backend=backend)
+    from ciffy import template
+    return template("aaaa", backend=backend)
 
 
 @pytest.fixture
 def all_same_residue_protein(backend):
     """Protein with all same residues (edge case for reduction)."""
-    from ciffy import from_sequence
-    return from_sequence("GGGG", backend=backend)
+    from ciffy import template
+    return template("GGGG", backend=backend)

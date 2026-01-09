@@ -258,16 +258,16 @@ Generate template polymers from sequence strings:
 
 ```python
 # RNA (lowercase with u)
-rna = ciffy.from_sequence("acgu")
+rna = ciffy.template("acgu")
 
 # DNA (lowercase with t)
-dna = ciffy.from_sequence("acgt")
+dna = ciffy.template("acgt")
 
 # Protein (uppercase)
-protein = ciffy.from_sequence("MGKLF")
+protein = ciffy.template("MGKLF")
 
 # Multi-chain structures
-multi = ciffy.from_sequence(["acgu", "MGKLF"])  # RNA + protein
+multi = ciffy.template(["acgu", "MGKLF"])  # RNA + protein
 ```
 
 Template polymers have correct atom types, elements, and residue sequences but ideal coordinates. This is useful for generative modeling where coordinates are predicted separately.

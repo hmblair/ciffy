@@ -217,7 +217,7 @@ class ResidueVAE(nn.Module):
         self.eval()
 
         device = next(self.parameters()).device
-        template = ciffy.from_sequence(sequence).torch().heavy().to(device)
+        template = ciffy.template(sequence).torch().heavy().to(device)
         n_residues = template.size(Scale.RESIDUE)
 
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature

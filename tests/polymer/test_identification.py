@@ -73,11 +73,11 @@ class TestChainId:
 
         assert chain_id == expected
 
-    def test_chain_id_template_polymer(self, backend):
-        """chain_id works on template-generated polymers."""
-        from ciffy import from_sequence
+    def test_chain_id__template_polymer(self, backend):
+        """chain_id works on _template-generated polymers."""
+        from ciffy import template
 
-        polymer = from_sequence("acgu", backend=backend)
+        polymer = template("acgu", backend=backend)
 
         chain_id = polymer.chain_id(0)
 
@@ -140,14 +140,14 @@ class TestIstype:
             assert not single_rna.istype(Molecule.PROTEIN)
             assert not single_rna.istype(Molecule.DNA)
 
-    def test_istype_works_for_templates(self, backend):
-        """istype works for template-generated polymers."""
-        from ciffy import from_sequence, Molecule
+    def test_istype_works_for__templates(self, backend):
+        """istype works for _template-generated polymers."""
+        from ciffy import template, Molecule
 
         # Template polymers have molecule_types
-        polymer = from_sequence("acgu", backend=backend)
+        polymer = template("acgu", backend=backend)
 
-        # Should work and return True for RNA template
+        # Should work and return True for RNA _template
         assert polymer.istype(Molecule.RNA)
         assert not polymer.istype(Molecule.PROTEIN)
 

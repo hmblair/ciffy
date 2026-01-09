@@ -12,14 +12,14 @@ Classes:
     Metadata: Descriptor for non-array metadata values.
 
 Factory Functions:
-    from_sequence: Create Polymer from sequence string (e.g., "acgu").
+    template: Create Polymer from sequence string (e.g., "acgu").
     from_extract: Convert extracted coordinates back to Polymer.
 """
 
 from .base import AtomContainer, Field, Metadata
 from .polymer import Polymer
 from .hetero import HeteroAtoms
-from .template import from_sequence, from_extract
+from .template import template, from_extract
 
 __all__ = [
     "AtomContainer",
@@ -27,6 +27,6 @@ __all__ = [
     "HeteroAtoms",
     "Field",
     "Metadata",
-    "from_sequence",
+    "template",
     "from_extract",
 ]

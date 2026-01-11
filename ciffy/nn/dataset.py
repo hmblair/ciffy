@@ -28,6 +28,71 @@ from ..biochemistry import Scale, Molecule
 logger = logging.getLogger(__name__)
 
 
+class PolymerCache:
+    """
+    Two-level cache for polymers with automatic file eviction.
+
+    Caches at two levels:
+    - File level: full polymers keyed by path (avoids redundant disk I/O)
+    - Item level: extracted chains keyed by index (returns same object on repeat access)
+
+    When all chains from a file have been loaded into the item cache,
+    the file is automatically evicted to free memory.
+    """
+
+    def __init__(self):
+        self._files: dict[Path, "Polymer"] = {}
+        self._items: dict[int, "Polymer"] = {}
+        self._total: dict[Path, int] = {}
+        self._loaded: dict[Path, int] = {}
+
+    def register(self, path: Path) -> None:
+        """Register a chain from a file. Call once per chain during indexing."""
+        self._total[path] = self._total.get(path, 0) + 1
+
+    def get(
+        self,
+        idx: int,
+        path: Path,
+        loader: callable,
+        extractor: callable,
+    ) -> "Polymer":
+        """
+        Get item from cache, loading and extracting if needed.
+
+        Args:
+            idx: Item index (for item cache key)
+            path: File path (for file cache key)
+            loader: Callable that loads the full polymer from disk
+            extractor: Callable that extracts the item from the full polymer
+
+        Returns:
+            The extracted polymer (chain or filtered molecule)
+        """
+        # Item cache hit - return immediately
+        if idx in self._items:
+            return self._items[idx]
+
+        # Load file if not cached
+        if path not in self._files:
+            self._files[path] = loader()
+
+        # Extract item and cache it
+        result = extractor(self._files[path])
+        self._items[idx] = result
+
+        # Track loaded chains, evict file when complete
+        self._loaded[path] = self._loaded.get(path, 0) + 1
+        if self._loaded[path] >= self._total.get(path, 0):
+            self._files.pop(path, None)
+
+        return result
+
+    def __contains__(self, idx: int) -> bool:
+        """Check if item is cached."""
+        return idx in self._items
+
+
 class PolymerDataset(Dataset):
     """
     PyTorch Dataset for loading CIF files.
@@ -147,11 +212,7 @@ class PolymerDataset(Dataset):
         self.max_residues = max_residues
         self.backend = backend
         self.limit = limit
-        # Two-level cache for efficiency:
-        # - _file_cache: maps file path to full polymer (avoids redundant disk I/O)
-        # - _item_cache: maps index to extracted chain/polymer (avoids redundant extraction)
-        self._file_cache: dict[Path, "Polymer"] | None = {} if cache else None
-        self._item_cache: dict[int, "Polymer"] | None = {} if cache else None
+        self._cache: PolymerCache | None = PolymerCache() if cache else None
 
         # Normalize molecule_types to tuple or None
         if molecule_types is None:
@@ -198,10 +259,14 @@ class PolymerDataset(Dataset):
             if self.scale == Scale.MOLECULE:
                 if self._file_passes_filters(meta, type_filter):
                     self._index.append((path, None))
+                    if self._cache is not None:
+                        self._cache.register(path)
             else:  # Scale.CHAIN
                 for chain_idx in range(meta["chains"]):
                     if self._chain_passes_filters(meta, chain_idx, type_filter):
                         self._index.append((path, chain_idx))
+                        if self._cache is not None:
+                            self._cache.register(path)
                         # Early termination for chain scale too
                         if self.limit is not None and len(self._index) >= self.limit:
                             break
@@ -277,37 +342,31 @@ class PolymerDataset(Dataset):
             When cache=True, caching is done at two levels:
             - File level: avoids redundant disk I/O for different chains from same file
             - Item level: returns same object on repeated access to same index
+            Files are automatically evicted from cache once all their chains are loaded.
         """
         from .. import load
 
         try:
-            # Check item cache first (returns same object on repeated access)
-            if self._item_cache is not None and idx in self._item_cache:
-                return self._item_cache[idx]
-
             path, chain_idx = self._index[idx]
 
-            # File-level caching: check if we've already loaded this file
-            if self._file_cache is not None and path in self._file_cache:
-                polymer = self._file_cache[path]
-            else:
-                polymer = load(str(path), backend=self.backend)
-                # Cache the full polymer (not the extracted chain)
-                if self._file_cache is not None:
-                    self._file_cache[path] = polymer
+            def loader():
+                return load(str(path), backend=self.backend)
 
-            if chain_idx is not None:
-                # Chain scale: filtering already done during indexing
-                polymer = polymer.chain(chain_idx)
-            elif self.molecule_types is not None:
-                # Molecule scale: filter out non-matching chains
-                polymer = self._filter_by_molecule_type(polymer)
+            def extractor(polymer):
+                if chain_idx is not None:
+                    # Chain scale: filtering already done during indexing
+                    return polymer.chain(chain_idx)
+                elif self.molecule_types is not None:
+                    # Molecule scale: filter out non-matching chains
+                    return self._filter_by_molecule_type(polymer)
+                return polymer
 
-            # Cache the final result (extracted chain or filtered polymer)
-            if self._item_cache is not None:
-                self._item_cache[idx] = polymer
+            if self._cache is not None:
+                return self._cache.get(idx, path, loader, extractor)
 
-            return polymer
+            # Non-cached path
+            polymer = loader()
+            return extractor(polymer)
 
         except Exception as e:
             logger.debug(f"Failed to load item {idx}: {e}")

@@ -441,6 +441,35 @@ int _prescan_alt_locs(mmBlock *block, int atoms, int *is_excluded,
                       char keep_alt, CifErrorContext *ctx);
 
 /**
+ * @brief Result of unified prescan operation.
+ */
+typedef struct {
+    int polymer_count;   /**< Number of polymer atoms (valid seq_id) */
+    int excluded_count;  /**< Number of excluded atoms (model/alt filter) */
+    CifError error;      /**< Error code (CIF_OK on success) */
+} PrescanResult;
+
+/**
+ * @brief Unified prescan: classify atoms and apply filters in a single pass.
+ *
+ * Combines polymer classification, model filtering, and alt_loc filtering
+ * into a single loop over atoms, reducing from 3 passes to 1.
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_nonpoly Output: non-polymer mask [atoms] (required)
+ * @param is_excluded Output: exclusion mask [atoms] (may be NULL if no filtering)
+ * @param target_model Target model number (0 or -1 = no model filtering)
+ * @param keep_alt Alt conformation to keep ('A', 'B', etc.), '\0' = keep all
+ * @param ctx Error context
+ * @return PrescanResult with polymer_count, excluded_count, and error status
+ */
+PrescanResult _prescan_unified(mmBlock *block, int atoms,
+                               int *is_nonpoly, int *is_excluded,
+                               int target_model, char keep_alt,
+                               CifErrorContext *ctx);
+
+/**
  * @brief Fast element lookup optimized for batch processing.
  *
  * @param block Block containing atom data

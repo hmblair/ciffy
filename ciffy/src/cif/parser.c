@@ -14,6 +14,7 @@
 
 #include "parser.h"
 #include "registry.h"
+#include "chain_lookup.h"
 #include "../log.h"
 
 #include <math.h>    /* for isnan */
@@ -94,7 +95,9 @@ static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
 static int _prescan_alt_loc_filter(mmCIF *cif, mmBlock *block, int atoms,
                                    const LoadFilter *filter, CifErrorContext *ctx);
 static CifError _compact_chain_arrays(mmCIF *cif, CifErrorContext *ctx);
-static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block, CifErrorContext *ctx);
+static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
+                                             const ChainLookup *chain_lookup,
+                                             CifErrorContext *ctx);
 
 /**
  * @brief Recount polymer/non-polymer atoms after exclusion filtering.
@@ -530,6 +533,7 @@ int *_count_sizes_by_group(mmBlock *block, const char *attr, int *size,
  * @return Array of ChainSeqInfo[chains], or NULL on error. Caller must free.
  */
 static ChainSeqInfo *_build_chain_seq_info(mmCIF *cif, mmBlock *poly_block,
+                                           const ChainLookup *chain_lookup,
                                            CifErrorContext *ctx) {
     /* Get attribute indices for asym_id (chain) and seq_id */
     int asym_index = _get_attr_index(poly_block, "asym_id", ctx);
@@ -577,15 +581,8 @@ static ChainSeqInfo *_build_chain_seq_info(mmCIF *cif, mmBlock *poly_block,
             !_field_eq_field(prev_asym_ptr, prev_asym_len, asym_ptr, asym_len);
 
         if (chain_changed) {
-            /* Find chain index by matching name */
-            int new_chain = -1;
-            for (int i = 0; i < chain_count; i++) {
-                if (cif->names[i] && strlen(cif->names[i]) == asym_len &&
-                    memcmp(cif->names[i], asym_ptr, asym_len) == 0) {
-                    new_chain = i;
-                    break;
-                }
-            }
+            /* Find chain index using hash lookup */
+            int new_chain = chain_lookup_find(chain_lookup, asym_ptr, asym_len);
 
             if (new_chain >= 0) {
                 current_chain = new_chain;
@@ -625,6 +622,7 @@ static ChainSeqInfo *_build_chain_seq_info(mmCIF *cif, mmBlock *poly_block,
  * This ensures atoms_per_chain matches atoms_per_res (both polymer-only).
  */
 static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
+                                             const ChainLookup *chain_lookup,
                                              CifErrorContext *ctx) {
     int index = _get_attr_index(block, ATTR_LABEL_ASYM, ctx);
     if (index == BAD_IX) {
@@ -666,25 +664,13 @@ static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
         if (prev_ptr == NULL) {
             prev_ptr = cur_ptr;
             prev_len = cur_len;
-            /* Find initial chain index */
-            for (int i = 0; i < chain_count; i++) {
-                if (cif->names[i] && strlen(cif->names[i]) == cur_len &&
-                    memcmp(cif->names[i], cur_ptr, cur_len) == 0) {
-                    current_chain = i;
-                    break;
-                }
-            }
+            /* Find initial chain index using hash lookup */
+            current_chain = chain_lookup_find(chain_lookup, cur_ptr, cur_len);
         } else if (!_field_eq_field(prev_ptr, prev_len, cur_ptr, cur_len)) {
             prev_ptr = cur_ptr;
             prev_len = cur_len;
-            /* Find new chain index */
-            for (int i = 0; i < chain_count; i++) {
-                if (cif->names[i] && strlen(cif->names[i]) == cur_len &&
-                    memcmp(cif->names[i], cur_ptr, cur_len) == 0) {
-                    current_chain = i;
-                    break;
-                }
-            }
+            /* Find new chain index using hash lookup */
+            current_chain = chain_lookup_find(chain_lookup, cur_ptr, cur_len);
         }
 
         if (current_chain >= 0 && current_chain < chain_count) {
@@ -711,7 +697,9 @@ static int *_count_atoms_per_chain_filtered(mmCIF *cif, mmBlock *block,
  * @return Array of atom counts per residue, or NULL on error
  */
 static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_count,
-                                     ChainSeqInfo *seq_info, CifErrorContext *ctx) {
+                                     ChainSeqInfo *seq_info,
+                                     const ChainLookup *chain_lookup,
+                                     CifErrorContext *ctx) {
     int seq_index = _get_attr_index(block, ATTR_SEQ_ID, ctx);
     if (seq_index == BAD_IX) {
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute '%s'", ATTR_SEQ_ID);
@@ -763,25 +751,13 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
         if (prev_chain_ptr == NULL) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
-            /* Find initial chain index */
-            for (int i = 0; i < chain_count; i++) {
-                if (cif->names[i] && strlen(cif->names[i]) == chain_len &&
-                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
-                    current_chain = i;
-                    break;
-                }
-            }
+            /* Find initial chain index using hash lookup */
+            current_chain = chain_lookup_find(chain_lookup, chain_ptr, chain_len);
         } else if (!_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
-            /* Find new chain index */
-            for (int i = 0; i < chain_count; i++) {
-                if (cif->names[i] && strlen(cif->names[i]) == chain_len &&
-                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
-                    current_chain = i;
-                    break;
-                }
-            }
+            /* Find new chain index using hash lookup */
+            current_chain = chain_lookup_find(chain_lookup, chain_ptr, chain_len);
         }
 
         /* Parse sequence ID and compute global residue index */
@@ -921,59 +897,63 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
     /* Skip if coordinates are skipped (the main heavy field) */
     bool skip_batch = _is_field_skipped(FIELD_COORDS, skip_mask);
 
+    /* Build chain lookup hash table for O(1) chain name -> index lookups.
+     * Use original_chains if set (before chain filtering) since functions
+     * operate on uncompacted arrays. */
+    int chain_count_for_lookup = cif->original_chains > 0 ? cif->original_chains : cif->chains;
+    ChainLookup chain_lookup = {0};
+    chain_lookup_init(&chain_lookup);
+    chain_lookup_build(&chain_lookup, cif->names, chain_count_for_lookup);
+
     if (skip_batch) {
         LOG_DEBUG("skip_mask includes batch fields: skipping batch parsing");
 
         _free_lines(&blocks->b[BLOCK_POLY]);
         _free_lines(&blocks->b[BLOCK_CHAIN]);
 
-        /* Apply model filtering for multi-model structures */
         int original_atoms = cif->atoms;
-        if (_model_filter_active(cif, filter)) {
-            cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
-            if (!cif->is_excluded) {
-                _free_lines(&blocks->b[BLOCK_ATOM]);
-                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded");
-                return CIF_ERR_ALLOC;
-            }
 
-            int excluded = _prescan_model_filter(cif, &blocks->b[BLOCK_ATOM],
-                                                  original_atoms, filter, ctx);
-            if (excluded < 0) {
-                free(cif->is_excluded);
-                cif->is_excluded = NULL;
-                _free_lines(&blocks->b[BLOCK_ATOM]);
-                return ctx->code;
-            }
-
-            cif->atoms -= excluded;
-            LOG_DEBUG("Model filter (metadata): excluded %d atoms, %d remaining",
-                      excluded, cif->atoms);
-        }
-
-        /* Prescan for nonpoly atoms - needed to count polymer-only atoms per chain */
+        /* Allocate is_nonpoly (always needed) */
         cif->is_nonpoly = calloc((size_t)original_atoms, sizeof(int));
         if (!cif->is_nonpoly) {
-            if (cif->is_excluded) free(cif->is_excluded);
             _free_lines(&blocks->b[BLOCK_ATOM]);
             CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_nonpoly (metadata)");
             return CIF_ERR_ALLOC;
         }
 
-        int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], original_atoms,
-                                               cif->is_nonpoly, ctx);
-        if (polymer_count < 0) {
+        /* Determine filtering parameters */
+        int target_model = _model_filter_active(cif, filter) ?
+                           (filter->model > 0 ? filter->model : 1) : 0;
+        char keep_alt = _alt_loc_filter_active(cif, filter) ? filter->alt_loc : '\0';
+        bool needs_exclusion = (target_model > 0 || keep_alt != '\0');
+
+        /* Allocate is_excluded if any filtering needed */
+        if (needs_exclusion) {
+            cif->is_excluded = calloc((size_t)original_atoms, sizeof(int));
+            if (!cif->is_excluded) {
+                free(cif->is_nonpoly);
+                _free_lines(&blocks->b[BLOCK_ATOM]);
+                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate is_excluded (metadata)");
+                return CIF_ERR_ALLOC;
+            }
+        }
+
+        /* Unified prescan: classify polymer/nonpoly and apply model/alt filters */
+        PrescanResult prescan = _prescan_unified(&blocks->b[BLOCK_ATOM], original_atoms,
+                                                 cif->is_nonpoly, cif->is_excluded,
+                                                 target_model, keep_alt, ctx);
+        if (prescan.error != CIF_OK) {
             free(cif->is_nonpoly);
             if (cif->is_excluded) free(cif->is_excluded);
             _free_lines(&blocks->b[BLOCK_ATOM]);
-            return ctx->code;
+            return prescan.error;
         }
-        cif->polymer = polymer_count;
-        cif->nonpoly = original_atoms - polymer_count;
 
-        /* Adjust atom count - we only count polymer atoms, minus any excluded */
-        /* Need to count how many excluded atoms were polymer vs nonpoly */
-        if (cif->is_excluded) {
+        cif->polymer = prescan.polymer_count;
+        cif->nonpoly = original_atoms - prescan.polymer_count;
+
+        /* Adjust atom count - polymer only, minus excluded polymer atoms */
+        if (cif->is_excluded && prescan.excluded_count > 0) {
             int excluded_polymer = 0;
             for (int i = 0; i < original_atoms; i++) {
                 if (cif->is_excluded[i] && !cif->is_nonpoly[i]) {
@@ -981,6 +961,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
                 }
             }
             cif->atoms = cif->polymer - excluded_polymer;
+            cif->excluded_count = prescan.excluded_count;
         } else {
             cif->atoms = cif->polymer;
         }
@@ -988,7 +969,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         LOG_DEBUG("metadata mode: %d polymer atoms (after filters)", cif->atoms);
 
         /* Count atoms per chain - always use filtered version since is_nonpoly is set */
-        cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+        cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM],
+                                                               &chain_lookup, ctx);
 
         _free_lines(&blocks->b[BLOCK_ATOM]);
         free(cif->is_nonpoly);
@@ -1016,15 +998,16 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
         return CIF_ERR_ALLOC;
     }
 
-    /* Pre-scan group_PDB to classify atoms */
-    int polymer_count = _prescan_group_pdb(&blocks->b[BLOCK_ATOM], original_atoms,
-                                           cif->is_nonpoly, ctx);
-    if (polymer_count < 0) {
+    /* Unified prescan for polymer classification (no model/alt filtering here,
+     * that's handled by _apply_atom_filters for batch path) */
+    PrescanResult prescan = _prescan_unified(&blocks->b[BLOCK_ATOM], original_atoms,
+                                             cif->is_nonpoly, NULL, 0, '\0', ctx);
+    if (prescan.error != CIF_OK) {
         free(cif->is_nonpoly);
-        return ctx->code;
+        return prescan.error;
     }
-    cif->polymer = polymer_count;
-    cif->nonpoly = cif->atoms - polymer_count;
+    cif->polymer = prescan.polymer_count;
+    cif->nonpoly = cif->atoms - prescan.polymer_count;
 
     LOG_DEBUG("Pre-scan: %d polymer, %d non-polymer atoms", cif->polymer, cif->nonpoly);
 
@@ -1085,7 +1068,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
     }
 
     /* Build chain seq_id mapping from sequence table before freeing lines */
-    ChainSeqInfo *seq_info = _build_chain_seq_info(cif, &blocks->b[BLOCK_POLY], ctx);
+    ChainSeqInfo *seq_info = _build_chain_seq_info(cif, &blocks->b[BLOCK_POLY],
+                                                   &chain_lookup, ctx);
     if (seq_info == NULL) {
         _free_lines(&blocks->b[BLOCK_POLY]);
         _free_lines(&blocks->b[BLOCK_CHAIN]);
@@ -1115,7 +1099,7 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
 
     /* Count atoms per residue using seq_id mapping */
     cif->atoms_per_res = _count_atoms_per_residue(cif, &blocks->b[BLOCK_ATOM], cif->residues,
-                                                  seq_info, ctx);
+                                                  seq_info, &chain_lookup, ctx);
     free(seq_info);  /* No longer needed after counting */
     seq_info = NULL;
 
@@ -1126,7 +1110,8 @@ CifError _fill_cif(mmCIF *cif, mmBlockList *blocks, FieldSkipMask skip_mask,
 
     /* Count atoms per chain - always use filtered version to skip nonpoly atoms.
      * This ensures atoms_per_chain matches atoms_per_res (both polymer-only). */
-    cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM], ctx);
+    cif->atoms_per_chain = _count_atoms_per_chain_filtered(cif, &blocks->b[BLOCK_ATOM],
+                                                           &chain_lookup, ctx);
     if (cif->atoms_per_chain == NULL) {
         free(cif->is_nonpoly);
         return ctx->code;
@@ -1245,6 +1230,11 @@ static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
         return -1;
     }
 
+    /* Build chain lookup for O(1) name->index lookups */
+    ChainLookup chain_lookup = {0};
+    chain_lookup_init(&chain_lookup);
+    chain_lookup_build(&chain_lookup, cif->names, cif->original_chains);
+
     /* Track chain transitions to efficiently map atoms to chains */
     int current_chain = 0;
     char *prev_chain_ptr = NULL;
@@ -1261,22 +1251,12 @@ static int _prescan_chain_filter(mmCIF *cif, mmBlock *block, int atoms,
             return -1;
         }
 
-        /* Check if chain changed */
+        /* Check if chain changed - use O(1) lookup instead of O(n) loop */
         if (prev_chain_ptr == NULL ||
             !_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
-
-            /* Find the chain index by matching name */
-            current_chain = -1;
-            for (int i = 0; i < cif->original_chains; i++) {
-                if (cif->names[i] &&
-                    strlen(cif->names[i]) == chain_len &&
-                    memcmp(cif->names[i], chain_ptr, chain_len) == 0) {
-                    current_chain = i;
-                    break;
-                }
-            }
+            current_chain = chain_lookup_find(&chain_lookup, chain_ptr, chain_len);
         }
 
         /* Mark as excluded if chain not in mask */

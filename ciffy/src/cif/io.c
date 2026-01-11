@@ -997,3 +997,101 @@ int _prescan_alt_locs(mmBlock *block, int atoms, int *is_excluded,
     LOG_DEBUG("Alt loc filtering: excluded %d atoms (keeping '%c')", excluded, keep_alt);
     return excluded;
 }
+
+
+/**
+ * @brief Unified prescan: classify atoms and apply filters in a single pass.
+ *
+ * Combines polymer classification, model filtering, and alt_loc filtering
+ * into a single loop over atoms, reducing from 3 passes to 1.
+ *
+ * For each atom:
+ * - Polymer classification: has valid label_seq_id (>= 1)
+ * - Model filtering: pdbx_PDB_model_num matches target_model (if specified)
+ * - Alt loc filtering: label_alt_id matches keep_alt or is '.' (if specified)
+ *
+ * @param block Atom block (must have lines pre-computed)
+ * @param atoms Total atom count
+ * @param is_nonpoly Output: non-polymer mask [atoms] (required)
+ * @param is_excluded Output: exclusion mask [atoms] (may be NULL if no filtering)
+ * @param target_model Target model number (0 or -1 = no model filtering)
+ * @param keep_alt Alt conformation to keep ('A', 'B', etc.), '\0' = keep all
+ * @param ctx Error context
+ * @return PrescanResult with polymer_count, excluded_count, and error status
+ */
+PrescanResult _prescan_unified(mmBlock *block, int atoms,
+                               int *is_nonpoly, int *is_excluded,
+                               int target_model, char keep_alt,
+                               CifErrorContext *ctx) {
+    PrescanResult result = {0, 0, CIF_OK};
+
+    /* Get attribute indices (once for all atoms) */
+    int seq_idx = _get_attr_index(block, "label_seq_id", ctx);
+    if (seq_idx == BAD_IX) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ATTR, "Missing attribute 'label_seq_id'");
+        result.error = CIF_ERR_ATTR;
+        return result;
+    }
+
+    /* Optional attributes for filtering */
+    int model_idx = BAD_IX;
+    if (target_model > 0) {
+        model_idx = _get_attr_index(block, "pdbx_PDB_model_num", ctx);
+        /* Missing model column in single-model file is OK - no filtering needed */
+    }
+
+    int alt_idx = BAD_IX;
+    if (keep_alt != '\0') {
+        alt_idx = _get_attr_index(block, "label_alt_id", ctx);
+        /* Missing alt column is OK - no alternate conformations */
+    }
+
+    /* Single pass over all atoms */
+    int nonpoly_count = 0;
+    int excluded_count = 0;
+
+    for (int row = 0; row < atoms; row++) {
+        /* 1. Polymer classification: check seq_id */
+        int seq_id;
+        IntParseResult seq_result = _parse_int_safe(block, row, seq_idx, &seq_id);
+        int has_valid_seq = (seq_result == PARSE_INT_OK && seq_id >= 1);
+
+        is_nonpoly[row] = has_valid_seq ? 0 : 1;
+        if (is_nonpoly[row]) nonpoly_count++;
+
+        /* Skip exclusion checks if not filtering or already excluded */
+        if (is_excluded == NULL) continue;
+
+        /* 2. Model filtering: check model_num */
+        if (model_idx != BAD_IX) {
+            int model_num = _parse_int_inline(block, row, model_idx);
+            if (model_num != target_model) {
+                is_excluded[row] = 1;
+                excluded_count++;
+                continue;  /* Already excluded, skip alt check */
+            }
+        }
+
+        /* 3. Alt loc filtering: check alt_id */
+        if (alt_idx != BAD_IX) {
+            size_t alt_len;
+            char *alt = _get_field_ptr(block, row, alt_idx, &alt_len);
+
+            /* Exclude if alt_id is not '.' and doesn't match keep_alt */
+            if (alt_len == 1 && alt[0] != '.' && alt[0] != keep_alt) {
+                is_excluded[row] = 1;
+                excluded_count++;
+            }
+        }
+    }
+
+    result.polymer_count = atoms - nonpoly_count;
+    result.excluded_count = excluded_count;
+
+    LOG_DEBUG("Unified prescan: %d polymer, %d excluded (model=%d, alt='%c')",
+              result.polymer_count, excluded_count,
+              target_model > 0 ? target_model : 0,
+              keep_alt ? keep_alt : '.');
+
+    return result;
+}

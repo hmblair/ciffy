@@ -5,6 +5,7 @@
 
 #include "connections.h"
 #include "io.h"
+#include "chain_lookup.h"
 #include "../log.h"
 
 #include <string.h>
@@ -42,76 +43,24 @@ static ConnType _parse_conn_type(const char *str, size_t len) {
  * this is much faster than hashing 100k+ atoms.
  * ============================================================================ */
 
-/* Simple hash table for chain name -> index lookup */
-#define CHAIN_HASH_SIZE 512  /* Power of 2 for fast modulo */
-
-typedef struct {
-    char *name;      /**< Chain name (pointer into cif->names) */
-    int index;       /**< Chain index, or -1 if empty */
-} ChainHashEntry;
-
 /**
  * @brief Atom lookup context for binary search approach.
+ *
+ * Uses ChainLookup from chain_lookup.h for O(1) chain name lookups.
  */
 typedef struct {
     mmBlock *block;          /**< Atom site block */
     int *chain_offsets;      /**< Start row for each chain [n_chains + 1] */
     int n_chains;            /**< Number of chains */
     char **chain_names;      /**< Chain name strings */
-    ChainHashEntry *chain_hash;  /**< Hash table for O(1) chain lookup */
+    ChainLookup chain_lookup; /**< Hash table for O(1) chain lookup */
     int asym_idx;            /**< Attribute index for label_asym_id */
     int seq_idx;             /**< Attribute index for label_seq_id */
     int atom_idx;            /**< Attribute index for label_atom_id */
 } AtomLookup;
 
-/**
- * @brief FNV-1a hash for chain name.
- */
-static inline uint32_t _chain_hash(const char *name, size_t len) {
-    uint32_t hash = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        hash ^= (uint8_t)name[i];
-        hash *= 16777619u;
-    }
-    return hash;
-}
-
-/**
- * @brief Look up chain index by name using hash table.
- */
-static inline int _find_chain_index(const AtomLookup *ctx,
-                                     const char *name, size_t len) {
-    uint32_t h = _chain_hash(name, len);
-    uint32_t mask = CHAIN_HASH_SIZE - 1;
-
-    for (int i = 0; i < CHAIN_HASH_SIZE; i++) {
-        uint32_t idx = (h + i) & mask;
-        ChainHashEntry *entry = &ctx->chain_hash[idx];
-
-        if (entry->index < 0) return -1;  /* Empty slot - not found */
-
-        if (strlen(entry->name) == len &&
-            strncmp(entry->name, name, len) == 0) {
-            return entry->index;
-        }
-    }
-    return -1;
-}
-
-/**
- * @brief Extract field pointer and length using direct pointer arithmetic.
- */
-static inline void _extract_field(char *line_start, const int *offsets, int idx,
-                                   const char **out_ptr, size_t *out_len) {
-    char *p = line_start + offsets[idx];
-    while (*p == ' ') p++;
-
-    char *end = p;
-    while (*end != ' ' && *end != '\n' && *end != '\0') end++;
-
-    *out_ptr = p;
-    *out_len = (size_t)(end - p);
-}
+/* Note: _fast_get_field from io.h is used for field extraction instead of
+ * a local duplicate implementation. */
 
 /**
  * @brief Compare two strings with known lengths.
@@ -146,8 +95,8 @@ static int32_t _lookup_atom_bsearch(const AtomLookup *ctx,
                                      const char *chain, size_t chain_len,
                                      const char *seq, size_t seq_len,
                                      const char *atom, size_t atom_len) {
-    /* Find chain index using hash table */
-    int chain_idx = _find_chain_index(ctx, chain, chain_len);
+    /* Find chain index using hash lookup */
+    int chain_idx = chain_lookup_find(&ctx->chain_lookup, chain, chain_len);
     if (chain_idx < 0) return -1;
 
     int start = ctx->chain_offsets[chain_idx];
@@ -168,9 +117,8 @@ static int32_t _lookup_atom_bsearch(const AtomLookup *ctx,
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
 
-        const char *mid_seq;
         size_t mid_seq_len;
-        _extract_field(lines[mid], offsets, ctx->seq_idx, &mid_seq, &mid_seq_len);
+        const char *mid_seq = _fast_get_field(lines[mid], offsets, ctx->seq_idx, &mid_seq_len);
         _strip_outer_quotes(&mid_seq, &mid_seq_len);
 
         int mid_seq_val = _parse_seq_id(mid_seq, mid_seq_len);
@@ -190,16 +138,15 @@ static int32_t _lookup_atom_bsearch(const AtomLookup *ctx,
 
     /* Linear search within residue for matching atom name */
     for (int row = first_match; row < end; row++) {
-        const char *row_seq, *row_atom;
         size_t row_seq_len, row_atom_len;
 
-        _extract_field(lines[row], offsets, ctx->seq_idx, &row_seq, &row_seq_len);
+        const char *row_seq = _fast_get_field(lines[row], offsets, ctx->seq_idx, &row_seq_len);
         _strip_outer_quotes(&row_seq, &row_seq_len);
 
         int row_seq_val = _parse_seq_id(row_seq, row_seq_len);
         if (row_seq_val != target_seq) break;  /* Past this residue */
 
-        _extract_field(lines[row], offsets, ctx->atom_idx, &row_atom, &row_atom_len);
+        const char *row_atom = _fast_get_field(lines[row], offsets, ctx->atom_idx, &row_atom_len);
         _strip_outer_quotes(&row_atom, &row_atom_len);
 
         if (row_atom_len == atom_len && strncmp(row_atom, atom, atom_len) == 0) {
@@ -225,7 +172,6 @@ AtomLookup *_build_atom_lookup_ctx(mmBlock *block, mmCIF *cif, CifErrorContext *
     lookup->block = block;
     lookup->n_chains = cif->chains;
     lookup->chain_names = cif->names;
-    lookup->chain_hash = NULL;
 
     /* Compute chain offsets */
     lookup->chain_offsets = (int *)malloc((size_t)(cif->chains + 1) * sizeof(int));
@@ -240,45 +186,9 @@ AtomLookup *_build_atom_lookup_ctx(mmBlock *block, mmCIF *cif, CifErrorContext *
         lookup->chain_offsets[i + 1] = lookup->chain_offsets[i] + cif->atoms_per_chain[i];
     }
 
-    /* Build chain name hash table */
-    lookup->chain_hash = (ChainHashEntry *)malloc(CHAIN_HASH_SIZE * sizeof(ChainHashEntry));
-    if (!lookup->chain_hash) {
-        free(lookup->chain_offsets);
-        free(lookup);
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate chain_hash");
-        return NULL;
-    }
-
-    /* Initialize all slots as empty */
-    for (int i = 0; i < CHAIN_HASH_SIZE; i++) {
-        lookup->chain_hash[i].name = NULL;
-        lookup->chain_hash[i].index = -1;
-    }
-
-    /* Insert chain names */
-    uint32_t mask = CHAIN_HASH_SIZE - 1;
-    for (int i = 0; i < cif->chains; i++) {
-        char *name = cif->names[i];
-        if (name == NULL) {
-            LOG_WARNING("Chain %d has NULL name, skipping hash insertion", i);
-            continue;
-        }
-        uint32_t h = _chain_hash(name, strlen(name));
-
-        bool inserted = false;
-        for (int j = 0; j < CHAIN_HASH_SIZE; j++) {
-            uint32_t idx = (h + j) & mask;
-            if (lookup->chain_hash[idx].index < 0) {
-                lookup->chain_hash[idx].name = name;
-                lookup->chain_hash[idx].index = i;
-                inserted = true;
-                break;
-            }
-        }
-        if (!inserted) {
-            LOG_WARNING("Chain hash table full, could not insert chain %d ('%s')", i, name);
-        }
-    }
+    /* Build chain name hash table using shared ChainLookup */
+    chain_lookup_init(&lookup->chain_lookup);
+    chain_lookup_build(&lookup->chain_lookup, cif->names, cif->chains);
 
     /* Get attribute indices */
     lookup->asym_idx = _get_attr_index(block, "label_asym_id", ctx);
@@ -286,7 +196,7 @@ AtomLookup *_build_atom_lookup_ctx(mmBlock *block, mmCIF *cif, CifErrorContext *
     lookup->atom_idx = _get_attr_index(block, "label_atom_id", ctx);
 
     if (lookup->asym_idx < 0 || lookup->seq_idx < 0 || lookup->atom_idx < 0) {
-        free(lookup->chain_hash);
+        /* ChainLookup is embedded, no need to free it */
         free(lookup->chain_offsets);
         free(lookup);
         CIF_SET_ERROR(ctx, CIF_ERR_ATTR,
@@ -305,7 +215,7 @@ AtomLookup *_build_atom_lookup_ctx(mmBlock *block, mmCIF *cif, CifErrorContext *
  */
 void _free_atom_lookup_ctx(AtomLookup *lookup) {
     if (lookup) {
-        free(lookup->chain_hash);
+        /* ChainLookup is embedded (not a pointer), no need to free it */
         free(lookup->chain_offsets);
         free(lookup);
     }
@@ -344,12 +254,11 @@ AtomHash _build_atom_lookup(mmBlock *block, int n_atoms, CifErrorContext *ctx) {
 
         for (int row = 0; row < n_atoms; row++) {
             char *line_start = lines[row];
-            const char *asym, *seq, *atom;
             size_t asym_len, seq_len, atom_len;
 
-            _extract_field(line_start, offsets, asym_idx, &asym, &asym_len);
-            _extract_field(line_start, offsets, seq_idx, &seq, &seq_len);
-            _extract_field(line_start, offsets, atom_idx, &atom, &atom_len);
+            const char *asym = _fast_get_field(line_start, offsets, asym_idx, &asym_len);
+            const char *seq = _fast_get_field(line_start, offsets, seq_idx, &seq_len);
+            const char *atom = _fast_get_field(line_start, offsets, atom_idx, &atom_len);
 
             _strip_outer_quotes(&asym, &asym_len);
             _strip_outer_quotes(&seq, &seq_len);

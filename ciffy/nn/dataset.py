@@ -135,7 +135,7 @@ class PolymerDataset(Dataset):
         exclude_ids: list[str] | set[str] | None = None,
         num_workers: int = 0,
         limit: int | None = None,
-        cache: bool = False,
+        cache: bool = True,
     ):
         """
         Initialize dataset from a directory or list of CIF files.
@@ -164,11 +164,11 @@ class PolymerDataset(Dataset):
             num_workers: Deprecated, does nothing. Kept for backward compatibility.
             limit: Maximum number of samples to include. Useful for overfitting
                 tests or quick iteration. None = no limit (use all samples).
-            cache: If True, cache loaded structures in memory at the file level.
-                This means accessing different chains from the same file only
-                loads the file once. Particularly effective for chain-scale
-                datasets where multiple chains come from the same structure.
-                Default False.
+            cache: If True, cache loaded structures in memory. Uses two-level
+                caching (file and item) with automatic file eviction once all
+                chains from a file are loaded. Particularly effective for
+                chain-scale datasets where multiple chains come from the same
+                structure. Default True.
 
         Raises:
             ImportError: If PyTorch is not installed.

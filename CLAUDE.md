@@ -198,9 +198,8 @@ dataset = PolymerDataset(
     min_residues=10,             # or max
     max_atoms=5000,              # or min
     exclude_ids=["1ABC"],
-    cache=True,                  # Cache structures in memory for faster epochs
 )
-polymer = dataset[0]
+polymer = dataset[0]  # Caching enabled by default
 ```
 
 ### Train/Test Splitting

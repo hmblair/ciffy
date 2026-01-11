@@ -52,7 +52,7 @@ packages = [
     "ciffy.utils",
     "ciffy.visualize",
     # Excluded from distribution (research code):
-    # ciffy.nn, ciffy.sampling
+    # ciffy.nn
 ]
 
 [tool.setuptools.package-data]
@@ -110,10 +110,6 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = "ciffy.nn.*"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "ciffy.sampling.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]

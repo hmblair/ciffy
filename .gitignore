@@ -28,6 +28,7 @@ inference_output/
 lightning_logs/
 wandb/
 outputs/
+figures/
 
 # Personal config files (use examples/configs as templates)
 configs/

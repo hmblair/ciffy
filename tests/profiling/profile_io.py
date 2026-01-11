@@ -61,7 +61,7 @@ def _bio_get_coords(iden: str, file: str) -> np.ndarray:
 def _biotite_load(file: str):
     """Load structure using Biotite."""
     from biotite.structure.io import load_structure
-    return load_structure(file)
+    return load_structure(file, model=1)
 
 
 

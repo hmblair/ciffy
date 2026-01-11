@@ -1549,6 +1549,62 @@ bool _skip_multiline_attr(ParseCursor *cursor) {
 }
 
 
+/* ============================================================================
+ * BLOCK PRUNING
+ * Functions for skipping unneeded blocks during parsing.
+ * ============================================================================ */
+
+int _peek_block_id(ParseCursor *cursor) {
+    char *ptr = cursor->ptr;
+
+    /* Skip "loop_" prefix if present */
+    if (_eq(ptr, "loop_")) {
+        while (*ptr != '\n' && *ptr != '\0') ptr++;
+        if (*ptr == '\n') ptr++;
+    }
+
+    /* Now ptr points to first attribute line, e.g. "_atom_site.id" */
+    if (*ptr != '_') return -1;
+
+    /* Compare against registry categories */
+    const BlockDef *blocks = _get_blocks();
+    for (int i = 0; i < BLOCK_COUNT; i++) {
+        if (_eq(ptr, blocks[i].category)) {
+            return i;
+        }
+    }
+
+    return -1;  /* Not in registry */
+}
+
+
+void _skip_current_block(ParseCursor *cursor) {
+    /* Skip "loop_" line if present */
+    if (_eq(cursor->ptr, "loop_")) {
+        CURSOR_NEXT_LINE(cursor);
+    }
+
+    /* Skip attribute header lines (lines starting with category prefix) */
+    while (!CURSOR_AT_END(cursor) && cursor->ptr[0] == '_') {
+        CURSOR_NEXT_LINE(cursor);
+        /* Handle multiline attributes starting with ; */
+        if (cursor->ptr[0] == ';') {
+            _skip_multiline_attr(cursor);
+        }
+    }
+
+    /* Skip data rows until section end (line starting with #) */
+    while (!CURSOR_AT_END(cursor) && !_is_section_end(cursor->ptr)) {
+        CURSOR_NEXT_LINE(cursor);
+    }
+
+    /* Skip the # line itself */
+    if (!CURSOR_AT_END(cursor)) {
+        CURSOR_NEXT_LINE(cursor);
+    }
+}
+
+
 void _next_block(ParseCursor *cursor) {
     while (!CURSOR_AT_END(cursor) && !_is_section_end(cursor->ptr)) {
         CURSOR_NEXT_LINE(cursor);

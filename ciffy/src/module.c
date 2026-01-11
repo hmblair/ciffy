@@ -667,17 +667,21 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         }
     }
 
-    /* Load the entire file into memory */
-    char *buffer = NULL;
-    CifError err = _load_file(file, &buffer, &ctx);
+    /* If connections not requested, add to skip_mask so registry won't parse */
+    if (!filter.connections) {
+        skip_mask |= SKIP_CONNECTIONS;
+    }
+
+    /* Load the file (uses mmap for efficient partial loading) */
+    FileBuffer fb = {0};
+    CifError err = _load_file(file, &fb, &ctx);
     if (err != CIF_OK) {
         _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
-    char *cpy = buffer;  /* Keep original pointer for free */
 
     /* Initialize parse cursor with line tracking */
-    ParseCursor cursor = {.ptr = buffer, .line = 1};
+    ParseCursor cursor = {.ptr = fb.data, .line = 1};
 
     mmCIF cif = {0};
     mmBlockList blocks = {0};
@@ -685,24 +689,54 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     /* Read and validate the PDB ID */
     cif.id = _get_id(&cursor, &ctx);
     if (cif.id == NULL) {
-        free(cpy);
+        _free_file_buffer(&fb);
         _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
     _next_block(&cursor);
 
-    /* Parse all blocks in the file */
+    /* Compute which blocks are actually needed based on skip_mask */
+    BlockMask required_blocks = _compute_required_blocks(skip_mask);
+
+    BlockMask found_blocks = 0;
+
+    /* Parse blocks, skipping those that aren't needed */
     while (*cursor.ptr != '\0') {
-        mmBlock block = _read_block(&cursor, &ctx);
-        if (block.category == NULL) {
-            /* Block parsing failed */
-            free(cif.id);
-            _free_block_list(&blocks);
-            free(cpy);
-            _free_filter(&filter);
-            return _set_py_error(&ctx, file);
+        int block_id = _peek_block_id(&cursor);
+
+        if (block_id >= 0 && _is_block_required((BlockId)block_id, required_blocks)) {
+            /* This block is needed - parse it fully */
+            mmBlock block = _read_block(&cursor, &ctx);
+            if (block.category == NULL) {
+                /* Block parsing failed */
+                free(cif.id);
+                _free_block_list(&blocks);
+                _free_file_buffer(&fb);
+                _free_filter(&filter);
+                return _set_py_error(&ctx, file);
+            }
+            _store_or_free_block(&block, &blocks);
+            found_blocks |= (1U << block_id);
+
+            /* Early exit if all required blocks found */
+            if (found_blocks == required_blocks) {
+                break;
+            }
+        } else if (block_id >= 0) {
+            /* Block is in registry but not needed - skip it */
+            _skip_current_block(&cursor);
+        } else {
+            /* Block not in registry - still need to parse to advance cursor */
+            mmBlock block = _read_block(&cursor, &ctx);
+            if (block.category == NULL) {
+                free(cif.id);
+                _free_block_list(&blocks);
+                _free_file_buffer(&fb);
+                _free_filter(&filter);
+                return _set_py_error(&ctx, file);
+            }
+            _store_or_free_block(&block, &blocks);  /* Will be freed since not in registry */
         }
-        _store_or_free_block(&block, &blocks);
     }
 
     /* Extract molecular data from parsed blocks (includes line_precomp, metadata, batch_parse, residue_count) */
@@ -710,7 +744,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (err != CIF_OK) {
         free(cif.id);
         _free_block_list(&blocks);
-        free(cpy);
+        _free_file_buffer(&fb);
         _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
@@ -724,24 +758,24 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         if (err != CIF_OK) {
             free(cif.id);
             _free_block_list(&blocks);
-            free(cpy);
+            _free_file_buffer(&fb);
             _free_filter(&filter);
             return _set_py_error(&ctx, file);
         }
     }
 
-    /* Optionally parse connections (hydrogen bonds, etc.) from _struct_conn */
-    if (filter.connections && !skip_batch) {
+    /* Optionally parse connections (hydrogen bonds, etc.) from _struct_conn
+     * Must be after _fill_cif since connections need atoms_per_chain. */
+    if (!_is_field_skipped(FIELD_CONNECTIONS, skip_mask) && !skip_batch) {
         mmBlock *atom_block = _get_block_by_id(&blocks, BLOCK_ATOM);
         mmBlock *conn_block = _get_block_by_id(&blocks, BLOCK_CONN);
 
         if (atom_block && atom_block->size > 0) {
-            /* Use binary search approach - faster for large structures */
             err = _parse_connections_bsearch(&cif, atom_block, conn_block, &ctx);
             if (err != CIF_OK) {
                 free(cif.id);
                 _free_block_list(&blocks);
-                free(cpy);
+                _free_file_buffer(&fb);
                 _free_filter(&filter);
                 return _set_py_error(&ctx, file);
             }
@@ -752,7 +786,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
     _free_filter(&filter);
 
     /* Free the file buffer and block metadata */
-    free(cpy);
+    _free_file_buffer(&fb);
     _free_block_list(&blocks);
 
     /* Convert to Python objects */

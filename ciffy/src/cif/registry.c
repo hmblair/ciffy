@@ -9,6 +9,7 @@
 #include "registry.h"
 #include "parser.h"
 #include "schema.h"
+#include "connections.h"
 #include "../common.h"
 #include "../log.h"
 
@@ -442,6 +443,30 @@ static CifError _parse_deposit_date(mmCIF *cif, mmBlockList *blocks,
 }
 
 
+/**
+ * Parse connections from _struct_conn block.
+ *
+ * Wrapper for _parse_connections_bsearch that conforms to ParseFunc signature.
+ * Connections link atom pairs via hydrogen bonds, disulfide bridges, etc.
+ */
+static CifError _parse_connections_field(mmCIF *cif, mmBlockList *blocks,
+                                          const void *def, CifErrorContext *ctx) {
+    (void)def;
+
+    mmBlock *atom_block = &blocks->b[BLOCK_ATOM];
+    mmBlock *conn_block = &blocks->b[BLOCK_CONN];
+
+    /* Skip if no atom block or it's empty */
+    if (atom_block->category == NULL || atom_block->size == 0) {
+        LOG_DEBUG("No atoms, skipping connection parsing");
+        return CIF_OK;
+    }
+
+    /* conn_block may be NULL if file has no connections - that's OK */
+    return _parse_connections_bsearch(cif, atom_block, conn_block, ctx);
+}
+
+
 /* ============================================================================
  * FIELD DEFINITIONS
  * Declarative specification of fields and their dependencies.
@@ -586,6 +611,16 @@ static const FieldDef FIELDS[] = {
       offsetof(mmCIF, deposit_date), STORAGE_NONE,
       SIZE_NONE, 0, 0,
       PY_STRING, "date" },
+
+    /* FIELD_CONNECTIONS = 16 - parsed from _struct_conn block
+     * Note: parse_func is NULL because connections need atoms_per_chain which
+     * is computed during batch parsing (after _execute_plan). Connections are
+     * parsed explicitly in module.c after _fill_cif returns. */
+    { FIELD_CONNECTIONS, "connections", BLOCK_CONN, OP_COMPUTE,
+      NULL, NULL, NULL, false, NULL,
+      offsetof(mmCIF, connections), STORAGE_NONE,
+      SIZE_NONE, 0, 0,
+      PY_NONE, NULL, true /* optional */ },
 };
 
 _Static_assert(sizeof(FIELDS) / sizeof(FIELDS[0]) == FIELD_COUNT,
@@ -678,6 +713,66 @@ FieldSkipMask _validate_skip_mask(FieldSkipMask skip_mask, CifErrorContext *ctx)
     }
 
     return skip_mask;
+}
+
+
+/* ============================================================================
+ * BLOCK MASK API
+ * Functions for computing required blocks from field skip mask.
+ * ============================================================================ */
+
+int _category_to_block_id(const char *category) {
+    if (category == NULL) return -1;
+
+    for (int i = 0; i < BLOCK_COUNT; i++) {
+        if (_eq(category, BLOCKS[i].category)) {
+            return i;
+        }
+    }
+    return -1;  /* Not in registry */
+}
+
+/**
+ * @brief Recursively mark a field and its dependencies as required.
+ */
+static void _mark_field_required(FieldId fid, bool *required_fields) {
+    if (required_fields[fid]) return;  /* Already marked */
+
+    required_fields[fid] = true;
+
+    /* Recursively mark dependencies */
+    const FieldId *deps = FIELDS[fid].depends_on;
+    if (deps != NULL) {
+        for (int i = 0; deps[i] != (FieldId)-1; i++) {
+            _mark_field_required(deps[i], required_fields);
+        }
+    }
+}
+
+BlockMask _compute_required_blocks(FieldSkipMask skip_mask) {
+    /* Step 1: Find all required fields (not skipped + their dependencies) */
+    bool required_fields[FIELD_COUNT] = {false};
+
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        if (!_is_field_skipped((FieldId)i, skip_mask)) {
+            _mark_field_required((FieldId)i, required_fields);
+        }
+    }
+
+    /* Step 2: Map required fields to their source blocks */
+    BlockMask required_blocks = 0;
+
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        if (required_fields[i]) {
+            BlockId bid = FIELDS[i].source_block;
+            if (bid >= 0 && bid < BLOCK_COUNT) {
+                required_blocks |= (1U << bid);
+            }
+        }
+    }
+
+    LOG_DEBUG("skip_mask=0x%x -> required_blocks=0x%x", skip_mask, required_blocks);
+    return required_blocks;
 }
 
 

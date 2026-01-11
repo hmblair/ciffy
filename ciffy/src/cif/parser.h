@@ -247,6 +247,27 @@ bool _skip_multiline_attr(ParseCursor *cursor);
 void _next_block(ParseCursor *cursor);
 
 /**
+ * @brief Peek at the block ID without parsing.
+ *
+ * Examines the current cursor position to determine which block (if any)
+ * starts here, without allocating memory or fully parsing the block.
+ *
+ * @param cursor Parse cursor at start of a block
+ * @return BlockId if recognized, -1 if not in registry
+ */
+int _peek_block_id(ParseCursor *cursor);
+
+/**
+ * @brief Skip the current block without parsing.
+ *
+ * Advances cursor past the current block (header + data rows) to the
+ * start of the next block. Used for block-level pruning.
+ *
+ * @param cursor Parse cursor at start of a block
+ */
+void _skip_current_block(ParseCursor *cursor);
+
+/**
  * @brief Store a block if it's needed, otherwise free it.
  *
  * Routes blocks to appropriate slots in the block list based on category.

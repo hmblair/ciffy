@@ -9,75 +9,145 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 /** Maximum file size (1GB) - prevents memory exhaustion attacks */
 #define MAX_CIF_FILE_SIZE (1024L * 1024L * 1024L)
 
 
-CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx) {
+/**
+ * @brief Load file using traditional malloc+read.
+ *
+ * Fallback when mmap is not suitable (page-aligned files, mmap failure).
+ */
+static CifError _load_file_malloc(int fd, size_t size, FileBuffer *fb,
+                                   CifErrorContext *ctx) {
+    char *buf = malloc(size + 1);
+    if (buf == NULL) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+            "Failed to allocate %zu bytes for file", size + 1);
+        return CIF_ERR_ALLOC;
+    }
 
-    *buffer = NULL;
+    size_t total_read = 0;
+    while (total_read < size) {
+        ssize_t n = read(fd, buf + total_read, size - total_read);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to read file");
+            free(buf);
+            return CIF_ERR_IO;
+        }
+        if (n == 0) break;  /* EOF */
+        total_read += (size_t)n;
+    }
 
-    FILE *file = fopen(name, "r");
-    if (file == NULL) {
+    buf[size] = '\0';
+    fb->data = buf;
+    fb->size = size;
+    fb->is_mmap = false;
+    return CIF_OK;
+}
+
+
+CifError _load_file(const char *name, FileBuffer *fb, CifErrorContext *ctx) {
+    fb->data = NULL;
+    fb->size = 0;
+    fb->is_mmap = false;
+
+    int fd = open(name, O_RDONLY);
+    if (fd < 0) {
         CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to open file: %s", name);
         return CIF_ERR_IO;
     }
 
-    /* Get file size */
-    if (fseek(file, 0, SEEK_END) != 0) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to seek to end of file: %s", name);
-        fclose(file);
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to stat file: %s", name);
+        close(fd);
         return CIF_ERR_IO;
     }
 
-    long size = ftell(file);
-    if (size < 0) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to get file size: %s", name);
-        fclose(file);
-        return CIF_ERR_IO;
-    }
+    size_t size = (size_t)st.st_size;
 
     /* Enforce maximum file size limit */
     if (size > MAX_CIF_FILE_SIZE) {
         CIF_SET_ERROR(ctx, CIF_ERR_IO,
-            "File too large: %ld bytes (max %ld): %s",
+            "File too large: %zu bytes (max %ld): %s",
             size, MAX_CIF_FILE_SIZE, name);
-        fclose(file);
+        close(fd);
         return CIF_ERR_IO;
     }
 
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to seek to start of file: %s", name);
-        fclose(file);
-        return CIF_ERR_IO;
+    /* Handle empty files */
+    if (size == 0) {
+        close(fd);
+        char *buf = malloc(1);
+        if (!buf) {
+            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate buffer");
+            return CIF_ERR_ALLOC;
+        }
+        buf[0] = '\0';
+        fb->data = buf;
+        fb->size = 0;
+        fb->is_mmap = false;
+        return CIF_OK;
     }
 
-    /* Allocate buffer */
-    char *buf = malloc((size_t)size + 1);
-    if (buf == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate %ld bytes for file: %s", size + 1, name);
-        fclose(file);
-        return CIF_ERR_ALLOC;
+    /* Check if file size is page-aligned (need fallback for null terminator) */
+    long page_size = sysconf(_SC_PAGESIZE);
+    bool page_aligned = (page_size > 0) && (size % (size_t)page_size == 0);
+
+    if (page_aligned) {
+        /* Page-aligned: mmap won't give us a null terminator, use malloc */
+        LOG_DEBUG("File size %zu is page-aligned, using malloc fallback", size);
+        CifError err = _load_file_malloc(fd, size, fb, ctx);
+        close(fd);
+        return err;
     }
 
-    /* Read file contents */
-    size_t bytes_read = fread(buf, 1, (size_t)size, file);
-    if (bytes_read != (size_t)size) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO,
-            "Failed to read file (expected %ld bytes, got %zu): %s",
-            size, bytes_read, name);
-        free(buf);
-        fclose(file);
-        return CIF_ERR_IO;
+    /* Try mmap - pages beyond file content are zero-filled by OS */
+    char *buf = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);  /* Can close fd after successful mmap */
+
+    if (buf == MAP_FAILED) {
+        /* mmap failed, fall back to malloc+read */
+        LOG_DEBUG("mmap failed, falling back to malloc");
+        fd = open(name, O_RDONLY);
+        if (fd < 0) {
+            CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to reopen file: %s", name);
+            return CIF_ERR_IO;
+        }
+        CifError err = _load_file_malloc(fd, size, fb, ctx);
+        close(fd);
+        return err;
     }
 
-    buf[size] = '\0';
-    fclose(file);
+    /* mmap succeeded - the byte at buf[size] is zero due to page zero-fill */
+    fb->data = buf;
+    fb->size = size;
+    fb->is_mmap = true;
 
-    *buffer = buf;
+    LOG_DEBUG("Loaded file via mmap: %zu bytes", size);
     return CIF_OK;
+}
+
+
+void _free_file_buffer(FileBuffer *fb) {
+    if (fb->data == NULL) return;
+
+    if (fb->is_mmap) {
+        munmap(fb->data, fb->size);
+    } else {
+        free(fb->data);
+    }
+
+    fb->data = NULL;
+    fb->size = 0;
+    fb->is_mmap = false;
 }
 
 
@@ -305,6 +375,39 @@ static bool _skip_semicolon_block(char **ptr) {
     }
     return false;
 }
+
+
+char *_find_block_end(char *start) {
+    char *p = start;
+
+    /* Scan for '#' at start of line (section end marker) */
+    while (*p != '\0') {
+        if (*p == '#') {
+            return p;
+        }
+        /* Skip to end of line */
+        while (*p != '\n' && *p != '\0') p++;
+        if (*p == '\n') p++;
+    }
+    return p;
+}
+
+
+int _count_lines_fast(const char *start, const char *end) {
+    int count = 0;
+    const char *p = start;
+    size_t remaining = (size_t)(end - start);
+
+    while (remaining > 0) {
+        const char *nl = memchr(p, '\n', remaining);
+        if (nl == NULL) break;
+        count++;
+        remaining -= (size_t)(nl - p + 1);
+        p = nl + 1;
+    }
+    return count;
+}
+
 
 CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
     const char *name = block->category ? block->category : "unknown";

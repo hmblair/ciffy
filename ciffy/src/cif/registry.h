@@ -177,6 +177,7 @@ typedef enum {
     FIELD_DESCRIPTIONS,  /**< cif->descriptions - entity description per chain (optional) */
     FIELD_RESOLUTION,    /**< cif->resolution - structure resolution in Angstroms */
     FIELD_DEPOSIT_DATE,  /**< cif->deposit_date - initial deposition date (YYYY-MM-DD) */
+    FIELD_CONNECTIONS,   /**< cif->connections - atom pair connections from _struct_conn */
     FIELD_COUNT          /**< Total number of field types */
 } FieldId;
 
@@ -337,7 +338,8 @@ typedef uint32_t FieldSkipMask;
 #define SKIP_NONE       ((FieldSkipMask)0)
 
 /* Individual field skip masks */
-#define SKIP_BFACTORS   (1U << FIELD_BFACTORS)
+#define SKIP_BFACTORS    (1U << FIELD_BFACTORS)
+#define SKIP_CONNECTIONS (1U << FIELD_CONNECTIONS)
 
 /* SKIP_METADATA: Skip heavy atom-level fields (what load_metadata uses) */
 #define SKIP_METADATA   ((FieldSkipMask)( \
@@ -369,6 +371,49 @@ typedef uint32_t FieldSkipMask;
 static inline bool _is_field_skipped(FieldId fid, FieldSkipMask skip_mask) {
     return (skip_mask & (1U << fid)) != 0;
 }
+
+
+/* ============================================================================
+ * BLOCK SKIP MASK
+ * Bitmask for block-level pruning during parsing.
+ * ============================================================================ */
+
+/**
+ * @brief Bitmask type for required/skipped blocks.
+ *
+ * Each bit corresponds to a BlockId. Used for block-level pruning.
+ */
+typedef uint16_t BlockMask;
+
+/**
+ * @brief Compute required blocks from field skip mask.
+ *
+ * Walks the field dependency tree to determine which blocks are actually
+ * needed given the skip mask. This enables block-level pruning during parsing.
+ *
+ * @param skip_mask Bitmask of fields to skip
+ * @return Bitmask of required blocks
+ */
+BlockMask _compute_required_blocks(FieldSkipMask skip_mask);
+
+/**
+ * @brief Check if a block is required.
+ *
+ * @param bid Block identifier
+ * @param required_mask Bitmask of required blocks
+ * @return true if block is needed
+ */
+static inline bool _is_block_required(BlockId bid, BlockMask required_mask) {
+    return (required_mask & (1U << bid)) != 0;
+}
+
+/**
+ * @brief Get BlockId for a category string.
+ *
+ * @param category Category prefix (e.g., "_atom_site.")
+ * @return BlockId if found, -1 if not in registry
+ */
+int _category_to_block_id(const char *category);
 
 /**
  * @brief Convert field name string to FieldId.

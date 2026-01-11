@@ -147,17 +147,41 @@ typedef struct {
 
 
 /**
- * @brief Load an entire file into memory.
+ * @brief File buffer with memory management metadata.
  *
- * Reads the complete contents of a file into a null-terminated buffer.
- * The caller is responsible for freeing the returned buffer.
+ * Wraps a file buffer with information needed for proper cleanup.
+ * Use _free_file_buffer() to release resources.
+ */
+typedef struct {
+    char *data;       /**< Buffer contents (null-terminated) */
+    size_t size;      /**< Size of file in bytes (not including null terminator) */
+    bool is_mmap;     /**< True if buffer is mmap'd, false if malloc'd */
+} FileBuffer;
+
+/**
+ * @brief Load an entire file into memory using mmap.
+ *
+ * Uses mmap for efficient memory-mapped I/O. Only pages actually accessed
+ * are loaded from disk, enabling fast metadata-only loading when combined
+ * with early exit from block parsing.
+ *
+ * Falls back to malloc+read for page-aligned files or if mmap fails.
  *
  * @param name Path to the file to load
- * @param buffer Output pointer to allocated buffer containing file contents
+ * @param fb Output file buffer structure
  * @param ctx Error context, populated on failure
  * @return CIF_OK on success, CIF_ERR_IO or CIF_ERR_ALLOC on failure
  */
-CifError _load_file(const char *name, char **buffer, CifErrorContext *ctx);
+CifError _load_file(const char *name, FileBuffer *fb, CifErrorContext *ctx);
+
+/**
+ * @brief Free a file buffer.
+ *
+ * Handles both mmap'd and malloc'd buffers appropriately.
+ *
+ * @param fb File buffer to free (fields are zeroed)
+ */
+void _free_file_buffer(FileBuffer *fb);
 
 /**
  * @brief Advance cursor to the next line.
@@ -310,6 +334,28 @@ typedef enum {
  * @return CIF_OK on success, CIF_ERR_ALLOC on failure
  */
 CifError _scan_lines(mmBlock *block, CifErrorContext *ctx);
+
+/**
+ * @brief Find the end of a block (next section marker).
+ *
+ * Scans forward to find a line starting with '#' which marks section end.
+ *
+ * @param start Start of data section
+ * @return Pointer to '#' at start of section end line, or to '\0' if EOF
+ */
+char *_find_block_end(char *start);
+
+/**
+ * @brief Fast line count using memchr.
+ *
+ * Counts newlines between start and end pointers.
+ * Much faster than per-character scanning for large blocks.
+ *
+ * @param start Start of region
+ * @param end End of region (exclusive)
+ * @return Number of newlines found
+ */
+int _count_lines_fast(const char *start, const char *end);
 
 /**
  * @brief Pre-compute line pointers for a block.

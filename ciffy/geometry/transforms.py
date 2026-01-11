@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..backend import Array, is_torch
-from ..backend.ops import to_backend, stack, unsqueeze, sin, acos, clamp
+from ..backend.ops import to_backend, stack, unsqueeze, sin, cos, acos, clamp, cat, norm
 
 if TYPE_CHECKING:
     from ..biochemistry import Residue
@@ -113,7 +113,9 @@ def rotation_to_axis_angle(R: Array) -> Array:
         R_flat[..., 0, 2] - R_flat[..., 2, 0],
         R_flat[..., 1, 0] - R_flat[..., 0, 1],
     ], axis=-1)
-    axis = axis / (2 * sin(angles)[..., None] + 1e-8)
+    # Normalize axis directly (more stable than dividing by 2*sin(angle))
+    axis_norm = norm(axis, axis=-1, keepdims=True)
+    axis = axis / (axis_norm + 1e-8)
 
     result = axis * angles[..., None]
     result = result.reshape(*batch_shape, 3)
@@ -327,6 +329,146 @@ def se3_loss(
 
 
 # =============================================================================
+# 6D Rotation Representation
+# =============================================================================
+# The 6D rotation representation (Zhou et al., 2019) is continuous and avoids
+# singularities present in axis-angle near θ=0 and θ=π. It represents rotations
+# as the first two columns of the rotation matrix, reconstructing the third
+# via Gram-Schmidt orthonormalization.
+
+
+def rotation_matrix_to_6d(R: Array) -> Array:
+    """
+    Convert rotation matrix to 6D representation (first two columns).
+
+    Args:
+        R: (..., 3, 3) rotation matrix or matrices.
+
+    Returns:
+        (..., 6) 6D representation [col1, col2] flattened.
+    """
+    # Extract first two columns and flatten
+    col1 = R[..., :, 0]  # (..., 3)
+    col2 = R[..., :, 1]  # (..., 3)
+    return cat([col1, col2], axis=-1)
+
+
+def rotation_6d_to_matrix(r6d: Array) -> Array:
+    """
+    Convert 6D representation to rotation matrix via Gram-Schmidt.
+
+    Args:
+        r6d: (..., 6) 6D representation [a1, a2].
+
+    Returns:
+        (..., 3, 3) rotation matrix.
+    """
+    a1 = r6d[..., :3]
+    a2 = r6d[..., 3:6]
+
+    # Gram-Schmidt orthonormalization (backend-agnostic)
+    b1 = normalize(a1)
+    # Compute dot product and expand for broadcasting
+    dot_val = dot(b1, a2)
+    if r6d.ndim > 1:
+        dot_val = unsqueeze(dot_val, -1)
+    b2 = normalize(a2 - dot_val * b1)
+    b3 = cross(b1, b2)
+    return stack([b1, b2, b3], axis=-1)
+
+
+def axis_angle_to_6d(axis_angle: Array) -> Array:
+    """
+    Convert axis-angle rotation to 6D representation.
+
+    Args:
+        axis_angle: (..., 3) axis-angle rotation vectors.
+
+    Returns:
+        (..., 6) 6D rotation representation.
+    """
+    R = rodrigues(axis_angle)  # (..., 3, 3)
+    return rotation_matrix_to_6d(R)
+
+
+def rotation_6d_to_axis_angle(r6d: Array) -> Array:
+    """
+    Convert 6D rotation representation to axis-angle.
+
+    Args:
+        r6d: (..., 6) 6D rotation representation.
+
+    Returns:
+        (..., 3) axis-angle rotation vectors.
+    """
+    R = rotation_6d_to_matrix(r6d)  # (..., 3, 3)
+    return rotation_to_axis_angle(R)
+
+
+def geodesic_so3_6d(
+    pred: Array,
+    target: Array,
+    reduction: str = "mean",
+) -> Array:
+    """
+    Compute geodesic distance on SO(3) between 6D rotation representations.
+
+    Args:
+        pred: (N, 6) predicted 6D rotations.
+        target: (N, 6) target 6D rotations.
+        reduction: "mean", "sum", or "none".
+
+    Returns:
+        Geodesic distance(s) in radians.
+    """
+    R_pred = rotation_6d_to_matrix(pred)      # (N, 3, 3)
+    R_target = rotation_6d_to_matrix(target)  # (N, 3, 3)
+
+    # R_diff = R_target^T @ R_pred (transpose last two dims)
+    R_target_T = R_target.swapaxes(-1, -2) if hasattr(R_target, 'swapaxes') else np.swapaxes(R_target, -1, -2)
+    R_diff = R_target_T @ R_pred
+
+    # trace(R) = 1 + 2*cos(θ), so θ = arccos((trace - 1) / 2)
+    trace = R_diff[..., 0, 0] + R_diff[..., 1, 1] + R_diff[..., 2, 2]
+    cos_angle = (trace - 1) / 2
+    cos_angle = clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
+    angles = acos(cos_angle)
+
+    if reduction == "mean":
+        return angles.mean()
+    elif reduction == "sum":
+        return angles.sum()
+    return angles
+
+
+def se3_loss_6d(
+    pred: Array,
+    target: Array,
+    rotation_weight: float = 1.0,
+    translation_weight: float = 1.0,
+) -> Array:
+    """
+    Compute SE(3) loss for 9D transforms (6D rotation + 3D translation).
+
+    Args:
+        pred: (N, 9) predicted transforms [6D_rotation(6), translation(3)].
+        target: (N, 9) target transforms [6D_rotation(6), translation(3)].
+        rotation_weight: Weight for rotation loss.
+        translation_weight: Weight for translation loss.
+
+    Returns:
+        Scalar loss combining rotation geodesic and translation MSE.
+    """
+    pred_rot, pred_trans = pred[..., :6], pred[..., 6:]
+    target_rot, target_trans = target[..., :6], target[..., 6:]
+
+    rotation_loss = geodesic_so3_6d(pred_rot, target_rot, reduction="mean")
+    translation_loss = ((pred_trans - target_trans) ** 2).mean()
+
+    return rotation_weight * rotation_loss + translation_weight * translation_loss
+
+
+# =============================================================================
 # Residue Frame Computation
 # =============================================================================
 # These functions compute reference frames at specific atoms for residue linking.
@@ -442,18 +584,9 @@ def rigid_align(
     """
     # R_correction @ current_R = target_R
     # => R_correction = target_R @ current_R.T
-    if is_torch(coords):
-        R_correction = target_R @ current_R.T
-        rotated_origin = R_correction @ current_origin
-        t_correction = target_origin - rotated_origin
-        positioned = (R_correction @ coords.T).T + t_correction
-    else:
-        R_correction = target_R @ current_R.T
-        rotated_origin = R_correction @ current_origin
-        t_correction = target_origin - rotated_origin
-        positioned = (R_correction @ coords.T).T + t_correction
-        positioned = positioned.astype(np.float32)
-
-    return positioned
+    R_correction = target_R @ current_R.T
+    rotated_origin = R_correction @ current_origin
+    t_correction = target_origin - rotated_origin
+    return (R_correction @ coords.T).T + t_correction
 
 

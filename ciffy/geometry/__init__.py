@@ -55,6 +55,16 @@ from .transforms import (
     se3_loss,
 )
 
+# 6D rotation representation
+from .transforms import (
+    rotation_matrix_to_6d,
+    rotation_6d_to_matrix,
+    axis_angle_to_6d,
+    rotation_6d_to_axis_angle,
+    geodesic_so3_6d,
+    se3_loss_6d,
+)
+
 # Frame computation
 from .transforms import (
     extract_frame_positions,
@@ -105,6 +115,13 @@ __all__ = [
     "apply_relative_transform",
     "geodesic_so3",
     "se3_loss",
+    # 6D rotation representation
+    "rotation_matrix_to_6d",
+    "rotation_6d_to_matrix",
+    "axis_angle_to_6d",
+    "rotation_6d_to_axis_angle",
+    "geodesic_so3_6d",
+    "se3_loss_6d",
     # Frame computation
     "extract_frame_positions",
     "frame_from_positions",

@@ -9,6 +9,7 @@ import torch.nn as nn
 
 import ciffy
 from ciffy import Scale
+from ciffy.geometry import rotation_6d_to_axis_angle
 from ciffy.polymer import Polymer
 
 from .encoder import ResidueEncoder
@@ -78,6 +79,8 @@ class ResidueVAE(nn.Module):
         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
         dropout: Dropout probability.
+        rotation_repr: Rotation representation: "axis_angle" (6D output) or
+            "rotation_6d" (9D output with continuous 6D rotation).
 
     Example:
         >>> model = ResidueVAE(latent_dim=32, d_model=128)
@@ -102,8 +105,10 @@ class ResidueVAE(nn.Module):
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         dropout: float = 0.1,
+        rotation_repr: Literal["axis_angle", "rotation_6d"] = "axis_angle",
     ):
         super().__init__()
+        self.rotation_repr = rotation_repr
 
         self.encoder = ResidueEncoder(
             latent_dim=latent_dim,
@@ -123,6 +128,7 @@ class ResidueVAE(nn.Module):
             atom_dim=atom_dim,
             residue_dim=residue_dim,
             dropout=dropout,
+            rotation_repr=rotation_repr,
         )
 
     @property
@@ -222,6 +228,13 @@ class ResidueVAE(nn.Module):
 
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
         local_coords, transforms = self.decode(z, template)
+
+        # Convert 6D rotation to axis-angle for apply_local_transforms
+        if self.rotation_repr == "rotation_6d":
+            rot_6d = transforms[:, :6]
+            trans = transforms[:, 6:]
+            rot_aa = rotation_6d_to_axis_angle(rot_6d)
+            transforms = torch.cat([rot_aa, trans], dim=-1)
 
         from ciffy.biochemistry.linking import O3P_FRAME, P_FRAME
 

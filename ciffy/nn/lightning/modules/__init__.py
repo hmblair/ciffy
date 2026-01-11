@@ -1,10 +1,4 @@
-"""LightningModules for ciffy models.
-
-Note:
-    ResidueFlowModule and ConsolidatedVAEModule have been archived.
-    See archive/nn/lightning/modules/ for the old implementations.
-    Use ciffy.nn.residue.ResidueVAE for new residue-level modeling.
-"""
+"""LightningModules for ciffy models."""
 
 from .base import BaseCiffyModule
 from .vae_base import BaseVAEModule, BaseVAEModelConfig

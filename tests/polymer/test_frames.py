@@ -200,8 +200,8 @@ class TestLocalFrames:
         transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
 
         assert transforms.shape == (n_res, 6)
-        # Last transform should be zeros (no successor residue)
-        assert np.allclose(transforms[-1], 0, atol=1e-6)
+        # First transform should be zeros (first residue has no predecessor)
+        assert np.allclose(transforms[0], 0, atol=1e-6)
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_local_transforms_backend_preserved(self, backend):
@@ -250,9 +250,10 @@ class TestAppendWithFrames:
         res_type1 = Residue.from_index(p.sequence[1])
         n_atoms0 = res0.size()
 
+        # transforms[1] describes how residue 1 is positioned relative to residue 0
         built = built.append(
             res_type1.subset(res1.atoms.tolist()),
-            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[0]),
+            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[1]),
             residue=res_type1,
             # No explicit frames - uses defaults
         )
@@ -282,6 +283,7 @@ class TestAppendWithFrames:
         )
 
         # Build subsequent residues with explicit frames
+        # transforms[i] describes how residue i is positioned relative to i-1
         offset = int(counts[0])
         for i in range(1, n_res):
             n_atoms = int(counts[i])
@@ -291,7 +293,7 @@ class TestAppendWithFrames:
             built = built.append(
                 res_type.subset(res_i.atoms.tolist()),
                 LocalCoordinates(
-                    aligned.coordinates[offset : offset + n_atoms], transforms[i - 1]
+                    aligned.coordinates[offset : offset + n_atoms], transforms[i]
                 ),
                 residue=res_type,
                 source_frame=GLYCOSIDIC_FRAME,

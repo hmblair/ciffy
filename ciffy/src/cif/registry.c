@@ -1243,7 +1243,6 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
 
     int poly_idx = 0;
     int hetatm_idx = 0;
-    int current_chain = 0;
 
     for (int row = 0; row < block->size; row++) {
         /* Skip excluded atoms (from chain filter) */
@@ -1252,28 +1251,6 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
         }
 
         char *line_start = lines[row];
-
-        /* Track current chain (for HETATM chain assignment) */
-        if (chain_idx >= 0) {
-            char *chain_ptr = line_start + offsets[chain_idx];
-            while (*chain_ptr == ' ') chain_ptr++;
-            char *chain_end = chain_ptr;
-            while (*chain_end != ' ' && *chain_end != '\n' && *chain_end != '\0') chain_end++;
-            size_t chain_len = (size_t)(chain_end - chain_ptr);
-
-            if (chain_len > 0 && chain_len < MAX_INLINE_BUFFER) {
-                memcpy(chain_buf, chain_ptr, chain_len);
-                chain_buf[chain_len] = '\0';
-
-                /* Find matching chain index */
-                for (int i = 0; i < cif->chains; i++) {
-                    if (cif->names[i] && strcmp(chain_buf, cif->names[i]) == 0) {
-                        current_chain = i;
-                        break;
-                    }
-                }
-            }
-        }
 
         if (is_nonpoly[row]) {
             /* Write to HETATM arrays */
@@ -1289,7 +1266,27 @@ static CifError _batch_atom_fields_fused(mmCIF *cif, mmBlock *block,
                 BATCH_LOOKUP(hetatm->elements[hetatm_idx], elem_idx, _lookup_element, elem_buf);
             }
 
-            if (hetatm_chains) {
+            /* Track chain for HETATM atoms only */
+            if (hetatm_chains && chain_idx >= 0) {
+                char *chain_ptr = line_start + offsets[chain_idx];
+                while (*chain_ptr == ' ') chain_ptr++;
+                char *chain_end = chain_ptr;
+                while (*chain_end != ' ' && *chain_end != '\n' && *chain_end != '\0') chain_end++;
+                size_t chain_len = (size_t)(chain_end - chain_ptr);
+
+                int current_chain = 0;
+                if (chain_len > 0 && chain_len < MAX_INLINE_BUFFER) {
+                    memcpy(chain_buf, chain_ptr, chain_len);
+                    chain_buf[chain_len] = '\0';
+
+                    /* Find matching chain index */
+                    for (int i = 0; i < cif->chains; i++) {
+                        if (cif->names[i] && strcmp(chain_buf, cif->names[i]) == 0) {
+                            current_chain = i;
+                            break;
+                        }
+                    }
+                }
                 hetatm_chains[hetatm_idx] = current_chain;
             }
 

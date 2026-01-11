@@ -147,27 +147,24 @@ typedef struct {
 
 
 /**
- * @brief File buffer with memory management metadata.
+ * @brief File buffer for loaded CIF data.
  *
- * Wraps a file buffer with information needed for proper cleanup.
+ * Wraps a file buffer with size information.
  * Use _free_file_buffer() to release resources.
  */
 typedef struct {
     char *data;       /**< Buffer contents (null-terminated) */
-    size_t size;      /**< Size of file in bytes (not including null terminator) */
-    bool is_mmap;     /**< True if buffer is mmap'd, false if malloc'd */
+    size_t size;      /**< Size of data in bytes (not including null terminator) */
 } FileBuffer;
 
 /**
- * @brief Load an entire file into memory using mmap.
+ * @brief Load an entire file into memory.
  *
- * Uses mmap for efficient memory-mapped I/O. Only pages actually accessed
- * are loaded from disk, enabling fast metadata-only loading when combined
- * with early exit from block parsing.
+ * Uses zlib for transparent handling of both plain and gzip-compressed
+ * files (.cif and .cif.gz). Compressed files are automatically detected
+ * and decompressed during loading.
  *
- * Falls back to malloc+read for page-aligned files or if mmap fails.
- *
- * @param name Path to the file to load
+ * @param name Path to the file to load (.cif or .cif.gz)
  * @param fb Output file buffer structure
  * @param ctx Error context, populated on failure
  * @return CIF_OK on success, CIF_ERR_IO or CIF_ERR_ALLOC on failure
@@ -176,8 +173,6 @@ CifError _load_file(const char *name, FileBuffer *fb, CifErrorContext *ctx);
 
 /**
  * @brief Free a file buffer.
- *
- * Handles both mmap'd and malloc'd buffers appropriately.
  *
  * @param fb File buffer to free (fields are zeroed)
  */

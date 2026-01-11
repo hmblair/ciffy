@@ -9,129 +9,90 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
+#include <zlib.h>
 
-/** Maximum file size (1GB) - prevents memory exhaustion attacks */
+/** Maximum decompressed file size (1GB) - prevents memory exhaustion attacks */
 #define MAX_CIF_FILE_SIZE (1024L * 1024L * 1024L)
 
-
-/**
- * @brief Load file using traditional malloc+read.
- *
- * Fallback when mmap is not suitable (page-aligned files, mmap failure).
- */
-static CifError _load_file_malloc(int fd, size_t size, FileBuffer *fb,
-                                   CifErrorContext *ctx) {
-    char *buf = malloc(size + 1);
-    if (buf == NULL) {
-        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate %zu bytes for file", size + 1);
-        return CIF_ERR_ALLOC;
-    }
-
-    size_t total_read = 0;
-    while (total_read < size) {
-        ssize_t n = read(fd, buf + total_read, size - total_read);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to read file");
-            free(buf);
-            return CIF_ERR_IO;
-        }
-        if (n == 0) break;  /* EOF */
-        total_read += (size_t)n;
-    }
-
-    buf[size] = '\0';
-    fb->data = buf;
-    fb->size = size;
-    fb->is_mmap = false;
-    return CIF_OK;
-}
+/** Initial buffer size for reading (1MB) */
+#define INITIAL_BUFFER_SIZE (1024 * 1024)
 
 
 CifError _load_file(const char *name, FileBuffer *fb, CifErrorContext *ctx) {
     fb->data = NULL;
     fb->size = 0;
-    fb->is_mmap = false;
 
-    int fd = open(name, O_RDONLY);
-    if (fd < 0) {
+    gzFile gz = gzopen(name, "rb");
+    if (!gz) {
         CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to open file: %s", name);
         return CIF_ERR_IO;
     }
 
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to stat file: %s", name);
-        close(fd);
-        return CIF_ERR_IO;
+    /* Start with 1MB buffer, grow as needed */
+    size_t capacity = INITIAL_BUFFER_SIZE;
+    char *buf = malloc(capacity);
+    if (!buf) {
+        CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate buffer");
+        gzclose(gz);
+        return CIF_ERR_ALLOC;
     }
 
-    size_t size = (size_t)st.st_size;
+    size_t size = 0;
+    int n;
+    while ((n = gzread(gz, buf + size, (unsigned)(capacity - size - 1))) > 0) {
+        size += (size_t)n;
 
-    /* Enforce maximum file size limit */
-    if (size > MAX_CIF_FILE_SIZE) {
-        CIF_SET_ERROR(ctx, CIF_ERR_IO,
-            "File too large: %zu bytes (max %ld): %s",
-            size, MAX_CIF_FILE_SIZE, name);
-        close(fd);
-        return CIF_ERR_IO;
-    }
-
-    /* Handle empty files */
-    if (size == 0) {
-        close(fd);
-        char *buf = malloc(1);
-        if (!buf) {
-            CIF_SET_ERROR(ctx, CIF_ERR_ALLOC, "Failed to allocate buffer");
-            return CIF_ERR_ALLOC;
-        }
-        buf[0] = '\0';
-        fb->data = buf;
-        fb->size = 0;
-        fb->is_mmap = false;
-        return CIF_OK;
-    }
-
-    /* Check if file size is page-aligned (need fallback for null terminator) */
-    long page_size = sysconf(_SC_PAGESIZE);
-    bool page_aligned = (page_size > 0) && (size % (size_t)page_size == 0);
-
-    if (page_aligned) {
-        /* Page-aligned: mmap won't give us a null terminator, use malloc */
-        LOG_DEBUG("File size %zu is page-aligned, using malloc fallback", size);
-        CifError err = _load_file_malloc(fd, size, fb, ctx);
-        close(fd);
-        return err;
-    }
-
-    /* Try mmap - pages beyond file content are zero-filled by OS */
-    char *buf = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);  /* Can close fd after successful mmap */
-
-    if (buf == MAP_FAILED) {
-        /* mmap failed, fall back to malloc+read */
-        LOG_DEBUG("mmap failed, falling back to malloc");
-        fd = open(name, O_RDONLY);
-        if (fd < 0) {
-            CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to reopen file: %s", name);
+        /* Check size limit */
+        if (size > MAX_CIF_FILE_SIZE) {
+            CIF_SET_ERROR(ctx, CIF_ERR_IO,
+                "File too large: %zu bytes (max %ld): %s",
+                size, MAX_CIF_FILE_SIZE, name);
+            free(buf);
+            gzclose(gz);
             return CIF_ERR_IO;
         }
-        CifError err = _load_file_malloc(fd, size, fb, ctx);
-        close(fd);
-        return err;
+
+        /* Grow buffer if needed */
+        if (size >= capacity - 1) {
+            capacity *= 2;
+            char *new_buf = realloc(buf, capacity);
+            if (!new_buf) {
+                CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
+                    "Failed to reallocate buffer to %zu bytes", capacity);
+                free(buf);
+                gzclose(gz);
+                return CIF_ERR_ALLOC;
+            }
+            buf = new_buf;
+        }
     }
 
-    /* mmap succeeded - the byte at buf[size] is zero due to page zero-fill */
+    /* Check for read errors */
+    int err;
+    const char *err_msg = gzerror(gz, &err);
+    if (err < 0 && err != Z_STREAM_END) {
+        CIF_SET_ERROR(ctx, CIF_ERR_IO, "Failed to read file %s: %s", name, err_msg);
+        free(buf);
+        gzclose(gz);
+        return CIF_ERR_IO;
+    }
+
+    gzclose(gz);
+
+    /* Null-terminate */
+    buf[size] = '\0';
+
+    /* Shrink buffer to actual size */
+    char *final_buf = realloc(buf, size + 1);
+    if (final_buf) {
+        buf = final_buf;
+    }
+    /* If realloc fails, keep the larger buffer - not a critical error */
+
     fb->data = buf;
     fb->size = size;
-    fb->is_mmap = true;
 
-    LOG_DEBUG("Loaded file via mmap: %zu bytes", size);
+    LOG_DEBUG("Loaded file: %zu bytes", size);
     return CIF_OK;
 }
 
@@ -139,15 +100,10 @@ CifError _load_file(const char *name, FileBuffer *fb, CifErrorContext *ctx) {
 void _free_file_buffer(FileBuffer *fb) {
     if (fb->data == NULL) return;
 
-    if (fb->is_mmap) {
-        munmap(fb->data, fb->size);
-    } else {
-        free(fb->data);
-    }
+    free(fb->data);
 
     fb->data = NULL;
     fb->size = 0;
-    fb->is_mmap = false;
 }
 
 

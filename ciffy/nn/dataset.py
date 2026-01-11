@@ -200,7 +200,10 @@ class PolymerDataset(Dataset):
             directory = Path(paths)
             if not directory.is_dir():
                 raise FileNotFoundError(f"Directory not found: {directory}")
-            cif_files = sorted(directory.glob("*.cif"))
+            # Glob both .cif and .cif.gz files
+            cif_files = sorted(
+                list(directory.glob("*.cif")) + list(directory.glob("*.cif.gz"))
+            )
         else:
             # Sequence of file paths
             cif_files = sorted(Path(p) for p in paths)

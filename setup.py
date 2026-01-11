@@ -392,7 +392,7 @@ def check_openmp_available():
 
 # Build compile args
 extra_compile_args = ['-O3']
-extra_link_args = []
+extra_link_args = ['-lz']  # zlib for transparent gzip support
 
 # Enable OpenMP unless CIFFY_NO_OPENMP is set
 if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):

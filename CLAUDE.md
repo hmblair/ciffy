@@ -32,7 +32,7 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 Local RNA DB:                     /Users/hmblair/academic/data/structures/rna
 Remote RNA DB (rex gpu):          /home/hmblair/data/rna
 Remote RNA DB (rex sherlock-gpu): /scratch/users/hmblair/structures/rna
-Output dir:                       outputs/
+Output dirs:                      outputs/, figures/
 ```
 
 ### Git Safety
@@ -50,7 +50,7 @@ git worktree add ../ciffy-<feature> -b <feature>
 import ciffy
 from ciffy import Scale, Molecule, Residue
 
-polymer = ciffy.load('structure.cif')           # Load from file
+polymer = ciffy.load('structure.cif')      # Load from file
 polymer = ciffy.template('acgu')           # Create template from sequence
 polymer = ciffy.template('MGKLF')          # Protein sequence
 ```
@@ -64,7 +64,7 @@ polymer.sequence             # (R,) residue type indices
 polymer.bonds                # (B, 2) covalent bond pairs
 polymer.size()               # Total atoms
 polymer.size(Scale.RESIDUE)  # Residue count
-polymer.size(Scale.CHAIN)    # Chain count
+polymer.size(Scale.CHAIN)   # Chain count
 polymer.sequence_str()       # "acgu"
 ```
 

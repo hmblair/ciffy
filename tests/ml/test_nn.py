@@ -345,25 +345,16 @@ class TestPolymerDatasetEdgeCases:
         assert len(dataset_range) <= len(dataset_all)
 
     def test_dataset_cache(self):
-        """Dataset cache stores and returns same objects."""
+        """Dataset cache returns same chain object on repeated access."""
         from ciffy.nn import PolymerDataset
         from ciffy import Scale
 
-        # Without cache (default)
-        ds_no_cache = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
-        assert ds_no_cache._cache is None
-
-        # With cache
+        # With cache enabled, repeated access returns same object
         ds_cache = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, cache=True)
-        assert ds_cache._cache == {}
 
-        # First access populates cache
         p1 = ds_cache[0]
-        assert 0 in ds_cache._cache
-
-        # Second access returns same object
         p2 = ds_cache[0]
-        assert p1 is p2
+        assert p1 is p2  # Same object returned from cache
 
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")

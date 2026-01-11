@@ -99,9 +99,11 @@ class PolymerDataset(Dataset):
             num_workers: Deprecated, does nothing. Kept for backward compatibility.
             limit: Maximum number of samples to include. Useful for overfitting
                 tests or quick iteration. None = no limit (use all samples).
-            cache: If True, cache loaded structures in memory. Subsequent
-                accesses to the same index return the cached polymer instead
-                of reloading from disk. Default False.
+            cache: If True, cache loaded structures in memory at the file level.
+                This means accessing different chains from the same file only
+                loads the file once. Particularly effective for chain-scale
+                datasets where multiple chains come from the same structure.
+                Default False.
 
         Raises:
             ImportError: If PyTorch is not installed.
@@ -145,7 +147,11 @@ class PolymerDataset(Dataset):
         self.max_residues = max_residues
         self.backend = backend
         self.limit = limit
-        self._cache: dict[int, "Polymer"] | None = {} if cache else None
+        # Two-level cache for efficiency:
+        # - _file_cache: maps file path to full polymer (avoids redundant disk I/O)
+        # - _item_cache: maps index to extracted chain/polymer (avoids redundant extraction)
+        self._file_cache: dict[Path, "Polymer"] | None = {} if cache else None
+        self._item_cache: dict[int, "Polymer"] | None = {} if cache else None
 
         # Normalize molecule_types to tuple or None
         if molecule_types is None:
@@ -165,10 +171,6 @@ class PolymerDataset(Dataset):
         self._index: list[tuple[Path, int | None]] = []
         self._build_index(cif_files)
 
-        # Apply limit after building index
-        if self.limit is not None and len(self._index) > self.limit:
-            self._index = self._index[:self.limit]
-
     def _build_index(self, cif_files: list[Path]) -> None:
         """Build index by scanning CIF files and applying filters."""
         from ciffy import load_metadata
@@ -178,6 +180,10 @@ class PolymerDataset(Dataset):
             type_filter = {m.value for m in self.molecule_types}
 
         for path in cif_files:
+            # Early termination: stop scanning once we have enough items
+            if self.limit is not None and len(self._index) >= self.limit:
+                break
+
             try:
                 meta = load_metadata(str(path))
             except Exception as e:
@@ -196,6 +202,9 @@ class PolymerDataset(Dataset):
                 for chain_idx in range(meta["chains"]):
                     if self._chain_passes_filters(meta, chain_idx, type_filter):
                         self._index.append((path, chain_idx))
+                        # Early termination for chain scale too
+                        if self.limit is not None and len(self._index) >= self.limit:
+                            break
 
     def _file_passes_filters(self, meta: dict, type_filter: set | None) -> bool:
         """Check if a file passes molecule-level filters."""
@@ -264,16 +273,28 @@ class PolymerDataset(Dataset):
 
             Returns None instead of raising on errors to support
             DataLoader with num_workers > 0 without crashing workers.
-        """
-        # Check cache first
-        if self._cache is not None and idx in self._cache:
-            return self._cache[idx]
 
+            When cache=True, caching is done at two levels:
+            - File level: avoids redundant disk I/O for different chains from same file
+            - Item level: returns same object on repeated access to same index
+        """
         from .. import load
 
         try:
+            # Check item cache first (returns same object on repeated access)
+            if self._item_cache is not None and idx in self._item_cache:
+                return self._item_cache[idx]
+
             path, chain_idx = self._index[idx]
-            polymer = load(str(path), backend=self.backend)
+
+            # File-level caching: check if we've already loaded this file
+            if self._file_cache is not None and path in self._file_cache:
+                polymer = self._file_cache[path]
+            else:
+                polymer = load(str(path), backend=self.backend)
+                # Cache the full polymer (not the extracted chain)
+                if self._file_cache is not None:
+                    self._file_cache[path] = polymer
 
             if chain_idx is not None:
                 # Chain scale: filtering already done during indexing
@@ -282,9 +303,9 @@ class PolymerDataset(Dataset):
                 # Molecule scale: filter out non-matching chains
                 polymer = self._filter_by_molecule_type(polymer)
 
-            # Cache the result
-            if self._cache is not None:
-                self._cache[idx] = polymer
+            # Cache the final result (extracted chain or filtered polymer)
+            if self._item_cache is not None:
+                self._item_cache[idx] = polymer
 
             return polymer
 

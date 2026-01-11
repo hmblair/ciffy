@@ -469,11 +469,9 @@ c_sources = [
     'ciffy/src/cif/writer.c',
     'ciffy/src/cif/registry.c',
     'ciffy/src/cif/connections.c',
-    # Internal coordinates C extension
-    'ciffy/src/internal/geometry.c',
-    'ciffy/src/internal/batch.c',
-    'ciffy/src/internal/graph.c',
-    'ciffy/src/internal/internal_module.c',
+    # Graph operations
+    'ciffy/src/graph/graph.c',
+    'ciffy/src/graph/bindings.c',
 ]
 
 # Validate source files exist

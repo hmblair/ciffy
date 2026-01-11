@@ -10,7 +10,7 @@
 #define CIFFY_MAIN_MODULE
 #include "module.h"
 #include "log.h"
-#include "internal/internal_module.h"
+#include "graph/bindings.h"
 
 
 /**
@@ -998,13 +998,6 @@ static PyMethodDef methods[] = {
      "    IOError: If file cannot be written\n"
      "    TypeError: If arguments have wrong type\n"
      "    MemoryError: If allocation fails\n"},
-    {"_cartesian_to_internal", py_cartesian_to_internal, METH_VARARGS,
-     "Convert Cartesian coordinates to internal coordinates.\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float64 Cartesian coordinates.\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n\n"
-     "Returns:\n"
-     "    tuple: (distances, angles, dihedrals), each (M,) float64.\n"},
     {"_build_bond_graph", py_build_bond_graph, METH_VARARGS,
      "Build molecular bond graph from polymer arrays.\n\n"
      "Args:\n"
@@ -1021,18 +1014,6 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (offsets, neighbors) CSR arrays.\n"},
-    {"_cartesian_to_internal_backward", py_cartesian_to_internal_backward, METH_VARARGS,
-     "Backward pass for Cartesian to internal coordinate conversion.\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float32 Cartesian coordinates.\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices.\n"
-     "    distances (ndarray): (M,) float32 forward pass distances.\n"
-     "    angles (ndarray): (M,) float32 forward pass angles.\n"
-     "    grad_distances (ndarray): (M,) float32 upstream gradients.\n"
-     "    grad_angles (ndarray): (M,) float32 upstream gradients.\n"
-     "    grad_dihedrals (ndarray): (M,) float32 upstream gradients.\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float32 gradients for coordinates.\n"},
     {"_find_connected_components", py_find_connected_components, METH_VARARGS,
      "Find connected components in CSR graph.\n\n"
      "Args:\n"
@@ -1041,73 +1022,6 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (roots, sizes, n_components).\n"},
-    {"_nerf_reconstruct_leveled_anchored", py_nerf_reconstruct_leveled_anchored, METH_VARARGS,
-     "Level-parallel NERF reconstruction with anchor coordinates.\n\n"
-     "Places atoms in frame defined by anchor coordinates instead of canonical frame.\n"
-     "Eliminates need for post-reconstruction Kabsch rotation.\n\n"
-     "Args:\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
-     "    distances (ndarray): (M,) float32 bond lengths.\n"
-     "    angles (ndarray): (M,) float32 bond angles in radians.\n"
-     "    dihedrals (ndarray): (M,) float32 dihedral angles in radians.\n"
-     "    n_atoms (int): Total number of atoms.\n"
-     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n"
-     "    anchor_coords (ndarray): (n_components, 3, 3) float32 anchor positions.\n"
-     "    component_ids (ndarray): (M,) int32 component ID per Z-matrix entry.\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float32 Cartesian coordinates.\n"},
-    {"_nerf_reconstruct_backward_leveled_anchored", py_nerf_reconstruct_backward_leveled_anchored, METH_VARARGS,
-     "Level-parallel backward pass for anchored NERF reconstruction.\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float32 reconstructed coordinates.\n"
-     "    indices (ndarray): (M, 4) int64 Z-matrix indices (sorted by level).\n"
-     "    distances (ndarray): (M,) float32 bond lengths.\n"
-     "    angles (ndarray): (M,) float32 bond angles.\n"
-     "    dihedrals (ndarray): (M,) float32 dihedral angles.\n"
-     "    grad_coords (ndarray): (N, 3) float32 upstream gradients.\n"
-     "    level_offsets (ndarray): (n_levels+1,) int32 CSR-style offsets.\n"
-     "    anchor_coords (ndarray): (n_components, 3, 3) float32 anchor positions.\n"
-     "    component_ids (ndarray): (M,) int32 component ID per Z-matrix entry.\n\n"
-     "Returns:\n"
-     "    tuple: (grad_distances, grad_angles, grad_dihedrals).\n"},
-    {"_nerf_place_atom", py_nerf_place_atom, METH_VARARGS,
-     "Place a single atom using NERF algorithm.\n\n"
-     "Given three reference atoms and internal coordinates, computes the\n"
-     "position of a new atom using Natural Extension Reference Frame.\n\n"
-     "Args:\n"
-     "    a (ndarray): (3,) float32 dihedral reference position.\n"
-     "    b (ndarray): (3,) float32 angle reference position.\n"
-     "    c (ndarray): (3,) float32 distance reference position (bonded atom).\n"
-     "    distance (float): Bond length to new atom.\n"
-     "    angle (float): Bond angle in radians.\n"
-     "    dihedral (float): Dihedral angle in radians.\n\n"
-     "Returns:\n"
-     "    ndarray: (3,) float32 position of new atom.\n"},
-    {"_cartesian_to_internal_parent", py_cartesian_to_internal_parent, METH_VARARGS,
-     "Convert Cartesian to internal coordinates using parent array.\n\n"
-     "References are derived from parent chain:\n"
-     "  dist_ref[k] = parent[k]\n"
-     "  ang_ref[k] = parent[parent[k]]\n"
-     "  dih_ref[k] = parent[parent[parent[k]]]\n\n"
-     "Args:\n"
-     "    coords (ndarray): (N, 3) float32 Cartesian coordinates.\n"
-     "    parent (ndarray): (N,) int64 parent indices (-1 for roots).\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float32 [distance, angle, dihedral] per atom.\n"},
-    {"_nerf_reconstruct_parent", py_nerf_reconstruct_parent, METH_VARARGS,
-     "NERF reconstruction using parent array from spanning tree.\n\n"
-     "Atoms at levels 0-2 are copied from fixed_coords (required for accuracy).\n"
-     "Atoms at level 3+ are placed via NERF using parent chain references.\n\n"
-     "Args:\n"
-     "    parent (ndarray): (N,) int64 parent indices.\n"
-     "    level (ndarray): (N,) int32 depth levels.\n"
-     "    internal (ndarray): (N, 3) float32 internal coordinates.\n"
-     "    level_offsets (ndarray): (n_levels+1,) int32 CSR offsets.\n"
-     "    level_atoms (ndarray): (N,) int64 atoms sorted by level.\n"
-     "    n_levels (int): Number of levels.\n"
-     "    fixed_coords (ndarray, optional): (N, 3) float32 original coordinates.\n\n"
-     "Returns:\n"
-     "    ndarray: (N, 3) float32 reconstructed coordinates.\n"},
     {NULL, NULL, 0, NULL}
 };
 

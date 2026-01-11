@@ -857,6 +857,330 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+
+/**
+ * @brief Free all resources associated with an mmCIF struct.
+ *
+ * Used for cleanup after parallel loading when a file fails or
+ * when we need to clean up before Python conversion.
+ */
+static void _free_mmcif_resources(mmCIF *cif) {
+    if (cif->id) free(cif->id);
+    if (cif->coordinates) free(cif->coordinates);
+    if (cif->bfactors) free(cif->bfactors);
+    if (cif->types) free(cif->types);
+    if (cif->elements) free(cif->elements);
+    if (cif->is_nonpoly) free(cif->is_nonpoly);
+    if (cif->sequence) free(cif->sequence);
+    if (cif->res_per_chain) free(cif->res_per_chain);
+    if (cif->atoms_per_chain) free(cif->atoms_per_chain);
+    if (cif->atoms_per_res) free(cif->atoms_per_res);
+    if (cif->molecule_types) free(cif->molecule_types);
+    if (cif->chain_mask) free(cif->chain_mask);
+    if (cif->is_excluded) free(cif->is_excluded);
+    if (cif->connections) free(cif->connections);
+    if (cif->conn_types) free(cif->conn_types);
+    if (cif->deposit_date) free(cif->deposit_date);
+
+    /* Free HETATM data */
+    if (cif->hetatm.coords) free(cif->hetatm.coords);
+    if (cif->hetatm.elements) free(cif->hetatm.elements);
+    if (cif->hetatm.bfactors) free(cif->hetatm.bfactors);
+    if (cif->hetatm_chains) free(cif->hetatm_chains);
+
+    /* Free string arrays */
+    if (cif->names) {
+        for (int i = 0; i < cif->chains; i++) {
+            if (cif->names[i]) free(cif->names[i]);
+        }
+        free(cif->names);
+    }
+    if (cif->strands) {
+        for (int i = 0; i < cif->chains; i++) {
+            if (cif->strands[i]) free(cif->strands[i]);
+        }
+        free(cif->strands);
+    }
+    if (cif->descriptions) {
+        for (int i = 0; i < cif->chains; i++) {
+            if (cif->descriptions[i]) free(cif->descriptions[i]);
+        }
+        free(cif->descriptions);
+    }
+}
+
+
+/**
+ * @brief Load multiple mmCIF files in parallel.
+ *
+ * Releases the GIL during file I/O and parsing, allowing true parallel
+ * loading with multiple threads. Each file is parsed independently.
+ *
+ * @param self Module reference (unused)
+ * @param args Python arguments: (filenames, skip=None)
+ * @param kwargs Keyword arguments: skip
+ * @return List of dicts (one per file), with None for failed files
+ */
+static PyObject *_load_batch(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    __py_init();
+
+    static char *kwlist[] = {"filenames", "skip", NULL};
+    PyObject *py_filenames = NULL;
+    PyObject *py_skip = NULL;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|O", kwlist,
+                                      &py_filenames, &py_skip)) {
+        return NULL;
+    }
+
+    if (!PyList_Check(py_filenames)) {
+        PyErr_SetString(PyExc_TypeError, "filenames must be a list");
+        return NULL;
+    }
+
+    /* Parse skip parameter */
+    FieldSkipMask skip_mask;
+    if (_parse_skip_param(py_skip, &skip_mask) < 0) {
+        return NULL;  /* Exception already set */
+    }
+
+    Py_ssize_t n_files = PyList_Size(py_filenames);
+    if (n_files == 0) {
+        return PyList_New(0);
+    }
+
+    /* Extract all filenames as C strings (GIL held) */
+    char **filenames = calloc(n_files, sizeof(char *));
+    if (filenames == NULL) {
+        return PyErr_NoMemory();
+    }
+
+    for (Py_ssize_t i = 0; i < n_files; i++) {
+        PyObject *item = PyList_GetItem(py_filenames, i);
+        if (!PyUnicode_Check(item)) {
+            for (Py_ssize_t j = 0; j < i; j++) {
+                free(filenames[j]);
+            }
+            free(filenames);
+            PyErr_SetString(PyExc_TypeError, "all filenames must be strings");
+            return NULL;
+        }
+        const char *str = PyUnicode_AsUTF8(item);
+        if (str == NULL) {
+            for (Py_ssize_t j = 0; j < i; j++) {
+                free(filenames[j]);
+            }
+            free(filenames);
+            return NULL;
+        }
+        filenames[i] = strdup(str);
+        if (filenames[i] == NULL) {
+            for (Py_ssize_t j = 0; j < i; j++) {
+                free(filenames[j]);
+            }
+            free(filenames);
+            return PyErr_NoMemory();
+        }
+    }
+
+    /* Allocate per-file structures */
+    mmCIF *cifs = calloc(n_files, sizeof(mmCIF));
+    mmBlockList *block_lists = calloc(n_files, sizeof(mmBlockList));
+    FileBuffer *buffers = calloc(n_files, sizeof(FileBuffer));
+    CifErrorContext *contexts = calloc(n_files, sizeof(CifErrorContext));
+    int *success = calloc(n_files, sizeof(int));
+
+    if (cifs == NULL || block_lists == NULL || buffers == NULL ||
+        contexts == NULL || success == NULL) {
+        free(cifs);
+        free(block_lists);
+        free(buffers);
+        free(contexts);
+        free(success);
+        for (Py_ssize_t i = 0; i < n_files; i++) {
+            free(filenames[i]);
+        }
+        free(filenames);
+        return PyErr_NoMemory();
+    }
+
+    /* Initialize contexts */
+    for (Py_ssize_t i = 0; i < n_files; i++) {
+        contexts[i] = (CifErrorContext)CIF_ERROR_INIT;
+    }
+
+    /* Compute required blocks based on skip mask */
+    BlockMask required_blocks = _compute_required_blocks(skip_mask);
+
+    /* ================================================================
+     * PARALLEL SECTION: Release GIL and parse files with OpenMP
+     * ================================================================ */
+    Py_BEGIN_ALLOW_THREADS
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (Py_ssize_t i = 0; i < n_files; i++) {
+        CifError err;
+        const char *file = filenames[i];
+        CifErrorContext *ctx = &contexts[i];
+        FileBuffer *fb = &buffers[i];
+        mmCIF *cif = &cifs[i];
+        mmBlockList *blocks = &block_lists[i];
+
+        /* Load file into buffer */
+        err = _load_file(file, fb, ctx);
+        if (err != CIF_OK) {
+            success[i] = 0;
+            continue;
+        }
+
+        /* Parse cursor */
+        ParseCursor cursor = {.ptr = fb->data, .line = 1};
+
+        /* Extract PDB ID */
+        cif->id = _get_id(&cursor, ctx);
+        if (cif->id == NULL) {
+            _free_file_buffer(fb);
+            success[i] = 0;
+            continue;
+        }
+        _next_block(&cursor);
+
+        /* Parse blocks */
+        BlockMask found_blocks = 0;
+        int parse_ok = 1;
+
+        while (*cursor.ptr != '\0') {
+            int block_id = _peek_block_id(&cursor);
+
+            if (block_id >= 0 && _is_block_required((BlockId)block_id, required_blocks)) {
+                mmBlock block = _read_block(&cursor, ctx);
+                if (block.category == NULL) {
+                    parse_ok = 0;
+                    break;
+                }
+                _store_or_free_block(&block, blocks);
+                found_blocks |= (1U << block_id);
+
+                if (found_blocks == required_blocks) {
+                    break;
+                }
+            } else if (block_id >= 0) {
+                _skip_current_block(&cursor);
+            } else {
+                mmBlock block = _read_block(&cursor, ctx);
+                if (block.category == NULL) {
+                    parse_ok = 0;
+                    break;
+                }
+                _store_or_free_block(&block, blocks);
+            }
+        }
+
+        if (!parse_ok) {
+            free(cif->id);
+            cif->id = NULL;
+            _free_block_list(blocks);
+            _free_file_buffer(fb);
+            success[i] = 0;
+            continue;
+        }
+
+        /* Fill mmCIF structure */
+        err = _fill_cif(cif, blocks, skip_mask, NULL, ctx);
+        if (err != CIF_OK) {
+            _free_mmcif_resources(cif);
+            memset(cif, 0, sizeof(mmCIF));
+            _free_block_list(blocks);
+            _free_file_buffer(fb);
+            success[i] = 0;
+            continue;
+        }
+
+        /* Clean up intermediate data */
+        _free_file_buffer(fb);
+        _free_block_list(blocks);
+
+        success[i] = 1;
+    }
+
+    Py_END_ALLOW_THREADS
+    /* ================================================================
+     * END PARALLEL SECTION: GIL reacquired
+     * ================================================================ */
+
+    /* Convert successful results to Python (sequential, GIL held) */
+    PyObject *result_list = PyList_New(n_files);
+    if (result_list == NULL) {
+        /* Cleanup all on failure */
+        for (Py_ssize_t i = 0; i < n_files; i++) {
+            if (success[i]) {
+                _free_mmcif_resources(&cifs[i]);
+            }
+            free(filenames[i]);
+        }
+        free(filenames);
+        free(cifs);
+        free(block_lists);
+        free(buffers);
+        free(contexts);
+        free(success);
+        return NULL;
+    }
+
+    for (Py_ssize_t i = 0; i < n_files; i++) {
+        if (success[i]) {
+            /* Convert C struct to Python dict */
+            /* Note: _c_to_py consumes/steals the arrays (they become numpy-owned) */
+            PyObject *dict = _c_to_py(cifs[i]);
+            if (dict == NULL) {
+                /* Cleanup remaining successful cifs */
+                for (Py_ssize_t j = i + 1; j < n_files; j++) {
+                    if (success[j]) {
+                        _free_mmcif_resources(&cifs[j]);
+                    }
+                }
+                Py_DECREF(result_list);
+                for (Py_ssize_t j = 0; j < n_files; j++) {
+                    free(filenames[j]);
+                }
+                free(filenames);
+                free(cifs);
+                free(block_lists);
+                free(buffers);
+                free(contexts);
+                free(success);
+                return NULL;
+            }
+            PyList_SET_ITEM(result_list, i, dict);  /* Steals reference */
+        } else {
+            Py_INCREF(Py_None);
+            PyList_SET_ITEM(result_list, i, Py_None);
+        }
+    }
+
+    /* Final cleanup */
+    for (Py_ssize_t i = 0; i < n_files; i++) {
+        free(filenames[i]);
+    }
+    free(filenames);
+    free(cifs);
+    free(block_lists);
+    free(buffers);
+    free(contexts);
+    free(success);
+
+    return result_list;
+}
+
+
 /**
  * @brief Save molecular structure data to an mmCIF file.
  *
@@ -1012,6 +1336,15 @@ static PyMethodDef methods[] = {
      "    ValueError: If file format is invalid\n"
      "    KeyError: If required attributes are missing\n"
      "    MemoryError: If allocation fails\n"},
+    {"_load_batch", (PyCFunction)_load_batch, METH_VARARGS | METH_KEYWORDS,
+     "Load multiple mmCIF files in parallel.\n\n"
+     "Releases the GIL during file I/O and parsing for true parallel loading.\n"
+     "Uses OpenMP threads when available.\n\n"
+     "Args:\n"
+     "    filenames (list[str]): List of file paths to load\n"
+     "    skip (str|list): Fields to skip (e.g., 'metadata')\n\n"
+     "Returns:\n"
+     "    list[dict|None]: List of dicts (same format as _load), with None for failures\n"},
     {"_save", _save, METH_VARARGS,
      "Save molecular structure data to an mmCIF file.\n\n"
      "Args:\n"

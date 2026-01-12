@@ -470,8 +470,19 @@ class AdaLNTransformerBlock(nn.Module):
     fixed normalization. This is the key innovation from DiT for diffusion.
 
     Architecture:
-        x = x + Attention(AdaLN(x, cond))
-        x = x + SwiGLU(AdaLN(x, cond))
+        x = x + layer_scale * Attention(AdaLN(x, cond))
+        x = x + layer_scale * SwiGLU(AdaLN(x, cond))
+
+    Args:
+        d_model: Model dimension.
+        cond_dim: Conditioning vector dimension.
+        num_heads: Number of attention heads.
+        d_ff: Feedforward hidden dimension (default: auto-computed for SwiGLU).
+        dropout: Dropout probability.
+        max_seq_len: Maximum sequence length for RoPE.
+        qk_norm: Whether to apply QK-Norm for training stability.
+        layer_scale_init: Initial value for layer scale parameters. If None,
+            layer scale is disabled. Typical values: 1e-4 to 1e-6.
     """
 
     def __init__(
@@ -482,14 +493,23 @@ class AdaLNTransformerBlock(nn.Module):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
         max_seq_len: int = 2048,
+        qk_norm: bool = False,
+        layer_scale_init: Optional[float] = None,
     ):
         super().__init__()
 
         self.adaln1 = AdaLN(d_model, cond_dim)
         self.adaln2 = AdaLN(d_model, cond_dim)
-        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope=True, qk_norm=qk_norm)
         self.ffn = SwiGLU(d_model, d_ff, dropout)
         self.dropout = nn.Dropout(dropout)
+
+        if layer_scale_init is not None:
+            self.gamma_1 = nn.Parameter(torch.full((d_model,), layer_scale_init))
+            self.gamma_2 = nn.Parameter(torch.full((d_model,), layer_scale_init))
+        else:
+            self.gamma_1 = None
+            self.gamma_2 = None
 
     def forward(
         self,
@@ -507,8 +527,15 @@ class AdaLNTransformerBlock(nn.Module):
         Returns:
             Output tensor (batch, seq, d_model).
         """
-        x = x + self.dropout(self.attn(self.adaln1(x, cond), mask=mask))
-        x = x + self.dropout(self.ffn(self.adaln2(x, cond)))
+        attn_out = self.dropout(self.attn(self.adaln1(x, cond), mask=mask))
+        ffn_out = self.dropout(self.ffn(self.adaln2(x, cond)))
+
+        if self.gamma_1 is not None:
+            attn_out = self.gamma_1 * attn_out
+            ffn_out = self.gamma_2 * ffn_out
+
+        x = x + attn_out
+        x = x + ffn_out
         return x
 
 
@@ -527,6 +554,9 @@ class AdaLNTransformer(nn.Module):
         d_ff: Feedforward hidden dimension (default: auto-computed for SwiGLU).
         dropout: Dropout probability.
         max_seq_len: Maximum sequence length for RoPE.
+        qk_norm: Whether to apply QK-Norm for training stability.
+        layer_scale_init: Initial value for layer scale parameters. If None,
+            layer scale is disabled. Typical values: 1e-4 to 1e-6.
 
     Example:
         >>> model = AdaLNTransformer(d_model=256, cond_dim=256, num_layers=4, num_heads=8)
@@ -544,6 +574,8 @@ class AdaLNTransformer(nn.Module):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
         max_seq_len: int = 2048,
+        qk_norm: bool = False,
+        layer_scale_init: Optional[float] = None,
     ):
         super().__init__()
 
@@ -553,7 +585,9 @@ class AdaLNTransformer(nn.Module):
         self.num_heads = num_heads
 
         self.layers = nn.ModuleList([
-            AdaLNTransformerBlock(d_model, cond_dim, num_heads, d_ff, dropout, max_seq_len)
+            AdaLNTransformerBlock(
+                d_model, cond_dim, num_heads, d_ff, dropout, max_seq_len, qk_norm, layer_scale_init
+            )
             for _ in range(num_layers)
         ])
         # Final norm also uses AdaLN for consistency

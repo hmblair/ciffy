@@ -36,12 +36,7 @@ from .pairformer import (
     OuterProductMean,
     PairToSingleAttention,
 )
-from .causal import (
-    CausalTransformer,
-    CausalTransformerBlock,
-    CausalMultiHeadAttention,
-    create_causal_mask,
-)
+from .causal import CausalTransformer, create_causal_mask
 
 __all__ = [
     # Embedding
@@ -67,7 +62,5 @@ __all__ = [
     "PairToSingleAttention",
     # Causal (autoregressive) components
     "CausalTransformer",
-    "CausalTransformerBlock",
-    "CausalMultiHeadAttention",
     "create_causal_mask",
 ]

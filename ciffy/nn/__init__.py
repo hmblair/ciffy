@@ -52,9 +52,7 @@ from .dataset import PolymerDataset
 
 # Layers
 from .layers import (
-    CausalMultiHeadAttention,
     CausalTransformer,
-    CausalTransformerBlock,
     MLP,
     MultiHeadAttention,
     PolymerEmbedding,
@@ -176,8 +174,6 @@ __all__ = [
     "RotaryPositionEmbedding",
     "SwiGLU",
     "CausalTransformer",
-    "CausalTransformerBlock",
-    "CausalMultiHeadAttention",
     "create_causal_mask",
     # Config
     "BaseConfig",

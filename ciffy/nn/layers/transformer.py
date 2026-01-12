@@ -257,6 +257,8 @@ class MultiHeadAttention(nn.Module):
         qk_norm: Whether to apply RMSNorm to queries and keys before the dot
             product. Improves training stability by preventing attention logit
             explosion. From ViT-22B (Dehghani et al., 2023).
+        is_causal: Whether to apply causal (autoregressive) masking. Each position
+            can only attend to itself and previous positions.
     """
 
     def __init__(
@@ -267,6 +269,7 @@ class MultiHeadAttention(nn.Module):
         max_seq_len: int = 2048,
         use_rope: bool = True,
         qk_norm: bool = False,
+        is_causal: bool = False,
     ):
         super().__init__()
 
@@ -278,6 +281,7 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = d_model // num_heads
         self.use_rope = use_rope
         self.qk_norm = qk_norm
+        self.is_causal = is_causal
 
         self.qkv_proj = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
@@ -381,16 +385,37 @@ class MultiHeadAttention(nn.Module):
             else:
                 combined_mask = attn_bias
 
+        # Add causal mask if needed
+        if self.is_causal and combined_mask is not None:
+            # Create causal mask and combine with existing mask
+            causal = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+            causal_mask = causal.float().masked_fill(causal, float("-inf"))
+            combined_mask = combined_mask + causal_mask
+
         if hasattr(F, "scaled_dot_product_attention"):
-            out = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=combined_mask,
-                dropout_p=self.dropout.p if self.training else 0.0,
-            )
+            # Use efficient is_causal=True when no other masks are present
+            if self.is_causal and combined_mask is None:
+                out = F.scaled_dot_product_attention(
+                    q, k, v,
+                    dropout_p=self.dropout.p if self.training else 0.0,
+                    is_causal=True,
+                )
+            else:
+                out = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=combined_mask,
+                    dropout_p=self.dropout.p if self.training else 0.0,
+                )
         else:
             scale = self.head_dim ** -0.5
             attn = torch.matmul(q, k.transpose(-2, -1)) * scale
-            if combined_mask is not None:
+
+            # Apply causal mask for manual implementation
+            if self.is_causal and combined_mask is None:
+                causal = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+                attn = attn.masked_fill(causal, float("-inf"))
+            elif combined_mask is not None:
                 attn = attn + combined_mask
+
             attn = F.softmax(attn, dim=-1)
             attn = self.dropout(attn)
             out = torch.matmul(attn, v)
@@ -417,6 +442,7 @@ class TransformerBlock(nn.Module):
         qk_norm: Whether to apply QK-Norm for training stability.
         layer_scale_init: Initial value for layer scale parameters. If None,
             layer scale is disabled. Typical values: 1e-4 to 1e-6. From CaiT/DeiT-III.
+        is_causal: Whether to apply causal (autoregressive) masking.
     """
 
     def __init__(
@@ -429,12 +455,13 @@ class TransformerBlock(nn.Module):
         use_rope: bool = True,
         qk_norm: bool = False,
         layer_scale_init: Optional[float] = None,
+        is_causal: bool = False,
     ):
         super().__init__()
 
         self.norm1 = RMSNorm(d_model)
         self.norm2 = RMSNorm(d_model)
-        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope, qk_norm)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope, qk_norm, is_causal)
         self.ffn = SwiGLU(d_model, d_ff, dropout)
         self.dropout = nn.Dropout(dropout)
 
@@ -634,6 +661,8 @@ class Transformer(nn.Module):
             for large models or when experiencing NaN issues.
         layer_scale_init: Initial value for layer scale parameters. If None,
             layer scale is disabled. Typical values: 1e-4 to 1e-6. From CaiT/DeiT-III.
+        is_causal: Whether to apply causal (autoregressive) masking. Each position
+            can only attend to itself and previous positions.
 
     Example:
         >>> model = Transformer(d_model=256, num_layers=4, num_heads=8)
@@ -644,6 +673,10 @@ class Transformer(nn.Module):
         >>> model = Transformer(d_model=256, num_layers=4, num_heads=8, use_rope=False)
         >>> attn_bias = torch.randn(2, 8, 100, 100)  # distance-based bias
         >>> out = model(x, attn_bias=attn_bias)
+        >>>
+        >>> # Causal (autoregressive) transformer
+        >>> model = Transformer(d_model=256, num_layers=4, num_heads=8, is_causal=True)
+        >>> out = model(x)  # Each position only sees previous positions
     """
 
     def __init__(
@@ -657,6 +690,7 @@ class Transformer(nn.Module):
         use_rope: bool = True,
         qk_norm: bool = False,
         layer_scale_init: Optional[float] = None,
+        is_causal: bool = False,
     ):
         super().__init__()
 
@@ -666,7 +700,7 @@ class Transformer(nn.Module):
 
         self.layers = nn.ModuleList([
             TransformerBlock(
-                d_model, num_heads, d_ff, dropout, max_seq_len, use_rope, qk_norm, layer_scale_init
+                d_model, num_heads, d_ff, dropout, max_seq_len, use_rope, qk_norm, layer_scale_init, is_causal
             )
             for _ in range(num_layers)
         ])

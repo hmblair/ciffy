@@ -8,7 +8,6 @@ import torch.nn as nn
 from ciffy import Scale
 from ciffy.geometry import normalize_quaternion
 from ciffy.nn import PolymerEmbedding
-from ciffy.nn.layers.mlp import MLP
 from ciffy.nn.layers.transformer import RMSNorm
 from ciffy.polymer import Polymer
 
@@ -89,13 +88,13 @@ class ResidueDecoder(nn.Module):
         coord_layers.append(nn.Linear(d_model, 3))
         self.coord_head = nn.Sequential(*coord_layers)
 
-        # Transform decoder (residue-level) with deeper residual blocks
+        # Transform decoder (residue-level) - simple MLP like coordinate decoder
         self.residue_embedding = PolymerEmbedding(
             scale=Scale.RESIDUE,
             residue_dim=d_model // 4,
         )
 
-        # Input projection
+        # Transform decoder projection
         self.transform_proj = nn.Sequential(
             nn.Linear(latent_dim + self.residue_embedding.output_dim, d_model),
             RMSNorm(d_model),
@@ -103,17 +102,17 @@ class ResidueDecoder(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # Residual blocks (4 blocks for deeper transform prediction)
-        n_transform_blocks = 4
-        self.transform_blocks = nn.ModuleList([
-            MLP(d_model, d_model, residual=True, dropout=dropout) for _ in range(n_transform_blocks)
-        ])
-
-        # Output head (7D: quaternion (4) + translation (3))
-        self.transform_head = nn.Sequential(
-            RMSNorm(d_model),
-            nn.Linear(d_model, 7),
-        )
+        # MLP decoder for transforms (same structure as coordinate decoder)
+        transform_layers = []
+        for _ in range(n_layers - 1):
+            transform_layers.extend([
+                nn.Linear(d_model, d_model),
+                RMSNorm(d_model),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+            ])
+        transform_layers.append(nn.Linear(d_model, 7))  # 7D: quaternion (4) + translation (3)
+        self.transform_head = nn.Sequential(*transform_layers)
 
     def forward(
         self,
@@ -141,12 +140,10 @@ class ResidueDecoder(nn.Module):
         x = self.coord_decoder_proj(x)
         coords = self.coord_head(x)
 
-        # Decode transforms with residual blocks
+        # Decode transforms
         res_emb = self.residue_embedding(polymer)
         t = torch.cat([z, res_emb], dim=-1)
         t = self.transform_proj(t)
-        for block in self.transform_blocks:
-            t = block(t)
         raw_transforms = self.transform_head(t)
 
         # Normalize quaternion to unit length and canonical form (w >= 0)

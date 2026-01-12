@@ -40,6 +40,7 @@ class PolymerEmbedding(nn.Module):
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         element_dim: int | None = None,
+        dropout: float = 0.0,
     ):
         """
         Initialize embedding layers.
@@ -51,6 +52,7 @@ class PolymerEmbedding(nn.Module):
             atom_dim: Embedding dimension for atom types (requires scale=ATOM).
             residue_dim: Embedding dimension for residue types.
             element_dim: Embedding dimension for element types (requires scale=ATOM).
+            dropout: Dropout probability applied to the concatenated embeddings.
 
         Raises:
             ImportError: If PyTorch is not installed.
@@ -102,6 +104,8 @@ class PolymerEmbedding(nn.Module):
             self.element_embedding = nn.Embedding(NUM_ELEMENTS, element_dim)
         else:
             self.element_embedding = None
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
 
     @property
     def output_dim(self) -> int:
@@ -186,4 +190,9 @@ class PolymerEmbedding(nn.Module):
             elem_idx = self._validate_indices(polymer.elements, NUM_ELEMENTS, "element")
             embeddings.append(self.element_embedding(elem_idx))
 
-        return torch.cat(embeddings, dim=-1)
+        out = torch.cat(embeddings, dim=-1)
+
+        if self.dropout is not None:
+            out = self.dropout(out)
+
+        return out

@@ -70,6 +70,7 @@ class IndexedData:
     atom_index: dict[tuple[str, str], int]  # (cif_name, atom_name) -> atom index
     atom_dihedral_type: np.ndarray  # atom index -> dihedral type
     atom_dihedral_refs: np.ndarray  # atom index -> reference atoms
+    backbone_values: dict[str, int]  # backbone atom name -> unified value
 
 
 @dataclass
@@ -151,16 +152,13 @@ def _build_indices(data: LoadedData) -> IndexedData:
     dihedral ownership and backbone atom arrays.
 
     Atom indexing uses a two-phase algorithm:
-    1. Backbone atoms get unified values (1-17) shared across all residue types
-    2. Sidechain/base atoms get unique values (18+) per residue type
+    1. Backbone atoms get unified values (1+) shared across all residue types
+       Values are assigned in CCD order (first residue containing each atom)
+    2. Sidechain/base atoms get unique values per residue type
 
     This enables robustness to modified residues with standard backbones.
     """
-    from .config import (
-        UNIFIED_BACKBONE_VALUES,
-        NUM_UNIFIED_BACKBONE,
-        is_backbone_atom,
-    )
+    from .config import is_backbone_atom
 
     residues = data.residues
 
@@ -176,20 +174,29 @@ def _build_indices(data: LoadedData) -> IndexedData:
     # Phase B: Sidechain/base atoms get unique values (per residue)
     atom_index: dict[tuple[str, str], int] = {}
 
-    # Phase A: Assign backbone atoms their unified values
-    backbone_count = 0
+    # Phase A: Assign backbone atoms in CCD order (first occurrence determines value)
+    backbone_values: dict[str, int] = {}  # atom_name -> unified value
+    current_backbone_idx = 1
+
     for res in residues:
         primary_cif = res.cif_names[0]
-        for atom in res.atoms:
+        for atom in res.atoms:  # CCD order
             if is_backbone_atom(atom, res.molecule_type):
+                # Assign unified value if this backbone atom hasn't been seen yet
+                if atom not in backbone_values:
+                    backbone_values[atom] = current_backbone_idx
+                    current_backbone_idx += 1
+                # Add to atom_index
                 key = (primary_cif, atom)
                 if key not in atom_index:
-                    atom_index[key] = UNIFIED_BACKBONE_VALUES[atom]
-                    backbone_count += 1
+                    atom_index[key] = backbone_values[atom]
+
+    num_backbone = len(backbone_values)
+    print(f"Assigned {num_backbone} unified backbone atoms (CCD order)")
 
     # Phase B: Assign sidechain/base atoms
     # Modified residues inherit atom indices from their parent where atom names match
-    current_idx = NUM_UNIFIED_BACKBONE + 1
+    current_idx = num_backbone + 1
     sidechain_count = 0
     inherited_count = 0
 
@@ -236,7 +243,7 @@ def _build_indices(data: LoadedData) -> IndexedData:
                 if alias_key not in atom_index:
                     atom_index[alias_key] = atom_index[primary_key]
 
-    print(f"Assigned {NUM_UNIFIED_BACKBONE} unified backbone + {sidechain_count} sidechain atoms")
+    print(f"Assigned {num_backbone} unified backbone + {sidechain_count} sidechain atoms")
     print(f"Inherited {inherited_count} atoms from parent residues")
     print(f"Total: {len(atom_index)} entries (backbone + inherited atoms shared)")
 
@@ -252,6 +259,7 @@ def _build_indices(data: LoadedData) -> IndexedData:
         atom_index=atom_index,
         atom_dihedral_type=atom_dihedral_type,
         atom_dihedral_refs=atom_dihedral_refs,
+        backbone_values=backbone_values,
     )
 
 
@@ -285,6 +293,7 @@ def _generate_files(
         indices.atom_index,
         indices.residue_to_cif,
         data.elements,
+        indices.backbone_values,
     )
     generate_bond_patterns_header(paths.internal_dir, data.residues, indices.atom_index)
 
@@ -293,7 +302,7 @@ def _generate_files(
     generate_python_elements(paths.biochem_dir, data.elements)
     generate_dihedral_arrays(paths.biochem_dir, data.residues, indices.atom_index)
     generate_python_dihedraltypes(paths.biochem_dir)
-    generate_python_atoms(paths.biochem_dir, indices.atom_index, data.residues)
+    generate_python_atoms(paths.biochem_dir, indices.atom_index, data.residues, indices.backbone_values)
     generate_python_residues(paths.biochem_dir, data.residues)
 
     # Generate linking geometry constants from MonomerLibrary

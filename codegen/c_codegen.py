@@ -205,13 +205,16 @@ def generate_reverse_header(
     atom_index: dict[tuple[str, str], int],
     residue_to_cif: dict[int, str],
     elements: dict[str, int],
+    backbone_values: dict[str, int],
 ) -> None:
     """Generate reverse.h for CIF writing."""
-    from .config import UNIFIED_BACKBONE_NAMES, NUM_UNIFIED_BACKBONE
+    # Build reverse mapping for backbone atoms: value -> name
+    backbone_names = {v: k for k, v in backbone_values.items()}
+    num_backbone = len(backbone_values)
 
     # Build reverse mappings
-    # Note: For backbone atoms (1-17), multiple (res, atom) pairs map to the same index.
-    # We use UNIFIED_BACKBONE_NAMES for those, with NULL residue.
+    # Note: For backbone atoms, multiple (res, atom) pairs map to the same index.
+    # We use backbone_names for those, with NULL residue.
     atoms = {idx: (res, atom) for (res, atom), idx in atom_index.items()}
     elements_reverse = {v: k for k, v in elements.items()}
     molecule_types = {i: mt.entity_poly_type for i, mt in enumerate(MOLECULE_TYPES)
@@ -292,9 +295,9 @@ def generate_reverse_header(
     ])
 
     for i in range(atom_max):
-        if i in UNIFIED_BACKBONE_NAMES:
+        if i in backbone_names:
             # Backbone atoms (shared across residues)
-            atom_str = UNIFIED_BACKBONE_NAMES[i]
+            atom_str = backbone_names[i]
             lines.append(f'    [{i}] = "{atom_str}",')
         elif i in atoms:
             # Sidechain/base atoms (may be shared via parent inheritance)

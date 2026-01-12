@@ -282,11 +282,13 @@ def generate_python_atoms(
     biochem_dir: Path,
     atom_index: dict[tuple[str, str], int],
     all_residues: list[ResidueDefinition],
+    backbone_values: dict[str, int],
 ) -> None:
     """Generate Python atom data for new AtomGroup system.
 
     Generates loader functions for lazy loading of atom data.
     Each loader returns (atoms_dict, ideal_coords, bonds) when called.
+    Also generates UNIFIED_BACKBONE_VALUES for runtime use.
     """
 
     # Build per-residue atom dicts
@@ -314,7 +316,26 @@ def generate_python_atoms(
         'from .atom import Atom',
         '',
         '',
+        '# ' + '=' * 77,
+        '# UNIFIED BACKBONE VALUES',
+        '# ' + '=' * 77,
+        '# Backbone atoms have unified values shared across all residue types.',
+        '# Values are auto-assigned in CCD order (first residue containing each atom).',
+        '',
+        'UNIFIED_BACKBONE_VALUES: dict[str, int] = {',
     ]
+
+    # Generate backbone values dict (sorted by value for readability)
+    for atom_name, value in sorted(backbone_values.items(), key=lambda x: x[1]):
+        lines.append(f'    "{atom_name}": {value},')
+
+    lines.extend([
+        '}',
+        '',
+        f'NUM_UNIFIED_BACKBONE: int = {len(backbone_values)}',
+        '',
+        '',
+    ])
 
     # Generate per-residue loader functions
     sections = [

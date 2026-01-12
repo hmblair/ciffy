@@ -193,71 +193,35 @@ Entity 5's name spans multiple lines. Currently, `_scan_lines()` in `io.c` skips
 
 ## LOW Priority
 
-### Structured AtomGroup Access by Molecule Type
+### ~~Structured AtomGroup Access by Molecule Type~~ (DONE)
 
-**Goal**: Provide intuitive access to atom groups organized by molecule type and chemical role.
-
-**Context**: Currently accessing atoms is awkward:
+Implemented in `ciffy/biochemistry/groups.py`. Access via:
 ```python
-# Current - must go through specific residue type
-Residue.A.O3p  # Works, but what about "all O3' atoms"?
-Residue.A.N9   # Glycosidic N for adenine
-Residue.C.N1   # Glycosidic N for cytosine - different!
+from ciffy.biochemistry import RNA, DNA, Protein
+
+RNA.Backbone.P           # Atom(P, 2) - unified value
+RNA.Backbone.C1p         # Atom(C1', 13)
+RNA.Base.glycosidic_n    # AtomGroup with {A: N9, G: N9, C: N1, U: N1}
+RNA.Base.glycosidic_n.A  # Atom(N9, 18)
+Protein.Backbone.CA      # Atom(CA, 15)
 ```
-
-**Proposed API**:
-```python
-from ciffy import RNA, Protein
-
-# Backbone - unified values, single int
-RNA.Backbone.P       # → 1 (same for all residues)
-RNA.Backbone.O3p     # → 10
-
-# Sugar - unified values
-RNA.Sugar.C1p        # → 13
-RNA.Sugar.ring       # → AtomGroup with C1'-C4', O4'
-
-# Base - aggregated across residue types
-RNA.Base.glycosidic_n  # → AtomGroup with [A.N9, G.N9, C.N1, U.N1]
-
-# Usage with bonded_distances
-polymer.bonded_distances(RNA.Sugar.C1p, RNA.Base.glycosidic_n)
-```
-
-**Key insight**: Backbone atoms already have unified values. Only base atoms need aggregation via AtomGroup.
-
-**Systematic derivation**:
-- Backbone/Sugar: Use existing `BACKBONE_ATOMS_NUCLEIC` from config.py
-- Glycosidic N: Derive from `PURINE_RESIDUES`/`PYRIMIDINE_RESIDUES` + dihedral definitions (N9 vs N1)
-- Base atoms: Per-residue CCD atoms minus backbone atoms
-
-**Files affected**:
-- `ciffy/biochemistry/groups.py` (new) - Define `RNA`, `Protein` classes with hierarchical AtomGroups
-- `ciffy/__init__.py` - Export `RNA`, `Protein`
-- `codegen/` - May need to generate some groupings automatically
 
 ---
 
-### Auto-generate Backbone Atom Values in Codegen
+### ~~Auto-generate Backbone Atom Values in Codegen~~ (DONE)
 
-**Goal**: Remove hardcoded integer values from `UNIFIED_BACKBONE_VALUES` and let codegen assign them automatically.
+Backbone atom values are now auto-generated from CCD order during codegen, exactly like non-backbone atoms:
+- `codegen/__init__.py` `_build_indices()` assigns backbone values as atoms are encountered
+- Values exported to `ciffy/biochemistry/_generated_atoms.py` as `UNIFIED_BACKBONE_VALUES`
+- Config only defines *which* atoms are backbone (name sets), not their values
 
-**Context**: Currently `codegen/config.py` has:
+New CCD-based ordering:
 ```python
-UNIFIED_BACKBONE_VALUES = {"P": 1, "OP1": 2, "OP2": 3, ...}  # Hardcoded values
+# OP3=1, P=2, OP1=3, OP2=4, O5'=5, C5'=6, C4'=7, O4'=8, C3'=9, O3'=10, C2'=11, O2'=12, C1'=13
+# N=14, CA=15, C=16, O=17
 ```
 
-The atom *names* being hardcoded is fine (defines which atoms are backbone), but the integer *values* should be auto-assigned by codegen, just like base/sidechain atoms are.
-
-**Design principle**:
-- Config defines: which atoms are backbone (names only)
-- Codegen decides: what values they get (backbone = shared across residues, base = per-residue)
-
-**Files affected**:
-- `codegen/config.py` - Remove `UNIFIED_BACKBONE_VALUES`, keep `BACKBONE_ATOMS_NUCLEIC`/`BACKBONE_ATOMS_PROTEIN` as name sets
-- `codegen/__init__.py` - Modify `_build_indices()` to auto-assign backbone values
-
-**Breaking change**: If auto-assigned values differ from current ones, saved model checkpoints with atom embeddings would break. May need to preserve current ordering.
+Note: This is a breaking change from the old hardcoded ordering (P=1, OP1=2, ...).
 
 ---
 

@@ -9,7 +9,7 @@
  */
 
 #include "graph.h"
-#include "bond_patterns.h"
+#include "../internal/bond_patterns.h"
 #include <stdlib.h>
 #include <string.h>
 

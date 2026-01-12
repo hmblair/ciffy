@@ -418,34 +418,10 @@ TERMINAL_ATOMS: dict[int, tuple[frozenset[str], frozenset[str]]] = {
     Molecule.CYCLIC_PEPTIDE: (frozenset({'H2', 'H3'}), frozenset({'OXT', 'HXT'})),
 }
 
-# Unified backbone atom values (1-indexed, 0 = unknown)
-# Order: nucleic acid backbone first, then protein backbone
-UNIFIED_BACKBONE_VALUES: dict[str, int] = {
-    # Nucleic acid backbone (1-13)
-    "P": 1,
-    "OP1": 2,
-    "OP2": 3,
-    "OP3": 4,
-    "O5'": 5,
-    "C5'": 6,
-    "C4'": 7,
-    "O4'": 8,
-    "C3'": 9,
-    "O3'": 10,
-    "C2'": 11,
-    "O2'": 12,
-    "C1'": 13,
-    # Protein backbone (14-17)
-    "N": 14,
-    "CA": 15,
-    "C": 16,
-    "O": 17,
-}
-
-NUM_UNIFIED_BACKBONE: int = len(UNIFIED_BACKBONE_VALUES)
-
-# Reverse mapping: value -> name
-UNIFIED_BACKBONE_NAMES: dict[int, str] = {v: k for k, v in UNIFIED_BACKBONE_VALUES.items()}
+# Note: UNIFIED_BACKBONE_VALUES is now auto-generated during codegen
+# based on CCD atom order, just like non-backbone atoms.
+# See codegen/__init__.py _build_indices() for the generation logic.
+# The generated values are exported to ciffy/biochemistry/_generated_atoms.py
 
 
 def is_backbone_atom(atom_name: str, molecule_type: int) -> bool:

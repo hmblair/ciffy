@@ -63,6 +63,9 @@ from .constants import (
     PyrimidineBase,
 )
 
+# Molecule-type namespaces for structured access
+from .groups import RNA, DNA, Protein
+
 # Canonical residue lists
 from .constants import CANONICAL_ALL
 
@@ -118,6 +121,10 @@ __all__ = [
     "PurinePyrimidine",
     "PurineBase",
     "PyrimidineBase",
+    # Molecule-type namespaces
+    "RNA",
+    "DNA",
+    "Protein",
     # Canonical residue lists
     "CANONICAL_ALL",
     # Van der Waals radii

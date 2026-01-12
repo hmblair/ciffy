@@ -291,6 +291,7 @@ embed = PolymerEmbedding(
     atom_dim=64,      # Atom type embedding
     residue_dim=32,   # Residue type (expanded to atoms)
     element_dim=16,   # Element type embedding
+    dropout=0.1,      # Optional dropout on output
 )
 features = embed(polymer)  # (num_atoms, 112)
 

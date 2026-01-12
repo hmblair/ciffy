@@ -11,6 +11,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
+    from ..polymer.base import Metadata
     from ..biochemistry import Molecule
 
 from ..polymer import Field
@@ -167,7 +168,7 @@ def _load_multiple(
     results = _load_batch(file_strs)
 
     # Convert dicts to Polymers
-    polymers = []
+    polymers: list[Polymer | None] = []
     for data in results:
         if data is None:
             polymers.append(None)
@@ -463,7 +464,7 @@ def _load_metadata_multiple(files: Sequence[str | Path]) -> List[dict | None]:
     results = _load_batch(file_strs, skip='metadata')
 
     # Process each result
-    metas = []
+    metas: list[Metadata | None] = []
     for data in results:
         if data is None:
             metas.append(None)

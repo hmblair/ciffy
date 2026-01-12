@@ -422,14 +422,6 @@ def _rmsd_polymer(
 # Unified RMSD interface using singledispatch
 # =============================================================================
 
-# Type stubs for static type checking
-@overload
-def rmsd(a: Array, b: Array, scale: None = None, eps: float = 0.0) -> Array: ...
-
-@overload
-def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None, eps: float = 0.0) -> Array: ...
-
-
 @singledispatch
 def _rmsd_dispatch(a, b, scale=None, eps=0.0):
     """Internal singledispatch for rmsd."""
@@ -463,6 +455,14 @@ def _ensure_polymer_registered():
     from ..polymer import Polymer
     _rmsd_dispatch.register(Polymer, _rmsd_polymer)
     _polymer_registered = True
+
+
+# Type stubs for static type checking (must be directly before implementation)
+@overload
+def rmsd(a: Array, b: Array, scale: None = None, eps: float = 0.0) -> Array: ...
+
+@overload
+def rmsd(a: "Polymer", b: "Polymer", scale: "Scale | None" = None, eps: float = 0.0) -> Array: ...
 
 
 def rmsd(
@@ -968,7 +968,7 @@ def _build_exclusion_mask(
 
     # Build adjacency list (CSR-like)
     # neighbors[i] = list of atoms bonded to i
-    neighbors = [[] for _ in range(n_atoms)]
+    neighbors: list[list[int]] = [[] for _ in range(n_atoms)]
     for i, j in bonds_np:
         neighbors[i].append(j)
         neighbors[j].append(i)

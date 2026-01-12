@@ -719,7 +719,7 @@ class AtomContainer:
         self,
         device: "str | torch.device | None" = None,
         dtype: "torch.dtype | None" = None,
-    ) -> "AtomContainer":
+    ) -> AtomContainer:
         """
         Move tensors to device and/or convert dtype (torch backend only).
 

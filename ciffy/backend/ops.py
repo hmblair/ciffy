@@ -8,6 +8,8 @@ if/else, while complex operations use a dispatch table to numpy_ops/torch_ops.
 
 from __future__ import annotations
 
+import types
+
 import numpy as np
 
 from .core import get_backend, is_torch, Backend, Array
@@ -42,7 +44,7 @@ def _check_backends(*arrays: Array) -> None:
 # Dispatch Table
 # =============================================================================
 
-def _get_ops(arr: Array):
+def _get_ops(arr: Array) -> "types.ModuleType":
     """Get the appropriate ops module for the array's backend."""
     if get_backend(arr) == Backend.TORCH:
         from . import torch_ops

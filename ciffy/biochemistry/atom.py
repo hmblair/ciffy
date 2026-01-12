@@ -99,6 +99,9 @@ class Atom(int):
     """
 
     # Note: int subclasses can't use __slots__, attributes stored in __dict__
+    # Type annotations for mypy (attributes are set in __new__)
+    name: str
+    local: int
 
     def __new__(cls, name: str, value: int, local: int = 0) -> Atom:
         """Create a new Atom instance.
@@ -692,7 +695,7 @@ class AtomGroup:
         if terminals is None:
             return self
 
-        exclude = set()
+        exclude: set[Atom] = set()
         if not start:
             exclude |= terminals[0]
         if not end:

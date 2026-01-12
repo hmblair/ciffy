@@ -80,9 +80,12 @@ from . import visualize
 
 # Optional submodules (require additional dependencies)
 # nn and flow require PyTorch and are not included in the PyPI distribution
+import types as _types
+nn: "_types.ModuleType | None"
+flow: "_types.ModuleType | None"
 try:
-    from . import nn
-    from . import flow
+    from . import nn as nn
+    from . import flow as flow
 except ImportError:
     nn = None
     flow = None

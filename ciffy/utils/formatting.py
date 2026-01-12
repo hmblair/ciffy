@@ -195,7 +195,7 @@ def format_multi_polymer_table(
         lines.append(sep)
 
     # Build summary by molecule type
-    type_stats = defaultdict(lambda: {'chains': 0, 'res': 0, 'atoms': 0})
+    type_stats: dict[str, dict[str, int]] = defaultdict(lambda: {'chains': 0, 'res': 0, 'atoms': 0})
     for r in all_rows:
         # Normalize type name (e.g., "MG ION" -> "ION")
         type_name = r['type']

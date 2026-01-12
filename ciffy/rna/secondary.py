@@ -243,7 +243,7 @@ def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
 
     # Each residue can only be in one base pair - keep longest range pairs
     # Count how many pairs each residue participates in
-    paired = {}  # residue -> (partner, distance)
+    paired: dict[int, tuple[int, int]] = {}  # residue -> (partner, distance)
     for i, j in unique_pairs:
         dist = j - i
         # For position i, keep pair with largest distance

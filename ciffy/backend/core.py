@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     import torch
 
 # Try to import torch for isinstance checks (more reliable than duck-typing)
+import types as _types
+_torch: "_types.ModuleType | None"
 try:
     import torch as _torch
     _TORCH_AVAILABLE = True
@@ -213,7 +215,7 @@ _NUMPY_DTYPES = {
 }
 
 
-def _get_torch_dtypes():
+def _get_torch_dtypes() -> dict[Dtype, "torch.dtype"]:
     """Lazy initialization of torch dtype mapping."""
     import torch
     return {

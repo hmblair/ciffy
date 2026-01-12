@@ -119,27 +119,30 @@ class PolymerEmbedding(nn.Module):
             dim += self.element_dim
         return dim
 
-    def _validate_indices(
+    def _validate_and_raise(
         self,
         indices: torch.Tensor,
         max_idx: int,
         name: str,
-    ) -> torch.Tensor:
+    ) -> None:
         """
-        Validate and clamp embedding indices.
+        Validate indices and raise detailed error if invalid.
+
+        Called only when an embedding error occurs, to provide a helpful
+        error message. This avoids GPU sync on the happy path.
 
         Args:
             indices: Tensor of indices to validate.
             max_idx: Maximum valid index (vocabulary size).
             name: Name of the index type for error messages.
 
-        Returns:
-            Clamped indices tensor (invalid indices mapped to 0).
-
         Raises:
             IndexError: If any indices exceed the vocabulary size.
         """
-        # Check for out-of-bounds indices
+        # Force sync to surface any pending CUDA errors
+        if indices.is_cuda:
+            torch.cuda.synchronize()
+
         invalid_mask = indices >= max_idx
         if invalid_mask.any():
             invalid_indices = indices[invalid_mask].unique().tolist()
@@ -151,8 +154,41 @@ class PolymerEmbedding(nn.Module):
                 f"This may indicate corrupted data or unsupported atom/residue types."
             )
 
-        # Clamp -1 (unknown) to 0
-        return indices.clamp(min=0)
+    def _embed(
+        self,
+        embedding: nn.Embedding,
+        indices: torch.Tensor,
+        max_idx: int,
+        name: str,
+    ) -> torch.Tensor:
+        """
+        Embed indices with lazy validation.
+
+        Clamps indices and performs embedding lookup. If an error occurs,
+        validates indices to provide a detailed error message.
+
+        Args:
+            embedding: The embedding layer.
+            indices: Raw indices (may contain -1 for unknown).
+            max_idx: Maximum valid index for validation.
+            name: Name of the index type for error messages.
+
+        Returns:
+            Embedded tensor.
+
+        Raises:
+            IndexError: If any indices exceed the vocabulary size.
+        """
+        # Clamp -1 (unknown) to 0, but leave upper bound unclamped
+        # so out-of-bounds indices still fail
+        clamped = indices.clamp(min=0)
+
+        try:
+            return embedding(clamped)
+        except (IndexError, RuntimeError):
+            # Embedding failed - validate original indices for detailed error
+            self._validate_and_raise(indices, max_idx, name)
+            raise  # Re-raise if validation didn't find the issue
 
     def forward(self, polymer: Polymer) -> torch.Tensor:
         """
@@ -171,24 +207,29 @@ class PolymerEmbedding(nn.Module):
 
         Note:
             Unknown indices (-1) are mapped to index 0 (unknown/padding).
+            Validation is lazy - indices are only checked if an error occurs,
+            avoiding GPU sync overhead on the happy path.
         """
         embeddings = []
 
         if self.atom_embedding is not None:
-            atom_idx = self._validate_indices(polymer.atoms, NUM_ATOMS, "atom")
-            embeddings.append(self.atom_embedding(atom_idx))
+            embeddings.append(
+                self._embed(self.atom_embedding, polymer.atoms, NUM_ATOMS, "atom")
+            )
 
         if self.residue_embedding is not None:
-            res_idx = self._validate_indices(polymer.sequence, NUM_RESIDUES, "residue")
-            res_emb = self.residue_embedding(res_idx)
+            res_emb = self._embed(
+                self.residue_embedding, polymer.sequence, NUM_RESIDUES, "residue"
+            )
             if self.scale == Scale.ATOM:
                 # Expand to atom level
                 res_emb = polymer.expand(res_emb, Scale.RESIDUE)
             embeddings.append(res_emb)
 
         if self.element_embedding is not None:
-            elem_idx = self._validate_indices(polymer.elements, NUM_ELEMENTS, "element")
-            embeddings.append(self.element_embedding(elem_idx))
+            embeddings.append(
+                self._embed(self.element_embedding, polymer.elements, NUM_ELEMENTS, "element")
+            )
 
         out = torch.cat(embeddings, dim=-1)
 

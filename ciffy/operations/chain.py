@@ -12,10 +12,9 @@ from typing import TYPE_CHECKING
 
 from ..backend import ops
 from ..biochemistry import Scale
-from ..polymer import Field
 
 if TYPE_CHECKING:
-    from ..polymer import Polymer
+    from ..polymer import Polymer, Field
 
 
 def _validate_same_backend(*polymers: "Polymer") -> str:
@@ -67,7 +66,7 @@ def join(*polymers: "Polymer") -> "Polymer":
         >>> combined.size(ciffy.CHAIN)
         2
     """
-    from ..polymer import Polymer
+    from ..polymer import Polymer, Field
 
     if not polymers:
         raise ValueError("join() requires at least one polymer")

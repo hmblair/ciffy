@@ -128,13 +128,14 @@ def precompute_targets(
 
             # THEN align coordinates to GLYCOSIDIC_FRAME for encoding
             try:
-                aligned, _ = polymer.align(frame=GLYCOSIDIC_FRAME)
+                aligned, _ = polymer.align_to_frame(frame=GLYCOSIDIC_FRAME)
             except Exception:
                 n_errors += 1
                 continue
 
             cached.append({
                 'polymer': aligned,
+                'original': polymer,  # Keep original for comparison
                 'target_coords': aligned.coordinates,
                 'transforms': transforms,
             })

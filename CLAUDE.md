@@ -92,13 +92,36 @@ polymer.expand(features, Scale.RESIDUE)    # Residue → atom features
 
 ```python
 polymer.center()               # Center coordinates
-polymer.pairwise_distances()   # Distance matrix
-polymer.knn(k=16)              # K-nearest neighbors
-polymer.bonded_distances(Residue.A.O3p, Residue.A.P)  # Distances between bonded atom types
 polymer.numpy() / polymer.torch()
 polymer.to('cuda')
 polymer.write('output.cif')
 ```
+
+### Operations Module
+
+Analysis functions live in `ciffy.operations`. Import what you need:
+
+```python
+from ciffy import operations
+
+# Geometry analysis
+dists = operations.pairwise_distances(polymer)        # Distance matrix
+neighbors = operations.knn(polymer, k=16)             # K-nearest neighbors
+adj = operations.adjacency(polymer)                   # Adjacency matrix from bonds
+bond_dists = operations.bonded_distances(polymer, Residue.A.O3p, Residue.A.P)
+
+# Frame operations (for ML pipelines)
+aligned, Rs = operations.align_to_frame(polymer)      # Align residues to local frames
+transforms = operations.local_transforms(polymer, O3P_FRAME, P_FRAME)  # Inter-residue SE(3)
+assembled = operations.apply_local_transforms(polymer, transforms, O3P_FRAME, P_FRAME)
+
+# Structure comparison
+rmsd_val = ciffy.rmsd(polymer1, polymer2)             # Kabsch-aligned RMSD
+tm = ciffy.tm_score(polymer1, polymer2)               # TM-score
+lddt_val = ciffy.lddt(polymer1, polymer2)             # lDDT
+```
+
+Note: Many operations are also available as Polymer methods for convenience, but the operations module is the canonical location.
 
 ### Structured Atom Access
 

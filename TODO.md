@@ -74,6 +74,37 @@ class MaskedPCAFlow(PCAFlow):
 
 ## MEDIUM Priority
 
+### Remove Deprecated Polymer Methods (API Cleanup)
+
+**Goal**: Remove deprecated methods from Polymer class that now live in the operations module.
+
+**Context**: As part of the API refactoring (commit forthcoming), analysis methods were moved from Polymer to `ciffy.operations`. The old methods remain on Polymer with deprecation warnings for backward compatibility.
+
+**Methods to remove from Polymer**:
+- `pairwise_distances()` → `operations.pairwise_distances(polymer)`
+- `knn()` → `operations.knn(polymer, k)`
+- `adjacency()` → `operations.adjacency(polymer)`
+- `bonded_distances()` → `operations.bonded_distances(polymer, ...)`
+- `pca()` → `operations.pca(polymer, scale)`
+- `moment()` → `operations.moment(polymer, n, scale)`
+- `frames()` → `operations.frames(polymer)`
+- `align()` → `operations.align_to_frame(polymer)` (renamed to `align_to_frame()`)
+- `unalign()` → `operations.unalign(polymer, Rs, origins)`
+- `local_transforms()` → `operations.local_transforms(polymer, ...)`
+- `apply_local_transforms()` → `operations.apply_local_transforms(polymer, ...)`
+- `gather()` → `operations.gather(polymer, groups)`
+- `sort_atoms()` → `operations.sort_atoms(polymer)`
+
+**Timeline**: Remove after 1-2 minor versions to give users time to migrate.
+
+**Files affected**:
+- `ciffy/polymer/polymer.py` - Remove deprecated method wrappers (~100 lines)
+
+**Effort**: 1 hour
+**Impact**: Cleaner API, smaller Polymer class
+
+---
+
 ### Consolidate Residue Extraction Code
 
 **Goal**: Reduce duplication between `ciffy/operations/extract.py` and `ciffy/nn/flow/residue/data.py`.

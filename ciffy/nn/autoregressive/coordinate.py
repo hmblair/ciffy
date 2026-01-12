@@ -223,7 +223,7 @@ class CoordinateARModel(nn.Module if TORCH_AVAILABLE else object):
         counts = polymer.counts(Scale.RESIDUE)  # (R,)
 
         # Align to local frames
-        aligned, Rs = polymer.align()  # Rs: (R, 3, 3)
+        aligned, Rs = polymer.align_to_frame()  # Rs: (R, 3, 3)
 
         # Get frame origins (C1' positions for glycosidic frame)
         origin_atom = GLYCOSIDIC_FRAME.origin

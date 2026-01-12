@@ -184,6 +184,9 @@ class Polymer(AtomContainer):
         """
         Compute local coordinate frames for each residue.
 
+        .. deprecated::
+            Use `ciffy.operations.frames(polymer, frame)` instead.
+
         Args:
             frame: FrameDefinition specifying origin, axis_ref, and plane_ref.
                 Defaults to GLYCOSIDIC_FRAME (C1' origin, Z toward N9/N1).
@@ -203,13 +206,20 @@ class Polymer(AtomContainer):
             >>> # frames[i, :4] is quaternion rotation for residue i
             >>> # frames[i, 4:] is origin position for residue i
         """
+        import warnings
+        warnings.warn(
+            "Polymer.frames() is deprecated. "
+            "Use ciffy.operations.frames(polymer, frame) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from ..geometry.transforms import rotation_matrix_to_quaternion
 
         origins, Rs = self._compute_frame_matrices(frame)
         quaternions = rotation_matrix_to_quaternion(Rs)
         return ops.cat([quaternions, origins], axis=1)
 
-    def align(
+    def align_to_frame(
         self: Polymer,
         frame: "FrameDefinition | None" = None,
         *,
@@ -221,6 +231,10 @@ class Polymer(AtomContainer):
         This is the GLOBAL FRAME paradigm - it puts each residue in a consistent
         local frame independent of global position. Use for per-residue analysis
         and ML models that operate on individual residues.
+
+        .. deprecated::
+            This method is deprecated. Use `ciffy.operations.align_to_frame(polymer)`
+            instead for the functional API.
 
         Args:
             frame: FrameDefinition specifying origin, axis_ref, and plane_ref
@@ -246,12 +260,12 @@ class Polymer(AtomContainer):
             ValueError: If required frame atoms are missing from any residue.
 
         Example:
-            >>> # Basic usage (backward compatible)
-            >>> aligned, Rs = polymer.strip().align()
+            >>> # Basic usage
+            >>> aligned, Rs = polymer.strip().align_to_frame()
             >>> # Rs[i] is the rotation matrix for residue i
 
             >>> # Full usage with origins for unalign()
-            >>> aligned, Rs, origins = polymer.align(return_origins=True)
+            >>> aligned, Rs, origins = polymer.align_to_frame(return_origins=True)
             >>> restored = aligned.unalign(Rs, origins)
             >>> ciffy.rmsd(restored, polymer) < 0.001  # True
         """
@@ -272,6 +286,28 @@ class Polymer(AtomContainer):
             return aligned_polymer, Rs, origins
         return aligned_polymer, Rs
 
+    def align(
+        self: Polymer,
+        frame: "FrameDefinition | None" = None,
+        *,
+        return_origins: bool = False,
+    ) -> "tuple[Polymer, Array] | tuple[Polymer, Array, Array]":
+        """
+        Deprecated: Use align_to_frame() instead.
+
+        This method aligns residues to local coordinate frames.
+        Note: ciffy.align() (Kabsch alignment of two polymers) is unchanged.
+        """
+        import warnings
+        warnings.warn(
+            "Polymer.align() is deprecated. Use Polymer.align_to_frame() or "
+            "ciffy.operations.align_to_frame(polymer) instead. "
+            "Note: ciffy.align() (Kabsch alignment of two polymers) is unchanged.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.align_to_frame(frame, return_origins=return_origins)
+
     def unalign(
         self: Polymer,
         Rs: Array,
@@ -279,6 +315,9 @@ class Polymer(AtomContainer):
     ) -> Polymer:
         """
         Reverse the alignment operation: restore residues to their original positions.
+
+        .. deprecated::
+            Use `ciffy.operations.unalign(polymer, Rs, origins)` instead.
 
         This is the inverse of align(). Takes a polymer with local-frame coordinates
         (each residue centered at origin) and restores the original global positions.
@@ -303,6 +342,13 @@ class Polymer(AtomContainer):
             The origins encode where each residue's frame was located.
             Both are required to fully reverse the alignment.
         """
+        import warnings
+        warnings.warn(
+            "Polymer.unalign() is deprecated. "
+            "Use ciffy.operations.unalign(polymer, Rs, origins) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         n_residues = self.size(Scale.RESIDUE)
         if Rs.shape[0] != n_residues:
             raise ValueError(
@@ -335,6 +381,9 @@ class Polymer(AtomContainer):
         """
         Compute inter-residue SE(3) transforms using specified source and target frames.
 
+        .. deprecated::
+            Use `ciffy.operations.local_transforms(polymer, source_frame, target_frame)` instead.
+
         This is the LOCAL FRAME paradigm - each transform[i] describes how residue i
         is positioned relative to residue i-1. Use for chain reconstruction and
         backbone sampling.
@@ -355,8 +404,8 @@ class Polymer(AtomContainer):
             TypeError: If source_frame or target_frame is None (fail-fast).
 
         Common Frame Pairs:
-            - GLYCOSIDIC→GLYCOSIDIC: For ML models (same frame, canonical orientation)
-            - O3P_FRAME→P_FRAME: For physical backbone modeling (actual bond geometry)
+            - GLYCOSIDIC->GLYCOSIDIC: For ML models (same frame, canonical orientation)
+            - O3P_FRAME->P_FRAME: For physical backbone modeling (actual bond geometry)
 
         Example:
             >>> from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, O3P_FRAME, P_FRAME
@@ -377,6 +426,13 @@ class Polymer(AtomContainer):
             >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
             >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
         """
+        import warnings
+        warnings.warn(
+            "Polymer.local_transforms() is deprecated. "
+            "Use ciffy.operations.local_transforms(polymer, source_frame, target_frame) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from ..geometry.transforms import rotation_matrix_to_quaternion
 
         # Fail-fast: require both frames
@@ -529,6 +585,9 @@ class Polymer(AtomContainer):
         """
         Chain residues together using inter-residue transforms.
 
+        .. deprecated::
+            Use `ciffy.operations.apply_local_transforms(polymer, transforms, source_frame, target_frame)` instead.
+
         This is the LOCAL FRAME paradigm - takes a polymer with LOCAL coordinates
         (each residue in its own frame, typically aligned to target_frame) and
         chains them using the transforms.
@@ -563,6 +622,13 @@ class Polymer(AtomContainer):
             >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
             >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
         """
+        import warnings
+        warnings.warn(
+            "Polymer.apply_local_transforms() is deprecated. "
+            "Use ciffy.operations.apply_local_transforms(polymer, transforms, source_frame, target_frame) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from ..geometry.transforms import (
             apply_relative_transform,
             extract_frame_positions,
@@ -631,6 +697,9 @@ class Polymer(AtomContainer):
         """
         Sort atoms within each residue by atom type enum value.
 
+        .. deprecated::
+            Use `ciffy.operations.sort_atoms(polymer)` instead.
+
         This creates a canonical atom ordering that is consistent regardless
         of the original CIF file ordering. Useful for ensuring training and
         inference use the same atom order.
@@ -647,6 +716,13 @@ class Polymer(AtomContainer):
             ...     res = canonical.residue(i)
             ...     # atoms are now in sorted order
         """
+        import warnings
+        warnings.warn(
+            "Polymer.sort_atoms() is deprecated. "
+            "Use ciffy.operations.sort_atoms(polymer) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from ..backend.ops import argsort
         from ..biochemistry import Atom
 
@@ -714,6 +790,9 @@ class Polymer(AtomContainer):
         """
         Symmetric adjacency matrix of the bond graph.
 
+        .. deprecated::
+            Use `ciffy.operations.adjacency(polymer, dtype)` instead.
+
         Args:
             dtype: Data type for the matrix ('bool', 'float32', 'int32').
 
@@ -722,9 +801,16 @@ class Polymer(AtomContainer):
             i and j are bonded.
 
         Note:
-            This is O(N²) memory. For large structures, use bonds
+            This is O(N^2) memory. For large structures, use polymer.bonds
             property directly or CSR representation.
         """
+        import warnings
+        warnings.warn(
+            "Polymer.adjacency() is deprecated. "
+            "Use ciffy.operations.adjacency(polymer, dtype) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         n_atoms = self.size()
         bonds = self.bonds
 
@@ -955,6 +1041,9 @@ class Polymer(AtomContainer):
         """
         Gather coordinates for specific atoms from each residue.
 
+        .. deprecated::
+            Use `ciffy.operations.gather(polymer, groups)` instead.
+
         For each atom group, finds the matching atom in each residue and
         returns their coordinates. Useful for extracting frame atoms.
 
@@ -972,6 +1061,13 @@ class Polymer(AtomContainer):
             >>> from ciffy.biochemistry.constants import Sugar, PurineBase
             >>> positions = polymer.gather([Sugar.C1p, PurineBase.N9, PurineBase.C4])
         """
+        import warnings
+        warnings.warn(
+            "Polymer.gather() is deprecated. "
+            "Use ciffy.operations.gather(polymer, groups) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         n_groups = len(groups)
         n_residues = self.size(Scale.RESIDUE)
         membership = self.membership(Scale.RESIDUE)
@@ -1066,6 +1162,9 @@ class Polymer(AtomContainer):
         """
         Compute pairwise distances.
 
+        .. deprecated::
+            Use `ciffy.operations.pairwise_distances(polymer, scale)` instead.
+
         If scale is provided, computes distances between centroids
         at that scale. Otherwise, computes atom-atom distances.
 
@@ -1075,6 +1174,13 @@ class Polymer(AtomContainer):
         Returns:
             Pairwise distance matrix.
         """
+        import warnings
+        warnings.warn(
+            "Polymer.pairwise_distances() is deprecated. "
+            "Use ciffy.operations.pairwise_distances(polymer, scale) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if scale is None or scale == Scale.ATOM:
             coords = self.coordinates
         else:
@@ -1089,6 +1195,9 @@ class Polymer(AtomContainer):
     ) -> Array:
         """
         Get distances between bonded atoms of specified types.
+
+        .. deprecated::
+            Use `ciffy.operations.bonded_distances(polymer, atom1, atom2)` instead.
 
         Finds all covalent bonds where one atom matches `atom1` and the other
         matches `atom2`, then computes the Euclidean distance for each pair.
@@ -1112,6 +1221,13 @@ class Polymer(AtomContainer):
             >>> p_values = np.array([Residue.A.P, Residue.G.P])
             >>> polymer.bonded_distances(o3p_values, p_values)
         """
+        import warnings
+        warnings.warn(
+            "Polymer.bonded_distances() is deprecated. "
+            "Use ciffy.operations.bonded_distances(polymer, atom1, atom2) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Get bonds and atom types
         bonds = self.bonds  # (B, 2) array of atom indices
         atoms = self.atoms  # (N,) array of atom type values
@@ -1154,6 +1270,9 @@ class Polymer(AtomContainer):
         """
         Find k-nearest neighbors at the specified scale.
 
+        .. deprecated::
+            Use `ciffy.operations.knn(polymer, k, scale)` instead.
+
         Args:
             k: Number of neighbors per point (excluding self).
             scale: Scale at which to compute (ATOM, RESIDUE, CHAIN).
@@ -1170,6 +1289,13 @@ class Polymer(AtomContainer):
             >>> dst = neighbors.flatten()
             >>> edge_index = torch.stack([src, dst])
         """
+        import warnings
+        warnings.warn(
+            "Polymer.knn() is deprecated. "
+            "Use ciffy.operations.knn(polymer, k, scale) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Compute pairwise distances at the given scale
         if scale == Scale.ATOM:
             dists = self.pairwise_distances()
@@ -1213,6 +1339,9 @@ class Polymer(AtomContainer):
         """
         Align structure to principal axes at the specified scale.
 
+        .. deprecated::
+            Use `ciffy.operations.pca(polymer, scale)` instead.
+
         Centers the structure and rotates it so that the covariance
         matrix is diagonal. Signs are chosen so that the largest
         two third moments are positive.
@@ -1223,6 +1352,13 @@ class Polymer(AtomContainer):
         Returns:
             Tuple of (aligned polymer, rotation matrices Q).
         """
+        import warnings
+        warnings.warn(
+            "Polymer.pca() is deprecated. "
+            "Use ciffy.operations.pca(polymer, scale) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         aligned, _ = self.center(scale)
         _, Q = aligned._pc(scale)
 
@@ -1249,6 +1385,9 @@ class Polymer(AtomContainer):
         """
         Compute the n-th moment of coordinates at a scale.
 
+        .. deprecated::
+            Use `ciffy.operations.moment(polymer, n, scale)` instead.
+
         Args:
             n: Moment order (1=mean, 2=variance, 3=skewness).
             scale: Scale at which to compute.
@@ -1256,6 +1395,13 @@ class Polymer(AtomContainer):
         Returns:
             Moment tensor with one value per scale unit per dimension.
         """
+        import warnings
+        warnings.warn(
+            "Polymer.moment() is deprecated. "
+            "Use ciffy.operations.moment(polymer, n, scale) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.reduce(self.coordinates ** n, scale)
 
     # ─────────────────────────────────────────────────────────────────────────

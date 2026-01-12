@@ -225,7 +225,7 @@ class SwiGLU(nn.Module):
         super().__init__()
 
         if d_ff is None:
-            d_ff = int(4 * d_model * 2 / 3)
+            d_ff = 4 * d_model
             d_ff = ((d_ff + 63) // 64) * 64  # Round to multiple of 64
 
         self.d_ff = d_ff
@@ -404,8 +404,8 @@ class TransformerBlock(nn.Module):
     Pre-LN Transformer block with RMSNorm, optional RoPE, and SwiGLU.
 
     Architecture:
-        x = x + Attention(RMSNorm(x))
-        x = x + SwiGLU(RMSNorm(x))
+        x = x + layer_scale * Attention(RMSNorm(x))
+        x = x + layer_scale * SwiGLU(RMSNorm(x))
 
     Args:
         d_model: Model dimension.
@@ -415,6 +415,8 @@ class TransformerBlock(nn.Module):
         max_seq_len: Maximum sequence length for RoPE.
         use_rope: Whether to use Rotary Position Embeddings.
         qk_norm: Whether to apply QK-Norm for training stability.
+        layer_scale_init: Initial value for layer scale parameters. If None,
+            layer scale is disabled. Typical values: 1e-4 to 1e-6. From CaiT/DeiT-III.
     """
 
     def __init__(
@@ -426,6 +428,7 @@ class TransformerBlock(nn.Module):
         max_seq_len: int = 2048,
         use_rope: bool = True,
         qk_norm: bool = False,
+        layer_scale_init: Optional[float] = None,
     ):
         super().__init__()
 
@@ -435,14 +438,28 @@ class TransformerBlock(nn.Module):
         self.ffn = SwiGLU(d_model, d_ff, dropout)
         self.dropout = nn.Dropout(dropout)
 
+        if layer_scale_init is not None:
+            self.gamma_1 = nn.Parameter(torch.full((d_model,), layer_scale_init))
+            self.gamma_2 = nn.Parameter(torch.full((d_model,), layer_scale_init))
+        else:
+            self.gamma_1 = None
+            self.gamma_2 = None
+
     def forward(
         self,
         x: "torch.Tensor",
         mask: Optional["torch.Tensor"] = None,
         attn_bias: Optional["torch.Tensor"] = None,
     ) -> "torch.Tensor":
-        x = x + self.dropout(self.attn(self.norm1(x), mask=mask, attn_bias=attn_bias))
-        x = x + self.dropout(self.ffn(self.norm2(x)))
+        attn_out = self.dropout(self.attn(self.norm1(x), mask=mask, attn_bias=attn_bias))
+        ffn_out = self.dropout(self.ffn(self.norm2(x)))
+
+        if self.gamma_1 is not None:
+            attn_out = self.gamma_1 * attn_out
+            ffn_out = self.gamma_2 * ffn_out
+
+        x = x + attn_out
+        x = x + ffn_out
         return x
 
 
@@ -581,6 +598,8 @@ class Transformer(nn.Module):
             when using custom attention biases (e.g., distance-based).
         qk_norm: Whether to apply QK-Norm for training stability. Recommended
             for large models or when experiencing NaN issues.
+        layer_scale_init: Initial value for layer scale parameters. If None,
+            layer scale is disabled. Typical values: 1e-4 to 1e-6. From CaiT/DeiT-III.
 
     Example:
         >>> model = Transformer(d_model=256, num_layers=4, num_heads=8)
@@ -603,6 +622,7 @@ class Transformer(nn.Module):
         max_seq_len: int = 2048,
         use_rope: bool = True,
         qk_norm: bool = False,
+        layer_scale_init: Optional[float] = None,
     ):
         super().__init__()
 
@@ -611,7 +631,9 @@ class Transformer(nn.Module):
         self.num_heads = num_heads
 
         self.layers = nn.ModuleList([
-            TransformerBlock(d_model, num_heads, d_ff, dropout, max_seq_len, use_rope, qk_norm)
+            TransformerBlock(
+                d_model, num_heads, d_ff, dropout, max_seq_len, use_rope, qk_norm, layer_scale_init
+            )
             for _ in range(num_layers)
         ])
         self.final_norm = RMSNorm(d_model)

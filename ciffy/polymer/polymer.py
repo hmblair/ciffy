@@ -1521,14 +1521,23 @@ class Polymer(AtomContainer):
             >>> else:
             ...     stripped = polymer.strip()  # Safe to use
         """
+        from ciffy.backend import ops
+
         resolved = self.resolved()
-        in_gap = False
-        for i in range(len(resolved)):
-            if resolved[i] and in_gap:
-                return True  # Found: resolved -> unresolved -> resolved
-            elif not resolved[i] and not in_gap and i > 0 and resolved[i - 1]:
-                in_gap = True
-        return False
+        if len(resolved) == 0:
+            return False
+
+        # Find indices of resolved residues
+        resolved_indices = ops.nonzero(resolved)[0]  # nonzero returns tuple
+        if len(resolved_indices) == 0:
+            return False
+
+        # Check if span from first to last resolved equals count of resolved
+        # If not, there are unresolved residues in between (internal gaps)
+        first = int(resolved_indices[0])
+        last = int(resolved_indices[-1])
+        span = last - first + 1
+        return span != len(resolved_indices)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Specialized Selections

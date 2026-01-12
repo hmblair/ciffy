@@ -302,6 +302,31 @@ features = embed(polymer)  # (num_residues, 64)
 embed.output_dim  # Total embedding dimension
 ```
 
+### Transformer
+
+Modern transformer with Pre-LN, RMSNorm, RoPE, and SwiGLU (4x FFN width).
+
+```python
+from ciffy.nn.layers import Transformer
+
+model = Transformer(
+    d_model=256,
+    num_layers=4,
+    num_heads=8,
+    dropout=0.1,
+    use_rope=True,          # Rotary position embeddings (disable if using attn_bias)
+    qk_norm=False,          # QK normalization for training stability
+    layer_scale_init=1e-4,  # Per-residual learnable scaling (None to disable)
+)
+
+x = torch.randn(batch, seq_len, 256)
+out = model(x)                          # (batch, seq_len, 256)
+out = model(x, mask=padding_mask)       # mask: (batch, seq_len), True = masked
+out = model(x, attn_bias=dist_bias)     # attn_bias: (batch, heads, seq, seq)
+```
+
+Also available: `TransformerBlock`, `CausalTransformer`, `AdaLNTransformer` (for diffusion), `Pairformer` (AlphaFold3-style).
+
 ### RMSD Loss
 
 **Use `ciffy.rmsd` as the default loss function for structure prediction models.** It computes Kabsch-aligned RMSD with gradient support.

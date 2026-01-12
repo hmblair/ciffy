@@ -19,56 +19,11 @@ Example:
 
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-logger = logging.getLogger(__name__)
-
-
-def _check_tensor(
-    tensor: "torch.Tensor",
-    name: str,
-    expected_dims: Optional[int] = None,
-    check_nan: bool = True,
-    check_inf: bool = True,
-) -> None:
-    """
-    Validate tensor for common issues that cause CUDA errors.
-
-    Args:
-        tensor: Tensor to validate.
-        name: Name for error messages.
-        expected_dims: Expected number of dimensions, or None to skip.
-        check_nan: Whether to check for NaN values.
-        check_inf: Whether to check for Inf values.
-
-    Raises:
-        ValueError: If tensor has wrong dimensions.
-        RuntimeError: If tensor contains NaN or Inf values.
-    """
-    if expected_dims is not None and tensor.dim() != expected_dims:
-        raise ValueError(
-            f"{name}: expected {expected_dims}D tensor, got {tensor.dim()}D "
-            f"with shape {tuple(tensor.shape)}"
-        )
-
-    if check_nan and torch.isnan(tensor).any():
-        nan_count = torch.isnan(tensor).sum().item()
-        raise RuntimeError(
-            f"{name}: tensor contains {nan_count} NaN values. "
-            f"Shape: {tuple(tensor.shape)}, dtype: {tensor.dtype}"
-        )
-
-    if check_inf and torch.isinf(tensor).any():
-        inf_count = torch.isinf(tensor).sum().item()
-        raise RuntimeError(
-            f"{name}: tensor contains {inf_count} Inf values. "
-            f"Shape: {tuple(tensor.shape)}, dtype: {tensor.dtype}"
-        )
 
 
 class RMSNorm(nn.Module):
@@ -76,6 +31,7 @@ class RMSNorm(nn.Module):
     Root Mean Square Layer Normalization.
 
     Simpler and faster than LayerNorm. Normalizes by RMS without centering.
+    Uses fused rsqrt for better GPU performance.
 
     Reference: Zhang & Sennrich (2019) https://arxiv.org/abs/1910.07467
     """
@@ -94,20 +50,9 @@ class RMSNorm(nn.Module):
 
         Returns:
             Normalized tensor with same shape as input.
-
-        Raises:
-            RuntimeError: If input contains NaN values.
         """
-        # Check for NaN (would propagate through normalization)
-        if torch.isnan(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            raise RuntimeError(
-                f"RMSNorm: input contains {nan_count} NaN values. "
-                f"Shape: {tuple(x.shape)}"
-            )
-
-        rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
-        return x / rms * self.weight
+        # Fused: rsqrt is faster than sqrt + division
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
 
 class AdaLN(nn.Module):
@@ -271,6 +216,7 @@ class SwiGLU(nn.Module):
     SwiGLU feedforward network.
 
     Gated Linear Unit with Swish activation. Generally outperforms GELU/ReLU FFN.
+    Uses fused w1/w2 projection for better GPU utilization.
 
     Reference: Shazeer (2020) https://arxiv.org/abs/2002.05202
     """
@@ -282,13 +228,17 @@ class SwiGLU(nn.Module):
             d_ff = int(4 * d_model * 2 / 3)
             d_ff = ((d_ff + 63) // 64) * 64  # Round to multiple of 64
 
-        self.w1 = nn.Linear(d_model, d_ff, bias=False)
-        self.w2 = nn.Linear(d_model, d_ff, bias=False)
+        self.d_ff = d_ff
+        # Fused projection: single matmul instead of two separate ones
+        self.w12 = nn.Linear(d_model, 2 * d_ff, bias=False)
         self.w3 = nn.Linear(d_ff, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        return self.dropout(self.w3(F.silu(self.w1(x)) * self.w2(x)))
+        # Single projection + chunk is faster than two separate projections
+        x12 = self.w12(x)
+        x1, x2 = x12.split(self.d_ff, dim=-1)
+        return self.dropout(self.w3(F.silu(x1) * x2))
 
 
 class MultiHeadAttention(nn.Module):
@@ -401,14 +351,6 @@ class MultiHeadAttention(nn.Module):
                     f"doesn't match input batch/seq ({B}, {L})"
                 )
 
-        # Check for NaN in input (common cause of CUDA errors)
-        if torch.isnan(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            raise RuntimeError(
-                f"MultiHeadAttention: input contains {nan_count} NaN values. "
-                f"This often indicates numerical instability in earlier layers."
-            )
-
         qkv = self.qkv_proj(x).view(B, L, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
@@ -450,14 +392,6 @@ class MultiHeadAttention(nn.Module):
             if combined_mask is not None:
                 attn = attn + combined_mask
             attn = F.softmax(attn, dim=-1)
-
-            # Check for NaN after softmax (can happen with all-masked sequences)
-            if torch.isnan(attn).any():
-                raise RuntimeError(
-                    f"MultiHeadAttention: NaN in attention weights after softmax. "
-                    f"This typically occurs when all positions are masked in a sequence."
-                )
-
             attn = self.dropout(attn)
             out = torch.matmul(attn, v)
 
@@ -702,7 +636,6 @@ class Transformer(nn.Module):
 
         Raises:
             ValueError: If input shapes are invalid.
-            RuntimeError: If tensors contain NaN/Inf values.
         """
         # Validate input tensor
         if x.dim() != 3:
@@ -749,46 +682,7 @@ class Transformer(nn.Module):
                     f"doesn't match input sequence length {L}"
                 )
 
-            # Check if all positions are masked (would cause NaN in attention)
-            if mask.all():
-                raise ValueError(
-                    f"Transformer: all positions are masked. "
-                    f"At least one position must be unmasked per sequence."
-                )
-
-            # Check per-sequence: warn if any sequence is fully masked
-            fully_masked = mask.all(dim=1)
-            if fully_masked.any():
-                n_fully_masked = fully_masked.sum().item()
-                raise ValueError(
-                    f"Transformer: {n_fully_masked} sequence(s) have all positions masked. "
-                    f"This will cause NaN in attention weights."
-                )
-
-        # Check for NaN/Inf in input
-        if torch.isnan(x).any():
-            nan_count = torch.isnan(x).sum().item()
-            raise RuntimeError(
-                f"Transformer: input contains {nan_count} NaN values. "
-                f"Check your data preprocessing and embedding layers."
-            )
-
-        if torch.isinf(x).any():
-            inf_count = torch.isinf(x).sum().item()
-            raise RuntimeError(
-                f"Transformer: input contains {inf_count} Inf values. "
-                f"This may indicate exploding gradients or invalid operations."
-            )
-
-        # Process through layers
-        for i, layer in enumerate(self.layers):
+        for layer in self.layers:
             x = layer(x, mask=mask, attn_bias=attn_bias)
-
-            # Check for NaN propagation after each layer (debug mode only)
-            if logger.isEnabledFor(logging.DEBUG) and torch.isnan(x).any():
-                nan_count = torch.isnan(x).sum().item()
-                logger.debug(
-                    f"Transformer layer {i}: output contains {nan_count} NaN values"
-                )
 
         return self.final_norm(x)

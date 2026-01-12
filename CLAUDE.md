@@ -29,10 +29,10 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and predict m
 ### Data Locations
 
 ```
-Local RNA DB:                     /Users/hmblair/academic/data/structures/rna
-Remote RNA DB (rex gpu):          /home/hmblair/data/rna
-Remote RNA DB (rex sherlock-gpu): /scratch/users/hmblair/structures/rna
-Output dirs:                      outputs/, figures/
+Local RNA DB:                 /Users/hmblair/academic/data/structures/rna
+Remote RNA DB (rex imp):      /home/hmblair/data/rna
+Remote RNA DB (rex sherlock): /scratch/users/hmblair/structures/rna
+Output dirs:                  outputs/, figures/
 ```
 
 ### Git Safety
@@ -130,7 +130,46 @@ p = p.append(Residue.A, coords1)                              # First at origin
 p = p.append(Residue.C, LocalCoordinates(coords2, transform)) # Relative positioning
 ```
 
-`LocalCoordinates`: Bundles (n_atoms, 3) coordinates with (6,) SE(3) transform [axis-angle, translation].
+`LocalCoordinates`: Bundles (n_atoms, 3) coordinates with (7,) SE(3) transform [quaternion (4), translation (3)].
+
+## Current Goal: Per-Residue Latent Embeddings
+
+### Objective
+
+Learn a **per-residue latent space** (16-dim) where each RNA residue's conformation can be encoded. Each residue is represented by:
+1. **Local coordinates** - Atom positions in the residue's aligned frame
+2. **Transform to next residue** - SE(3) transform (quaternion + translation)
+
+If per-residue reconstruction is exact, chain reconstruction follows automatically.
+
+### Relevant Files
+
+```
+ciffy/nn/residue/
+├── encoder.py      # ResidueEncoder
+├── decoder.py      # ResidueDecoder
+├── vae.py          # ResidueVAE
+└── training.py     # precompute_targets(), create_batches()
+
+scratch/train_vae.py    # Training script
+```
+
+### Running
+
+```bash
+# Local test
+python scratch/train_vae.py --data tests/data --epochs 10
+
+# Remote GPU (outputs to /scratch/users/hmblair/ciffy/vae_runs/)
+rex sherlock -d --gpu scratch/train_vae.py -- --name <experiment_name>
+```
+
+### Current Best Results (935K params, latent_dim=16, coord_weight=100)
+
+- **Per-residue**: 0.038 Å RMSD, 0.99° rotation error
+- **Full chain**: 1.6-7.5 Å RMSD (20-75 residues)
+
+Key finding: Default `coord_weight=1` causes 150x gradient imbalance (transform loss dominates). Setting `coord_weight=100` balances gradients and improves chain reconstruction 2-4x.
 
 ## Code Conventions
 

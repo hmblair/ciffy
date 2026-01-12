@@ -69,6 +69,9 @@ class ResidueVAE(nn.Module):
     - Decode latent samples to local coordinates and inter-residue transforms
     - Generate new polymer conformations via sampling
 
+    Uses quaternion representation for rotations throughout, avoiding
+    discontinuities present in axis-angle representations at 180 degrees.
+
     Args:
         latent_dim: Dimension of the latent space per residue.
         d_model: Hidden dimension for transformer/MLP layers.
@@ -78,6 +81,8 @@ class ResidueVAE(nn.Module):
         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
         dropout: Dropout probability.
+        logvar_min: Minimum logvar value to prevent variance collapse. Default
+            -4.0 ensures sigma >= 0.135. Set to None to disable.
 
     Example:
         >>> model = ResidueVAE(latent_dim=32, d_model=128)
@@ -102,6 +107,7 @@ class ResidueVAE(nn.Module):
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         dropout: float = 0.1,
+        logvar_min: float = -4.0,
     ):
         super().__init__()
 
@@ -113,6 +119,7 @@ class ResidueVAE(nn.Module):
             atom_dim=atom_dim,
             residue_dim=residue_dim,
             dropout=dropout,
+            logvar_min=logvar_min,
         )
 
         self.decoder = ResidueDecoder(
@@ -141,7 +148,8 @@ class ResidueVAE(nn.Module):
 
         Args:
             polymer: Input polymer (torch backend).
-            transforms: Optional (n_residues, 6) inter-residue transforms.
+            transforms: Optional (n_residues, 7) inter-residue transforms
+                       in quaternion format (quaternion (4) + translation (3)).
             return_distribution: If True, return (z, mu, logvar).
 
         Returns:
@@ -164,7 +172,8 @@ class ResidueVAE(nn.Module):
 
         Returns:
             coords: (n_atoms, 3) local coordinates.
-            transforms: (n_residues, 6) inter-residue SE(3) transforms.
+            transforms: (n_residues, 7) inter-residue SE(3) transforms
+                (quaternion (4) + translation (3)).
         """
         return self.decoder(z, polymer)
 
@@ -178,11 +187,13 @@ class ResidueVAE(nn.Module):
 
         Args:
             polymer: Input polymer (torch backend).
-            transforms: Optional (n_residues, 6) inter-residue transforms.
+            transforms: Optional (n_residues, 7) inter-residue transforms
+                       in quaternion format (quaternion (4) + translation (3)).
 
         Returns:
             coords: (n_atoms, 3) predicted local coordinates.
-            pred_transforms: (n_residues, 6) predicted inter-residue transforms.
+            pred_transforms: (n_residues, 7) predicted inter-residue transforms
+                (quaternion (4) + translation (3)).
             mu: (n_residues, latent_dim) latent means.
             logvar: (n_residues, latent_dim) latent log-variances.
         """
@@ -223,6 +234,7 @@ class ResidueVAE(nn.Module):
         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
         local_coords, transforms = self.decode(z, template)
 
+        # Transforms are already in quaternion format (7D), directly usable
         from ciffy.biochemistry.linking import O3P_FRAME, P_FRAME
 
         return (

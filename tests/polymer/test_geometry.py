@@ -961,8 +961,8 @@ class TestGather:
 class TestFrames:
     """Test Polymer.frames() method."""
 
-    def test_frames_returns_6d(self, backend):
-        """frames() returns (n_residues, 6) array."""
+    def test_frames_returns_7d(self, backend):
+        """frames() returns (n_residues, 7) array (quaternion + origin)."""
         from ciffy import Scale
         import ciffy
 
@@ -973,19 +973,19 @@ class TestFrames:
             pytest.skip("No RNA chains in structure")
 
         frames = rna.frames()
-        assert frames.shape == (rna.size(Scale.RESIDUE), 6)
+        assert frames.shape == (rna.size(Scale.RESIDUE), 7)
 
     def test_frames_shape_single_residue(self, backend):
-        """frames() on single residue returns (1, 6)."""
+        """frames() on single residue returns (1, 7)."""
         import ciffy
 
         p = get_single_chain_poly(backend, "a")  # Single adenosine
         frames = p.frames()
 
-        assert frames.shape == (1, 6)
+        assert frames.shape == (1, 7)
 
-    def test_frames_axis_angle_magnitude(self, backend):
-        """frames() axis-angle part has reasonable magnitude (< 2*pi)."""
+    def test_frames_quaternion_normalized(self, backend):
+        """frames() quaternion part is unit length."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
@@ -995,11 +995,11 @@ class TestFrames:
             pytest.skip("No RNA chains in structure")
 
         frames = np.asarray(rna.frames())
-        axis_angles = frames[:, :3]
+        quaternions = frames[:, :4]
 
-        # Magnitude of axis-angle should be < 2*pi (rotation angle)
-        magnitudes = np.linalg.norm(axis_angles, axis=1)
-        assert (magnitudes < 2 * np.pi + 0.1).all()
+        # Quaternion magnitude should be ~1.0
+        magnitudes = np.linalg.norm(quaternions, axis=1)
+        assert np.allclose(magnitudes, 1.0, atol=1e-5)
 
     def test_frames_origin_reasonable(self, backend):
         """frames() origin part is within coordinate bounds."""
@@ -1012,7 +1012,7 @@ class TestFrames:
             pytest.skip("No RNA chains in structure")
 
         frames = np.asarray(rna.frames())
-        origins = frames[:, 3:]  # Last 3 components
+        origins = frames[:, 4:]  # Last 3 components (after quaternion)
 
         # Origins should be within the coordinate bounds of the structure
         coords = np.asarray(rna.coordinates)
@@ -1068,7 +1068,7 @@ class TestFrames:
         frames = target.frames(PURINE_GLYCOSIDIC_FRAME)
 
         from ciffy import Scale
-        assert frames.shape == (target.size(Scale.RESIDUE), 6)
+        assert frames.shape == (target.size(Scale.RESIDUE), 7)
 
 
 # =============================================================================

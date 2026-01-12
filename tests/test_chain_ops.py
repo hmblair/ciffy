@@ -7,8 +7,9 @@ import ciffy
 from ciffy import Residue, Scale, join
 from ciffy import template
 
-# Identity rotation + Z-axis translation for ideal backbone spacing
-LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+# Identity quaternion (w=1) + Z-axis translation for ideal backbone spacing
+# Format: [w, x, y, z, tx, ty, tz] - 7D quaternion format
+LINEAR_EXTEND_TRANSFORM = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
 
 def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
@@ -263,7 +264,7 @@ class TestAppend:
 
         atom_group = Residue.A.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
+        transform = np.array([1, 0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         # Extend should add to the last chain
         p2 = p._append(Residue.A, coords, transform, atoms=atoms, elements=elements)
@@ -276,7 +277,7 @@ class TestAppend:
         _template = template("ac")
         atom_group = Residue.G.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6], dtype=np.float32)
+        transform = np.array([1, 0, 0, 0, 0, 0, 6], dtype=np.float32)
 
         with pytest.raises(AttributeError, match="coordinates"):
             _template._append(Residue.G, coords, transform, atoms=atoms, elements=elements)

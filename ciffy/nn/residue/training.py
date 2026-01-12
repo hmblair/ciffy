@@ -78,7 +78,8 @@ def precompute_targets(
         List of dicts with keys:
         - 'polymer': Aligned polymer (coordinates in GLYCOSIDIC frame)
         - 'target_coords': Target coordinates tensor
-        - 'transforms': Inter-residue SE(3) transforms (N, 6)
+        - 'transforms': Inter-residue SE(3) transforms (N, 7) in quaternion format
+            (quaternion (4) + translation (3))
     """
     if n_structures is None:
         n_structures = len(dataset)
@@ -113,13 +114,15 @@ def precompute_targets(
 
             # Compute transforms FIRST (before alignment destroys frame info)
             # Use O3P_FRAME → P_FRAME to preserve phosphodiester bond geometry
+            # Returns (N, 7) quaternion format: [quaternion (4), translation (3)]
             try:
                 transforms = polymer.local_transforms(O3P_FRAME, P_FRAME)
             except Exception:
                 n_errors += 1
                 continue
 
-            if transforms.abs().max() > max_transform_magnitude:
+            # Check translation magnitude (quaternion is normalized, so only check translation)
+            if transforms[:, 4:].abs().max() > max_transform_magnitude:
                 n_filtered += 1
                 continue
 

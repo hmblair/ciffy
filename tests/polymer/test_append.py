@@ -10,8 +10,9 @@ from ciffy import Scale, template
 from ciffy.biochemistry import Residue
 
 
-# Identity rotation + Z-axis translation for ideal backbone spacing
-LINEAR_EXTEND_TRANSFORM = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+# Identity quaternion (w=1) + Z-axis translation for ideal backbone spacing
+# Format: [w, x, y, z, tx, ty, tz] - 7D quaternion format
+LINEAR_EXTEND_TRANSFORM = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
 
 def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polymer:
@@ -60,8 +61,8 @@ class TestAppendEdgeCases:
 
         atom_group = Residue.C.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        # Identity rotation, translate along Z
-        transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+        # Identity quaternion (w=1), translate along Z
+        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         extended = p._append(
             coordinates=coords,
@@ -100,7 +101,7 @@ class TestAppendEdgeCases:
 
         atom_group = Residue.U.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         extended = p._append(
             coordinates=coords,
@@ -119,7 +120,7 @@ class TestAppendEdgeCases:
 
         atom_group = Residue.G.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         extended = p._append(
             coordinates=coords,
@@ -138,7 +139,7 @@ class TestAppendEdgeCases:
 
             atom_group = Residue.A.terminal(start=False, end=False)
             atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-            transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+            transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
             extended = p._append(
                 coordinates=coords,
@@ -192,7 +193,9 @@ class TestAppend:
         from ciffy.geometry import LocalCoordinates
         p = ciffy.Polymer()
         p = p.append(Residue.A, Residue.A.ideal)
-        p = p.append(Residue.C, LocalCoordinates(Residue.C.ideal, np.zeros(6)))
+        # 7D quaternion format: [w=1, x=0, y=0, z=0, tx=0, ty=0, tz=0] = identity
+        identity_transform = np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+        p = p.append(Residue.C, LocalCoordinates(Residue.C.ideal, identity_transform))
 
         assert p.size(Scale.RESIDUE) == 2
         assert p.coordinates is not None

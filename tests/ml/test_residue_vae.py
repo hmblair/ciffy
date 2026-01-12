@@ -167,8 +167,8 @@ class TestResidueDecoder:
 
         # Coords should have shape (n_atoms, 3)
         assert coords.shape == (chain.size(), 3)
-        # Transforms should have shape (n_residues, 6)
-        assert transforms.shape == (n_residues, 6)
+        # Transforms should have shape (n_residues, 7) - quaternion (4) + translation (3)
+        assert transforms.shape == (n_residues, 7)
 
     def test_output_coords_reasonable(self):
         """Test that output coordinates are in reasonable range."""
@@ -215,7 +215,7 @@ class TestResidueVAE:
             # Decode
             coords, transforms = vae.decode(z, chain)
             assert coords.shape == (chain.size(), 3)
-            assert transforms.shape == (n_residues, 6)
+            assert transforms.shape == (n_residues, 7)
 
     def test_forward_pass(self):
         """Test forward pass returns all outputs."""
@@ -233,7 +233,7 @@ class TestResidueVAE:
 
         n_residues = chain.size(Scale.RESIDUE)
         assert coords.shape == (chain.size(), 3)
-        assert transforms.shape == (n_residues, 6)
+        assert transforms.shape == (n_residues, 7)
         assert mu.shape == (n_residues, 32)
         assert logvar.shape == (n_residues, 32)
 

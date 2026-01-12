@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import torch
     from .hetero import HeteroAtoms
     from ..biochemistry.linking import FrameDefinition
+    from ..geometry import LocalCoordinates
 from ..operations.reduction import Reduction, ReductionResult
 from .hierarchy import _Hierarchy
 from .base import AtomContainer, Field, Metadata, _KNOWN_FIELDS
@@ -191,23 +192,22 @@ class Polymer(AtomContainer):
                 - PROTEIN_BACKBONE_FRAME: For proteins (CA origin, Z toward N)
 
         Returns:
-            (n_residues, 6) frames as [axis_angle (3), origin (3)] where
-            axis_angle encodes the rotation (direction is axis, magnitude
-            is angle in radians).
+            (n_residues, 7) frames as [quaternion (4), origin (3)] where
+            quaternion encodes the rotation as (w, x, y, z).
 
         Raises:
             ValueError: If required frame atoms are missing from any residue.
 
         Example:
             >>> frames = polymer.strip().frames()
-            >>> # frames[i, :3] is axis-angle rotation for residue i
-            >>> # frames[i, 3:] is origin position for residue i
+            >>> # frames[i, :4] is quaternion rotation for residue i
+            >>> # frames[i, 4:] is origin position for residue i
         """
-        from ..geometry.transforms import rotation_to_axis_angle
+        from ..geometry.transforms import rotation_matrix_to_quaternion
 
         origins, Rs = self._compute_frame_matrices(frame)
-        axis_angles = rotation_to_axis_angle(Rs)
-        return ops.cat([axis_angles, origins], axis=1)
+        quaternions = rotation_matrix_to_quaternion(Rs)
+        return ops.cat([quaternions, origins], axis=1)
 
     def align(
         self: Polymer,
@@ -335,21 +335,21 @@ class Polymer(AtomContainer):
         """
         Compute inter-residue SE(3) transforms using specified source and target frames.
 
-        This is the LOCAL FRAME paradigm - each transform[i] describes how to go from
-        source_frame in residue i to target_frame in residue i+1. Use for chain
-        reconstruction and backbone sampling.
+        This is the LOCAL FRAME paradigm - each transform[i] describes how residue i
+        is positioned relative to residue i-1. Use for chain reconstruction and
+        backbone sampling.
 
         Args:
-            source_frame: Frame definition for residue i (5'/N-terminal side).
+            source_frame: Frame definition for residue i-1 (5'/N-terminal side).
                 REQUIRED - no default to make frame choice explicit.
-            target_frame: Frame definition for residue i+1 (3'/C-terminal side).
+            target_frame: Frame definition for residue i (3'/C-terminal side).
                 REQUIRED - no default to make frame choice explicit.
 
         Returns:
-            (n_residues, 6) array where:
-            - transforms[i] = SE(3) from source_frame[i] TO target_frame[i+1]
-            - transforms[-1] = zeros (no successor residue)
-            - Each transform is [axis_angle (3), translation (3)]
+            (n_residues, 7) array where:
+            - transforms[0] = zeros (first residue has no predecessor)
+            - transforms[i] = SE(3) from source_frame[i-1] TO target_frame[i]
+            - Each transform is [quaternion (4), translation (3)]
 
         Raises:
             TypeError: If source_frame or target_frame is None (fail-fast).
@@ -377,7 +377,7 @@ class Polymer(AtomContainer):
             >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
             >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
         """
-        from ..geometry.transforms import compute_relative_transform
+        from ..geometry.transforms import rotation_matrix_to_quaternion
 
         # Fail-fast: require both frames
         if source_frame is None:
@@ -395,13 +395,39 @@ class Polymer(AtomContainer):
         else:
             tgt_origins, tgt_Rs = self._compute_frame_matrices(target_frame)
 
-        # Compute transforms: source_frame[i] -> target_frame[i+1]
-        transforms = ops.zeros_nd((n_residues, 6), like=self.coordinates)
-        for i in range(n_residues - 1):
-            transforms[i] = compute_relative_transform(
-                src_origins[i], src_Rs[i],
-                tgt_origins[i + 1], tgt_Rs[i + 1],
-            )
+        # Compute transforms: transforms[i] = source_frame[i-1] -> target_frame[i]
+        # transforms[0] = identity (first residue has no predecessor)
+        # Vectorized: compute all n_residues-1 transforms at once
+        if n_residues < 2:
+            return ops.zeros_nd((n_residues, 7), like=self.coordinates)
+
+        # Relative rotation: R_rel = R1.T @ R2 for consecutive pairs
+        # src_Rs[:-1] is (n-1, 3, 3), tgt_Rs[1:] is (n-1, 3, 3)
+        src_Rs_prev = src_Rs[:-1]  # frames 0..n-2
+        tgt_Rs_curr = tgt_Rs[1:]   # frames 1..n-1
+        R_rel = ops.transpose(src_Rs_prev, (0, 2, 1)) @ tgt_Rs_curr  # (n-1, 3, 3)
+
+        # Convert to quaternion (vectorized)
+        quaternions = rotation_matrix_to_quaternion(R_rel)  # (n-1, 4)
+
+        # Translation in source frame coords: t_local = R1.T @ (origin2 - origin1)
+        t_world = tgt_origins[1:] - src_origins[:-1]  # (n-1, 3)
+        # Batched matrix-vector multiply: (n-1, 3, 3) @ (n-1, 3, 1) -> (n-1, 3, 1)
+        t_local = (ops.transpose(src_Rs_prev, (0, 2, 1)) @ t_world[..., None]).squeeze(-1)
+
+        # Concatenate rotation (quaternion) and translation
+        transforms_1_to_n = ops.cat([quaternions, t_local], axis=-1)  # (n-1, 7)
+
+        # Prepend identity quaternion [1,0,0,0] + zero translation for first residue
+        identity_first = ops.zeros_nd((1, 7), like=self.coordinates)
+        # Set w=1 for identity quaternion
+        if hasattr(identity_first, 'clone'):  # torch
+            identity_first = identity_first.clone()
+            identity_first[0, 0] = 1.0
+        else:  # numpy
+            identity_first = identity_first.copy()
+            identity_first[0, 0] = 1.0
+        transforms = ops.cat([identity_first, transforms_1_to_n], axis=0)  # (n, 7)
 
         return transforms
 
@@ -425,8 +451,8 @@ class Polymer(AtomContainer):
         by chaining the transforms.
 
         Args:
-            transforms: (n_residues, 6) array where each row is
-                [axis-angle (3), translation (3)] specifying the relative
+            transforms: (n_residues, 7) array where each row is
+                [quaternion (4), translation (3)] specifying the relative
                 SE(3) transform from the previous residue's frame.
                 transforms[0] is ignored (first residue stays at origin).
 
@@ -472,8 +498,16 @@ class Polymer(AtomContainer):
         current_origin = ops.zeros_nd((3,), like=coords)
 
         # Chain residues together
+        # transforms[i] describes how residue i is positioned relative to i-1
+        # transforms[0] is ignored (first residue stays at origin)
         atom_offset = 0
         for i in range(n_residues):
+            # Apply transforms[i] BEFORE placing residue i (skip first residue)
+            if i > 0:
+                current_origin, current_R = apply_relative_transform(
+                    current_origin, current_R, transforms[i]
+                )
+
             n_atoms_i = int(counts[i])
             local_coords = coords[atom_offset:atom_offset + n_atoms_i]
 
@@ -481,12 +515,6 @@ class Polymer(AtomContainer):
             global_coords[atom_offset:atom_offset + n_atoms_i] = (
                 local_coords @ current_R.T + current_origin
             )
-
-            # Update frame for next residue
-            if i < n_residues - 1:
-                current_origin, current_R = apply_relative_transform(
-                    current_origin, current_R, transforms[i]
-                )
 
             atom_offset += n_atoms_i
 
@@ -506,10 +534,13 @@ class Polymer(AtomContainer):
         chains them using the transforms.
 
         Args:
-            transforms: (n_residues, 6) array from local_transforms().
-            source_frame: Frame definition for residue i (must match local_transforms).
+            transforms: (n_residues, 7) array from local_transforms().
+                Each row is [quaternion (4), translation (3)].
+                transforms[i] describes how residue i is positioned relative to i-1.
+                transforms[0] is ignored (first residue stays at origin).
+            source_frame: Frame definition for residue i-1 (must match local_transforms).
                 REQUIRED - no default to make frame choice explicit.
-            target_frame: Frame definition for residue i+1 (must match local_transforms).
+            target_frame: Frame definition for residue i (must match local_transforms).
                 REQUIRED - no default to make frame choice explicit.
 
         Returns:
@@ -522,7 +553,7 @@ class Polymer(AtomContainer):
             1. First residue placed at global origin
             2. For each subsequent residue i:
                a. Compute source_frame in residue i-1 (now in global coords)
-               b. Apply transforms[i-1] to get target_frame position for residue i
+               b. Apply transforms[i] to get target_frame position for residue i
                c. Compute target_frame in residue i's local coords
                d. Align local target_frame to global target_frame position
 
@@ -564,7 +595,7 @@ class Polymer(AtomContainer):
             atom_offsets.append(atom_offsets[-1] + int(counts[i]))
 
         # First residue stays at origin (its local coords are already aligned)
-        # For subsequent residues, compute frame alignment
+        # For subsequent residues, compute frame alignment using transforms[i]
         for i in range(1, n_residues):
             # Get previous residue's atoms (now in global coords)
             prev_start, prev_end = atom_offsets[i - 1], atom_offsets[i]
@@ -575,9 +606,9 @@ class Polymer(AtomContainer):
             src_positions = extract_frame_positions(prev_global, prev_atoms, source_frame)
             src_origin, src_R = frame_from_positions(src_positions)
 
-            # Apply transform to get target_frame position for current residue
+            # Apply transforms[i] to get target_frame position for current residue
             target_origin, target_R = apply_relative_transform(
-                src_origin, src_R, transforms[i - 1]
+                src_origin, src_R, transforms[i]
             )
 
             # Get current residue's atoms (still in local coords)

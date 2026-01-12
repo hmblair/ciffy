@@ -150,14 +150,17 @@ class TestLocalFrames:
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
-        # Create a random rotation
+        # Create a random rotation using quaternion
         axis = torch.randn(3)
         axis = axis / axis.norm()
         angle = torch.tensor(0.5)  # ~30 degrees
-        axis_angle = axis * angle
 
-        from ciffy.geometry.transforms import rodrigues
-        R = rodrigues(axis_angle)
+        from ciffy.geometry import quaternion_to_rotation_matrix
+        # Create quaternion from axis-angle
+        quat = torch.zeros(4)
+        quat[0] = torch.cos(angle / 2)
+        quat[1:] = axis * torch.sin(angle / 2)
+        R = quaternion_to_rotation_matrix(quat.unsqueeze(0)).squeeze(0)
 
         # Rotate the polymer
         rotated_coords = p.coordinates @ R.T
@@ -192,16 +195,17 @@ class TestLocalFrames:
         assert diff < 1e-3, f"Transforms should be invariant to translation, max diff={diff}"
 
     def test_transforms_shape(self):
-        """local_transforms returns correct shape."""
+        """local_transforms returns correct shape (7D quaternion format)."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
         p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
         n_res = p.size(Scale.RESIDUE)
 
         transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
 
-        assert transforms.shape == (n_res, 6)
-        # Last transform should be zeros (no successor residue)
-        assert np.allclose(transforms[-1], 0, atol=1e-6)
+        assert transforms.shape == (n_res, 7)
+        # First transform should be identity quaternion [1,0,0,0] + zero translation
+        assert np.allclose(transforms[0, 0], 1, atol=1e-6)  # w=1
+        assert np.allclose(transforms[0, 1:], 0, atol=1e-6)  # x,y,z,tx,ty,tz=0
 
     @pytest.mark.parametrize("backend", BACKENDS)
     def test_local_transforms_backend_preserved(self, backend):
@@ -250,9 +254,10 @@ class TestAppendWithFrames:
         res_type1 = Residue.from_index(p.sequence[1])
         n_atoms0 = res0.size()
 
+        # transforms[1] describes how residue 1 is positioned relative to residue 0
         built = built.append(
             res_type1.subset(res1.atoms.tolist()),
-            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[0]),
+            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[1]),
             residue=res_type1,
             # No explicit frames - uses defaults
         )
@@ -282,6 +287,7 @@ class TestAppendWithFrames:
         )
 
         # Build subsequent residues with explicit frames
+        # transforms[i] describes how residue i is positioned relative to i-1
         offset = int(counts[0])
         for i in range(1, n_res):
             n_atoms = int(counts[i])
@@ -291,7 +297,7 @@ class TestAppendWithFrames:
             built = built.append(
                 res_type.subset(res_i.atoms.tolist()),
                 LocalCoordinates(
-                    aligned.coordinates[offset : offset + n_atoms], transforms[i - 1]
+                    aligned.coordinates[offset : offset + n_atoms], transforms[i]
                 ),
                 residue=res_type,
                 source_frame=GLYCOSIDIC_FRAME,

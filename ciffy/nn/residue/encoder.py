@@ -30,6 +30,10 @@ class ResidueEncoder(nn.Module):
         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
         dropout: Dropout probability.
+        logvar_min: Minimum logvar value to prevent variance collapse. At small
+            sigma, gradients through reparameterization vanish, creating a
+            positive feedback loop. Default -4.0 ensures sigma >= 0.135.
+            Set to None to disable clamping.
 
     Example:
         >>> encoder = ResidueEncoder(latent_dim=32, d_model=128)
@@ -46,11 +50,13 @@ class ResidueEncoder(nn.Module):
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         dropout: float = 0.1,
+        logvar_min: float = -4.0,
     ):
         super().__init__()
         self.latent_dim = latent_dim
         self.d_model = d_model
         self.n_heads = n_heads
+        self.logvar_min = logvar_min  # Prevents variance collapse (sigma >= 0.135)
 
         # Default embedding dimensions
         if atom_dim is None:
@@ -92,9 +98,9 @@ class ResidueEncoder(nn.Module):
         )
         self.distance_to_bias = nn.Linear(num_rbf, n_heads, bias=False)
 
-        # Transform encoder
+        # Transform encoder (7D input: quaternion (4) + translation (3))
         self.transform_encoder = nn.Sequential(
-            nn.Linear(6, d_model),
+            nn.Linear(7, d_model),
             RMSNorm(d_model),
             nn.SiLU(),
             nn.Linear(d_model, d_model),
@@ -110,7 +116,7 @@ class ResidueEncoder(nn.Module):
         return self.latent_dim
 
     def _compute_transforms(self, polymer: Polymer) -> torch.Tensor:
-        """Compute inter-residue SE(3) transforms from polymer coordinates."""
+        """Compute inter-residue SE(3) transforms in quaternion format (quaternion (4) + translation (3))."""
         return polymer.local_transforms(O3P_FRAME, P_FRAME)
 
     def forward(
@@ -124,7 +130,8 @@ class ResidueEncoder(nn.Module):
 
         Args:
             polymer: Input polymer (torch backend).
-            transforms: Optional (n_residues, 6) inter-residue transforms.
+            transforms: Optional (n_residues, 7) inter-residue transforms
+                       in quaternion format (quaternion (4) + translation (3)).
                        If None, computed automatically.
             return_distribution: If True, return (z, mu, logvar).
 
@@ -170,6 +177,12 @@ class ResidueEncoder(nn.Module):
         # Project to latent space
         mu = self.to_mu(pooled)
         logvar = self.to_logvar(pooled)
+
+        # Clamp logvar to prevent variance collapse
+        # At small sigma, gradients through reparameterization vanish,
+        # creating a positive feedback loop. Clamping ensures sigma >= 0.135.
+        if self.logvar_min is not None:
+            logvar = logvar.clamp(min=self.logvar_min)
 
         # Reparameterization
         if self.training:

@@ -2,9 +2,14 @@
 SE(3) transforms and residue frame computation for molecular modeling.
 
 This module provides functions for:
-- SE(3) transform operations (rotation to/from axis-angle, relative transforms)
+- Quaternion operations (rotation representation)
+- SE(3) transform operations (relative transforms between frames)
 - Residue frame computation (reference frames at specific atoms)
 - Residue positioning (aligning residues for chain building)
+
+Quaternions are represented as (w, x, y, z) where w is the scalar part.
+The convention is to always use the canonical form with w >= 0 to avoid
+the antipodal ambiguity (q and -q represent the same rotation).
 """
 
 from __future__ import annotations
@@ -39,10 +44,8 @@ class LocalCoordinates:
 
     Attributes:
         coordinates: (n_atoms, 3) atom positions in local frame.
-        transform: (6,) SE(3) as [axis_angle_x, axis_angle_y, axis_angle_z,
-            translation_x, translation_y, translation_z]. The first 3 elements
-            are the axis-angle rotation (direction is axis, magnitude is angle
-            in radians). The last 3 are the translation vector.
+        transform: (7,) SE(3) as [quaternion (4), translation (3)].
+            Quaternion is (w, x, y, z) with w >= 0 (canonical form).
 
     Example:
         >>> from ciffy.geometry import LocalCoordinates
@@ -55,8 +58,10 @@ class LocalCoordinates:
 
 
 # =============================================================================
-# SE(3) Transform Operations
+# Quaternion Operations
 # =============================================================================
+# Quaternions are represented as (w, x, y, z) where w is the scalar part.
+# We use the canonical form with w >= 0 to avoid the antipodal ambiguity.
 
 
 def _eye3(like: Array) -> Array:
@@ -67,119 +72,272 @@ def _eye3(like: Array) -> Array:
     return np.eye(3, dtype=like.dtype)
 
 
-def _trace(R: Array) -> Array:
-    """Matrix trace."""
-    if is_torch(R):
-        import torch
-        return torch.trace(R)
-    return np.trace(R)
-
-
-def _acos_safe(x: Array) -> Array:
-    """Arccos with safe clamping."""
-    if is_torch(x):
-        import torch
-        return torch.acos(torch.clamp(x, -1.0, 1.0))
-    return np.arccos(np.clip(x, -1.0, 1.0))
-
-
-def rotation_to_axis_angle(R: Array) -> Array:
+def rotation_matrix_to_quaternion(R: Array) -> Array:
     """
-    Convert rotation matrix to axis-angle representation.
+    Convert rotation matrix to quaternion (w, x, y, z).
 
-    Uses the Rodrigues formula inverse.
+    Uses Shepperd's method which is numerically stable for all rotations.
+    Returns canonical form with w >= 0.
 
     Args:
         R: (3, 3) single rotation matrix or (..., 3, 3) batch of matrices.
 
     Returns:
-        (3,) or (..., 3) axis-angle vector(s) where direction is axis
-        and magnitude is angle.
+        (4,) or (..., 4) quaternion(s) in (w, x, y, z) format with w >= 0.
     """
     single_input = R.ndim == 2
     if single_input:
         R = R[None]
 
     batch_shape = R.shape[:-2]
-    R_flat = R.reshape(-1, 3, 3)  # (N, 3, 3)
+    R_flat = R.reshape(-1, 3, 3)
+    n = R_flat.shape[0]
 
-    # angle = acos((trace(R) - 1) / 2)
-    traces = R_flat[..., 0, 0] + R_flat[..., 1, 1] + R_flat[..., 2, 2]
-    angles = acos(clamp((traces - 1) / 2, -1.0, 1.0))
+    if is_torch(R):
+        import torch
+        quat = torch.zeros((n, 4), dtype=R.dtype, device=R.device)
+    else:
+        quat = np.zeros((n, 4), dtype=R.dtype)
 
-    # axis from skew-symmetric part: [R[2,1]-R[1,2], R[0,2]-R[2,0], R[1,0]-R[0,1]]
-    axis = stack([
-        R_flat[..., 2, 1] - R_flat[..., 1, 2],
-        R_flat[..., 0, 2] - R_flat[..., 2, 0],
-        R_flat[..., 1, 0] - R_flat[..., 0, 1],
-    ], axis=-1)
-    # Normalize axis directly (more stable than dividing by 2*sin(angle))
-    axis_norm = norm(axis, axis=-1, keepdims=True)
-    axis = axis / (axis_norm + 1e-8)
+    # Shepperd's method: choose the largest diagonal element to avoid division by small numbers
+    trace = R_flat[:, 0, 0] + R_flat[:, 1, 1] + R_flat[:, 2, 2]
 
-    result = axis * angles[..., None]
-    result = result.reshape(*batch_shape, 3)
+    # Case 1: trace > 0 (w is largest)
+    mask1 = trace > 0
+    if is_torch(R):
+        s1 = torch.sqrt(trace[mask1] + 1.0) * 2  # s = 4w
+    else:
+        s1 = np.sqrt(trace[mask1] + 1.0) * 2
+    quat[mask1, 0] = 0.25 * s1  # w
+    quat[mask1, 1] = (R_flat[mask1, 2, 1] - R_flat[mask1, 1, 2]) / s1  # x
+    quat[mask1, 2] = (R_flat[mask1, 0, 2] - R_flat[mask1, 2, 0]) / s1  # y
+    quat[mask1, 3] = (R_flat[mask1, 1, 0] - R_flat[mask1, 0, 1]) / s1  # z
 
+    # Case 2: R[0,0] is largest diagonal
+    mask2 = ~mask1 & (R_flat[:, 0, 0] > R_flat[:, 1, 1]) & (R_flat[:, 0, 0] > R_flat[:, 2, 2])
+    if is_torch(R):
+        s2 = torch.sqrt(1.0 + R_flat[mask2, 0, 0] - R_flat[mask2, 1, 1] - R_flat[mask2, 2, 2]) * 2
+    else:
+        s2 = np.sqrt(1.0 + R_flat[mask2, 0, 0] - R_flat[mask2, 1, 1] - R_flat[mask2, 2, 2]) * 2
+    quat[mask2, 0] = (R_flat[mask2, 2, 1] - R_flat[mask2, 1, 2]) / s2  # w
+    quat[mask2, 1] = 0.25 * s2  # x
+    quat[mask2, 2] = (R_flat[mask2, 0, 1] + R_flat[mask2, 1, 0]) / s2  # y
+    quat[mask2, 3] = (R_flat[mask2, 0, 2] + R_flat[mask2, 2, 0]) / s2  # z
+
+    # Case 3: R[1,1] is largest diagonal
+    mask3 = ~mask1 & ~mask2 & (R_flat[:, 1, 1] > R_flat[:, 2, 2])
+    if is_torch(R):
+        s3 = torch.sqrt(1.0 + R_flat[mask3, 1, 1] - R_flat[mask3, 0, 0] - R_flat[mask3, 2, 2]) * 2
+    else:
+        s3 = np.sqrt(1.0 + R_flat[mask3, 1, 1] - R_flat[mask3, 0, 0] - R_flat[mask3, 2, 2]) * 2
+    quat[mask3, 0] = (R_flat[mask3, 0, 2] - R_flat[mask3, 2, 0]) / s3  # w
+    quat[mask3, 1] = (R_flat[mask3, 0, 1] + R_flat[mask3, 1, 0]) / s3  # x
+    quat[mask3, 2] = 0.25 * s3  # y
+    quat[mask3, 3] = (R_flat[mask3, 1, 2] + R_flat[mask3, 2, 1]) / s3  # z
+
+    # Case 4: R[2,2] is largest diagonal
+    mask4 = ~mask1 & ~mask2 & ~mask3
+    if is_torch(R):
+        s4 = torch.sqrt(1.0 + R_flat[mask4, 2, 2] - R_flat[mask4, 0, 0] - R_flat[mask4, 1, 1]) * 2
+    else:
+        s4 = np.sqrt(1.0 + R_flat[mask4, 2, 2] - R_flat[mask4, 0, 0] - R_flat[mask4, 1, 1]) * 2
+    quat[mask4, 0] = (R_flat[mask4, 1, 0] - R_flat[mask4, 0, 1]) / s4  # w
+    quat[mask4, 1] = (R_flat[mask4, 0, 2] + R_flat[mask4, 2, 0]) / s4  # x
+    quat[mask4, 2] = (R_flat[mask4, 1, 2] + R_flat[mask4, 2, 1]) / s4  # y
+    quat[mask4, 3] = 0.25 * s4  # z
+
+    # Normalize and ensure canonical form (w >= 0)
+    quat = normalize_quaternion(quat)
+
+    quat = quat.reshape(*batch_shape, 4)
     if single_input:
-        result = result[0]
+        quat = quat[0]
 
-    return result
+    return quat
 
 
-def rodrigues(axis_angles: Array) -> Array:
+def quaternion_to_rotation_matrix(q: Array) -> Array:
     """
-    Convert axis-angle vectors to rotation matrices (Rodrigues' formula).
-
-    R = I + sin(θ)K + (1-cos(θ))K²
-
-    where K is the skew-symmetric matrix of the unit axis.
-
-    Backend-agnostic implementation that handles both single and batched inputs.
+    Convert quaternion (w, x, y, z) to rotation matrix.
 
     Args:
-        axis_angles: Either (3,) single axis-angle vector or (n, 3) batch of vectors.
-            Direction is the rotation axis, magnitude is the rotation angle.
+        q: (4,) single quaternion or (..., 4) batch of quaternions.
 
     Returns:
-        (3, 3) rotation matrix for single input, or (n, 3, 3) for batched input.
+        (3, 3) or (..., 3, 3) rotation matrix.
     """
-    from ..backend import (
-        norm as backend_norm, sin, cos, eye, zeros_nd, ones_like, where,
-        unsqueeze, expand,
-    )
-
-    # Handle single vs batched input
-    single_input = axis_angles.ndim == 1
+    single_input = q.ndim == 1
     if single_input:
-        axis_angles = unsqueeze(axis_angles, 0)  # (1, 3)
+        q = q[None]
 
-    n = len(axis_angles)
+    batch_shape = q.shape[:-1]
+    q_flat = q.reshape(-1, 4)
 
-    # Compute angle magnitudes
-    angles = backend_norm(axis_angles, axis=1, keepdims=True)  # (n, 1)
-    safe_angles = where(angles < 1e-8, ones_like(angles), angles)
-    axes = axis_angles / safe_angles
+    w, x, y, z = q_flat[:, 0], q_flat[:, 1], q_flat[:, 2], q_flat[:, 3]
 
-    # Build skew-symmetric matrices K
-    K = zeros_nd((n, 3, 3), like=axis_angles)
-    K[:, 0, 1] = -axes[:, 2]
-    K[:, 0, 2] = axes[:, 1]
-    K[:, 1, 0] = axes[:, 2]
-    K[:, 1, 2] = -axes[:, 0]
-    K[:, 2, 0] = -axes[:, 1]
-    K[:, 2, 1] = axes[:, 0]
+    # Rotation matrix from quaternion
+    # R = [[1-2(y²+z²), 2(xy-wz), 2(xz+wy)],
+    #      [2(xy+wz), 1-2(x²+z²), 2(yz-wx)],
+    #      [2(xz-wy), 2(yz+wx), 1-2(x²+y²)]]
 
-    # Rodrigues formula: R = I + sin(θ)K + (1-cos(θ))K²
-    I = expand(unsqueeze(eye(3, like=axis_angles), 0), (n, -1, -1))
-    sin_a = unsqueeze(sin(angles), -1)  # (n, 1, 1)
-    cos_a = unsqueeze(cos(angles), -1)
+    x2, y2, z2 = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
 
-    result = I + sin_a * K + (1 - cos_a) * (K @ K)
+    if is_torch(q):
+        import torch
+        R = torch.stack([
+            torch.stack([1 - 2 * (y2 + z2), 2 * (xy - wz), 2 * (xz + wy)], dim=-1),
+            torch.stack([2 * (xy + wz), 1 - 2 * (x2 + z2), 2 * (yz - wx)], dim=-1),
+            torch.stack([2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (x2 + y2)], dim=-1),
+        ], dim=-2)
+    else:
+        R = np.stack([
+            np.stack([1 - 2 * (y2 + z2), 2 * (xy - wz), 2 * (xz + wy)], axis=-1),
+            np.stack([2 * (xy + wz), 1 - 2 * (x2 + z2), 2 * (yz - wx)], axis=-1),
+            np.stack([2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (x2 + y2)], axis=-1),
+        ], axis=-2)
 
-    # Return single matrix if input was single
+    R = R.reshape(*batch_shape, 3, 3)
     if single_input:
-        return result[0]
-    return result
+        R = R[0]
+
+    return R
+
+
+def normalize_quaternion(q: Array) -> Array:
+    """
+    Normalize quaternion to unit length and canonical form (w >= 0).
+
+    Args:
+        q: (..., 4) quaternion(s).
+
+    Returns:
+        (..., 4) normalized quaternion(s) with w >= 0.
+    """
+    # Normalize to unit length
+    q_norm = norm(q, axis=-1, keepdims=True)
+    q = q / (q_norm + 1e-8)
+
+    # Canonical form: w >= 0 (flip sign if w < 0)
+    if is_torch(q):
+        import torch
+        sign = torch.sign(q[..., :1])
+        sign = torch.where(sign == 0, torch.ones_like(sign), sign)
+    else:
+        sign = np.sign(q[..., :1])
+        sign = np.where(sign == 0, 1.0, sign)
+
+    return q * sign
+
+
+def quaternion_multiply(q1: Array, q2: Array) -> Array:
+    """
+    Multiply two quaternions (Hamilton product).
+
+    Args:
+        q1: (..., 4) first quaternion(s).
+        q2: (..., 4) second quaternion(s).
+
+    Returns:
+        (..., 4) product quaternion(s).
+    """
+    w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+    w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+
+    return stack([w, x, y, z], axis=-1)
+
+
+def quaternion_conjugate(q: Array) -> Array:
+    """
+    Compute quaternion conjugate (inverse for unit quaternions).
+
+    Args:
+        q: (..., 4) quaternion(s).
+
+    Returns:
+        (..., 4) conjugate quaternion(s).
+    """
+    if is_torch(q):
+        import torch
+        return torch.stack([q[..., 0], -q[..., 1], -q[..., 2], -q[..., 3]], dim=-1)
+    return np.stack([q[..., 0], -q[..., 1], -q[..., 2], -q[..., 3]], axis=-1)
+
+
+def geodesic_so3_quat(
+    pred: Array,
+    target: Array,
+    reduction: str = "mean",
+) -> Array:
+    """
+    Compute geodesic distance on SO(3) between quaternion rotations.
+
+    The geodesic distance is: θ = 2 * arccos(|q1 · q2|)
+
+    Args:
+        pred: (N, 4) predicted quaternions.
+        target: (N, 4) target quaternions.
+        reduction: "mean", "sum", or "none".
+
+    Returns:
+        Geodesic distance(s) in radians.
+    """
+    # Quaternion dot product (take absolute value due to antipodal equivalence)
+    dot_product = (pred * target).sum(axis=-1)
+    if is_torch(pred):
+        import torch
+        dot_product = torch.abs(dot_product)
+    else:
+        dot_product = np.abs(dot_product)
+
+    # Clamp for numerical stability
+    dot_product = clamp(dot_product, -1.0 + 1e-7, 1.0 - 1e-7)
+
+    # Geodesic distance: θ = 2 * arccos(|q1 · q2|)
+    angles = 2 * acos(dot_product)
+
+    if reduction == "mean":
+        return angles.mean()
+    elif reduction == "sum":
+        return angles.sum()
+    return angles
+
+
+def se3_loss_quat(
+    pred: Array,
+    target: Array,
+    rotation_weight: float = 1.0,
+    translation_weight: float = 1.0,
+) -> Array:
+    """
+    Compute SE(3) loss for 7D transforms (quaternion + translation).
+
+    Args:
+        pred: (N, 7) predicted transforms [quaternion(4), translation(3)].
+        target: (N, 7) target transforms [quaternion(4), translation(3)].
+        rotation_weight: Weight for rotation loss.
+        translation_weight: Weight for translation loss.
+
+    Returns:
+        Scalar loss combining rotation geodesic and translation MSE.
+    """
+    pred_rot, pred_trans = pred[..., :4], pred[..., 4:]
+    target_rot, target_trans = target[..., :4], target[..., 4:]
+
+    rotation_loss = geodesic_so3_quat(pred_rot, target_rot, reduction="mean")
+    translation_loss = ((pred_trans - target_trans) ** 2).mean()
+
+    return rotation_weight * rotation_loss + translation_weight * translation_loss
+
+
+# =============================================================================
+# SE(3) Transform Operations
+# =============================================================================
 
 
 def compute_relative_transform(
@@ -192,7 +350,7 @@ def compute_relative_transform(
     Compute relative SE(3) transform from frame 1 to frame 2.
 
     The transform encodes how to get from frame 1 to frame 2:
-    - Rotation: R_rel = R1.T @ R2
+    - Rotation: R_rel = R1.T @ R2 (converted to quaternion)
     - Translation: expressed in frame 1's coordinate system
 
     Args:
@@ -202,17 +360,17 @@ def compute_relative_transform(
         R2: (3, 3) rotation matrix of frame 2.
 
     Returns:
-        (6,) transform vector [axis-angle (3), translation in frame1 coords (3)].
+        (7,) transform vector [quaternion (4), translation in frame1 coords (3)].
     """
     R_rel = R1.T @ R2
-    axis_angle = rotation_to_axis_angle(R_rel)
+    quat = rotation_matrix_to_quaternion(R_rel)
     t_world = origin2 - origin1
     t_local = R1.T @ t_world
 
     if is_torch(origin1):
         import torch
-        return torch.cat([axis_angle, t_local])
-    return np.concatenate([axis_angle, t_local]).astype(np.float32)
+        return torch.cat([quat, t_local])
+    return np.concatenate([quat, t_local]).astype(np.float32)
 
 
 def apply_relative_transform(
@@ -228,244 +386,18 @@ def apply_relative_transform(
     Args:
         origin: (3,) position of source frame.
         R: (3, 3) rotation matrix of source frame.
-        transform: (6,) vector [axis-angle (3), translation in source coords (3)].
+        transform: (7,) vector [quaternion (4), translation in source coords (3)].
 
     Returns:
         (origin2, R2): Position and rotation of target frame.
     """
-    axis_angle = transform[:3]
-    t_local = transform[3:]
-    R_rel = rodrigues(axis_angle)
+    quat = transform[:4]
+    t_local = transform[4:]
+    R_rel = quaternion_to_rotation_matrix(quat)
     R2 = R @ R_rel
     t_world = R @ t_local
     origin2 = origin + t_world
     return origin2, R2
-
-
-def geodesic_so3(
-    pred: Array,
-    target: Array,
-    reduction: str = "mean",
-) -> Array:
-    """
-    Compute geodesic distance on SO(3) between rotations.
-
-    The geodesic distance is the angle of the rotation needed to go from
-    one orientation to another: θ = arccos((trace(R_target^T @ R_pred) - 1) / 2).
-
-    This is the proper metric on SO(3), unlike Euclidean distance on axis-angle
-    which treats the curved rotation manifold as flat.
-
-    Args:
-        pred: (N, 3) predicted axis-angle rotations.
-        target: (N, 3) target axis-angle rotations.
-        reduction: "mean", "sum", or "none".
-
-    Returns:
-        Geodesic distance(s) in radians. If reduction="none", returns (N,) angles.
-    """
-    R_pred = rodrigues(pred)      # (N, 3, 3)
-    R_target = rodrigues(target)  # (N, 3, 3)
-
-    # R_diff = R_target^T @ R_pred
-    # For batched: transpose last two dims
-    if is_torch(pred):
-        R_diff = R_target.transpose(-1, -2) @ R_pred
-    else:
-        R_diff = np.swapaxes(R_target, -1, -2) @ R_pred
-
-    # trace(R) = 1 + 2*cos(θ), so θ = arccos((trace - 1) / 2)
-    trace = R_diff[..., 0, 0] + R_diff[..., 1, 1] + R_diff[..., 2, 2]
-    cos_angle = (trace - 1) / 2
-    cos_angle = clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
-    angles = acos(cos_angle)
-
-    if reduction == "mean":
-        return angles.mean()
-    elif reduction == "sum":
-        return angles.sum()
-    return angles
-
-
-def se3_loss(
-    pred: Array,
-    target: Array,
-    rotation_weight: float = 1.0,
-    translation_weight: float = 1.0,
-) -> Array:
-    """
-    Compute SE(3) loss with geodesic distance for rotation and MSE for translation.
-
-    This is the proper loss for SE(3) transforms, using:
-    - Geodesic distance on SO(3) for the rotation component
-    - Mean squared error for the translation component
-
-    The geodesic distance returns angles in radians, so rotation_weight=1.0
-    means 1 radian of rotation error equals 1 unit of loss.
-
-    Args:
-        pred: (N, 6) predicted transforms [axis_angle(3), translation(3)].
-        target: (N, 6) target transforms [axis_angle(3), translation(3)].
-        rotation_weight: Weight for rotation loss (default 1.0).
-        translation_weight: Weight for translation loss (default 1.0).
-
-    Returns:
-        Scalar loss combining rotation geodesic and translation MSE.
-
-    Example:
-        >>> pred_transforms = model(polymer)
-        >>> loss = se3_loss(pred_transforms, target_transforms)
-    """
-    pred_rot, pred_trans = pred[..., :3], pred[..., 3:]
-    target_rot, target_trans = target[..., :3], target[..., 3:]
-
-    # Geodesic distance on SO(3) - returns mean angle in radians
-    rotation_loss = geodesic_so3(pred_rot, target_rot, reduction="mean")
-
-    # MSE for translation
-    translation_loss = ((pred_trans - target_trans) ** 2).mean()
-
-    return rotation_weight * rotation_loss + translation_weight * translation_loss
-
-
-# =============================================================================
-# 6D Rotation Representation
-# =============================================================================
-# The 6D rotation representation (Zhou et al., 2019) is continuous and avoids
-# singularities present in axis-angle near θ=0 and θ=π. It represents rotations
-# as the first two columns of the rotation matrix, reconstructing the third
-# via Gram-Schmidt orthonormalization.
-
-
-def rotation_matrix_to_6d(R: Array) -> Array:
-    """
-    Convert rotation matrix to 6D representation (first two columns).
-
-    Args:
-        R: (..., 3, 3) rotation matrix or matrices.
-
-    Returns:
-        (..., 6) 6D representation [col1, col2] flattened.
-    """
-    # Extract first two columns and flatten
-    col1 = R[..., :, 0]  # (..., 3)
-    col2 = R[..., :, 1]  # (..., 3)
-    return cat([col1, col2], axis=-1)
-
-
-def rotation_6d_to_matrix(r6d: Array) -> Array:
-    """
-    Convert 6D representation to rotation matrix via Gram-Schmidt.
-
-    Args:
-        r6d: (..., 6) 6D representation [a1, a2].
-
-    Returns:
-        (..., 3, 3) rotation matrix.
-    """
-    a1 = r6d[..., :3]
-    a2 = r6d[..., 3:6]
-
-    # Gram-Schmidt orthonormalization (backend-agnostic)
-    b1 = normalize(a1)
-    # Compute dot product and expand for broadcasting
-    dot_val = dot(b1, a2)
-    if r6d.ndim > 1:
-        dot_val = unsqueeze(dot_val, -1)
-    b2 = normalize(a2 - dot_val * b1)
-    b3 = cross(b1, b2)
-    return stack([b1, b2, b3], axis=-1)
-
-
-def axis_angle_to_6d(axis_angle: Array) -> Array:
-    """
-    Convert axis-angle rotation to 6D representation.
-
-    Args:
-        axis_angle: (..., 3) axis-angle rotation vectors.
-
-    Returns:
-        (..., 6) 6D rotation representation.
-    """
-    R = rodrigues(axis_angle)  # (..., 3, 3)
-    return rotation_matrix_to_6d(R)
-
-
-def rotation_6d_to_axis_angle(r6d: Array) -> Array:
-    """
-    Convert 6D rotation representation to axis-angle.
-
-    Args:
-        r6d: (..., 6) 6D rotation representation.
-
-    Returns:
-        (..., 3) axis-angle rotation vectors.
-    """
-    R = rotation_6d_to_matrix(r6d)  # (..., 3, 3)
-    return rotation_to_axis_angle(R)
-
-
-def geodesic_so3_6d(
-    pred: Array,
-    target: Array,
-    reduction: str = "mean",
-) -> Array:
-    """
-    Compute geodesic distance on SO(3) between 6D rotation representations.
-
-    Args:
-        pred: (N, 6) predicted 6D rotations.
-        target: (N, 6) target 6D rotations.
-        reduction: "mean", "sum", or "none".
-
-    Returns:
-        Geodesic distance(s) in radians.
-    """
-    R_pred = rotation_6d_to_matrix(pred)      # (N, 3, 3)
-    R_target = rotation_6d_to_matrix(target)  # (N, 3, 3)
-
-    # R_diff = R_target^T @ R_pred (transpose last two dims)
-    R_target_T = R_target.swapaxes(-1, -2) if hasattr(R_target, 'swapaxes') else np.swapaxes(R_target, -1, -2)
-    R_diff = R_target_T @ R_pred
-
-    # trace(R) = 1 + 2*cos(θ), so θ = arccos((trace - 1) / 2)
-    trace = R_diff[..., 0, 0] + R_diff[..., 1, 1] + R_diff[..., 2, 2]
-    cos_angle = (trace - 1) / 2
-    cos_angle = clamp(cos_angle, -1.0 + 1e-7, 1.0 - 1e-7)
-    angles = acos(cos_angle)
-
-    if reduction == "mean":
-        return angles.mean()
-    elif reduction == "sum":
-        return angles.sum()
-    return angles
-
-
-def se3_loss_6d(
-    pred: Array,
-    target: Array,
-    rotation_weight: float = 1.0,
-    translation_weight: float = 1.0,
-) -> Array:
-    """
-    Compute SE(3) loss for 9D transforms (6D rotation + 3D translation).
-
-    Args:
-        pred: (N, 9) predicted transforms [6D_rotation(6), translation(3)].
-        target: (N, 9) target transforms [6D_rotation(6), translation(3)].
-        rotation_weight: Weight for rotation loss.
-        translation_weight: Weight for translation loss.
-
-    Returns:
-        Scalar loss combining rotation geodesic and translation MSE.
-    """
-    pred_rot, pred_trans = pred[..., :6], pred[..., 6:]
-    target_rot, target_trans = target[..., :6], target[..., 6:]
-
-    rotation_loss = geodesic_so3_6d(pred_rot, target_rot, reduction="mean")
-    translation_loss = ((pred_trans - target_trans) ** 2).mean()
-
-    return rotation_weight * rotation_loss + translation_weight * translation_loss
 
 
 # =============================================================================
@@ -588,5 +520,3 @@ def rigid_align(
     rotated_origin = R_correction @ current_origin
     t_correction = target_origin - rotated_origin
     return (R_correction @ coords.T).T + t_correction
-
-

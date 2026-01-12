@@ -41,7 +41,7 @@ class TestCopyFieldDeletion:
         # Get new residue data (no bfactors)
         atom_group = Residue.G.terminal(start=False, end=False)
         atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([0, 0, 0, 0, 0, 6.0], dtype=np.float32)
+        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
 
         # Should work without providing bfactors
         extended = p._append(

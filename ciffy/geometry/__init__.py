@@ -44,15 +44,22 @@ from .primitives import (
     verify_closure_distance,
 )
 
+# Quaternion operations
+from .transforms import (
+    rotation_matrix_to_quaternion,
+    quaternion_to_rotation_matrix,
+    normalize_quaternion,
+    quaternion_multiply,
+    quaternion_conjugate,
+    geodesic_so3_quat,
+    se3_loss_quat,
+)
+
 # SE(3) transforms
 from .transforms import (
     LocalCoordinates,
-    rodrigues,
-    rotation_to_axis_angle,
     compute_relative_transform,
     apply_relative_transform,
-    geodesic_so3,
-    se3_loss,
 )
 
 # Frame computation
@@ -97,14 +104,18 @@ __all__ = [
     # Ring closure
     "circle_sphere_intersect",
     "verify_closure_distance",
+    # Quaternion operations
+    "rotation_matrix_to_quaternion",
+    "quaternion_to_rotation_matrix",
+    "normalize_quaternion",
+    "quaternion_multiply",
+    "quaternion_conjugate",
+    "geodesic_so3_quat",
+    "se3_loss_quat",
     # SE(3) transforms
     "LocalCoordinates",
-    "rodrigues",
-    "rotation_to_axis_angle",
     "compute_relative_transform",
     "apply_relative_transform",
-    "geodesic_so3",
-    "se3_loss",
     # Frame computation
     "extract_frame_positions",
     "frame_from_positions",

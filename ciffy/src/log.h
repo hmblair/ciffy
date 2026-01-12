@@ -84,6 +84,40 @@ static inline int _ciffy_log_level(void) {
 
 
 /* ============================================================================
+ * LOG CONTEXT (Thread-Local File ID)
+ * Stores the current file being processed for inclusion in log messages.
+ * ============================================================================ */
+
+#ifdef _MSC_VER
+#define CIFFY_THREAD_LOCAL __declspec(thread)
+#else
+#define CIFFY_THREAD_LOCAL _Thread_local
+#endif
+
+/** Thread-local file ID for log messages (set via LOG_SET_FILE_ID) */
+extern CIFFY_THREAD_LOCAL const char *_ciffy_log_file_id;
+
+/**
+ * @brief Set the current file ID for log messages.
+ *
+ * Call this at the start of parsing a file. The ID will be included
+ * in all subsequent log messages from the current thread.
+ *
+ * @param id File identifier (e.g., "4V5D"), or NULL to clear
+ */
+#define LOG_SET_FILE_ID(id) (_ciffy_log_file_id = (id))
+
+/**
+ * @brief Get the current file ID for log messages.
+ *
+ * @return Current file ID, or empty string if not set
+ */
+static inline const char *_ciffy_log_file_id_str(void) {
+    return _ciffy_log_file_id ? _ciffy_log_file_id : "";
+}
+
+
+/* ============================================================================
  * LOGGING MACROS
  * Each macro checks both compile-time and runtime levels for efficiency
  * ============================================================================ */
@@ -117,13 +151,23 @@ static inline int _ciffy_log_level(void) {
 #define _LOG_IMPL(level, level_str, color, file, line, func, fmt, ...) \
     do { \
         if ((level) <= _ciffy_log_level()) { \
+            const char *_fid = _ciffy_log_file_id_str(); \
             if (_ciffy_log_level() >= LOG_LEVEL_DEBUG) { \
-                fprintf(stderr, "%s[%-7s]%s %s:%d (%s): " fmt "\n", \
-                    color, level_str, LOG_COLOR_RESET, \
-                    file, line, func, ##__VA_ARGS__); \
+                if (_fid[0]) \
+                    fprintf(stderr, "%s[%-7s]%s [%s] %s:%d (%s): " fmt "\n", \
+                        color, level_str, LOG_COLOR_RESET, _fid, \
+                        file, line, func, ##__VA_ARGS__); \
+                else \
+                    fprintf(stderr, "%s[%-7s]%s %s:%d (%s): " fmt "\n", \
+                        color, level_str, LOG_COLOR_RESET, \
+                        file, line, func, ##__VA_ARGS__); \
             } else { \
-                fprintf(stderr, "%s[%-7s]%s " fmt "\n", \
-                    color, level_str, LOG_COLOR_RESET, ##__VA_ARGS__); \
+                if (_fid[0]) \
+                    fprintf(stderr, "%s[%-7s]%s [%s] " fmt "\n", \
+                        color, level_str, LOG_COLOR_RESET, _fid, ##__VA_ARGS__); \
+                else \
+                    fprintf(stderr, "%s[%-7s]%s " fmt "\n", \
+                        color, level_str, LOG_COLOR_RESET, ##__VA_ARGS__); \
             } \
         } \
     } while (0)

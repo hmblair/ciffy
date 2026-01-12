@@ -12,6 +12,9 @@
 #include "log.h"
 #include "graph/bindings.h"
 
+/* Define the thread-local log file ID (declared extern in log.h) */
+CIFFY_THREAD_LOCAL const char *_ciffy_log_file_id = NULL;
+
 
 /**
  * @brief Convert CifError to appropriate Python exception.
@@ -693,6 +696,7 @@ static PyObject *_load(PyObject *self, PyObject *args, PyObject *kwargs) {
         _free_filter(&filter);
         return _set_py_error(&ctx, file);
     }
+    LOG_SET_FILE_ID(cif.id);  /* Set file ID for logging */
     _next_block(&cursor);
 
     /* Compute which blocks are actually needed based on skip_mask */
@@ -1051,6 +1055,7 @@ static PyObject *_load_batch(PyObject *self, PyObject *args, PyObject *kwargs) {
             success[i] = 0;
             continue;
         }
+        LOG_SET_FILE_ID(cif->id);  /* Set file ID for logging */
         _next_block(&cursor);
 
         /* Parse blocks */

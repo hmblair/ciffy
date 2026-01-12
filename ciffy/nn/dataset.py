@@ -238,8 +238,8 @@ class PolymerDataset(Dataset):
     def _build_index(self, cif_files: list[Path]) -> None:
         """Build index by scanning CIF files and applying filters.
 
-        Uses parallel metadata loading for faster indexing (~4x speedup).
-        For small limits, uses sequential loading with early termination.
+        Uses parallel metadata loading in batches of 128 for faster indexing
+        (~4x speedup) while avoiding loading all metadata at once.
         """
         from ciffy import load_metadata
 
@@ -247,50 +247,23 @@ class PolymerDataset(Dataset):
         if self.molecule_types is not None:
             type_filter = {m.value for m in self.molecule_types}
 
-        # For small limits, use sequential loading with early termination
-        # to avoid loading metadata for files we won't use
-        use_sequential = self.limit is not None and self.limit < 100
-
-        if use_sequential:
-            self._build_index_sequential(cif_files, type_filter)
-        else:
-            self._build_index_parallel(cif_files, type_filter, load_metadata)
-
-    def _build_index_sequential(
-        self, cif_files: list[Path], type_filter: set | None
-    ) -> None:
-        """Build index sequentially with early termination (for small limits)."""
-        from ciffy import load_metadata
-
-        for path in cif_files:
+        batch_size = 128
+        for i in range(0, len(cif_files), batch_size):
             if self.limit is not None and len(self._index) >= self.limit:
                 break
 
-            try:
-                meta = load_metadata(path)
-            except Exception:
-                logger.debug(f"Failed to load metadata from {path}")
-                continue
+            batch = cif_files[i : i + batch_size]
+            metas = load_metadata(batch)
 
-            self._process_metadata_for_index(path, meta, type_filter)
+            for path, meta in zip(batch, metas):
+                if self.limit is not None and len(self._index) >= self.limit:
+                    break
 
-    def _build_index_parallel(
-        self, cif_files: list[Path], type_filter: set | None, load_metadata
-    ) -> None:
-        """Build index with parallel metadata loading (~4x faster)."""
-        # Load all metadata in parallel
-        metas = load_metadata(cif_files)
+                if meta is None:
+                    logger.debug(f"Failed to load metadata from {path}")
+                    continue
 
-        # Process metadata and build index
-        for path, meta in zip(cif_files, metas):
-            if self.limit is not None and len(self._index) >= self.limit:
-                break
-
-            if meta is None:
-                logger.debug(f"Failed to load metadata from {path}")
-                continue
-
-            self._process_metadata_for_index(path, meta, type_filter)
+                self._process_metadata_for_index(path, meta, type_filter)
 
     def _process_metadata_for_index(
         self, path: Path, meta: dict, type_filter: set | None

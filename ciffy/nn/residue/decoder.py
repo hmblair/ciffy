@@ -8,29 +8,9 @@ import torch.nn as nn
 from ciffy import Scale
 from ciffy.geometry import normalize_quaternion
 from ciffy.nn import PolymerEmbedding
+from ciffy.nn.layers.mlp import MLP
 from ciffy.nn.layers.transformer import RMSNorm
 from ciffy.polymer import Polymer
-
-
-class ResidualBlock(nn.Module):
-    """Residual block with pre-norm and SiLU activation."""
-
-    def __init__(self, dim: int, dropout: float = 0.1):
-        super().__init__()
-        self.norm = RMSNorm(dim)
-        self.linear1 = nn.Linear(dim, dim * 2)
-        self.linear2 = nn.Linear(dim * 2, dim)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        x = self.norm(x)
-        x = self.linear1(x)
-        x = nn.functional.silu(x)
-        x = self.dropout(x)
-        x = self.linear2(x)
-        x = self.dropout(x)
-        return residual + x
 
 
 class ResidueDecoder(nn.Module):
@@ -71,9 +51,6 @@ class ResidueDecoder(nn.Module):
         self.latent_dim = latent_dim
         self.d_model = d_model
         self.n_heads = n_heads
-
-        # Output dimension: 7 for quaternion (4) + translation (3)
-        self.transform_dim = 7
 
         # Default embedding dimensions
         if atom_dim is None:
@@ -129,13 +106,13 @@ class ResidueDecoder(nn.Module):
         # Residual blocks (4 blocks for deeper transform prediction)
         n_transform_blocks = 4
         self.transform_blocks = nn.ModuleList([
-            ResidualBlock(d_model, dropout) for _ in range(n_transform_blocks)
+            MLP(d_model, d_model, residual=True, dropout=dropout) for _ in range(n_transform_blocks)
         ])
 
-        # Output head
+        # Output head (7D: quaternion (4) + translation (3))
         self.transform_head = nn.Sequential(
             RMSNorm(d_model),
-            nn.Linear(d_model, self.transform_dim),
+            nn.Linear(d_model, 7),
         )
 
     def forward(
@@ -175,6 +152,7 @@ class ResidueDecoder(nn.Module):
         # Normalize quaternion to unit length and canonical form (w >= 0)
         quat = normalize_quaternion(raw_transforms[:, :4])
         trans = raw_transforms[:, 4:]
+
         transforms = torch.cat([quat, trans], dim=-1)
 
         return coords, transforms

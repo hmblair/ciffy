@@ -64,7 +64,7 @@ from typing import Tuple
 import torch
 from torch import nn
 
-from ..layers.dense_network import DenseNetwork
+from ..layers.mlp import MLP
 
 
 class FixedSinusoidalEmbedding(nn.Module):
@@ -693,10 +693,10 @@ class TimestepEmbedding(nn.Module):
         )
 
         # Learnable MLP projection
-        self.dense = DenseNetwork(
-            in_size=embedding_dim,
-            out_size=embedding_dim,
-            hidden_sizes=[hidden_mult * embedding_dim],
+        self.dense = MLP(
+            embedding_dim,
+            embedding_dim,
+            hidden_dims=[hidden_mult * embedding_dim],
         )
 
     def forward(

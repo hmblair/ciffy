@@ -8,18 +8,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ...polymer import Polymer
 
-try:
-    import torch
-    import torch.nn as nn
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    nn = None  # Placeholder
+import torch
+import torch.nn as nn
 
 from ...biochemistry import Scale, NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
 
 
-class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
+class PolymerEmbedding(nn.Module):
     """
     Learnable embeddings for polymer features.
 
@@ -63,12 +58,6 @@ class PolymerEmbedding(nn.Module if TORCH_AVAILABLE else object):
             ValueError: If atom_dim or element_dim specified with scale=RESIDUE.
             ValueError: If no embedding dimensions are specified.
         """
-        if not TORCH_AVAILABLE:
-            raise ImportError(
-                "PyTorch is required for PolymerEmbedding. "
-                "Install with: pip install torch"
-            )
-
         super().__init__()
 
         if scale not in (Scale.ATOM, Scale.RESIDUE):

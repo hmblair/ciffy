@@ -31,8 +31,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = None
 
-from ..layers import CausalTransformer, RMSNorm, SwiGLU, Transformer
-from ..blocks import RBFDistanceEncoder, build_mlp_stack, ResidualBlock
+from ..layers import CausalTransformer, MLP, RMSNorm, SwiGLU, Transformer
 from ...biochemistry import NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
 
 if TYPE_CHECKING:
@@ -285,12 +284,12 @@ class ResidueDecoder(nn.Module):
         ])
 
         # Output head per atom
-        self.coord_head = build_mlp_stack(
+        self.coord_head = MLP(
             config.d_model,
-            list(config.output_hidden_dims),
-            output_dim=3,
+            3,
+            hidden_dims=list(config.output_hidden_dims),
             dropout=config.dropout,
-            zero_init_final=True,
+            zero_init=True,
         )
 
     def forward(

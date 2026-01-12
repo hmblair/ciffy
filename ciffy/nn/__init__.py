@@ -55,7 +55,7 @@ from .layers import (
     CausalMultiHeadAttention,
     CausalTransformer,
     CausalTransformerBlock,
-    DenseNetwork,
+    MLP,
     MultiHeadAttention,
     PolymerEmbedding,
     RMSNorm,
@@ -66,13 +66,6 @@ from .layers import (
     create_causal_mask,
 )
 
-# Shared building blocks
-from .blocks import (
-    CoordinateDecoder,
-    InputNorm,
-    RBFDistanceEncoder,
-    ResidualBlock,
-)
 
 # Config (from config/ submodule)
 from .config import (
@@ -174,7 +167,7 @@ __all__ = [
     # Dataset
     "PolymerDataset",
     # Layers
-    "DenseNetwork",
+    "MLP",
     "PolymerEmbedding",
     "Transformer",
     "TransformerBlock",
@@ -186,11 +179,6 @@ __all__ = [
     "CausalTransformerBlock",
     "CausalMultiHeadAttention",
     "create_causal_mask",
-    # Blocks
-    "InputNorm",
-    "ResidualBlock",
-    "CoordinateDecoder",
-    "RBFDistanceEncoder",
     # Config
     "BaseConfig",
     "DataConfig",

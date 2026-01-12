@@ -50,7 +50,7 @@ class ResidueEncoder(nn.Module):
         atom_dim: int | None = None,
         residue_dim: int | None = None,
         dropout: float = 0.1,
-        logvar_min: float = -4.0,
+        logvar_min: float | None = -4.0,
     ):
         super().__init__()
         self.latent_dim = latent_dim

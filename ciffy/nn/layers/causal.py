@@ -23,16 +23,9 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-try:
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    nn = None
-    F = None
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from .transformer import RMSNorm, RotaryPositionEmbedding, SwiGLU
 
@@ -55,7 +48,7 @@ def create_causal_mask(seq_len: int, device: "torch.device") -> "torch.Tensor":
     return torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
 
 
-class CausalMultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
+class CausalMultiHeadAttention(nn.Module):
     """
     Multi-head attention with causal masking and Rotary Position Embeddings.
 
@@ -70,8 +63,6 @@ class CausalMultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if d_model % num_heads != 0:
@@ -165,7 +156,7 @@ class CausalMultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         return self.out_proj(out)
 
 
-class CausalTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
+class CausalTransformerBlock(nn.Module):
     """
     Pre-LN Causal Transformer block.
 
@@ -182,8 +173,6 @@ class CausalTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.norm1 = RMSNorm(d_model)
@@ -202,7 +191,7 @@ class CausalTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         return x
 
 
-class CausalTransformer(nn.Module if TORCH_AVAILABLE else object):
+class CausalTransformer(nn.Module):
     """
     Decoder-only (GPT-style) Transformer for autoregressive generation.
 
@@ -232,8 +221,6 @@ class CausalTransformer(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_model = d_model

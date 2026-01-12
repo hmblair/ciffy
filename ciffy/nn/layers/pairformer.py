@@ -21,18 +21,11 @@ from __future__ import annotations
 import logging
 from typing import Optional, Tuple, Union
 
-try:
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    nn = None
-    F = None
-
-from .transformer import RMSNorm, SwiGLU
+from .transformer import RMSNorm, SwiGLU, MultiHeadAttention
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +74,7 @@ def _check_pair_tensor(
         )
 
 
-class TriangularMultiplicativeUpdate(nn.Module if TORCH_AVAILABLE else object):
+class TriangularMultiplicativeUpdate(nn.Module):
     """
     Triangular multiplicative update for pair representations.
 
@@ -108,8 +101,6 @@ class TriangularMultiplicativeUpdate(nn.Module if TORCH_AVAILABLE else object):
         direction: str = "outgoing",
         dropout: float = 0.0,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if direction not in ("outgoing", "incoming"):
@@ -182,7 +173,7 @@ class TriangularMultiplicativeUpdate(nn.Module if TORCH_AVAILABLE else object):
         return self.dropout(out)
 
 
-class TriangularAttention(nn.Module if TORCH_AVAILABLE else object):
+class TriangularAttention(nn.Module):
     """
     Triangular self-attention for pair representations.
 
@@ -209,8 +200,6 @@ class TriangularAttention(nn.Module if TORCH_AVAILABLE else object):
         direction: str = "starting",
         dropout: float = 0.0,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if direction not in ("starting", "ending"):
@@ -340,7 +329,7 @@ class TriangularAttention(nn.Module if TORCH_AVAILABLE else object):
         return self.dropout(out)
 
 
-class PairTransition(nn.Module if TORCH_AVAILABLE else object):
+class PairTransition(nn.Module):
     """
     Feedforward transition layer for pair representations.
 
@@ -363,8 +352,6 @@ class PairTransition(nn.Module if TORCH_AVAILABLE else object):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_pair = d_pair
@@ -385,7 +372,7 @@ class PairTransition(nn.Module if TORCH_AVAILABLE else object):
         return self.ffn(self.layer_norm(pair))
 
 
-class OuterProductMean(nn.Module if TORCH_AVAILABLE else object):
+class OuterProductMean(nn.Module):
     """
     Compute outer product of single representations to update pair.
 
@@ -409,8 +396,6 @@ class OuterProductMean(nn.Module if TORCH_AVAILABLE else object):
         d_pair: int,
         d_hidden: int = 32,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_single = d_single
@@ -472,7 +457,7 @@ class OuterProductMean(nn.Module if TORCH_AVAILABLE else object):
         return pair_update
 
 
-class PairToSingleAttention(nn.Module if TORCH_AVAILABLE else object):
+class PairToSingleAttention(nn.Module):
     """
     Aggregate pair representation to update single representation.
 
@@ -496,8 +481,6 @@ class PairToSingleAttention(nn.Module if TORCH_AVAILABLE else object):
         d_single: int,
         num_heads: int = 8,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if d_single % num_heads != 0:
@@ -578,7 +561,7 @@ class PairToSingleAttention(nn.Module if TORCH_AVAILABLE else object):
         return self.proj_out(out)
 
 
-class PairformerBlock(nn.Module if TORCH_AVAILABLE else object):
+class PairformerBlock(nn.Module):
     """
     Single Pairformer block with triangular operations.
 
@@ -610,8 +593,6 @@ class PairformerBlock(nn.Module if TORCH_AVAILABLE else object):
         d_ff: Optional[int] = None,
         dropout: float = 0.0,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_pair = d_pair
@@ -658,7 +639,7 @@ class PairformerBlock(nn.Module if TORCH_AVAILABLE else object):
         return pair
 
 
-class Pairformer(nn.Module if TORCH_AVAILABLE else object):
+class Pairformer(nn.Module):
     """
     Full Pairformer transformer for pair representations.
 
@@ -695,8 +676,6 @@ class Pairformer(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         d_single: Optional[int] = None,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_pair = d_pair
@@ -721,7 +700,7 @@ class Pairformer(nn.Module if TORCH_AVAILABLE else object):
             ])
             # Single track transformer layers (simple attention + FFN)
             self.single_attn = nn.ModuleList([
-                nn.MultiheadAttention(d_single, num_heads, dropout=dropout, batch_first=True)
+                MultiHeadAttention(d_single, num_heads, dropout=dropout, use_rope=False)
                 for _ in range(num_layers)
             ])
             self.single_ffn = nn.ModuleList([
@@ -778,17 +757,9 @@ class Pairformer(nn.Module if TORCH_AVAILABLE else object):
             if single is not None:
                 single = single + self.pair_to_single[i](pair, single, mask)
 
-                # Single self-attention
+                # Single self-attention (custom MultiHeadAttention handles mask internally)
                 single_normed = self.single_norm1[i](single)
-                attn_mask = None
-                if mask is not None:
-                    # Convert to attention mask format
-                    attn_mask = mask.unsqueeze(1).expand(-1, single.shape[1], -1)
-                attn_out, _ = self.single_attn[i](
-                    single_normed, single_normed, single_normed,
-                    key_padding_mask=mask,
-                    attn_mask=attn_mask,
-                )
+                attn_out = self.single_attn[i](single_normed, mask=mask)
                 single = single + attn_out
 
                 # Single FFN

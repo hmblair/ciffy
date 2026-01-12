@@ -22,16 +22,9 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-try:
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    nn = None
-    F = None
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +71,7 @@ def _check_tensor(
         )
 
 
-class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
+class RMSNorm(nn.Module):
     """
     Root Mean Square Layer Normalization.
 
@@ -88,8 +81,6 @@ class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
     """
 
     def __init__(self, dim: int, eps: float = 1e-6):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
@@ -119,7 +110,7 @@ class RMSNorm(nn.Module if TORCH_AVAILABLE else object):
         return x / rms * self.weight
 
 
-class AdaLN(nn.Module if TORCH_AVAILABLE else object):
+class AdaLN(nn.Module):
     """Adaptive Layer Normalization (AdaLN) for conditioning.
 
     Modulates normalized features based on a conditioning vector.
@@ -144,8 +135,6 @@ class AdaLN(nn.Module if TORCH_AVAILABLE else object):
             cond_dim: Dimension of conditioning vector.
             eps: Small constant for numerical stability.
         """
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
         self.eps = eps
         self.norm = RMSNorm(dim, eps)
@@ -186,7 +175,7 @@ class AdaLN(nn.Module if TORCH_AVAILABLE else object):
             return x_norm * (1 + scale) + shift
 
 
-class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
+class RotaryPositionEmbedding(nn.Module):
     """
     Rotary Position Embeddings (RoPE).
 
@@ -197,8 +186,6 @@ class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
     """
 
     def __init__(self, dim: int, max_seq_len: int = 2048, base: float = 10000.0):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if dim % 2 != 0:
@@ -279,7 +266,7 @@ class RotaryPositionEmbedding(nn.Module if TORCH_AVAILABLE else object):
         return x * cos + rotated * sin
 
 
-class SwiGLU(nn.Module if TORCH_AVAILABLE else object):
+class SwiGLU(nn.Module):
     """
     SwiGLU feedforward network.
 
@@ -289,8 +276,6 @@ class SwiGLU(nn.Module if TORCH_AVAILABLE else object):
     """
 
     def __init__(self, d_model: int, d_ff: Optional[int] = None, dropout: float = 0.0):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if d_ff is None:
@@ -306,7 +291,7 @@ class SwiGLU(nn.Module if TORCH_AVAILABLE else object):
         return self.dropout(self.w3(F.silu(self.w1(x)) * self.w2(x)))
 
 
-class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
+class MultiHeadAttention(nn.Module):
     """
     Multi-head attention with optional Rotary Position Embeddings.
 
@@ -319,6 +304,9 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         max_seq_len: Maximum sequence length for RoPE.
         use_rope: Whether to use Rotary Position Embeddings. Set to False
             when using custom attention biases (e.g., distance-based).
+        qk_norm: Whether to apply RMSNorm to queries and keys before the dot
+            product. Improves training stability by preventing attention logit
+            explosion. From ViT-22B (Dehghani et al., 2023).
     """
 
     def __init__(
@@ -328,9 +316,8 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
         use_rope: bool = True,
+        qk_norm: bool = False,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         if d_model % num_heads != 0:
@@ -340,6 +327,7 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
         self.use_rope = use_rope
+        self.qk_norm = qk_norm
 
         self.qkv_proj = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
@@ -349,6 +337,13 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
             self.rope = RotaryPositionEmbedding(self.head_dim, max_seq_len)
         else:
             self.rope = None
+
+        if qk_norm:
+            self.q_norm = RMSNorm(self.head_dim)
+            self.k_norm = RMSNorm(self.head_dim)
+        else:
+            self.q_norm = None
+            self.k_norm = None
 
     def forward(
         self,
@@ -422,6 +417,11 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         if self.rope is not None:
             q, k = self.rope(q, k, seq_len=L)
 
+        # Apply QK-Norm if enabled (after RoPE, before dot product)
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
         # Build combined attention mask from padding mask and custom bias
         combined_mask = None
 
@@ -465,7 +465,7 @@ class MultiHeadAttention(nn.Module if TORCH_AVAILABLE else object):
         return self.out_proj(out)
 
 
-class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
+class TransformerBlock(nn.Module):
     """
     Pre-LN Transformer block with RMSNorm, optional RoPE, and SwiGLU.
 
@@ -480,6 +480,7 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         dropout: Dropout probability.
         max_seq_len: Maximum sequence length for RoPE.
         use_rope: Whether to use Rotary Position Embeddings.
+        qk_norm: Whether to apply QK-Norm for training stability.
     """
 
     def __init__(
@@ -490,14 +491,13 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
         use_rope: bool = True,
+        qk_norm: bool = False,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.norm1 = RMSNorm(d_model)
         self.norm2 = RMSNorm(d_model)
-        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout, max_seq_len, use_rope, qk_norm)
         self.ffn = SwiGLU(d_model, d_ff, dropout)
         self.dropout = nn.Dropout(dropout)
 
@@ -512,7 +512,7 @@ class TransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         return x
 
 
-class AdaLNTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
+class AdaLNTransformerBlock(nn.Module):
     """Transformer block with Adaptive Layer Normalization (AdaLN).
 
     Uses AdaLN for conditioning on timestep (or other signals) instead of
@@ -532,8 +532,6 @@ class AdaLNTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.adaln1 = AdaLN(d_model, cond_dim)
@@ -563,7 +561,7 @@ class AdaLNTransformerBlock(nn.Module if TORCH_AVAILABLE else object):
         return x
 
 
-class AdaLNTransformer(nn.Module if TORCH_AVAILABLE else object):
+class AdaLNTransformer(nn.Module):
     """Transformer with Adaptive Layer Normalization conditioning.
 
     Like the standard Transformer but each layer receives a conditioning
@@ -596,8 +594,6 @@ class AdaLNTransformer(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_model = d_model
@@ -633,7 +629,7 @@ class AdaLNTransformer(nn.Module if TORCH_AVAILABLE else object):
         return self.final_adaln(x, cond)
 
 
-class Transformer(nn.Module if TORCH_AVAILABLE else object):
+class Transformer(nn.Module):
     """
     Modern Transformer encoder.
 
@@ -649,6 +645,8 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         max_seq_len: Maximum sequence length for RoPE
         use_rope: Whether to use Rotary Position Embeddings. Set to False
             when using custom attention biases (e.g., distance-based).
+        qk_norm: Whether to apply QK-Norm for training stability. Recommended
+            for large models or when experiencing NaN issues.
 
     Example:
         >>> model = Transformer(d_model=256, num_layers=4, num_heads=8)
@@ -670,9 +668,8 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         dropout: float = 0.0,
         max_seq_len: int = 2048,
         use_rope: bool = True,
+        qk_norm: bool = False,
     ):
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required")
         super().__init__()
 
         self.d_model = d_model
@@ -680,7 +677,7 @@ class Transformer(nn.Module if TORCH_AVAILABLE else object):
         self.num_heads = num_heads
 
         self.layers = nn.ModuleList([
-            TransformerBlock(d_model, num_heads, d_ff, dropout, max_seq_len, use_rope)
+            TransformerBlock(d_model, num_heads, d_ff, dropout, max_seq_len, use_rope, qk_norm)
             for _ in range(num_layers)
         ])
         self.final_norm = RMSNorm(d_model)

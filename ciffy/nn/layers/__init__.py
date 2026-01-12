@@ -1,21 +1,21 @@
 """Reusable neural network building blocks.
 
 Provides foundational layers used across the ciffy.nn module:
-- DenseNetwork: Multi-layer perceptron
+- MLP: Unified multi-layer perceptron with optional residual connections
 - PolymerEmbedding: Embeddings for polymer features
 - Transformer components: RMSNorm, RoPE, SwiGLU, etc.
 - Pairformer: AlphaFold3-style transformer for pair representations
 
 Example:
-    >>> from ciffy.nn.layers import DenseNetwork, Transformer, Pairformer
+    >>> from ciffy.nn.layers import MLP, Transformer, Pairformer
     >>>
-    >>> mlp = DenseNetwork(64, 10, hidden_sizes=[128, 64])
+    >>> mlp = MLP(64, 10, hidden_dims=[128, 64])
     >>> transformer = Transformer(d_model=256, num_layers=4, num_heads=8)
     >>> pairformer = Pairformer(d_pair=128, num_layers=4, num_heads=8)
 """
 
-from .dense_network import DenseNetwork
 from .embedding import PolymerEmbedding
+from .mlp import MLP
 from .transformer import (
     Transformer,
     TransformerBlock,
@@ -44,8 +44,6 @@ from .causal import (
 )
 
 __all__ = [
-    # Dense network
-    "DenseNetwork",
     # Embedding
     "PolymerEmbedding",
     # Transformer components
@@ -54,6 +52,7 @@ __all__ = [
     "AdaLNTransformer",
     "AdaLNTransformerBlock",
     "AdaLN",
+    "MLP",
     "MultiHeadAttention",
     "RMSNorm",
     "RotaryPositionEmbedding",

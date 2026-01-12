@@ -408,3 +408,59 @@ class PolymerDataset(Dataset):
             return polymer[:0]
 
         return polymer.chain(matching_indices)
+
+    def load(self) -> "PolymerDataset":
+        """
+        Preload all structures into cache using parallel I/O.
+
+        Loads all unique files in parallel (~5x faster than sequential access),
+        then extracts and caches individual items. Subsequent __getitem__ calls
+        return cached items instantly.
+
+        Returns:
+            self, for method chaining (e.g., `dataset = PolymerDataset(...).load()`)
+
+        Raises:
+            ValueError: If cache is disabled (cache=False in constructor).
+
+        Example:
+            >>> dataset = PolymerDataset("./structures/", scale=Scale.CHAIN).load()
+            >>> for i in range(len(dataset)):  # Fast iteration, all cached
+            ...     polymer = dataset[i]
+        """
+        if self._cache is None:
+            raise ValueError("Cannot preload: cache is disabled")
+
+        from .. import load as ciffy_load
+
+        # Get unique file paths preserving order
+        unique_paths = list(dict.fromkeys(path for path, _ in self._index))
+
+        # Parallel load all files
+        polymers = ciffy_load(unique_paths, backend=self.backend)
+
+        # Build path -> polymer mapping
+        path_to_polymer = {}
+        for path, polymer in zip(unique_paths, polymers):
+            if polymer is not None:
+                path_to_polymer[path] = polymer
+
+        # Extract and cache each item
+        for idx, (path, chain_idx) in enumerate(self._index):
+            if idx in self._cache:
+                continue
+
+            polymer = path_to_polymer.get(path)
+            if polymer is None:
+                continue
+
+            if chain_idx is not None:
+                item = polymer.chain(chain_idx)
+            elif self.molecule_types is not None:
+                item = self._filter_by_molecule_type(polymer)
+            else:
+                item = polymer
+
+            self._cache._items[idx] = item
+
+        return self

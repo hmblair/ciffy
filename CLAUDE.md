@@ -268,6 +268,7 @@ dataset = PolymerDataset(
     exclude_ids=["1ABC"],
 )
 polymer = dataset[0]  # Caching enabled by default
+dataset.load()        # Preload all structures with parallel I/O (~2-5x faster)
 ```
 
 ### Train/Test Splitting

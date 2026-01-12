@@ -100,6 +100,30 @@ polymer.to('cuda')
 polymer.write('output.cif')
 ```
 
+### Structured Atom Access
+
+Access atoms by molecule type using `RNA`, `DNA`, `Protein` namespaces:
+
+```python
+from ciffy.biochemistry import RNA, DNA, Protein
+
+# Backbone atoms - unified values shared across all residue types
+RNA.Backbone.P       # Atom(P, 2)
+RNA.Backbone.C1p     # Atom(C1', 13)
+RNA.Backbone.O3p     # Atom(O3', 10)
+Protein.Backbone.CA  # Atom(CA, 15)
+
+# Base atoms - aggregated across residue types
+RNA.Base.glycosidic_n       # AtomGroup with {A: N9, G: N9, C: N1, U: N1}
+RNA.Base.glycosidic_n.A     # Atom(N9, 18) for adenine
+RNA.Base.glycosidic_n.index()  # Array of all glycosidic N values
+
+# Usage with bonded_distances
+polymer.bonded_distances(RNA.Backbone.C1p, RNA.Base.glycosidic_n)
+```
+
+Note: `ciffy.RNA` returns `Molecule.RNA` (int) for filtering. Use `ciffy.biochemistry.RNA` for structured atom access.
+
 ### Saving Predicted Coordinates
 
 To save predicted coordinates to a `.cif` file, create a template from the sequence and use `copy()` to assign coordinates:
@@ -198,7 +222,7 @@ Key ops: `cat`, `stack`, `cdist`, `scatter_sum/mean/max/min`, `repeat_interleave
 
 ### Enum Values
 
-Always use enum `.value` attributes instead of hardcoded integers. Enum values are implementation details and are not consecutive across residue types.
+Always use enum `.value` attributes instead of hardcoded integers. Enum values are implementation details, auto-generated from CCD order during codegen, and may change between versions.
 
 ```python
 # GOOD - use enum values
@@ -207,8 +231,13 @@ from ciffy import Residue
 mask = polymer.sequence == Residue.A.value
 adenine_count = (polymer.sequence == Residue.A.value).sum()
 
+# GOOD - use structured access for atoms
+from ciffy.biochemistry import RNA
+p_atoms = polymer.atoms == int(RNA.Backbone.P)
+
 # BAD - hardcoded integers
 mask = polymer.sequence == 5  # What residue is this? Will it change?
+mask = polymer.atoms == 2     # Atom values are auto-generated, not stable!
 ```
 
 ### Training Practices

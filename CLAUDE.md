@@ -111,14 +111,20 @@ adj = operations.adjacency(polymer)                   # Adjacency matrix from bo
 bond_dists = operations.bonded_distances(polymer, Residue.A.O3p, Residue.A.P)
 
 # Frame operations (for ML pipelines)
-aligned, Rs = operations.align_to_frame(polymer)      # Align residues to local frames
-transforms = operations.local_transforms(polymer, O3P_FRAME, P_FRAME)  # Inter-residue SE(3)
-assembled = operations.apply_local_transforms(polymer, transforms, O3P_FRAME, P_FRAME)
+transforms = operations.decompose(polymer)             # Extract inter-residue SE(3) transforms
+rebuilt = operations.compose(polymer, transforms)      # Rebuild polymer from transforms
+# transforms.data: (n_residues, 7) - [quaternion(4), translation(3)]
+# transforms.source, transforms.target: frame definitions used
 
 # Structure comparison
 rmsd_val = ciffy.rmsd(polymer1, polymer2)             # Kabsch-aligned RMSD
 tm = ciffy.tm_score(polymer1, polymer2)               # TM-score
 lddt_val = ciffy.lddt(polymer1, polymer2)             # lDDT
+
+# Packing for batched per-residue operations
+packed, mask = operations.pack(polymer.coordinates, polymer.counts(Scale.RESIDUE))
+# packed: (n_residues, max_atoms, 3), mask: (n_residues, max_atoms) boolean
+unpacked = operations.unpack(packed, mask)  # Back to (N_atoms, 3)
 ```
 
 Note: Many operations are also available as Polymer methods for convenience, but the operations module is the canonical location.

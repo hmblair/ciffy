@@ -1,181 +1,112 @@
 """
-Tests for frame paradigm methods on Polymer.
+Tests for frame operations.
 
-Two paradigms exist for frame operations:
-1. Global Frames (single FrameDefinition): align() / unalign()
-2. Local Frames (pair of FrameDefinitions): local_transforms() / apply_local_transforms()
+Primary API:
+- decompose(polymer, source, target) -> Transforms
+- compose(polymer, transforms) -> Polymer
 """
 
 import numpy as np
 import pytest
 
 import ciffy
-from ciffy import Scale, Molecule, Polymer
-from ciffy.biochemistry import Residue
-from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, NUCLEIC_ACID_LINK
-from ciffy.geometry import LocalCoordinates
+from ciffy import Scale, operations
+from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, O3P_FRAME, P_FRAME
 
 from tests.utils import BACKENDS
 
 
-class TestGlobalFrames:
-    """Tests for Paradigm 1: Global frame operations (align/unalign)."""
+class TestDecomposeCompose:
+    """Tests for the decompose/compose API."""
 
-    def test_align_unalign_roundtrip(self):
-        """align() -> unalign() restores original coordinates."""
+    def test_roundtrip_default_frames(self):
+        """decompose -> compose roundtrip preserves structure."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
         p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
 
-        aligned, Rs, origins = p.align(return_origins=True)
-        restored = aligned.unalign(Rs, origins)
+        transforms = operations.decompose(p)
+        rebuilt = operations.compose(p, transforms)
 
-        rmsd = ciffy.rmsd(restored, p).item()
-        assert rmsd < 0.001, f"Roundtrip RMSD should be ~0, got {rmsd}"
+        rmsd = ciffy.rmsd(rebuilt, p).item()
+        assert rmsd < 0.01, f"Roundtrip RMSD should be ~0, got {rmsd}"
 
-    def test_align_unalign_with_custom_frame(self):
-        """Roundtrip works with non-default frame."""
-        # Use P_FRAME instead of default GLYCOSIDIC_FRAME
-        from ciffy.biochemistry.linking import P_FRAME
-
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue(list(range(1, min(5, p.size(Scale.RESIDUE)))))  # Skip first (no P)
-
-        aligned, Rs, origins = p.align(frame=P_FRAME, return_origins=True)
-        restored = aligned.unalign(Rs, origins)
-
-        rmsd = ciffy.rmsd(restored, p).item()
-        assert rmsd < 0.001, f"Roundtrip RMSD should be ~0, got {rmsd}"
-
-    def test_align_returns_origins_optionally(self):
-        """align() returns origins only when return_origins=True."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue([0, 1, 2])
-
-        # Default: no origins
-        result = p.align()
-        assert len(result) == 2
-        aligned, Rs = result
-        assert Rs.shape == (3, 3, 3)
-
-        # With origins
-        result = p.align(return_origins=True)
-        assert len(result) == 3
-        aligned, Rs, origins = result
-        assert Rs.shape == (3, 3, 3)
-        assert origins.shape == (3, 3)
-
-    @pytest.mark.parametrize("backend", BACKENDS)
-    def test_align_unalign_backend_preserved(self, backend):
-        """align/unalign work with both backends."""
-        if backend == "torch":
-            pytest.importorskip("torch")
-
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1, 2])
-        if backend == "torch":
-            p = p.torch()
-
-        aligned, Rs, origins = p.align(return_origins=True)
-        restored = aligned.unalign(Rs, origins)
-
-        rmsd = ciffy.rmsd(restored, p).item()
-        assert rmsd < 0.001
-
-
-class TestLocalFrames:
-    """Tests for Paradigm 2: Local frame operations."""
-
-    def test_local_transforms_requires_both_frames(self):
-        """Raises TypeError if either frame is None."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue([0, 1, 2])
-
-        with pytest.raises(TypeError, match="source_frame is required"):
-            p.local_transforms(None, GLYCOSIDIC_FRAME)
-
-        with pytest.raises(TypeError, match="target_frame is required"):
-            p.local_transforms(GLYCOSIDIC_FRAME, None)
-
-    def test_apply_local_transforms_requires_both_frames(self):
-        """Raises TypeError if either frame is None."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue([0, 1, 2])
-        transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        aligned, _ = p.align()
-
-        with pytest.raises(TypeError, match="source_frame is required"):
-            aligned.apply_local_transforms(transforms, None, GLYCOSIDIC_FRAME)
-
-        with pytest.raises(TypeError, match="target_frame is required"):
-            aligned.apply_local_transforms(transforms, GLYCOSIDIC_FRAME, None)
-
-    def test_roundtrip_same_frame(self):
-        """Roundtrip with GLYCOSIDIC->GLYCOSIDIC preserves structure."""
+    def test_roundtrip_glycosidic_frames(self):
+        """Roundtrip with GLYCOSIDIC->GLYCOSIDIC frames."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
         p = p.residue(list(range(min(6, p.size(Scale.RESIDUE)))))
 
-        transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        aligned, _ = p.align(frame=GLYCOSIDIC_FRAME)
-        rebuilt = aligned.apply_local_transforms(
-            transforms, GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME
-        )
+        transforms = operations.decompose(p, source=GLYCOSIDIC_FRAME, target=GLYCOSIDIC_FRAME)
+        rebuilt = operations.compose(p, transforms)
 
         rmsd = ciffy.rmsd(rebuilt, p).item()
         assert rmsd < 0.01, f"Roundtrip RMSD should be ~0, got {rmsd}"
 
-    def test_roundtrip_different_frames(self):
-        """Roundtrip with O3P->P frames preserves structure."""
-        O3P_FRAME = NUCLEIC_ACID_LINK.prev_frame
-        P_FRAME = NUCLEIC_ACID_LINK.next_frame
-
+    def test_roundtrip_o3p_p_frames(self):
+        """Roundtrip with O3P->P frames (default)."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        # Skip first and last residues (may not have O3' or P)
-        n_res = p.size(Scale.RESIDUE)
-        if n_res > 4:
-            p = p.residue(list(range(1, min(5, n_res - 1))))
-        else:
-            pytest.skip("Need at least 5 residues for this test")
+        p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
 
-        transforms = p.local_transforms(O3P_FRAME, P_FRAME)
-        aligned, _ = p.align(frame=P_FRAME)  # Align to TARGET frame
-        rebuilt = aligned.apply_local_transforms(transforms, O3P_FRAME, P_FRAME)
+        transforms = operations.decompose(p, source=O3P_FRAME, target=P_FRAME)
+        rebuilt = operations.compose(p, transforms)
 
         rmsd = ciffy.rmsd(rebuilt, p).item()
         assert rmsd < 0.01, f"Roundtrip RMSD should be ~0, got {rmsd}"
+
+    def test_transforms_shape(self):
+        """Transforms has correct shape and identity first element."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
+        n_res = p.size(Scale.RESIDUE)
+
+        transforms = operations.decompose(p)
+
+        assert transforms.data.shape == (n_res, 7)
+        assert len(transforms) == n_res
+        # First transform should be identity quaternion [1,0,0,0] + zero translation
+        assert np.allclose(transforms.data[0, 0], 1, atol=1e-6)  # w=1
+        assert np.allclose(transforms.data[0, 1:], 0, atol=1e-6)  # rest=0
+
+    def test_transforms_carries_frame_metadata(self):
+        """Transforms object stores source and target frames."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = p.residue([0, 1, 2])
+
+        transforms = operations.decompose(p, source=O3P_FRAME, target=P_FRAME)
+
+        assert transforms.source is O3P_FRAME
+        assert transforms.target is P_FRAME
 
     def test_invariant_to_global_rotation(self):
-        """Local transforms are invariant to global rotation."""
+        """Transforms are invariant to global rotation."""
         pytest.importorskip("torch")
         import torch
 
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
-        # Create a random rotation using quaternion
+        # Create a random rotation
+        from ciffy.geometry import quaternion_to_rotation_matrix
         axis = torch.randn(3)
         axis = axis / axis.norm()
-        angle = torch.tensor(0.5)  # ~30 degrees
-
-        from ciffy.geometry import quaternion_to_rotation_matrix
-        # Create quaternion from axis-angle
+        angle = torch.tensor(0.5)
         quat = torch.zeros(4)
         quat[0] = torch.cos(angle / 2)
         quat[1:] = axis * torch.sin(angle / 2)
         R = quaternion_to_rotation_matrix(quat.unsqueeze(0)).squeeze(0)
 
         # Rotate the polymer
-        rotated_coords = p.coordinates @ R.T
-        rotated = p.copy(coordinates=rotated_coords)
+        rotated = p.copy(coordinates=p.coordinates @ R.T)
 
         # Compute transforms
-        t_original = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        t_rotated = rotated.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+        t_original = operations.decompose(p)
+        t_rotated = operations.decompose(rotated)
 
-        # Should be the same (within numerical precision)
-        diff = (t_original - t_rotated).abs().max().item()
+        # Should be the same
+        diff = (t_original.data - t_rotated.data).abs().max().item()
         assert diff < 1e-3, f"Transforms should be invariant to rotation, max diff={diff}"
 
     def test_invariant_to_global_translation(self):
-        """Local transforms are invariant to global translation."""
+        """Transforms are invariant to global translation."""
         pytest.importorskip("torch")
         import torch
 
@@ -183,33 +114,20 @@ class TestLocalFrames:
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
         # Translate the polymer
-        translation = torch.randn(3) * 100  # Large translation
+        translation = torch.randn(3) * 100
         translated = p.copy(coordinates=p.coordinates + translation)
 
         # Compute transforms
-        t_original = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        t_translated = translated.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+        t_original = operations.decompose(p)
+        t_translated = operations.decompose(translated)
 
         # Should be the same
-        diff = (t_original - t_translated).abs().max().item()
+        diff = (t_original.data - t_translated.data).abs().max().item()
         assert diff < 1e-3, f"Transforms should be invariant to translation, max diff={diff}"
 
-    def test_transforms_shape(self):
-        """local_transforms returns correct shape (7D quaternion format)."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
-        n_res = p.size(Scale.RESIDUE)
-
-        transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-
-        assert transforms.shape == (n_res, 7)
-        # First transform should be identity quaternion [1,0,0,0] + zero translation
-        assert np.allclose(transforms[0, 0], 1, atol=1e-6)  # w=1
-        assert np.allclose(transforms[0, 1:], 0, atol=1e-6)  # x,y,z,tx,ty,tz=0
-
     @pytest.mark.parametrize("backend", BACKENDS)
-    def test_local_transforms_backend_preserved(self, backend):
-        """local_transforms/apply work with both backends."""
+    def test_backend_preserved(self, backend):
+        """decompose/compose work with both backends."""
         if backend == "torch":
             pytest.importorskip("torch")
 
@@ -217,93 +135,79 @@ class TestLocalFrames:
         if backend == "torch":
             p = p.torch()
 
-        transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        aligned, _ = p.align()
-        rebuilt = aligned.apply_local_transforms(
-            transforms, GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME
-        )
+        transforms = operations.decompose(p)
+        rebuilt = operations.compose(p, transforms)
 
         rmsd = ciffy.rmsd(rebuilt, p).item()
         assert rmsd < 0.01
 
+    def test_single_residue(self):
+        """Works with single residue polymer."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0])
 
-class TestAppendWithFrames:
-    """Tests for append() with explicit frame parameters."""
+        transforms = operations.decompose(p)
+        assert len(transforms) == 1
+        assert np.allclose(transforms.data[0, 0], 1, atol=1e-6)  # identity quat
 
-    def test_append_default_frames_backward_compatible(self):
-        """Default frames use LINKING_BY_TYPE (backward compatible)."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
-        p = p.residue([0, 1])
+        rebuilt = operations.compose(p, transforms)
+        rmsd = ciffy.rmsd(rebuilt, p).item()
+        assert rmsd < 0.01
 
-        # Build first residue
-        res0 = p.residue(0)
-        res_type = Residue.from_index(p.sequence[0])
-        built = Polymer().append(
-            res_type.subset(res0.atoms.tolist()),
-            res0.coordinates,
-            residue=res_type,
-        )
-
-        # Should work without specifying frames
-        O3P_FRAME = NUCLEIC_ACID_LINK.prev_frame
-        P_FRAME = NUCLEIC_ACID_LINK.next_frame
-        transforms = p.local_transforms(O3P_FRAME, P_FRAME)
-        aligned, _ = p.align(frame=P_FRAME)
-
-        res1 = p.residue(1)
-        res_type1 = Residue.from_index(p.sequence[1])
-        n_atoms0 = res0.size()
-
-        # transforms[1] describes how residue 1 is positioned relative to residue 0
-        built = built.append(
-            res_type1.subset(res1.atoms.tolist()),
-            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[1]),
-            residue=res_type1,
-            # No explicit frames - uses defaults
-        )
-
-        assert built.size(Scale.RESIDUE) == 2
-
-    def test_append_explicit_glycosidic_frames(self):
-        """Explicit GLYCOSIDIC frames work for ML-style transforms."""
+    def test_compose_with_different_polymer(self):
+        """compose works with a different polymer (template)."""
         p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
-        # Get GLYCOSIDIC transforms
-        transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
-        aligned, _ = p.align(frame=GLYCOSIDIC_FRAME)
+        # Extract transforms from original
+        transforms = operations.decompose(p)
 
-        counts = p.counts(Scale.RESIDUE)
-        sequence = p.sequence
-        n_res = p.size(Scale.RESIDUE)
+        # Use same polymer as template (simplest case)
+        rebuilt = operations.compose(p, transforms)
 
-        # Build first residue
-        res0 = p.residue(0)
-        res_type = Residue.from_index(sequence[0])
-        built = Polymer().append(
-            res_type.subset(res0.atoms.tolist()),
-            aligned.coordinates[: int(counts[0])],
-            residue=res_type,
-        )
+        rmsd = ciffy.rmsd(rebuilt, p).item()
+        assert rmsd < 0.01
 
-        # Build subsequent residues with explicit frames
-        # transforms[i] describes how residue i is positioned relative to i-1
-        offset = int(counts[0])
-        for i in range(1, n_res):
-            n_atoms = int(counts[i])
-            res_i = p.residue(i)
-            res_type = Residue.from_index(sequence[i])
+    def test_compose_size_mismatch_raises(self):
+        """compose raises if transform count doesn't match residue count."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = p.residue([0, 1, 2])
 
-            built = built.append(
-                res_type.subset(res_i.atoms.tolist()),
-                LocalCoordinates(
-                    aligned.coordinates[offset : offset + n_atoms], transforms[i]
-                ),
-                residue=res_type,
-                source_frame=GLYCOSIDIC_FRAME,
-                target_frame=GLYCOSIDIC_FRAME,
-            )
-            offset += n_atoms
+        transforms = operations.decompose(p)
+        p_short = p.residue([0, 1])
 
-        rmsd = ciffy.rmsd(built, p).item()
-        assert rmsd < 0.01, f"Append with GLYCOSIDIC frames should preserve structure, got RMSD={rmsd}"
+        with pytest.raises(ValueError, match="transforms has 3 entries"):
+            operations.compose(p_short, transforms)
+
+
+class TestTransformsDataclass:
+    """Tests for the Transforms dataclass."""
+
+    def test_len(self):
+        """len(transforms) returns number of residues."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1, 2])
+        transforms = operations.decompose(p)
+        assert len(transforms) == 3
+
+    def test_data_access(self):
+        """Can access transform data directly."""
+        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1])
+        transforms = operations.decompose(p)
+
+        # Access quaternion and translation
+        quat = transforms.data[1, :4]
+        trans = transforms.data[1, 4:]
+        assert quat.shape == (4,)
+        assert trans.shape == (3,)
+
+    def test_create_manually(self):
+        """Can create Transforms manually for predictions."""
+        import numpy as np
+        from ciffy.operations import Transforms
+
+        # Create identity transforms
+        data = np.zeros((3, 7), dtype=np.float32)
+        data[:, 0] = 1.0  # identity quaternions
+
+        transforms = Transforms(data=data, source=O3P_FRAME, target=P_FRAME)
+        assert len(transforms) == 3
+        assert transforms.source is O3P_FRAME

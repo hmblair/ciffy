@@ -28,15 +28,22 @@ from .geometry import (
     pca,
 )
 
-# Frame operations (moved from Polymer)
+# Frame operations - new API
+from .frames import (
+    Transforms,
+    decompose,
+    compose,
+    gather,
+    sort_atoms,
+)
+
+# Frame operations - legacy (to be removed)
 from .frames import (
     frames,
     align_to_frame,
     unalign,
     local_transforms,
     apply_local_transforms,
-    gather,
-    sort_atoms,
 )
 
 # Legacy alias
@@ -82,12 +89,16 @@ __all__ = [
     "bonded_distances",
     "moment",
     "pca",
-    # Frame operations
+    # Frame operations - new API
+    "Transforms",
+    "decompose",
+    "compose",
+    "gather",
+    "sort_atoms",
+    # Frame operations - legacy (to be removed)
     "frames",
     "align_to_frame",
     "unalign",
     "local_transforms",
     "apply_local_transforms",
-    "gather",
-    "sort_atoms",
 ]

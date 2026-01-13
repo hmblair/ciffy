@@ -842,6 +842,10 @@ class EquivariantAttention(nn.Module):
         """Node-wise attention: Q at node level, K/V at edge level."""
         N, k = neighbor_idx.shape
 
+        # Handle empty neighbor case
+        if k == 0:
+            return f.new_zeros(N, self.out_mult, self.out_dim)
+
         # === Compute Queries (node-level) ===
         queries = self.proj_q(f)  # (N, in_mult, in_dim)
 
@@ -929,6 +933,10 @@ class EquivariantAttention(nn.Module):
     ) -> torch.Tensor:
         """Edge-wise attention: Q, K, V all computed at edge level."""
         N, k = neighbor_idx.shape
+
+        # Handle empty neighbor case
+        if k == 0:
+            return f.new_zeros(N, self.out_mult, self.out_dim)
 
         # Flatten for convolution
         src_idx = neighbor_idx.flatten()
@@ -1320,6 +1328,10 @@ class EquivariantTransformer(nn.Module):
             )
 
         N = coordinates.size(0)
+
+        # Handle empty input
+        if N == 0:
+            return node_features.new_zeros(0, self.out_repr.mult, self.out_repr.dim())
 
         # Build k-NN graph from coordinates
         neighbor_idx = build_knn_graph(coordinates, self.k_neighbors)

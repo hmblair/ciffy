@@ -105,89 +105,6 @@ class MaskedPCAFlow(PCAFlow):
 
 ---
 
-### Consolidate Residue Extraction Code
-
-**Goal**: Reduce duplication between `ciffy/operations/extract.py` and `ciffy/nn/flow/residue/data.py`.
-
-**Context**: Both modules extract residue coordinates into dense `(n, n_atoms, 3)` arrays with similar logic but different implementations.
-
-**Detailed comparison**:
-
-| Concern | `operations/extract.py` | `nn/flow/residue/data.py` |
-|---------|-------------------------|---------------------------|
-| Find common atoms | Set intersection (all instances) | Counter + min_coverage threshold |
-| Build dense array | Mask-based on sorted atoms | Dict lookup remapping |
-| Filter residue type | `poly.by_residue(residue.value)` | Manual `seq[i] != residue_type.value` |
-| Input | Single `Polymer` object | List of CIF file paths |
-| Output | `(n, n_atoms, 3)` coords only | coords + SE(3) link transforms |
-
-**Duplicated patterns**:
-
-1. **Common atom discovery** (`extract.py:134-142` vs `data.py:187-193`):
-```python
-# extract.py - strict intersection
-atom_sets = [set(to_numpy(a).tolist()) for a in per_res_atoms]
-common_atoms = set.intersection(*atom_sets)
-
-# data.py - coverage threshold
-atom_counts = Counter()
-for coords_i, atoms_i, *_ in all_instances:
-    atom_counts.update(atoms_i)
-common_atoms = sorted([a for a, c in atom_counts.items() if c >= min_count])
-```
-
-2. **Dense array construction** (`extract.py:163-173` vs `data.py:212-217`):
-```python
-# extract.py - mask-based
-result = np.zeros((n_residues, n_atoms, 3), dtype=np.float32)
-for i in range(n_residues):
-    mask = np.isin(res_atoms, common_atoms_arr)
-    result[i] = res_coords[mask]
-
-# data.py - dict remapping via _remap_to_common()
-coords_out = np.zeros((n, n_atoms, 3), dtype=np.float32)
-coords_out[idx] = _remap_to_common(c_i, a_i, common_atoms)
-```
-
-**Proposed refactor**:
-
-Option A: Extend `extract()` to support both modes:
-```python
-def extract(
-    poly: Polymer,
-    residue: AtomGroup,
-    atoms: list | None = None,
-    min_coverage: float = 1.0,  # 1.0 = strict intersection (current default)
-    ...
-) -> tuple[Array, list[int]]:
-```
-
-Option B: Create unified `Ensemble` class:
-```python
-class Ensemble:
-    coords: Array              # (n, n_atoms, 3)
-    atoms: list[int]
-    residue: AtomGroup
-    transforms: Array | None   # (n, 6) optional SE(3) link transforms
-
-    @classmethod
-    def from_polymer(cls, poly, residue, ...): ...
-
-    @classmethod
-    def from_cif_files(cls, paths, residue, with_transforms=False, ...): ...
-```
-
-`ResidueDataset` becomes `Ensemble.from_cif_files(..., with_transforms=True)`.
-
-**Files affected**:
-- `ciffy/operations/extract.py` - Add `min_coverage` parameter or refactor to shared utility
-- `ciffy/nn/flow/residue/data.py` - Use shared extraction logic, keep link transform computation
-- `ciffy/ensemble.py` (optional) - Unified interface
-
-**Effort**: 2-4 hours
-
----
-
 ### Properly Parse CIF Semicolon Multi-line Text Blocks
 
 **Goal**: Fully parse CIF files containing semicolon-delimited multi-line text values instead of skipping them.
@@ -223,38 +140,6 @@ Entity 5's name spans multiple lines. Currently, `_scan_lines()` in `io.c` skips
 ---
 
 ## LOW Priority
-
-### ~~Structured AtomGroup Access by Molecule Type~~ (DONE)
-
-Implemented in `ciffy/biochemistry/groups.py`. Access via:
-```python
-from ciffy.biochemistry import RNA, DNA, Protein
-
-RNA.Backbone.P           # Atom(P, 2) - unified value
-RNA.Backbone.C1p         # Atom(C1', 13)
-RNA.Base.glycosidic_n    # AtomGroup with {A: N9, G: N9, C: N1, U: N1}
-RNA.Base.glycosidic_n.A  # Atom(N9, 18)
-Protein.Backbone.CA      # Atom(CA, 15)
-```
-
----
-
-### ~~Auto-generate Backbone Atom Values in Codegen~~ (DONE)
-
-Backbone atom values are now auto-generated from CCD order during codegen, exactly like non-backbone atoms:
-- `codegen/__init__.py` `_build_indices()` assigns backbone values as atoms are encountered
-- Values exported to `ciffy/biochemistry/_generated_atoms.py` as `UNIFIED_BACKBONE_VALUES`
-- Config only defines *which* atoms are backbone (name sets), not their values
-
-New CCD-based ordering:
-```python
-# OP3=1, P=2, OP1=3, OP2=4, O5'=5, C5'=6, C4'=7, O4'=8, C3'=9, O3'=10, C2'=11, O2'=12, C1'=13
-# N=14, CA=15, C=16, O=17
-```
-
-Note: This is a breaking change from the old hardcoded ordering (P=1, OP1=2, ...).
-
----
 
 ### Derive Terminal Atoms from CCD
 
@@ -293,7 +178,6 @@ The following modules lack test coverage. Adding tests would improve reliability
 
 | Module | Issue |
 |--------|-------|
-| `ciffy/ensemble.py` | Core feature for conformational analysis, no tests |
 | `ciffy/operations/extract.py` | Used by template system, no tests |
 
 ### Medium Priority

@@ -161,6 +161,12 @@ class SphericalHarmonic(nn.Module):
             NaN values (from zero vectors) are replaced with zeros.
         """
         *b, n, _ = x.shape
+
+        # Handle empty input
+        if n == 0:
+            out_dim = (self.lmax + 1) ** 2
+            return x.new_zeros(*b, 0, out_dim)
+
         x = x.view(-1, 3)
 
         # Permute coordinates for sphericart convention

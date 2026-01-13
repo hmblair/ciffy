@@ -130,6 +130,8 @@ class PolymerDataset(Dataset):
         max_atoms: int | None = None,
         min_residues: int | None = None,
         max_residues: int | None = None,
+        min_chains: int | None = None,
+        max_chains: int | None = None,
         backend: str = "torch",
         molecule_types: Molecule | tuple[Molecule, ...] | None = None,
         exclude_ids: list[str] | set[str] | None = None,
@@ -154,6 +156,11 @@ class PolymerDataset(Dataset):
                 are filtered out during indexing. None = no minimum.
             max_residues: Maximum residues per item. Items exceeding this
                 are filtered out during indexing. None = no limit.
+            min_chains: Minimum chains per structure. Structures with fewer
+                chains are filtered out. None = no minimum.
+            max_chains: Maximum chains per structure. Structures exceeding
+                this are filtered out. None = no limit. Use max_chains=1 to
+                only include single-chain structures (no complexes).
             backend: Backend for loaded polymers ("torch" or "numpy").
             molecule_types: Filter to specific molecule type(s). Can be
                 a single Molecule or tuple of Molecules. Chains not matching
@@ -231,6 +238,9 @@ class PolymerDataset(Dataset):
         else:
             self.exclude_ids = {pid.upper() for pid in exclude_ids}
 
+        self.min_chains = min_chains
+        self.max_chains = max_chains
+
         # Build index: list of (file_path, chain_idx or None)
         self._index: list[tuple[Path, int | None]] = []
         self._build_index(cif_files)
@@ -291,6 +301,12 @@ class PolymerDataset(Dataset):
 
     def _file_passes_filters(self, meta: dict, type_filter: set | None) -> bool:
         """Check if a file passes molecule-level filters."""
+        num_chains = meta["chains"]
+        if self.min_chains is not None and num_chains < self.min_chains:
+            return False
+        if self.max_chains is not None and num_chains > self.max_chains:
+            return False
+
         if type_filter is not None:
             has_matching = any(int(t) in type_filter for t in meta["molecule_types"])
             if not has_matching:
@@ -312,6 +328,12 @@ class PolymerDataset(Dataset):
 
     def _chain_passes_filters(self, meta: dict, chain_idx: int, type_filter: set | None) -> bool:
         """Check if a chain passes chain-level filters."""
+        num_chains = meta["chains"]
+        if self.min_chains is not None and num_chains < self.min_chains:
+            return False
+        if self.max_chains is not None and num_chains > self.max_chains:
+            return False
+
         if type_filter is not None:
             chain_mol_type = int(meta["molecule_types"][chain_idx])
             if chain_mol_type not in type_filter:

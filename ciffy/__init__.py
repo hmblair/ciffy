@@ -64,9 +64,6 @@ from .io.writer import write_cif
 
 # Template generation (re-exported from polymer module above)
 
-# Ensemble for conformational analysis
-from .ensemble import Ensemble
-
 # Operations - commonly used, re-exported at top level
 from .operations.alignment import align, intersect
 from .operations.metrics import rmsd, tm_score, lddt, rg, clashes

@@ -27,8 +27,30 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .representations import Repr, ProductRepr
-from .equivariant import RepNorm, EquivariantBases, RadialBasisFunctions, SequencePositionEncoding
+from .equivariant import (
+    RepNorm,
+    EquivariantBasis,
+    EquivariantBases,
+    _EquivariantBasisLegacy,
+    RadialBasisFunctions,
+    SequencePositionEncoding,
+)
 from .output import MatrixOutput, LowRankMatrixOutput
+from ..layers.transformer import RMSNorm
+
+
+def _compute_num_basis(repr: ProductRepr, rank: int | None) -> int:
+    """Compute the number of basis elements for a ProductRepr and rank.
+
+    Args:
+        repr: ProductRepr specifying input and output representations.
+        rank: Maximum filter degree relative to minimum coupling.
+            0 = only l=|l1-l2| terms, None = all terms up to l1+l2.
+
+    Returns:
+        Number of basis elements.
+    """
+    return repr.num_basis(rank)
 
 
 def _init_weights(module: nn.Module) -> None:
@@ -103,6 +125,10 @@ def build_knn_graph(
         # Exclude self (distance 0 is always to self at same index)
         neighbor_idx[start:end] = chunk_indices[:, 1:]
 
+    # Debug assertion: verify all indices are valid
+    assert neighbor_idx.max() < N, f"k-NN returned invalid index: max={neighbor_idx.max()}, N={N}"
+    assert neighbor_idx.min() >= 0, f"k-NN returned negative index: min={neighbor_idx.min()}"
+
     return neighbor_idx
 
 
@@ -112,60 +138,47 @@ class RadialWeight(nn.Module):
     A neural network that maps edge features to weights for tensor product
     contractions. Used in equivariant message passing networks.
 
-    Supports two modes:
-    - Full-rank (rank=None): Direct projection to full weight matrix
-    - Low-rank (rank=k): Factorized projection A @ B where A is (nl2*out_dim, k)
-      and B is (k, nl1*in_dim), significantly reducing parameters
+    Supports two output formats:
+    - Legacy format (for factored basis): output shape (num_basis, out_mult * in_mult)
+    - New format (for explicit basis): output shape (num_basis, out_mult, in_mult)
 
-    Parameter count comparison for output matrix of shape (M, N):
-    - Full-rank: hidden_dim * M * N
-    - Low-rank:  hidden_dim * (M * k + k * N) = hidden_dim * k * (M + N)
-
-    For M=N=64 and k=8: full-rank = 4096*h, low-rank = 1024*h (4x reduction)
+    Also supports low-rank decomposition for parameter efficiency.
 
     Args:
         edge_dim: Dimension of input edge features.
         hidden_dim: Hidden layer dimension.
-        repr: ProductRepr specifying the tensor product structure.
-        in_dim: Input multiplicity.
-        out_dim: Output multiplicity.
+        num_basis: Number of equivariant basis elements.
+        in_mult: Input multiplicity.
+        out_mult: Output multiplicity.
         dropout: Dropout probability.
         rank: Rank for low-rank decomposition. If None, uses full-rank.
 
     Example:
-        >>> repr = ProductRepr(Repr([1]), Repr([1]))
-        >>> # Full-rank version
-        >>> weight_net = RadialWeight(16, 32, repr, 8, 8)
-        >>> # Low-rank version with rank 4
-        >>> weight_net_lr = RadialWeight(16, 32, repr, 8, 8, rank=4)
+        >>> weight_net = RadialWeight(16, 32, num_basis=4, in_mult=8, out_mult=8)
         >>> edge_features = torch.randn(100, 16)
-        >>> weights = weight_net(edge_features)
-        >>> weights_lr = weight_net_lr(edge_features)
-        >>> assert weights.shape == weights_lr.shape
+        >>> weights = weight_net(edge_features)  # (100, 4, 8, 8)
     """
 
     def __init__(
         self: RadialWeight,
         edge_dim: int,
         hidden_dim: int,
-        repr: ProductRepr,
-        in_dim: int,
-        out_dim: int,
+        num_basis: int,
+        in_mult: int,
+        out_mult: int,
         dropout: float = 0,
         rank: int | None = None,
     ) -> None:
         super().__init__()
 
-        self.nl1 = repr.rep1.nreps()
-        self.nl2 = repr.rep2.nreps()
-
-        self.in_dim = in_dim
-        self.out_dim = out_dim
+        self.num_basis = num_basis
+        self.in_mult = in_mult
+        self.out_mult = out_mult
         self.rank = rank
 
         # Output dimensions
-        self.out_rows = self.nl2 * out_dim  # M
-        self.out_cols = self.nl1 * in_dim   # N
+        self.out_rows = num_basis * out_mult
+        self.out_cols = in_mult
 
         # Hidden layer with fused ops
         self.layer1 = nn.Linear(edge_dim, hidden_dim)
@@ -190,14 +203,18 @@ class RadialWeight(nn.Module):
             x: Edge features of shape (..., edge_dim).
 
         Returns:
-            Weights of shape (..., nl2 * out_dim, nl1 * in_dim).
+            Weights of shape (..., num_basis, out_mult, in_mult).
         """
+        *batch_dims, _ = x.shape
+
         # Fused linear + GELU (approximate='tanh' is faster and torch.compile friendly)
         h = F.linear(x, self.layer1.weight, self.layer1.bias)
         h = F.gelu(h, approximate='tanh')
         h = self.dropout(h)
 
-        return self.matrix_output(h)
+        # Get output and reshape to (*, num_basis, out_mult, in_mult)
+        out = self.matrix_output(h)  # (*, num_basis * out_mult, in_mult)
+        return out.view(*batch_dims, self.num_basis, self.out_mult, self.in_mult)
 
 
 class EquivariantLinear(nn.Module):
@@ -413,25 +430,36 @@ class EquivariantTransition(nn.Module):
 
 
 class EquivariantConvolution(nn.Module):
-    """Low-rank SE(3)-equivariant convolution.
+    """SE(3)-equivariant convolution using Clebsch-Gordan basis.
 
-    Performs equivariant message passing using a low-rank decomposition
-    of the full tensor product. Uses radial weights computed from
-    invariant edge features and equivariant basis matrices.
+    Performs equivariant message passing using explicit basis matrices
+    computed from Clebsch-Gordan coefficients. Bases are precomputed
+    externally (via EquivariantBasis or EquivariantBases) and passed to
+    forward() for efficiency when the same bases are reused.
+
+    The `rank` parameter controls the expressivity vs efficiency
+    trade-off in the basis:
+
+    - rank=0: Only l=|l1-l2| terms (rank-1, fast, equivalent to legacy)
+    - rank=k: Terms up to l=|l1-l2|+k
+    - rank=None: All terms up to l=l1+l2 (full SO(3) expressivity)
 
     Args:
         repr: ProductRepr specifying input/output representations.
         edge_dim: Dimension of invariant edge features.
         hidden_dim: Hidden dimension for radial weight network.
+        num_basis: Number of basis elements (from EquivariantBasis.num_basis).
         dropout: Dropout probability.
         radial_weight_rank: Rank for low-rank radial weight decomposition.
             If None, uses full-rank weights. Lower rank reduces parameters.
 
     Example:
         >>> repr = ProductRepr(Repr([0, 1]), Repr([0, 1]))
-        >>> conv = EquivariantConvolution(repr, edge_dim=16, hidden_dim=32)
-        >>> # With low-rank radial weights
-        >>> conv_lr = EquivariantConvolution(repr, edge_dim=16, hidden_dim=32, radial_weight_rank=8)
+        >>> basis_module = EquivariantBasis(repr, rank=0)
+        >>> conv = EquivariantConvolution(repr, edge_dim=16, hidden_dim=32,
+        ...                               num_basis=basis_module.num_basis)
+        >>> basis = basis_module(displacements)  # Precompute
+        >>> output = conv(basis, edge_feats, f, src_idx)
     """
 
     def __init__(
@@ -439,24 +467,35 @@ class EquivariantConvolution(nn.Module):
         repr: ProductRepr,
         edge_dim: int,
         hidden_dim: int,
+        num_basis: int,
         dropout: float = 0.0,
         radial_weight_rank: int | None = None,
     ) -> None:
         super().__init__()
 
+        self.repr = repr
+
+        # Dimensions
+        self.in_mult = repr.rep1.mult
+        self.out_mult = repr.rep2.mult
+        self.in_dim = repr.rep1.dim()
+        self.out_dim = repr.rep2.dim()
+        self.num_basis = num_basis
+
+        # Create radial weight network
         self.rwlin = RadialWeight(
             edge_dim,
             hidden_dim,
-            repr,
-            repr.rep1.mult,
-            repr.rep2.mult,
-            dropout,
+            num_basis=num_basis,
+            in_mult=self.in_mult,
+            out_mult=self.out_mult,
+            dropout=dropout,
             rank=radial_weight_rank,
         )
 
     def forward(
         self: EquivariantConvolution,
-        bases: tuple[torch.Tensor, torch.Tensor],
+        basis: torch.Tensor,
         edge_feats: torch.Tensor,
         f: torch.Tensor,
         src_idx: torch.Tensor,
@@ -464,7 +503,7 @@ class EquivariantConvolution(nn.Module):
         """Apply equivariant convolution.
 
         Args:
-            bases: Tuple of (basis1, basis2) from EquivariantBasis.
+            basis: Precomputed basis matrices of shape (E, num_basis, in_dim, out_dim).
             edge_feats: Invariant edge features of shape (E, edge_dim).
             f: Node features of shape (N, mult, dim).
             src_idx: Source node indices for each edge, shape (E,).
@@ -472,19 +511,28 @@ class EquivariantConvolution(nn.Module):
         Returns:
             Convolved features of shape (E, out_mult, out_dim).
         """
-        b1, b2 = bases
-        n_edges = edge_feats.size(0)
+        # Debug assertion: verify source indices are valid
+        N = f.size(0)
+        assert src_idx.max() < N, f"EquivariantConvolution: src_idx max ({src_idx.max()}) >= N ({N})"
+        assert src_idx.min() >= 0, f"EquivariantConvolution: src_idx min ({src_idx.min()}) < 0"
 
-        # Compute radial weights
-        rw = self.rwlin(edge_feats)
+        # Compute radial weights: (E, num_basis, out_mult, in_mult)
+        weights = self.rwlin(edge_feats)
 
-        # Gather source features
+        # Gather source features: (E, in_mult, in_dim)
         f_src = f[src_idx]
 
-        # Apply convolution: f @ b1 -> rw @ ... -> ... @ b2
-        tmp = (f_src @ b1).view(n_edges, -1, 1)
-        tmp = (rw @ tmp).view(n_edges, -1, b2.size(1))
-        return tmp @ b2
+        # Step 1: Contract basis with input features
+        # f_src: (E, in_mult, in_dim), basis: (E, num_basis, in_dim, out_dim)
+        # -> contracted: (E, num_basis, in_mult, out_dim)
+        contracted = f_src.unsqueeze(1) @ basis
+
+        # Step 2: Apply weights and sum over basis
+        # weights: (E, num_basis, out_mult, in_mult) @ contracted: (E, num_basis, in_mult, out_dim)
+        # -> (E, num_basis, out_mult, out_dim) -> sum over basis -> (E, out_mult, out_dim)
+        output = (weights @ contracted).sum(dim=1)
+
+        return output
 
 
 class EquivariantLayerNorm(nn.Module):
@@ -677,6 +725,13 @@ class EquivariantAttention(nn.Module):
         scale_type: Attention scaling - "sqrt_head_dim", "sqrt_dim", "learned", or "none".
         radial_weight_rank: Rank for low-rank radial weight decomposition.
             If None, uses full-rank weights. Lower rank reduces parameters.
+        qk_norm: If True, apply RMSNorm to queries and keys before computing
+            attention scores. Improves training stability for deep networks.
+        use_rope: If True, apply Rotary Position Embeddings to queries and keys.
+            Requires seq_pos to be passed to forward(). Replaces the need for
+            separate SequencePositionEncoding on edge features.
+        rank: Maximum filter degree for equivariant basis.
+            0 = rank-1 (fast, default), None = full SO(3) expressivity.
     """
 
     def __init__(
@@ -690,6 +745,9 @@ class EquivariantAttention(nn.Module):
         attention_type: str = "node_wise",
         scale_type: str = "sqrt_head_dim",
         radial_weight_rank: int | None = None,
+        qk_norm: bool = False,
+        use_rope: bool = False,
+        rank: int | None = 0,
     ) -> None:
         super().__init__()
 
@@ -702,6 +760,9 @@ class EquivariantAttention(nn.Module):
         self.nheads = nheads
         self.attention_type = attention_type
         self.scale_type = scale_type
+        self.qk_norm = qk_norm
+        self.use_rope = use_rope
+        self.rank = rank
 
         # Input/output dimensions
         in_mult = repr.rep1.mult
@@ -732,6 +793,21 @@ class EquivariantAttention(nn.Module):
         # Initialize scale factor based on scale_type
         self._init_scale()
 
+        # QK normalization (improves training stability for deep networks)
+        if qk_norm:
+            self.q_norm = RMSNorm(self.head_dim)
+            self.k_norm = RMSNorm(self.head_dim)
+        else:
+            self.q_norm = None
+            self.k_norm = None
+
+        # Rotary Position Embeddings
+        if use_rope:
+            from ..layers.transformer import RotaryPositionEmbedding
+            self.rope = RotaryPositionEmbedding(self.head_dim)
+        else:
+            self.rope = None
+
         # Build attention components based on type
         if attention_type == "node_wise":
             self._init_node_wise(repr, edge_dim, edge_hidden_dim, dropout, radial_weight_rank)
@@ -758,35 +834,29 @@ class EquivariantAttention(nn.Module):
         radial_weight_rank: int | None,
     ) -> None:
         """Initialize node_wise attention components."""
+        # Require same lvals for K and V (fused case only)
+        if repr.rep1.lvals != repr.rep2.lvals:
+            raise ValueError(
+                f"node_wise attention requires rep1.lvals == rep2.lvals, "
+                f"got {repr.rep1.lvals} vs {repr.rep2.lvals}"
+            )
+
         # Q: Node-level projection (EquivariantLinear, keeps rep1 lvals)
         self.proj_q = EquivariantLinear(repr.rep1, repr.rep1, dropout=dropout, activation=None)
 
-        # Check if K and V can be fused (same lvals)
-        self.can_fuse_kv = repr.rep1.lvals == repr.rep2.lvals
+        # Fused K+V: Single convolution with 2x output multiplicity
+        rep1_copy = deepcopy(repr.rep1)
+        rep2_fused = deepcopy(repr.rep2)
+        rep2_fused.mult = repr.rep1.mult + repr.rep2.mult  # K mult + V mult
+        repr_kv = ProductRepr(rep1_copy, rep2_fused)
 
-        if self.can_fuse_kv:
-            # Fused K+V: Single convolution with 2x output multiplicity
-            rep1_copy = deepcopy(repr.rep1)
-            rep2_fused = deepcopy(repr.rep2)
-            rep2_fused.mult = repr.rep1.mult + repr.rep2.mult  # K mult + V mult
-            repr_kv = ProductRepr(rep1_copy, rep2_fused)
-            self.conv_kv = EquivariantConvolution(
-                repr_kv, edge_dim, edge_hidden_dim, dropout, radial_weight_rank=radial_weight_rank
-            )
-            self.k_mult = repr.rep1.mult  # Where to split K from V
-        else:
-            # Separate K and V convolutions (different lvals)
-            # K: Edge-level convolution (keeps rep1 lvals for Q·K compatibility)
-            repr_k = ProductRepr(deepcopy(repr.rep1), deepcopy(repr.rep1))
-            self.conv_k = EquivariantConvolution(
-                repr_k, edge_dim, edge_hidden_dim, dropout, radial_weight_rank=radial_weight_rank
-            )
-
-            # V: Edge-level convolution (can change to rep2 lvals)
-            repr_v = ProductRepr(deepcopy(repr.rep1), deepcopy(repr.rep2))
-            self.conv_v = EquivariantConvolution(
-                repr_v, edge_dim, edge_hidden_dim, dropout, radial_weight_rank=radial_weight_rank
-            )
+        num_basis = _compute_num_basis(repr_kv, self.rank)
+        self.conv_kv = EquivariantConvolution(
+            repr_kv, edge_dim, edge_hidden_dim,
+            num_basis=num_basis,
+            dropout=dropout, radial_weight_rank=radial_weight_rank
+        )
+        self.k_mult = repr.rep1.mult  # Where to split K from V
 
     def _init_edge_wise(
         self, repr: ProductRepr, edge_dim: int, edge_hidden_dim: int, dropout: float,
@@ -798,46 +868,53 @@ class EquivariantAttention(nn.Module):
         rep2_copy = deepcopy(repr.rep2)
         rep2_copy.mult = 3 * self.out_mult  # Q, K, V concatenated
         repr_qkv = ProductRepr(rep1_copy, rep2_copy)
+
+        num_basis = _compute_num_basis(repr_qkv, self.rank)
         self.conv_qkv = EquivariantConvolution(
-            repr_qkv, edge_dim, edge_hidden_dim, dropout, radial_weight_rank=radial_weight_rank
+            repr_qkv, edge_dim, edge_hidden_dim,
+            num_basis=num_basis,
+            dropout=dropout, radial_weight_rank=radial_weight_rank
         )
 
     def forward(
         self: EquivariantAttention,
-        basis_k: tuple[torch.Tensor, torch.Tensor],
-        basis_v: tuple[torch.Tensor, torch.Tensor],
+        basis: torch.Tensor,
         edge_feats: torch.Tensor,
         f: torch.Tensor,
         neighbor_idx: torch.Tensor,
         mask: torch.Tensor | None = None,
+        seq_pos: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply equivariant k-NN attention.
 
         Args:
-            basis_k: Equivariant basis for keys (rep1->rep1), shape (N, k, ...).
-                For edge_wise attention, this is ignored (uses basis_v for QKV).
-            basis_v: Equivariant basis for values (rep1->rep2), shape (N, k, ...).
+            basis: Precomputed equivariant basis of shape (N, k, num_basis, dim1, dim2).
             edge_feats: Edge features of shape (N, k, edge_dim).
             f: Node features of shape (N, in_mult, in_dim).
             neighbor_idx: Neighbor indices of shape (N, k).
             mask: Optional attention mask of shape (N, k).
+            seq_pos: Optional sequence positions of shape (N,). Required if
+                use_rope=True. Used to compute relative positions for RoPE.
 
         Returns:
             Updated node features of shape (N, out_mult, out_dim).
         """
+        if self.rope is not None and seq_pos is None:
+            raise ValueError("seq_pos must be provided when use_rope=True")
+
         if self.attention_type == "node_wise":
-            return self._forward_node_wise(basis_k, basis_v, edge_feats, f, neighbor_idx, mask)
+            return self._forward_node_wise(basis, edge_feats, f, neighbor_idx, mask, seq_pos)
         else:
-            return self._forward_edge_wise(basis_v, edge_feats, f, neighbor_idx, mask)
+            return self._forward_edge_wise(basis, edge_feats, f, neighbor_idx, mask, seq_pos)
 
     def _forward_node_wise(
         self: EquivariantAttention,
-        basis_k: tuple[torch.Tensor, torch.Tensor],
-        basis_v: tuple[torch.Tensor, torch.Tensor],
+        basis: torch.Tensor,
         edge_feats: torch.Tensor,
         f: torch.Tensor,
         neighbor_idx: torch.Tensor,
         mask: torch.Tensor | None = None,
+        seq_pos: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Node-wise attention: Q at node level, K/V at edge level."""
         N, k = neighbor_idx.shape
@@ -852,45 +929,35 @@ class EquivariantAttention(nn.Module):
         # === Prepare for edge-level convolutions ===
         src_idx = neighbor_idx.flatten()  # (N*k,)
         edge_feats_flat = edge_feats.view(N * k, -1)
+        basis_flat = basis.view(N * k, *basis.shape[2:])  # (N*k, num_basis, dim1, dim2)
 
-        if self.can_fuse_kv:
-            # Fused K+V computation (same lvals, use basis_v for both)
-            b1_v, b2_v = basis_v
-            b1_v_flat = b1_v.view(N * k, *b1_v.shape[2:])
-            b2_v_flat = b2_v.view(N * k, *b2_v.shape[2:])
+        # Fused K+V computation
+        kv = self.conv_kv(basis_flat, edge_feats_flat, f, src_idx)
+        kv = kv.view(N, k, self.k_mult + self.out_mult, self.in_dim)
 
-            # Single convolution for K and V
-            kv = self.conv_kv((b1_v_flat, b2_v_flat), edge_feats_flat, f, src_idx)
-            kv = kv.view(N, k, self.k_mult + self.out_mult, self.in_dim)
-
-            # Split into K and V
-            keys = kv[:, :, :self.k_mult, :]  # (N, k, in_mult, in_dim)
-            values = kv[:, :, self.k_mult:, :]  # (N, k, out_mult, out_dim)
-        else:
-            # Separate K and V convolutions (different lvals)
-            # Flatten basis for keys (rep1->rep1)
-            b1_k, b2_k = basis_k
-            b1_k_flat = b1_k.view(N * k, *b1_k.shape[2:])
-            b2_k_flat = b2_k.view(N * k, *b2_k.shape[2:])
-
-            # Flatten basis for values (rep1->rep2)
-            b1_v, b2_v = basis_v
-            b1_v_flat = b1_v.view(N * k, *b1_v.shape[2:])
-            b2_v_flat = b2_v.view(N * k, *b2_v.shape[2:])
-
-            # === Compute Keys (edge-level, same lvals as Q) ===
-            keys = self.conv_k((b1_k_flat, b2_k_flat), edge_feats_flat, f, src_idx)
-            keys = keys.view(N, k, self.in_mult, self.in_dim)
-
-            # === Compute Values (edge-level, can change lvals) ===
-            values = self.conv_v((b1_v_flat, b2_v_flat), edge_feats_flat, f, src_idx)
-            values = values.view(N, k, self.out_mult, self.out_dim)
+        # Split into K and V
+        keys = kv[:, :, :self.k_mult, :]  # (N, k, in_mult, in_dim)
+        values = kv[:, :, self.k_mult:, :]  # (N, k, out_mult, out_dim)
 
         # === Multi-head attention ===
         # Reshape for attention: (N, nheads, seq_len, head_dim)
         q_heads = queries.flatten(-2, -1).view(N, self.nheads, 1, self.head_dim)
         k_heads = keys.flatten(-2, -1).view(N, k, self.nheads, self.head_dim)
         k_heads = k_heads.transpose(1, 2).contiguous()  # (N, nheads, k, head_dim)
+
+        # Apply QK normalization if enabled
+        if self.q_norm is not None:
+            q_heads = self.q_norm(q_heads)
+            k_heads = self.k_norm(k_heads)
+
+        # Apply RoPE if enabled
+        if self.rope is not None:
+            # Q position: target node index (N,) -> (N, 1, 1) for broadcast
+            q_pos = seq_pos.view(N, 1, 1)
+            # K position: source node index from neighbor_idx (N, k) -> (N, 1, k)
+            k_pos = seq_pos[neighbor_idx].unsqueeze(1)
+            q_heads = self.rope.apply_by_positions(q_heads, q_pos)
+            k_heads = self.rope.apply_by_positions(k_heads, k_pos)
 
         v_hidden_size = self.out_mult * self.out_dim
         v_head_dim = v_hidden_size // self.nheads
@@ -925,11 +992,12 @@ class EquivariantAttention(nn.Module):
 
     def _forward_edge_wise(
         self: EquivariantAttention,
-        basis: tuple[torch.Tensor, torch.Tensor],
+        basis: torch.Tensor,
         edge_feats: torch.Tensor,
         f: torch.Tensor,
         neighbor_idx: torch.Tensor,
         mask: torch.Tensor | None = None,
+        seq_pos: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Edge-wise attention: Q, K, V all computed at edge level."""
         N, k = neighbor_idx.shape
@@ -940,13 +1008,11 @@ class EquivariantAttention(nn.Module):
 
         # Flatten for convolution
         src_idx = neighbor_idx.flatten()
-        b1, b2 = basis
-        b1_flat = b1.view(N * k, *b1.shape[2:])
-        b2_flat = b2.view(N * k, *b2.shape[2:])
+        basis_flat = basis.view(N * k, *basis.shape[2:])  # (N*k, num_basis, dim1, dim2)
         edge_feats_flat = edge_feats.view(N * k, -1)
 
         # Compute Q, K, V as edge features via single convolution
-        qkv = self.conv_qkv((b1_flat, b2_flat), edge_feats_flat, f, src_idx)
+        qkv = self.conv_qkv(basis_flat, edge_feats_flat, f, src_idx)
         qkv = qkv.view(N, k, 3 * self.out_mult, self.out_dim)
 
         # Split into Q, K, V
@@ -961,6 +1027,20 @@ class EquivariantAttention(nn.Module):
         q_heads = q_heads.transpose(1, 2).contiguous()
         k_heads = k_heads.transpose(1, 2).contiguous()
         v_heads = v_heads.transpose(1, 2).contiguous()
+
+        # Apply QK normalization if enabled
+        if self.q_norm is not None:
+            q_heads = self.q_norm(q_heads)
+            k_heads = self.k_norm(k_heads)
+
+        # Apply RoPE if enabled
+        if self.rope is not None:
+            # Q position: target node index (N,) -> (N, 1, k) broadcast to all neighbors
+            q_pos = seq_pos.view(N, 1, 1).expand(-1, -1, k)
+            # K position: source node index from neighbor_idx (N, k) -> (N, 1, k)
+            k_pos = seq_pos[neighbor_idx].unsqueeze(1)
+            q_heads = self.rope.apply_by_positions(q_heads, q_pos)
+            k_heads = self.rope.apply_by_positions(k_heads, k_pos)
 
         # Edge attention scores: element-wise Q · K, sum over head_dim
         scores = (q_heads * k_heads).sum(dim=-1) * self.scale
@@ -1002,6 +1082,10 @@ class EquivariantTransformerBlock(nn.Module):
         skip_type: Skip connection type - "scaled", "gated", or "none".
         radial_weight_rank: Rank for low-rank radial weight decomposition.
             If None, uses full-rank weights.
+        qk_norm: If True, apply RMSNorm to queries and keys before attention.
+        use_rope: If True, apply Rotary Position Embeddings to queries and keys.
+        rank: Maximum filter degree for equivariant basis.
+            0 = rank-1 (fast, default), None = full SO(3) expressivity.
     """
 
     def __init__(
@@ -1018,6 +1102,9 @@ class EquivariantTransformerBlock(nn.Module):
         scale_type: str = "sqrt_head_dim",
         skip_type: str = "scaled",
         radial_weight_rank: int | None = None,
+        qk_norm: bool = False,
+        use_rope: bool = False,
+        rank: int | None = 0,
     ) -> None:
         super().__init__()
 
@@ -1031,7 +1118,8 @@ class EquivariantTransformerBlock(nn.Module):
         self.attn = EquivariantAttention(
             repr, edge_dim, edge_hidden_dim, nheads, dropout, attn_dropout,
             attention_type=attention_type, scale_type=scale_type,
-            radial_weight_rank=radial_weight_rank,
+            radial_weight_rank=radial_weight_rank, qk_norm=qk_norm,
+            use_rope=use_rope, rank=rank,
         )
 
         self.ln1 = EquivariantLayerNorm(repr.rep1)
@@ -1078,22 +1166,22 @@ class EquivariantTransformerBlock(nn.Module):
 
     def forward(
         self: EquivariantTransformerBlock,
-        basis_k: tuple[torch.Tensor, torch.Tensor],
-        basis_v: tuple[torch.Tensor, torch.Tensor],
+        basis: torch.Tensor,
         features: torch.Tensor,
         edge_feats: torch.Tensor,
         neighbor_idx: torch.Tensor,
         mask: torch.Tensor | None = None,
+        seq_pos: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply transformer block.
 
         Args:
-            basis_k: Equivariant basis for keys (rep1->rep1), shape (N, k, ...).
-            basis_v: Equivariant basis for values (rep1->rep2), shape (N, k, ...).
+            basis: Precomputed equivariant basis of shape (N, k, num_basis, dim1, dim2).
             features: Node features of shape (N, mult, dim).
             edge_feats: Edge features of shape (N, k, edge_dim).
             neighbor_idx: Neighbor indices of shape (N, k).
             mask: Optional attention mask of shape (N, k).
+            seq_pos: Optional sequence positions of shape (N,). Required if use_rope=True.
 
         Returns:
             Updated node features.
@@ -1101,7 +1189,7 @@ class EquivariantTransformerBlock(nn.Module):
         # Pre-LN transformer variant
         residual = features
         features = self.ln1(features)
-        features = self.attn(basis_k, basis_v, edge_feats, features, neighbor_idx, mask)
+        features = self.attn(basis, edge_feats, features, neighbor_idx, mask, seq_pos)
         features = self._apply_skip(residual, features, self.gate)
 
         if self.transition is not None:
@@ -1148,6 +1236,13 @@ class EquivariantTransformer(nn.Module):
             sequential vs non-sequential neighbors have different meanings).
         seq_pos_max_distance: Maximum sequence distance to encode. Default 128.
         seq_pos_learnable: If True, use learnable position embeddings instead of sinusoidal.
+        qk_norm: If True, apply RMSNorm to queries and keys before attention.
+            Improves training stability for deep networks.
+        use_rope: If True, apply Rotary Position Embeddings to Q/K instead of edge-based
+            position encoding. Requires seq_pos to be passed to forward(). Can be used
+            together with seq_pos_dim (RoPE on Q/K, edge encoding on edge features).
+        rank: Maximum filter degree for equivariant basis.
+            0 = rank-1 (fast, default), None = full SO(3) expressivity.
 
     Example:
         >>> in_repr = Repr(lvals=[0, 1], mult=4)
@@ -1189,11 +1284,16 @@ class EquivariantTransformer(nn.Module):
         seq_pos_dim: int | None = None,
         seq_pos_max_distance: int = 128,
         seq_pos_learnable: bool = False,
+        qk_norm: bool = False,
+        use_rope: bool = False,
+        rank: int | None = 0,
     ) -> None:
         super().__init__()
 
         # Sequence position encoding (optional)
         self.seq_pos_dim = seq_pos_dim or 0
+        self.qk_norm = qk_norm
+        self.use_rope = use_rope
         if self.seq_pos_dim > 0:
             self.seq_pos_enc = SequencePositionEncoding(
                 dim=self.seq_pos_dim,
@@ -1219,10 +1319,18 @@ class EquivariantTransformer(nn.Module):
         self.scale_type = scale_type
         self.skip_type = skip_type
         self.radial_weight_rank = radial_weight_rank
+        self.rank = rank
 
         self.in_repr = in_repr
         self.out_repr = out_repr
         self.hidden_repr = hidden_repr
+
+        # Require same lvals for all representations (fused K/V case)
+        if in_repr.lvals != hidden_repr.lvals or hidden_repr.lvals != out_repr.lvals:
+            raise ValueError(
+                f"All representations must have same lvals for fused K/V attention. "
+                f"Got in={in_repr.lvals}, hidden={hidden_repr.lvals}, out={out_repr.lvals}"
+            )
 
         # Final layer norm and output projection
         out_repr_tmp = deepcopy(out_repr)
@@ -1233,32 +1341,21 @@ class EquivariantTransformer(nn.Module):
         # Build sequence of representations
         reprs = [in_repr] + [hidden_repr] * hidden_layers + [out_repr_tmp]
 
-        # Create layers and track product representations for K and V
-        # K uses rep1->rep1 (same lvals as Q for dot product compatibility)
-        # V uses rep1->rep2 (actual transition, where lval changes happen)
+        # Create layers and track product representations
+        # With fused K/V, we only need one ProductRepr per layer
         layers = []
-        preprs_k = []  # ProductReprs for keys
-        preprs_v = []  # ProductReprs for values
+        preprs = []
         for i in range(len(reprs) - 1):
             repr1, repr2 = reprs[i], reprs[i + 1]
-            # For values: rep1 -> rep2 (the actual layer transition)
-            prepr_v = ProductRepr(deepcopy(repr1), deepcopy(repr2))
-            preprs_v.append(prepr_v)
-            # For keys: rep1 -> rep1 (same lvals as queries)
-            prepr_k = ProductRepr(deepcopy(repr1), deepcopy(repr1))
-            preprs_k.append(prepr_k)
-            # Layer uses V's ProductRepr for its configuration
-            layers.append(self._construct_layer(prepr_v))
+            prepr = ProductRepr(deepcopy(repr1), deepcopy(repr2))
+            preprs.append(prepr)
+            layers.append(self._construct_layer(prepr))
 
         self.layers = nn.ModuleList(layers)
         self.num_layers = len(layers)
 
-        # Compute equivariant bases for both K and V ProductReprs
-        # Interleave: [k0, v0, k1, v1, ...] for efficient deduplication
-        all_preprs = []
-        for pk, pv in zip(preprs_k, preprs_v):
-            all_preprs.extend([pk, pv])
-        self.bases = EquivariantBases(*all_preprs)
+        # Compute equivariant bases for all layers (with deduplication)
+        self.bases = EquivariantBases(*preprs, rank=rank)
 
         # Radial basis functions for edge features
         self.rbf = RadialBasisFunctions(
@@ -1286,6 +1383,9 @@ class EquivariantTransformer(nn.Module):
             scale_type=self.scale_type,
             skip_type=self.skip_type,
             radial_weight_rank=self.radial_weight_rank,
+            qk_norm=self.qk_norm,
+            use_rope=self.use_rope,
+            rank=self.rank,
         )
 
     def forward(
@@ -1327,6 +1427,12 @@ class EquivariantTransformer(nn.Module):
                 "Pass sequence positions (e.g., residue indices) or set seq_pos_dim=0."
             )
 
+        if self.use_rope and seq_pos is None:
+            raise ValueError(
+                "seq_pos must be provided when use_rope=True. "
+                "Pass sequence positions (e.g., residue indices) or set use_rope=False."
+            )
+
         N = coordinates.size(0)
 
         # Handle empty input
@@ -1351,28 +1457,19 @@ class EquivariantTransformer(nn.Module):
             seq_pos_features = self.seq_pos_enc(seq_pos, neighbor_idx)  # (N, k, seq_pos_dim)
             edge_features = torch.cat([edge_features, seq_pos_features], dim=-1)
 
-        # Compute all bases at once (interleaved: k0, v0, k1, v1, ...)
+        # Compute all bases at once (one per layer, with deduplication)
         all_bases_flat = self.bases(displacements.view(N * k, 3))
 
-        # Reshape bases for (N, k, ...) structure and pass through layers
-        # Bases are interleaved: [basis_k_0, basis_v_0, basis_k_1, basis_v_1, ...]
+        # Pass through layers with precomputed bases
         for i, layer in enumerate(self.layers):
-            # Extract K and V bases for this layer
-            basis_k = all_bases_flat[2 * i]      # (b1_k, b2_k)
-            basis_v = all_bases_flat[2 * i + 1]  # (b1_v, b2_v)
-
-            # Reshape to (N, k, ...)
-            b1_k, b2_k = basis_k
-            b1_k = b1_k.view(N, k, *b1_k.shape[1:])
-            b2_k = b2_k.view(N, k, *b2_k.shape[1:])
-
-            b1_v, b2_v = basis_v
-            b1_v = b1_v.view(N, k, *b1_v.shape[1:])
-            b2_v = b2_v.view(N, k, *b2_v.shape[1:])
+            # Get basis for this layer: (N*k, num_basis, dim1, dim2)
+            basis_flat = all_bases_flat[i]
+            # Reshape to (N, k, num_basis, dim1, dim2)
+            basis = basis_flat.view(N, k, *basis_flat.shape[1:])
 
             node_features = layer(
-                (b1_k, b2_k), (b1_v, b2_v),
-                node_features, edge_features, neighbor_idx, mask
+                basis, node_features, edge_features, neighbor_idx, mask,
+                seq_pos=seq_pos if self.use_rope else None
             )
 
         # Final layer norm and output projection

@@ -631,3 +631,98 @@ class ProductRepr:
     def nreps(self: ProductRepr) -> int:
         """Return total number of irreps in the tensor product."""
         return sum(rep.nreps() for rep in self.reps)
+
+    def num_basis(self: ProductRepr, rank: int | None = None) -> int:
+        """Compute the number of equivariant basis elements.
+
+        Args:
+            rank: Maximum filter degree relative to minimum coupling.
+                - rank=0: Only l=|l1-l2| terms (rank-1 approximation, fastest)
+                - rank=k: Terms up to l=|l1-l2|+k
+                - rank=None: All terms up to l1+l2 (full SO(3) expressivity)
+
+        Returns:
+            Number of basis elements.
+        """
+        count = 0
+        for l1 in self.rep1.lvals:
+            for l2 in self.rep2.lvals:
+                lmin = abs(l1 - l2)
+                lmax_pair = l1 + l2
+                if rank is not None:
+                    lmax_keep = min(lmin + rank, lmax_pair)
+                else:
+                    lmax_keep = lmax_pair
+                count += lmax_keep - lmin + 1
+        return count
+
+    def cg_tensor(
+        self: ProductRepr,
+        rank: int | None = None,
+    ) -> tuple[torch.Tensor, int]:
+        """Compute the Clebsch-Gordan coupling tensor for equivariant basis.
+
+        Builds a precomputed tensor that contracts spherical harmonics into
+        equivariant basis matrices via a single matrix multiplication.
+
+        The `rank` parameter controls the trade-off between expressivity and
+        efficiency:
+            - rank=0: Only l=|l1-l2| terms (rank-1 approximation, fastest)
+            - rank=k: Terms up to l=|l1-l2|+k
+            - rank=None: All terms up to l1+l2 (full SO(3) expressivity)
+
+        Args:
+            rank: Maximum filter degree relative to minimum coupling.
+
+        Returns:
+            Tuple of (coupling_tensor, num_basis) where:
+            - coupling_tensor: Shape (sh_dim, num_basis * dim1 * dim2)
+            - num_basis: Number of basis elements
+        """
+        from .clebsch_gordan import clebsch_gordan
+
+        dim1 = self.rep1.dim()
+        dim2 = self.rep2.dim()
+        lmax = self.lmax()
+        sh_dim = (lmax + 1) ** 2
+
+        cdims1 = self.rep1.cumdims()
+        cdims2 = self.rep2.cumdims()
+
+        # Count basis elements
+        num_basis = self.num_basis(rank)
+
+        # Build 4D tensor: (sh_dim, num_basis, dim1, dim2)
+        Q = torch.zeros(sh_dim, num_basis, dim1, dim2)
+
+        basis_idx = 0
+        for i, l1 in enumerate(self.rep1.lvals):
+            for j, l2 in enumerate(self.rep2.lvals):
+                lmin = abs(l1 - l2)
+                lmax_pair = l1 + l2
+
+                if rank is not None:
+                    lmax_keep = min(lmin + rank, lmax_pair)
+                else:
+                    lmax_keep = lmax_pair
+
+                off1 = cdims1[i]
+                off2 = cdims2[j]
+                d1 = 2 * l1 + 1
+                d2 = 2 * l2 + 1
+
+                for l in range(lmin, lmax_keep + 1):
+                    # Get CG coefficients: (2l1+1, 2l2+1, 2l+1)
+                    cg = clebsch_gordan(l1, l2, l)
+
+                    # Place into Q tensor
+                    sh_start = l ** 2
+                    for m in range(2 * l + 1):
+                        Q[sh_start + m, basis_idx, off1:off1+d1, off2:off2+d2] = cg[:, :, m]
+
+                    basis_idx += 1
+
+        # Reshape for efficient matmul: (sh_dim, num_basis * dim1 * dim2)
+        coupling_tensor = Q.view(sh_dim, -1).contiguous()
+
+        return coupling_tensor, num_basis

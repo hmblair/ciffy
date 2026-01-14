@@ -516,6 +516,120 @@ class TestProductRepr:
         prod = ProductRepr(rep1, rep2)
         assert prod.lmax() == 3
 
+    @pytest.mark.parametrize("rank", [0, 1, 2, None])
+    def test_num_basis(self, rank):
+        """Test num_basis computation for different ranks."""
+        rep = Repr(lvals=[0, 1, 2], mult=1)
+        prod = ProductRepr(rep, rep)
+        num_basis = prod.num_basis(rank)
+
+        # num_basis should increase with rank
+        assert num_basis > 0
+        if rank is not None and rank > 0:
+            assert num_basis > prod.num_basis(0)
+
+    @pytest.mark.parametrize("rank", [0, 1, None])
+    def test_cg_tensor(self, rank):
+        """Test cg_tensor returns correct shape."""
+        rep = Repr(lvals=[0, 1], mult=1)
+        prod = ProductRepr(rep, rep)
+
+        tensor, num_basis = prod.cg_tensor(rank)
+
+        # Check num_basis matches
+        assert num_basis == prod.num_basis(rank)
+
+        # Check tensor shape: (sh_dim, num_basis * dim1 * dim2)
+        sh_dim = (prod.lmax() + 1) ** 2
+        expected_cols = num_basis * rep.dim() * rep.dim()
+        assert tensor.shape == (sh_dim, expected_cols)
+
+    def test_cg_tensor_rank_ordering(self):
+        """Test that higher rank gives more basis elements."""
+        rep = Repr(lvals=[0, 1, 2], mult=1)
+        prod = ProductRepr(rep, rep)
+
+        nb_0 = prod.num_basis(0)
+        nb_1 = prod.num_basis(1)
+        nb_2 = prod.num_basis(2)
+        nb_full = prod.num_basis(None)
+
+        assert nb_0 < nb_1 < nb_2 <= nb_full
+
+
+# ============================================================================
+# TEST: EquivariantBasis
+# ============================================================================
+
+
+@requires_sphericart
+class TestEquivariantBasis:
+    """Tests for EquivariantBasis layer."""
+
+    @pytest.mark.parametrize("rank", [0, 1, 2, None])
+    def test_output_shape(self, rank):
+        """Test basis output shape for different ranks."""
+        from ciffy.nn.geometric import EquivariantBasis
+
+        rep = Repr(lvals=[0, 1], mult=1)
+        prepr = ProductRepr(rep, rep)
+        basis = EquivariantBasis(prepr, rank=rank)
+
+        N = 50
+        x = torch.randn(N, 3)
+        output = basis(x)
+
+        expected_num_basis = prepr.num_basis(rank)
+        assert output.shape == (N, expected_num_basis, rep.dim(), rep.dim())
+
+    @pytest.mark.parametrize("rank", [0, 1, None])
+    def test_no_nan_output(self, rank):
+        """Test basis produces no NaN values."""
+        from ciffy.nn.geometric import EquivariantBasis
+
+        rep = Repr(lvals=[0, 1, 2], mult=1)
+        prepr = ProductRepr(rep, rep)
+        basis = EquivariantBasis(prepr, rank=rank)
+
+        x = torch.randn(100, 3)
+        output = basis(x)
+
+        assert not torch.isnan(output).any()
+
+    @pytest.mark.parametrize("rank", [0, 1, None])
+    def test_equivariance(self, rank):
+        """Test basis satisfies equivariance: B(Rx) = D_out @ B(x) @ D_in.T"""
+        from ciffy.nn.geometric import EquivariantBasis
+
+        rep = Repr(lvals=[0, 1], mult=1)
+        prepr = ProductRepr(rep, rep)
+        basis = EquivariantBasis(prepr, rank=rank)
+
+        x = torch.randn(30, 3)
+        R, axis, angle = random_rotation_matrix()
+        D = rep.rot(axis, angle)
+
+        B_x = basis(x)
+        B_Rx = basis(x @ R.T)
+
+        # B(Rx) should equal D @ B(x) @ D.T
+        B_x_rotated = torch.einsum('ij,...jk,lk->...il', D, B_x, D)
+
+        assert torch.allclose(B_Rx, B_x_rotated, atol=1e-5)
+
+    def test_rank_increases_basis_count(self):
+        """Test higher rank gives more basis elements."""
+        from ciffy.nn.geometric import EquivariantBasis
+
+        rep = Repr(lvals=[0, 1, 2], mult=1)
+        prepr = ProductRepr(rep, rep)
+
+        basis_0 = EquivariantBasis(prepr, rank=0)
+        basis_1 = EquivariantBasis(prepr, rank=1)
+        basis_full = EquivariantBasis(prepr, rank=None)
+
+        assert basis_0.num_basis < basis_1.num_basis < basis_full.num_basis
+
 
 # ============================================================================
 # TEST: RepNorm
@@ -1038,7 +1152,7 @@ class TestEquivariantTransformer:
 
     @pytest.fixture
     def simple_model(self):
-        """Create a simple transformer for testing."""
+        """Create a simple transformer for testing (rank=0, fastest)."""
         from ciffy.nn.geometric import EquivariantTransformer
         in_repr = Repr(lvals=[0, 1], mult=4)
         out_repr = Repr(lvals=[0, 1], mult=2)
@@ -1051,8 +1165,29 @@ class TestEquivariantTransformer:
             edge_hidden_dim=32,
             k_neighbors=8,
             nheads=2,
+            rank=0,
         )
         return model, in_repr, out_repr
+
+    @pytest.fixture(params=[0, 1, None])
+    def model_with_rank(self, request):
+        """Create transformer with different rank values."""
+        from ciffy.nn.geometric import EquivariantTransformer
+        rank = request.param
+        in_repr = Repr(lvals=[0, 1], mult=4)
+        out_repr = Repr(lvals=[0, 1], mult=2)
+        hidden_repr = Repr(lvals=[0, 1], mult=8)
+
+        model = EquivariantTransformer(
+            in_repr, out_repr, hidden_repr,
+            hidden_layers=2,
+            edge_dim=16,
+            edge_hidden_dim=32,
+            k_neighbors=8,
+            nheads=2,
+            rank=rank,
+        )
+        return model, in_repr, out_repr, rank
 
     def test_forward_shape(self, simple_model):
         """Test forward pass produces correct output shape."""
@@ -1183,9 +1318,9 @@ class TestEquivariantTransformer:
         # Use relative tolerance due to floating point accumulation in deep networks
         assert torch.allclose(output1, output2, atol=1e-3, rtol=1e-3)
 
-    def test_rotation_equivariance(self, simple_model):
-        """Test output rotates correctly under input rotation."""
-        model, in_repr, out_repr = simple_model
+    def test_rotation_equivariance(self, model_with_rank):
+        """Test output rotates correctly under input rotation for all ranks."""
+        model, in_repr, out_repr, rank = model_with_rank
         model.eval()
 
         coords = torch.randn(30, 3)

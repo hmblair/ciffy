@@ -71,6 +71,7 @@ References:
 """
 
 from .representations import Irrep, ProductIrrep, Repr, ProductRepr
+from .clebsch_gordan import clebsch_gordan
 from .equivariant import (
     FEATURE_DIM,
     REPR_DIM,
@@ -106,6 +107,8 @@ __all__ = [
     "ProductIrrep",
     "Repr",
     "ProductRepr",
+    # Clebsch-Gordan coefficients
+    "clebsch_gordan",
     # Equivariant primitives
     "RepNorm",
     "SphericalHarmonic",

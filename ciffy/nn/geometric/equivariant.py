@@ -15,6 +15,7 @@ Classes:
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import torch
@@ -36,14 +37,91 @@ def _get_sphericart() -> Any:
     global _sphericart, _sphericart_available
 
     if _sphericart_available is None:
-        try:
-            import sphericart.torch as sc
-            _sphericart = sc
-            _sphericart_available = True
-        except ImportError:
+        # Check if sphericart is disabled via environment variable
+        if os.environ.get("CIFFY_DISABLE_SPHERICART", "").lower() in ("1", "true", "yes"):
             _sphericart_available = False
+        else:
+            try:
+                import sphericart.torch as sc
+                _sphericart = sc
+                _sphericart_available = True
+            except ImportError:
+                _sphericart_available = False
 
     return _sphericart
+
+
+def _spherical_harmonics_pytorch(
+    x: torch.Tensor,
+    lmax: int,
+    normalized: bool = True,
+) -> torch.Tensor:
+    """Pure PyTorch implementation of real spherical harmonics for l=0,1,2.
+
+    Uses the same conventions as sphericart for consistency.
+
+    Args:
+        x: Coordinates of shape (..., 3) in sphericart convention (z, x, y order).
+        lmax: Maximum degree (only 0, 1, 2 supported).
+        normalized: If True, normalize by 1/sqrt(4*pi) factor.
+
+    Returns:
+        Spherical harmonics of shape (..., (lmax+1)^2).
+    """
+    if lmax > 2:
+        raise ValueError(
+            f"PyTorch fallback only supports lmax <= 2, got {lmax}. "
+            "Install sphericart for higher degrees: pip install sphericart"
+        )
+
+    # Extract coordinates (sphericart convention: input is z, x, y)
+    z = x[..., 0]
+    xc = x[..., 1]
+    y = x[..., 2]
+
+    # Compute r^2 and r with numerical stability
+    r2 = xc * xc + y * y + z * z
+    r = torch.sqrt(r2.clamp(min=1e-12))
+
+    # Normalization factors for real spherical harmonics
+    # Standard convention: Y_l^m normalized so integral over sphere = 1
+    if normalized:
+        # Normalized SH (sphericart default)
+        norm_l0 = 0.28209479177387814  # 1/sqrt(4*pi)
+        norm_l1 = 0.4886025119029199   # sqrt(3/(4*pi))
+        norm_l2_0 = 0.31539156525252005  # sqrt(5/(16*pi))
+        norm_l2_1 = 1.0925484305920792  # sqrt(15/(4*pi))
+        norm_l2_2 = 0.5462742152960396  # sqrt(15/(16*pi))
+    else:
+        norm_l0 = 1.0
+        norm_l1 = 1.0
+        norm_l2_0 = 1.0
+        norm_l2_1 = 1.0
+        norm_l2_2 = 1.0
+
+    results = []
+
+    # l=0: Y_0^0 = norm_l0 (constant)
+    results.append(torch.full_like(z, norm_l0))
+
+    if lmax >= 1:
+        # l=1: Y_1^{-1}, Y_1^0, Y_1^1
+        # Standard ordering: m = -1, 0, 1
+        inv_r = 1.0 / r
+        results.append(norm_l1 * y * inv_r)   # Y_1^{-1}
+        results.append(norm_l1 * z * inv_r)   # Y_1^0
+        results.append(norm_l1 * xc * inv_r)  # Y_1^1
+
+    if lmax >= 2:
+        # l=2: Y_2^{-2}, Y_2^{-1}, Y_2^0, Y_2^1, Y_2^2
+        inv_r2 = 1.0 / r2.clamp(min=1e-12)
+        results.append(norm_l2_1 * xc * y * inv_r2)           # Y_2^{-2}
+        results.append(norm_l2_1 * y * z * inv_r2)            # Y_2^{-1}
+        results.append(norm_l2_0 * (3 * z * z - r2) * inv_r2) # Y_2^0
+        results.append(norm_l2_1 * xc * z * inv_r2)           # Y_2^1
+        results.append(norm_l2_2 * (xc * xc - y * y) * inv_r2) # Y_2^2
+
+    return torch.stack(results, dim=-1)
 
 
 class RepNorm(nn.Module):
@@ -108,7 +186,8 @@ class SphericalHarmonic(nn.Module):
     on the sphere. They are the natural features for SO(3)-equivariant
     networks, as they transform predictably under rotations.
 
-    Uses the sphericart library for efficient computation.
+    Uses the sphericart library when available, with a pure PyTorch
+    fallback for lmax <= 2.
 
     Args:
         lmax: Maximum degree of spherical harmonics to compute.
@@ -116,12 +195,12 @@ class SphericalHarmonic(nn.Module):
         normalized: If True, compute normalized spherical harmonics.
 
     Raises:
-        ImportError: If sphericart is not installed.
+        ImportError: If sphericart is not installed and lmax > 2.
 
     Example:
-        >>> sh = SphericalHarmonic(lmax=3)
+        >>> sh = SphericalHarmonic(lmax=2)
         >>> coords = torch.randn(100, 3)
-        >>> features = sh(coords)  # shape: (100, 16)
+        >>> features = sh(coords)  # shape: (100, 9)
     """
 
     def __init__(
@@ -134,15 +213,23 @@ class SphericalHarmonic(nn.Module):
         if not isinstance(lmax, int) or lmax < 0:
             raise ValueError(f"lmax must be a non-negative integer, got {lmax}")
 
+        self.lmax = lmax
+        self.normalized = normalized
+
         sc = _get_sphericart()
-        if sc is None:
+        if sc is not None:
+            # Use sphericart for efficient computation
+            self.sh = sc.SphericalHarmonics(lmax, normalized)
+            self._use_sphericart = True
+        elif lmax <= 2:
+            # Use PyTorch fallback for low-degree harmonics
+            self.sh = None
+            self._use_sphericart = False
+        else:
             raise ImportError(
-                "sphericart is required for SphericalHarmonic. "
+                f"sphericart is required for lmax > 2, got lmax={lmax}. "
                 "Install with: pip install sphericart"
             )
-
-        self.sh = sc.SphericalHarmonics(lmax, normalized)
-        self.lmax = lmax
 
         # Index permutation for sphericart coordinate convention
         self.register_buffer('ix', torch.tensor([2, 0, 1], dtype=torch.int64))
@@ -167,21 +254,23 @@ class SphericalHarmonic(nn.Module):
             out_dim = (self.lmax + 1) ** 2
             return x.new_zeros(*b, 0, out_dim)
 
-        x = x.view(-1, 3)
+        x_flat = x.view(-1, 3)
 
         # Permute coordinates for sphericart convention
-        x = x[:, self.ix]
+        x_permuted = x_flat[:, self.ix]
 
         # Handle dtype (sphericart only supports float32/64)
-        # Save original dtype for restoration after computation
-        dtype = x.dtype
+        dtype = x_permuted.dtype
         if dtype not in [torch.float32, torch.float64]:
-            x = x.to(torch.float32)
+            x_permuted = x_permuted.to(torch.float32)
 
-        # Compute spherical harmonics with autocast disabled
-        # (sphericart doesn't support float16/bfloat16)
-        with torch.amp.autocast(x.device.type, enabled=False):
-            sh = self.sh.compute(x)
+        if self._use_sphericart:
+            # Use sphericart with autocast disabled
+            with torch.amp.autocast(x_permuted.device.type, enabled=False):
+                sh = self.sh.compute(x_permuted)
+        else:
+            # Use PyTorch fallback
+            sh = _spherical_harmonics_pytorch(x_permuted, self.lmax, self.normalized)
 
         # Restore original dtype and handle NaN
         sh = sh.to(dtype)
@@ -415,6 +504,11 @@ class SequencePositionEncoding(nn.Module):
         """
         N, k = neighbor_idx.shape
 
+        # Debug assertion: verify neighbor indices are valid for seq_pos
+        assert neighbor_idx.max() < len(seq_pos), (
+            f"SequencePositionEncoding: neighbor_idx max ({neighbor_idx.max()}) >= seq_pos length ({len(seq_pos)})"
+        )
+
         # Get sequence positions for self and neighbors
         self_pos = seq_pos.unsqueeze(1)  # (N, 1)
         neighbor_pos = seq_pos[neighbor_idx]  # (N, k)
@@ -437,24 +531,97 @@ class SequencePositionEncoding(nn.Module):
 
 
 class EquivariantBasis(nn.Module):
-    """Compute equivariant basis matrices for tensor product operations.
+    """Compute SO(3)-equivariant basis matrices using Clebsch-Gordan coefficients.
 
-    Given 3D displacement vectors, computes the spherical harmonic coefficients
-    organized as matrices suitable for equivariant convolutions. The output
-    consists of two coefficient tensors that can be used in low-rank
-    tensor product contractions.
+    Given 3D displacement vectors, computes explicit basis matrices suitable for
+    equivariant convolutions. The basis matrices satisfy the equivariance property:
+        B(R @ x) = D_out(R) @ B(x) @ D_in(R)^T
+
+    The basis is parameterized by `rank` which controls the trade-off between
+    expressivity and efficiency:
+        - rank=0: Only l=|l1-l2| terms (rank-1 approximation, fastest)
+        - rank=k: Terms up to l=|l1-l2|+k
+        - rank=None: All terms up to l=l1+l2 (full SO(3) expressivity)
+
+    The implementation uses a vectorized single-matmul approach for efficiency:
+    precomputed CG coefficients are packed into a tensor that can be contracted
+    with spherical harmonics in one operation.
 
     Args:
         repr: ProductRepr specifying the input and output representations.
+        rank: Maximum filter degree relative to the minimum coupling.
+            0 = rank-1 (fast, current default), None = full expressivity.
 
     Example:
         >>> repr = ProductRepr(Repr([0, 1]), Repr([0, 1]))
-        >>> basis = EquivariantBasis(repr)
-        >>> displacements = torch.randn(100, 3)  # 100 edge vectors
-        >>> coeff1, coeff2 = basis(displacements)
+        >>> basis = EquivariantBasis(repr, rank=0)  # Rank-1 (fast)
+        >>> displacements = torch.randn(100, 3)
+        >>> B = basis(displacements)  # (100, num_basis, dim1, dim2)
+        >>>
+        >>> basis_full = EquivariantBasis(repr, rank=None)  # Full SO(3)
+        >>> B_full = basis_full(displacements)  # More basis elements
     """
 
-    def __init__(self: EquivariantBasis, repr: ProductRepr) -> None:
+    def __init__(
+        self: EquivariantBasis,
+        repr: ProductRepr,
+        rank: int | None = 0,
+    ) -> None:
+        super().__init__()
+
+        self.repr = repr
+        self.rank = rank
+        self.dim1 = repr.rep1.dim()
+        self.dim2 = repr.rep2.dim()
+
+        # Maximum l needed for spherical harmonics
+        self._lmax = repr.lmax()
+
+        # Spherical harmonic calculator
+        self.sh = SphericalHarmonic(self._lmax)
+
+        # Get the coupling tensor from ProductRepr
+        coupling_coeff, num_basis = repr.cg_tensor(rank)
+        self.num_basis = num_basis
+
+        # Register as buffer: (sh_dim, num_basis * dim1 * dim2)
+        self.register_buffer('coupling_coeff', coupling_coeff)
+
+    def forward(self: EquivariantBasis, x: torch.Tensor) -> torch.Tensor:
+        """Compute equivariant basis matrices.
+
+        Args:
+            x: Displacement vectors of shape (N, 3).
+
+        Returns:
+            Basis matrices of shape (N, num_basis, dim1, dim2).
+        """
+        N = x.size(0)
+
+        # Compute spherical harmonics: (N, sh_dim)
+        sh = self.sh(x)
+        sh = torch.nan_to_num(sh, nan=0.0)
+
+        # Single matmul: (N, sh_dim) @ (sh_dim, num_basis * dim1 * dim2)
+        # -> (N, num_basis * dim1 * dim2)
+        out = sh @ self.coupling_coeff
+
+        # Reshape to (N, num_basis, dim1, dim2)
+        return out.view(N, self.num_basis, self.dim1, self.dim2)
+
+
+class _EquivariantBasisLegacy(nn.Module):
+    """Legacy equivariant basis returning factored coefficients.
+
+    This is the original implementation that returns a tuple of coefficient
+    tensors for low-rank tensor product contractions. Kept for backward
+    compatibility with existing code.
+
+    Args:
+        repr: ProductRepr specifying the input and output representations.
+    """
+
+    def __init__(self: _EquivariantBasisLegacy, repr: ProductRepr) -> None:
         super().__init__()
 
         self.outdims1 = (repr.rep1.dim(), repr.rep1.nreps())
@@ -464,7 +631,6 @@ class EquivariantBasis(nn.Module):
         self.sh = SphericalHarmonic(repr.lmax())
 
         # Pre-compute slice indices for efficient forward pass
-        # Each tuple: (coeff_slice_start, coeff_slice_end, sh_slice_start, sh_slice_end, irrep_idx)
         cdims1 = repr.rep1.cumdims()
         self.slices1 = [
             (cdims1[j], cdims1[j + 1], l ** 2, (l + 1) ** 2, j)
@@ -478,7 +644,7 @@ class EquivariantBasis(nn.Module):
         ]
 
     def forward(
-        self: EquivariantBasis,
+        self: _EquivariantBasisLegacy,
         x: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute equivariant basis coefficients.
@@ -500,8 +666,6 @@ class EquivariantBasis(nn.Module):
         coeff2 = torch.zeros(x.size(0), *self.outdims2, device=x.device, dtype=x.dtype)
 
         # Normalize SH values to unit RMS for each l-degree
-        # Standard real SH have: Y_l^m ~ 1/sqrt(4*pi) for l=0, different scales for l>0
-        # We scale by sqrt(4*pi) to make RMS ≈ 1 (exact for uniform directions)
         sh_normalized = sh * math.sqrt(4 * math.pi)
 
         for c_low, c_high, sh_low, sh_high, j in self.slices1:
@@ -521,17 +685,25 @@ class EquivariantBases(nn.Module):
 
     Args:
         *reprs: Variable number of ProductRepr objects.
+        rank: Maximum filter degree for all bases.
+            0 = rank-1 (fast), None = full expressivity.
 
     Example:
         >>> repr1 = ProductRepr(Repr([0, 1]), Repr([0, 1]))
         >>> repr2 = ProductRepr(Repr([0, 1, 2]), Repr([0, 1, 2]))
-        >>> bases = EquivariantBases(repr1, repr2)
+        >>> bases = EquivariantBases(repr1, repr2, rank=0)
         >>> displacements = torch.randn(100, 3)
-        >>> basis_list = bases(displacements)  # tuple of basis pairs
+        >>> basis_list = bases(displacements)  # tuple of basis tensors
     """
 
-    def __init__(self: EquivariantBases, *reprs: ProductRepr) -> None:
+    def __init__(
+        self: EquivariantBases,
+        *reprs: ProductRepr,
+        rank: int | None = 0,
+    ) -> None:
         super().__init__()
+
+        self.rank = rank
 
         # Deduplicate representations to avoid redundant computation
         self.unique_reprs: list[ProductRepr] = []
@@ -542,21 +714,22 @@ class EquivariantBases(nn.Module):
         for repr in reprs:
             if repr not in self.unique_reprs:
                 self.unique_reprs.append(repr)
-                self.comps.append(EquivariantBasis(repr))
+                self.comps.append(EquivariantBasis(repr, rank=rank))
                 repr_count += 1
             self.repr_ix.append(repr_count)
 
     def forward(
         self: EquivariantBases,
         x: torch.Tensor,
-    ) -> tuple[tuple[torch.Tensor, torch.Tensor], ...]:
+    ) -> tuple[torch.Tensor, ...]:
         """Compute basis matrices for all representations.
 
         Args:
             x: Displacement vectors of shape (N, 3).
 
         Returns:
-            Tuple of basis pairs, one for each input ProductRepr.
+            Tuple of basis tensors, one for each input ProductRepr.
+            Each tensor has shape (N, num_basis, dim1, dim2).
         """
         # Compute unique bases
         ms = [comp(x) for comp in self.comps]

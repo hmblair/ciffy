@@ -185,45 +185,6 @@ p = p.append(Residue.C, LocalCoordinates(coords2, transform)) # Relative positio
 
 `LocalCoordinates`: Bundles (n_atoms, 3) coordinates with (7,) SE(3) transform [quaternion (4), translation (3)].
 
-## Current Goal: Per-Residue Latent Embeddings
-
-### Objective
-
-Learn a **per-residue latent space** (16-dim) where each RNA residue's conformation can be encoded. Each residue is represented by:
-1. **Local coordinates** - Atom positions in the residue's aligned frame
-2. **Transform to next residue** - SE(3) transform (quaternion + translation)
-
-If per-residue reconstruction is exact, chain reconstruction follows automatically.
-
-### Relevant Files
-
-```
-ciffy/nn/residue/
-├── encoder.py      # ResidueEncoder
-├── decoder.py      # ResidueDecoder
-├── vae.py          # ResidueVAE
-└── training.py     # precompute_targets(), create_batches()
-
-scratch/train_vae.py    # Training script
-```
-
-### Running
-
-```bash
-# Local test
-python scratch/train_vae.py --data tests/data --epochs 10
-
-# Remote GPU (outputs to /scratch/users/hmblair/ciffy/vae_runs/)
-rex sherlock -d --gpu scratch/train_vae.py -- --name <experiment_name>
-```
-
-### Current Best Results (935K params, latent_dim=16, coord_weight=100)
-
-- **Per-residue**: 0.038 Å RMSD, 0.99° rotation error
-- **Full chain**: 1.6-7.5 Å RMSD (20-75 residues)
-
-Key finding: Default `coord_weight=1` causes 150x gradient imbalance (transform loss dominates). Setting `coord_weight=100` balances gradients and improves chain reconstruction 2-4x.
-
 ## Code Conventions
 
 ### Backend-Agnostic Code
@@ -374,3 +335,36 @@ loss = ciffy.rmsd(pred_coords, target_coords, eps=1e-8) # Gradient-stable near 0
 ```
 
 The `eps` parameter adds numerical stability when RMSD approaches zero during training.
+
+## Current Goal: RNA Structure Representation Learning
+
+### Objective
+
+Learn a latent representation of RNA structures with the following requirements:
+
+1. **Chain or residue scale** - Latents at chain or residue level (either is acceptable)
+2. **Fully differentiable** - Encoder and decoder are differentiable in both directions
+3. **Regularized latent space** - Latent distribution close to N(0, I)
+4. **High reconstruction fidelity** - <1 Å RMSD for 100-mer chains
+
+### Relevant Files
+
+```
+ciffy/nn/residue/
+├── encoder.py      # ResidueEncoder
+├── decoder.py      # ResidueDecoder
+├── vae.py          # ResidueVAE
+└── training.py     # precompute_targets(), create_batches()
+
+scripts/train_vae.py    # Training script
+```
+
+### Running
+
+```bash
+# Local test
+python scripts/train_vae.py --data tests/data --epochs 10
+
+# Remote GPU
+rex sherlock -d --gpu scripts/train_vae.py -- --name <experiment_name>
+```

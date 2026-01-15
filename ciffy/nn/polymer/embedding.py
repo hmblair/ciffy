@@ -6,12 +6,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...polymer import Polymer
+    from ciffy.polymer import Polymer
 
 import torch
 import torch.nn as nn
 
-from ...biochemistry import Scale, NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
+from ciffy.biochemistry import Scale, NUM_ATOMS, NUM_RESIDUES, NUM_ELEMENTS
 
 
 class PolymerEmbedding(nn.Module):

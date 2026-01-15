@@ -210,6 +210,44 @@ class RotaryPositionEmbedding(nn.Module):
         rotated = torch.cat([-x2, x1], dim=-1)
         return x * cos + rotated * sin
 
+    def apply_by_positions(
+        self,
+        x: "torch.Tensor",
+        positions: "torch.Tensor",
+    ) -> "torch.Tensor":
+        """
+        Apply rotary embedding using explicit position indices.
+
+        Useful for edge-wise attention where Q and K have different positions.
+
+        Args:
+            x: Tensor of shape (..., head_dim) to rotate.
+            positions: Position indices of shape broadcastable to x[..., 0].
+                Each position determines the rotation angle.
+
+        Returns:
+            Rotated tensor of same shape as x.
+
+        Example:
+            >>> rope = RotaryPositionEmbedding(dim=64)
+            >>> # Edge-wise attention: Q at target positions, K at source positions
+            >>> q = torch.randn(N, nheads, k, 64)  # queries
+            >>> k = torch.randn(N, nheads, k, 64)  # keys
+            >>> q_pos = torch.arange(N).view(N, 1, 1)  # target positions
+            >>> k_pos = neighbor_idx.unsqueeze(1)      # source positions (N, 1, k)
+            >>> q_rot = rope.apply_by_positions(q, q_pos)
+            >>> k_rot = rope.apply_by_positions(k, k_pos)
+        """
+        max_pos = int(positions.max().item()) + 1
+        if max_pos > self.cos_cached.shape[0]:
+            self._update_cache(max_pos)
+
+        # Gather cos/sin for each position
+        cos = self.cos_cached[positions]  # (..., head_dim)
+        sin = self.sin_cached[positions]  # (..., head_dim)
+
+        return self._rotate(x, cos, sin)
+
 
 class SwiGLU(nn.Module):
     """

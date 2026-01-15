@@ -1,39 +1,37 @@
 """
-Normalizing flow utilities.
+Normalizing flow layers and utilities.
 
-Note:
-    The residue-level flow models (ResidueFlowModel, PCAFlow) and PolymerModel
-    have been archived. For new residue-level modeling, use:
+This module provides generic normalizing flow building blocks:
 
-        >>> from ciffy.nn.residue import ResidueVAE
+Complete Flows:
+    - RealNVP: Stack of affine coupling layers
+    - NeuralSplineFlow: Stack of spline coupling layers
 
-    The old code is preserved in archive/nn/flow/ for reference.
+Embeddings:
+    - SinusoidalTimeEmbedding: Time embedding for flow matching
 
-Remaining utilities:
+Utilities:
     - FlowMetrics: Metrics for evaluating normalizing flow models
-    - load_pretrained: Load pre-trained models (if available)
+
+Example:
+    >>> from ciffy.nn.flow import RealNVP, NeuralSplineFlow
+    >>>
+    >>> flow = RealNVP(dim=16, n_layers=8)
+    >>> z, log_det = flow(x)
+    >>> x_recon = flow.inverse(z)  # Exact reconstruction
+    >>> log_prob = flow.log_prob(x)
 """
 
-from .metrics import (
-    LatentMoments,
-    FlowMetrics,
-    compute_nll,
-    compute_latent_moments,
-    compute_flow_metrics,
-    estimate_kl_divergence,
+from .layers import (
+    RealNVP,
+    NeuralSplineFlow,
 )
-from .pretrained import load_pretrained, list_pretrained, is_pretrained_available
+from .embeddings import SinusoidalTimeEmbedding
+from .metrics import FlowMetrics
 
 __all__ = [
-    # Metrics
-    "LatentMoments",
+    "RealNVP",
+    "NeuralSplineFlow",
+    "SinusoidalTimeEmbedding",
     "FlowMetrics",
-    "compute_nll",
-    "compute_latent_moments",
-    "compute_flow_metrics",
-    "estimate_kl_divergence",
-    # Pre-trained models
-    "load_pretrained",
-    "list_pretrained",
-    "is_pretrained_available",
 ]

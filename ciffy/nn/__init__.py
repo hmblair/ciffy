@@ -1,18 +1,22 @@
 """
 Neural network utilities for ciffy.
 
-Provides PyTorch-compatible modules for deep learning on molecular structures.
+Provides PyTorch-compatible modules for deep learning.
 
-Modules:
-    - layers: Reusable neural network building blocks (DenseNetwork, Transformer, etc.)
+Generic modules:
+    - layers: Reusable neural network building blocks (Transformer, MLP, etc.)
     - diffusion: Noise schedules, diffusion processes, and EMA utilities
+    - flow: Normalizing flow architectures (RealNVP, NeuralSplineFlow)
     - config: Configuration framework for training
     - training: Training infrastructure and utilities
     - io: Model saving, loading, and Hub integration
-    - flow: Normalizing flow models for polymer conformations
-    - vae: Variational autoencoder models
-    - autoregressive: Autoregressive models for polymer generation
     - geometric: SO(3)-equivariant layers (optional, requires sphericart)
+
+Polymer-specific:
+    - polymer: PolymerDataset, PolymerEmbedding
+
+For polymer-specific models (ResidueVAE, AR models, diffusion models),
+see science/rna-representation/nn/.
 """
 
 import torch
@@ -47,15 +51,14 @@ def configure_precision(
     torch.set_float32_matmul_precision(matmul_precision)
 
 
-# Core
-from .dataset import PolymerDataset
+# Polymer-specific utilities (backward-compat re-exports)
+from .polymer import PolymerDataset, PolymerEmbedding
 
 # Layers
 from .layers import (
     CausalTransformer,
     MLP,
     MultiHeadAttention,
-    PolymerEmbedding,
     RMSNorm,
     RotaryPositionEmbedding,
     SwiGLU,
@@ -63,6 +66,9 @@ from .layers import (
     TransformerBlock,
     create_causal_mask,
 )
+
+# Flow
+from .flow import RealNVP, NeuralSplineFlow
 
 
 # Config (from config/ submodule)
@@ -119,21 +125,12 @@ from .io import (
 # Protocols
 from .protocols import PolymerEncoder, PolymerGenerativeModel, PolymerPropertyPredictor
 
-# Diffusion
+# Diffusion (generic components only)
 from .diffusion import (
-    CoordinateDenoiser,
-    CoordinateDenoiserConfig,
-    CoordinateDiffusionConfig,
-    CoordinateDiffusionModel,
     CosineNoiseSchedule,
-    DiffusionConfig,
     DiffusionProcess,
     EMA,
     FixedSinusoidalEmbedding,
-    LatentDenoiser,
-    LatentDenoiserConfig,
-    LatentDiffusionConfig,
-    LatentDiffusionModel,
     LinearNoiseSchedule,
     NoiseSchedule,
     TimestepEmbedding,
@@ -141,154 +138,38 @@ from .diffusion import (
     update_ema_model,
 )
 
-# Residue-level encoder/decoder (new vectorized implementation)
-from .residue import (
-    ResidueDecoder,
-    ResidueEncoder,
-    ResidueVAE,
-)
-
-# Autoregressive models
-from .autoregressive import (
-    AtomARModel,
-    AtomARModelConfig,
-    CoordinateARModel,
-    CoordinateARModelConfig,
-    PolymerLatentARModel,
-    ResidueLatentARModel,
-    ResidueLatentARModelConfig,
-)
-
 __all__ = [
     # Precision configuration
     "configure_precision",
-    # Dataset
+    # Polymer utilities
     "PolymerDataset",
+    "PolymerEmbedding",
     # Layers
     "MLP",
-    "PolymerEmbedding",
     "Transformer",
-    "TransformerBlock",
-    "MultiHeadAttention",
-    "RMSNorm",
-    "RotaryPositionEmbedding",
-    "SwiGLU",
     "CausalTransformer",
-    "create_causal_mask",
-    # Config
-    "BaseConfig",
-    "DataConfig",
-    "TrainingConfig",
-    "OutputConfig",
-    "WandbConfig",
-    "MetricsLogger",
-    "SchedulerConfig",
-    "ValidationConfig",
-    "InferenceConfig",
-    "get_device",
-    # Training
-    "WandbLogger",
-    "NoOpLogger",
-    "create_logger",
-    "GradientTracker",
-    "ParameterTracker",
-    "ActivationTracker",
-    "LearningRateTracker",
-    "TrainingDiagnostics",
-    "DiagnosticsConfig",
-    "diagnose_gradients",
-    "DataSplit",
+    # Flow
+    "RealNVP",
+    "NeuralSplineFlow",
+    # Diffusion (generic)
+    "NoiseSchedule",
+    "CosineNoiseSchedule",
+    "DiffusionProcess",
+    "EMA",
+    # Training utilities
     "split_items",
-    "split_train_test",
-    "split_by_clusters",
-    "split_by_sequence_identity",
-    "split_by_sequence",
-    "split_to_directories",
-    # I/O
-    "save_model",
-    "load_model",
-    "get_model_info",
-    "SaveableModel",
-    "register_model",
-    "get_model_class",
-    "list_registered_models",
-    "load_model_from_checkpoint",
-    "generate_samples",
-    "HubMixin",
-    "get_cache_dir",
-    "set_cache_dir",
+    "DataSplit",
     # Protocols
     "PolymerGenerativeModel",
     "PolymerEncoder",
-    "PolymerPropertyPredictor",
-    # Diffusion
-    "FixedSinusoidalEmbedding",
-    "NoiseSchedule",
-    "LinearNoiseSchedule",
-    "CosineNoiseSchedule",
-    "DiffusionProcess",
-    "TimestepEmbedding",
-    "EMA",
-    "create_ema_model",
-    "update_ema_model",
-    "DiffusionConfig",
-    "LatentDenoiserConfig",
-    "LatentDenoiser",
-    "LatentDiffusionConfig",
-    "LatentDiffusionModel",
-    "CoordinateDenoiserConfig",
-    "CoordinateDenoiser",
-    "CoordinateDiffusionConfig",
-    "CoordinateDiffusionModel",
-    # Residue-level encoder/decoder
-    "ResidueEncoder",
-    "ResidueDecoder",
-    "ResidueVAE",
-    # Autoregressive models
-    "ResidueLatentARModel",
-    "ResidueLatentARModelConfig",
-    "PolymerLatentARModel",
-    "CoordinateARModel",
-    "CoordinateARModelConfig",
-    "AtomARModel",
-    "AtomARModelConfig",
 ]
 
 # Optional geometric deep learning module
 # Requires sphericart: pip install ciffy[geometric]
 try:
-    from .geometric import (
-        EquivariantAttention,
-        EquivariantLinear,
-        EquivariantTransformer,
-        EquivariantTransformerBlock,
-        Irrep,
-        LowRankMatrixOutput,
-        MatrixOutput,
-        ProductIrrep,
-        ProductRepr,
-        RadialBasisFunctions,
-        Repr,
-        SphericalHarmonic,
-        build_knn_graph,
-    )
+    from .geometric import EquivariantTransformer, RadialBasisFunctions
     GEOMETRIC_AVAILABLE = True
-    __all__.extend([
-        "Repr",
-        "ProductRepr",
-        "Irrep",
-        "ProductIrrep",
-        "MatrixOutput",
-        "LowRankMatrixOutput",
-        "EquivariantLinear",
-        "EquivariantTransformer",
-        "EquivariantAttention",
-        "EquivariantTransformerBlock",
-        "SphericalHarmonic",
-        "RadialBasisFunctions",
-        "build_knn_graph",
-        "GEOMETRIC_AVAILABLE",
-    ])
+    __all__.extend(["EquivariantTransformer", "GEOMETRIC_AVAILABLE"])
 except ImportError:
     GEOMETRIC_AVAILABLE = False
     __all__.append("GEOMETRIC_AVAILABLE")

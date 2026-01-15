@@ -2,7 +2,6 @@
 
 Provides foundational layers used across the ciffy.nn module:
 - MLP: Unified multi-layer perceptron with optional residual connections
-- PolymerEmbedding: Embeddings for polymer features
 - Transformer components: RMSNorm, RoPE, SwiGLU, etc.
 - Pairformer: AlphaFold3-style transformer for pair representations
 
@@ -14,7 +13,6 @@ Example:
     >>> pairformer = Pairformer(d_pair=128, num_layers=4, num_heads=8)
 """
 
-from .embedding import PolymerEmbedding
 from .mlp import MLP
 from .transformer import (
     Transformer,
@@ -39,8 +37,6 @@ from .pairformer import (
 from .causal import CausalTransformer, create_causal_mask
 
 __all__ = [
-    # Embedding
-    "PolymerEmbedding",
     # Transformer components
     "Transformer",
     "TransformerBlock",

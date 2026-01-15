@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Sequence, Union
 
 if TYPE_CHECKING:
-    from ..polymer import Polymer
+    from ciffy.polymer import Polymer
 
 try:
     import torch
@@ -23,7 +23,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     Dataset = object  # Placeholder for type hints
 
-from ..biochemistry import Scale, Molecule
+from ciffy.biochemistry import Scale, Molecule
 
 logger = logging.getLogger(__name__)
 
@@ -384,13 +384,13 @@ class PolymerDataset(Dataset):
             - Item level: returns same object on repeated access to same index
             Files are automatically evicted from cache once all their chains are loaded.
         """
-        from .. import load
+        import ciffy
 
         try:
             path, chain_idx = self._index[idx]
 
             def loader():
-                return load(str(path), backend=self.backend)
+                return ciffy.load(str(path), backend=self.backend)
 
             def extractor(polymer):
                 if chain_idx is not None:
@@ -414,7 +414,7 @@ class PolymerDataset(Dataset):
 
     def _filter_by_molecule_type(self, polymer: Polymer) -> Polymer:
         """Filter polymer to only include chains of specified molecule types."""
-        from ..backend import ops
+        from ciffy.backend import ops
 
         # Build mask for matching types (backend-agnostic)
         if polymer.molecule_types is None:
@@ -453,7 +453,7 @@ class PolymerDataset(Dataset):
         if self._cache is None:
             raise ValueError("Cannot preload: cache is disabled")
 
-        from .. import load as ciffy_load
+        from ciffy import load as ciffy_load
 
         # Get unique file paths preserving order
         unique_paths = list(dict.fromkeys(path for path, _ in self._index))

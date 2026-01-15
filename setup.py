@@ -80,7 +80,7 @@ def generate_hash_tables(force=False):
         'atom.c', 'element.c', 'entity.c', 'ion.c', 'molecule.c', 'residue.c', 'reverse.h'
     ]
     required_python_files = [
-        '_generated_atoms.py', '_generated_dihedrals.py', '_generated_dihedraltypes.py',
+        '_generated_atoms.py', '_generated_dihedraltypes.py',
         '_generated_elements.py', '_generated_molecule.py', '_generated_residues.py'
     ]
 
@@ -449,10 +449,9 @@ if os.environ.get('CIFFY_NO_OPENMP', '').lower() not in ('1', 'true', 'yes'):
                         print(f"  Added rpath for Homebrew libomp: {homebrew_path}")
                         break
 
-        print("OpenMP enabled for parallel Z-matrix construction")
+        print("OpenMP enabled")
     else:
         print("OpenMP not available (install libomp on macOS: brew install libomp)")
-        print("Building without OpenMP - Z-matrix construction will be single-threaded")
 else:
     print("OpenMP disabled via CIFFY_NO_OPENMP")
 

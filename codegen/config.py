@@ -331,8 +331,8 @@ SIDECHAIN_CHI_DEFS: dict[str, dict[str, tuple[str, str, str, str]]] = {
 # BACKBONE NAME IDS - For inter-residue reference resolution in C
 # =============================================================================
 # These are canonical identifiers for backbone atoms that can be referenced
-# across residue boundaries. Used in the C Z-matrix builder to resolve
-# inter-residue refs without knowing specific atom types.
+# across residue boundaries. Used to resolve inter-residue refs without
+# knowing specific atom types.
 
 BACKBONE_NAMES: dict[str, int] = {
     # Protein backbone

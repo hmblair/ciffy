@@ -1,6 +1,6 @@
 /**
  * @file graph.h
- * @brief Bond graph construction for Z-matrix generation.
+ * @brief Bond graph construction and operations.
  */
 
 #ifndef _CIFFY_GRAPH_H

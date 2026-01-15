@@ -19,11 +19,8 @@ The generation process has four phases:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-import numpy as np
 
 from .config import MOLECULE_TYPES, IONS, RESIDUE_WHITELIST
 from .ccd import load_residues_from_ccd
@@ -33,14 +30,10 @@ from .c_codegen import (
     generate_reverse_header,
     generate_bond_patterns_header,
 )
-from .residue import (
-    ResidueDefinition,
-    compute_atom_dihedral_ownership,
-)
+from .residue import ResidueDefinition
 from .python_codegen import (
     generate_python_molecule,
     generate_python_elements,
-    generate_dihedral_arrays,
     generate_python_dihedraltypes,
     generate_python_atoms,
     generate_python_residues,
@@ -68,8 +61,6 @@ class IndexedData:
     cif_to_residue: dict[str, int]  # CIF name -> residue index
     residue_to_cif: dict[int, str]  # residue index -> primary CIF name
     atom_index: dict[tuple[str, str], int]  # (cif_name, atom_name) -> atom index
-    atom_dihedral_type: np.ndarray  # atom index -> dihedral type
-    atom_dihedral_refs: np.ndarray  # atom index -> reference atoms
     backbone_values: dict[str, int]  # backbone atom name -> unified value
 
 
@@ -148,8 +139,8 @@ def _build_indices(data: LoadedData) -> IndexedData:
     """
     Phase 3: Build indices and derived arrays.
 
-    Creates lookup tables for residues and atoms, and computes
-    dihedral ownership and backbone atom arrays.
+    Creates lookup tables for residues and atoms, and identifies
+    backbone atom values.
 
     Atom indexing uses a two-phase algorithm:
     1. Backbone atoms get unified values (1+) shared across all residue types
@@ -247,18 +238,11 @@ def _build_indices(data: LoadedData) -> IndexedData:
     print(f"Inherited {inherited_count} atoms from parent residues")
     print(f"Total: {len(atom_index)} entries (backbone + inherited atoms shared)")
 
-    # Compute derived arrays
-    atom_dihedral_type, atom_dihedral_refs = compute_atom_dihedral_ownership(
-        residues, atom_index
-    )
-
     return IndexedData(
         residue_index=residue_index,
         cif_to_residue=cif_to_residue,
         residue_to_cif=residue_to_cif,
         atom_index=atom_index,
-        atom_dihedral_type=atom_dihedral_type,
-        atom_dihedral_refs=atom_dihedral_refs,
         backbone_values=backbone_values,
     )
 
@@ -300,7 +284,6 @@ def _generate_files(
     # Python code generation
     generate_python_molecule(paths.biochem_dir)
     generate_python_elements(paths.biochem_dir, data.elements)
-    generate_dihedral_arrays(paths.biochem_dir, data.residues, indices.atom_index)
     generate_python_dihedraltypes(paths.biochem_dir)
     generate_python_atoms(paths.biochem_dir, indices.atom_index, data.residues, indices.backbone_values)
     generate_python_residues(paths.biochem_dir, data.residues)

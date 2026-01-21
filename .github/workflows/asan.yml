@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y gperf
+        run: sudo apt-get update && sudo apt-get install -y gperf libasan8
 
       - name: Install dependencies
         run: |
@@ -36,8 +36,10 @@ jobs:
 
       - name: Run tests with ASan
         env:
-          # ASan is already linked via CFLAGS, no LD_PRELOAD needed
-          ASAN_OPTIONS: abort_on_error=0:print_stacktrace=1:detect_leaks=0
+          ASAN_OPTIONS: abort_on_error=0:print_stacktrace=1:detect_leaks=0:verify_asan_link_order=0
         run: |
+          # Find and preload the ASan runtime library
+          ASAN_LIB=$(gcc -print-file-name=libasan.so)
+          echo "Using ASan library: $ASAN_LIB"
           # Run without xdist (-n auto) to avoid multiprocess issues with ASan
-          pytest tests/ -v --ignore=tests/profile.py --ignore=tests/nn/
+          LD_PRELOAD="$ASAN_LIB" pytest tests/ -v --ignore=tests/profile.py --ignore=tests/nn/

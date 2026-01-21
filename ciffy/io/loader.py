@@ -5,7 +5,7 @@ CIF file loading functionality.
 from __future__ import annotations
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Union, List, Sequence, overload
+from typing import TYPE_CHECKING, Union, List, Sequence, overload, cast
 
 import numpy as np
 
@@ -24,30 +24,30 @@ def load(
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = ("descriptions", "connections"),
+    skip: Union[str, Sequence[str], None] = ("descriptions", "connections"),
     alt_loc: str | None = "A",
 ) -> "Polymer": ...
 
 
 @overload
 def load(
-    file: Sequence[str | Path],
+    file: List[str | Path],
     backend: str | None = None,
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = ("descriptions", "connections"),
+    skip: Union[str, Sequence[str], None] = ("descriptions", "connections"),
     alt_loc: str | None = "A",
 ) -> List["Polymer | None"]: ...
 
 
 def load(
-    file: str | Path | Sequence[str | Path],
+    file: str | Path | List[str | Path],
     backend: str | None = None,
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = ("descriptions", "connections"),
+    skip: Union[str, Sequence[str], None] = ("descriptions", "connections"),
     alt_loc: str | None = "A",
 ) -> "Polymer | List[Polymer | None]":
     """
@@ -130,11 +130,11 @@ def load(
     """
     # Check if file is a sequence of paths (but not a single string/Path)
     if not isinstance(file, (str, Path)) and hasattr(file, '__iter__'):
-        return _load_multiple(file, backend=backend)
+        return _load_multiple(cast(List[str | Path], file), backend=backend)
 
     # Single file path - use existing logic
     return _load_single(
-        file,
+        cast("str | Path", file),
         backend=backend,
         molecule_types=molecule_types,
         chains=chains,
@@ -153,7 +153,7 @@ def _load_multiple(
 
     Internal implementation for parallel loading.
     """
-    from .._c import _load_batch
+    from .._c import _load_batch  # type: ignore[attr-defined]
 
     if backend is None:
         backend = "numpy"
@@ -188,7 +188,7 @@ def _load_single(
     molecule_types: Union["Molecule", List["Molecule"], None] = None,
     chains: Union[str, List[str], None] = None,
     model: int = 1,
-    skip: Union[str, List[str], None] = ("descriptions", "connections"),
+    skip: Union[str, Sequence[str], None] = ("descriptions", "connections"),
     alt_loc: str | None = "A",
 ) -> "Polymer":
     """
@@ -248,30 +248,32 @@ def _load_single(
     load_connections = "connections" not in skip_set
 
     # Normalize skip to list for C extension (exclude "connections" - handled separately)
+    skip_for_c: str | list[str] | None
     if skip is None:
         skip_for_c = None
     elif isinstance(skip, str):
         skip_for_c = skip if skip != "connections" else None
     else:
-        skip_for_c = [s for s in skip if s != "connections"]
-        if not skip_for_c:
-            skip_for_c = None
+        skip_list = [s for s in skip if s != "connections"]
+        skip_for_c = skip_list if skip_list else None
 
     # Load returns a dict with all parsed data
-    data = _load(file, skip=skip_for_c, molecule_types=mol_type_filter, chains=chain_filter,
-                 connections=load_connections, alt_loc=alt_loc, model=model)
+    data = _load(  # type: ignore[call-arg]
+        file, skip=skip_for_c, molecule_types=mol_type_filter, chains=chain_filter,
+        connections=load_connections, alt_loc=alt_loc, model=model
+    )
 
     # Extract fields from dict
-    id = data["id"]
+    pdb_id = data["id"]
     coordinates = data["coordinates"]
-    atoms = data["atoms"]
+    atoms_arr = data["atoms"]
     elements = data["elements"]
     residues = data["residues"]
     atoms_per_res = data["atoms_per_res"]
     atoms_per_chain = data["atoms_per_chain"]
     res_per_chain = data["res_per_chain"]
     chain_names = data["chain_names"]
-    molecule_types = data["molecule_types"]
+    mol_types = data["molecule_types"]
 
     # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
     # These chains only contain HETATM atoms and shouldn't be part of Polymer
@@ -280,7 +282,7 @@ def _load_single(
         atoms_per_chain = atoms_per_chain[chain_mask]
         res_per_chain = res_per_chain[chain_mask]
         chain_names = [n for n, m in zip(chain_names, chain_mask) if m]
-        molecule_types = molecule_types[chain_mask]
+        mol_types = mol_types[chain_mask]
         # descriptions is per-chain if present
         descriptions = data.get("descriptions", None)
         if descriptions is not None:
@@ -301,7 +303,7 @@ def _load_single(
     descriptions = data.get("descriptions", None)
 
     # Get B-factors, resolution, and deposit date
-    bfactors = data.get("bfactors", None)
+    bfactors = data["bfactors"]
     resolution = data.get("resolution", None)
     # C extension uses -1.0 as sentinel for unavailable; convert to None
     if resolution is not None and resolution < 0:
@@ -331,12 +333,13 @@ def _load_single(
     hetero = None
     if hetatm_coords is not None and len(hetatm_coords) > 0:
         from ..polymer.hetero import HeteroAtoms
+        # Elements and chains are guaranteed non-None when coords exist
         hetero = HeteroAtoms.from_arrays(
             coordinates=hetatm_coords,
-            elements=hetatm_elements,
-            chains=hetatm_chains,
+            elements=hetatm_elements,  # type: ignore[arg-type]
+            chains=hetatm_chains,  # type: ignore[arg-type]
             bfactors=hetatm_bfactors,
-            pdb_id=id,
+            pdb_id=pdb_id,
         )
 
     # Create hierarchy from sizes and lengths
@@ -352,13 +355,13 @@ def _load_single(
         hierarchy,
         # Field objects (arrays with scale)
         coordinates=Field(coordinates, Scale.ATOM),
-        atoms=Field(atoms, Scale.ATOM),
+        atoms=Field(atoms_arr, Scale.ATOM),
         elements=Field(elements, Scale.ATOM),
         sequence=Field(residues, Scale.RESIDUE),
-        molecule_types=Field(molecule_types, Scale.CHAIN),
+        molecule_types=Field(mol_types, Scale.CHAIN),
         bfactors=Field(bfactors, Scale.ATOM),
         # Metadata (non-array values)
-        pdb_id=id,
+        pdb_id=pdb_id,
         names=chain_names,
         descriptions=descriptions,
         resolution=resolution,
@@ -371,7 +374,7 @@ def _load_single(
 
     # Convert to torch if requested
     if backend == "torch":
-        return polymer.torch()
+        return cast("Polymer", polymer.torch())
 
     return polymer
 
@@ -381,11 +384,11 @@ def load_metadata(file: str | Path) -> dict: ...
 
 
 @overload
-def load_metadata(file: Sequence[str | Path]) -> List[dict | None]: ...
+def load_metadata(file: List[str | Path]) -> List[dict | None]: ...
 
 
 def load_metadata(
-    file: str | Path | Sequence[str | Path],
+    file: str | Path | List[str | Path],
 ) -> dict | List[dict | None]:
     """
     Load only metadata from CIF file(s) (fast path for indexing).
@@ -433,9 +436,9 @@ def load_metadata(
     """
     # Check if file is a sequence of paths (but not a single string/Path)
     if not isinstance(file, (str, Path)) and hasattr(file, '__iter__'):
-        return _load_metadata_multiple(file)
+        return _load_metadata_multiple(cast(List[str | Path], file))
 
-    return _load_metadata_single(file)
+    return _load_metadata_single(cast("str | Path", file))
 
 
 def _load_metadata_single(file: str | Path) -> dict:
@@ -449,13 +452,13 @@ def _load_metadata_single(file: str | Path) -> dict:
     if not os.path.isfile(file):
         raise OSError(f'The file "{file}" does not exist.')
 
-    data = _load(file, skip='metadata')
+    data = _load(file, skip='metadata')  # type: ignore[call-arg]
     return _process_metadata(data)
 
 
 def _load_metadata_multiple(files: Sequence[str | Path]) -> List[dict | None]:
     """Load metadata from multiple CIF files in parallel."""
-    from .._c import _load_batch
+    from .._c import _load_batch  # type: ignore[attr-defined]
 
     # Convert all paths to strings
     file_strs = [str(f) for f in files]
@@ -464,7 +467,7 @@ def _load_metadata_multiple(files: Sequence[str | Path]) -> List[dict | None]:
     results = _load_batch(file_strs, skip='metadata')
 
     # Process each result
-    metas: list[Metadata | None] = []
+    metas: list[dict | None] = []
     for data in results:
         if data is None:
             metas.append(None)
@@ -523,16 +526,16 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
     from ..biochemistry import Scale
 
     # Extract fields from dict
-    id = data["id"]
+    pdb_id = data["id"]
     coordinates = data["coordinates"]
-    atoms = data["atoms"]
+    atoms_arr = data["atoms"]
     elements = data["elements"]
     residues = data["residues"]
     atoms_per_res = data["atoms_per_res"]
     atoms_per_chain = data["atoms_per_chain"]
     res_per_chain = data["res_per_chain"]
     chain_names = data["chain_names"]
-    molecule_types = data["molecule_types"]
+    mol_types = data["molecule_types"]
 
     # Filter out chains with 0 residues (ION/WATER/LIGAND-only chains)
     chain_mask = res_per_chain > 0
@@ -540,7 +543,7 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
         atoms_per_chain = atoms_per_chain[chain_mask]
         res_per_chain = res_per_chain[chain_mask]
         chain_names = [n for n, m in zip(chain_names, chain_mask) if m]
-        molecule_types = molecule_types[chain_mask]
+        mol_types = mol_types[chain_mask]
         descriptions = data.get("descriptions", None)
         if descriptions is not None:
             descriptions = [d for d, m in zip(descriptions, chain_mask) if m]
@@ -558,7 +561,7 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
 
     # Get optional fields
     descriptions = data.get("descriptions", None)
-    bfactors = data.get("bfactors", None)
+    bfactors = data["bfactors"]
     resolution = data.get("resolution", None)
     if resolution is not None and resolution < 0:
         resolution = None
@@ -586,12 +589,13 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
     hetero = None
     if hetatm_coords is not None and len(hetatm_coords) > 0:
         from ..polymer.hetero import HeteroAtoms
+        # Elements and chains are guaranteed non-None when coords exist
         hetero = HeteroAtoms.from_arrays(
             coordinates=hetatm_coords,
-            elements=hetatm_elements,
-            chains=hetatm_chains,
+            elements=hetatm_elements,  # type: ignore[arg-type]
+            chains=hetatm_chains,  # type: ignore[arg-type]
             bfactors=hetatm_bfactors,
-            pdb_id=id,
+            pdb_id=pdb_id,
         )
 
     # Create hierarchy from sizes and lengths
@@ -606,12 +610,12 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
     polymer = Polymer(
         hierarchy,
         coordinates=Field(coordinates, Scale.ATOM),
-        atoms=Field(atoms, Scale.ATOM),
+        atoms=Field(atoms_arr, Scale.ATOM),
         elements=Field(elements, Scale.ATOM),
         sequence=Field(residues, Scale.RESIDUE),
-        molecule_types=Field(molecule_types, Scale.CHAIN),
+        molecule_types=Field(mol_types, Scale.CHAIN),
         bfactors=Field(bfactors, Scale.ATOM),
-        pdb_id=id,
+        pdb_id=pdb_id,
         names=chain_names,
         descriptions=descriptions,
         resolution=resolution,
@@ -622,6 +626,6 @@ def _dict_to_polymer(data: dict, backend: str = "numpy") -> "Polymer":
     )
 
     if backend == "torch":
-        return polymer.torch()
+        return cast("Polymer", polymer.torch())
 
     return polymer

@@ -90,7 +90,6 @@ class TestFromSequence:
         polymer = template("acgt")
         assert (polymer.atoms > 0).all()
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_backend(self, backend):
         """Test backend selection."""
         from ciffy import template

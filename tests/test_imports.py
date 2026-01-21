@@ -7,8 +7,6 @@ Includes tests for both numpy and torch backends.
 import pytest
 import numpy as np
 
-from tests.utils import skip_if_no_torch
-
 
 class TestUtilityFunctions:
     """Test utility functions."""
@@ -679,15 +677,12 @@ class TestRMSDEdgeCases:
             return polymer.torch()
         return polymer
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_single_atom_rmsd(self, backend):
         """rmsd with single atom should return exactly 0.
 
         With 1 atom, the centered coordinates are all zero, making the
         covariance matrix all zeros. RMSD is trivially 0.
         """
-        skip_if_no_torch(backend)
-
         from ciffy import rmsd
 
         p = self._create_small_polymer(1, backend)
@@ -702,15 +697,12 @@ class TestRMSDEdgeCases:
         else:
             assert dist[0] == 0.0
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_two_atom_rmsd(self, backend):
         """rmsd with two atoms should return ~0 for self-comparison.
 
         With 2 atoms, the covariance matrix has rank 1, but self-comparison
         should still give 0 since any 2 points can be perfectly aligned.
         """
-        skip_if_no_torch(backend)
-
         from ciffy import rmsd
 
         p = self._create_small_polymer(2, backend)
@@ -724,15 +716,12 @@ class TestRMSDEdgeCases:
         else:
             assert dist[0] < 1e-5
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_three_atom_rmsd(self, backend):
         """rmsd with three atoms should return ~0 for self-comparison.
 
         With 3 atoms, the covariance matrix can be rank-deficient depending
         on the point configuration.
         """
-        skip_if_no_torch(backend)
-
         from ciffy import rmsd
 
         p = self._create_small_polymer(3, backend)

@@ -195,10 +195,8 @@ class TestJoin:
 
         assert combined.pdb_id == "joined"
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_join_backend_preserved(self, backend):
         """Join preserves backend."""
-        pytest.importorskip("torch")
         p1 = _template_with_coords("ac", backend=backend)
         p2 = _template_with_coords("gu", backend=backend)
 
@@ -314,11 +312,8 @@ class TestAppend:
         assert distance > 5.0, f"Centroid distance {distance:.2f}Å too small (residues may clash)"
         assert distance < 15.0, f"Centroid distance {distance:.2f}Å too large (unusual spacing)"
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_extend_backend_preserved(self, backend):
         """Extend preserves backend."""
-        pytest.importorskip("torch")
-
         p = _template_with_coords("ac", backend=backend)
 
         # Use explicit extend with numpy arrays (will be converted)

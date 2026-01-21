@@ -8,12 +8,7 @@ import numpy as np
 import ciffy
 from ciffy import Scale
 
-from tests.utils import (
-    get_test_cif,
-    TORCH_AVAILABLE,
-    skip_if_no_torch,
-    DATA_DIR,
-)
+from tests.utils import get_test_cif, TORCH_AVAILABLE, DATA_DIR
 
 
 # =============================================================================
@@ -23,33 +18,24 @@ from tests.utils import (
 class TestKNN:
     """Tests for Polymer.knn() method."""
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_shape(self, backend):
         """Test that knn returns correct shape."""
-        skip_if_no_torch(backend)
-
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 5
         neighbors = p.knn(k=k, scale=Scale.ATOM)
 
         assert neighbors.shape == (k, p.size())
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_residue_scale(self, backend):
         """Test KNN at residue scale."""
-        skip_if_no_torch(backend)
-
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 3
         neighbors = p.knn(k=k, scale=Scale.RESIDUE)
 
         assert neighbors.shape == (k, p.size(Scale.RESIDUE))
 
-    @pytest.mark.parametrize("backend", ["numpy", "torch"])
     def test_knn_excludes_self(self, backend):
         """Test that knn excludes self (no point is its own neighbor)."""
-        skip_if_no_torch(backend)
-
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         neighbors = p.knn(k=3, scale=Scale.ATOM)
 

@@ -13,8 +13,6 @@ import ciffy
 from ciffy import Scale, operations
 from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, O3P_FRAME, P_FRAME
 
-from tests.utils import BACKENDS
-
 
 class TestDecomposeCompose:
     """Tests for the decompose/compose API."""
@@ -125,15 +123,9 @@ class TestDecomposeCompose:
         diff = (t_original.data - t_translated.data).abs().max().item()
         assert diff < 1e-3, f"Transforms should be invariant to translation, max diff={diff}"
 
-    @pytest.mark.parametrize("backend", BACKENDS)
     def test_backend_preserved(self, backend):
         """decompose/compose work with both backends."""
-        if backend == "torch":
-            pytest.importorskip("torch")
-
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1, 2])
-        if backend == "torch":
-            p = p.torch()
+        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).strip().residue([0, 1, 2])
 
         transforms = operations.decompose(p)
         rebuilt = operations.compose(p, transforms)

@@ -1,0 +1,481 @@
+From fd2e5a836ff8e54899880835677fda5d12ce16d6 Mon Sep 17 00:00:00 2001
+From: Hamish B <hmblair@stanford.edu>
+Date: Sat, 10 Jan 2026 20:32:59 -0800
+Subject: [PATCH] Only apply gres when using GPU partition
+
+Previously, gres from project config was applied regardless of partition,
+causing CPU jobs to unnecessarily request GPU resources.
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+---
+ ciffy/geometry/__init__.py             | 17 ++++++
+ ciffy/nn/lightning/__init__.py         |  5 --
+ ciffy/nn/lightning/modules/__init__.py |  8 +--
+ ciffy/nn/residue/decoder.py            | 67 ++++++++++++++++++----
+ ciffy/nn/residue/vae.py                | 13 +++++
+ ciffy/polymer/polymer.py               | 77 +++++++++++++++++---------
+ tests/polymer/test_frames.py           | 10 ++--
+ 7 files changed, 142 insertions(+), 55 deletions(-)
+
+diff --git a/ciffy/geometry/__init__.py b/ciffy/geometry/__init__.py
+index b7afbe1..438a986 100644
+--- a/ciffy/geometry/__init__.py
++++ b/ciffy/geometry/__init__.py
+@@ -55,6 +55,16 @@ from .transforms import (
+     se3_loss,
+ )
+ 
++# 6D rotation representation
++from .transforms import (
++    rotation_matrix_to_6d,
++    rotation_6d_to_matrix,
++    axis_angle_to_6d,
++    rotation_6d_to_axis_angle,
++    geodesic_so3_6d,
++    se3_loss_6d,
++)
++
+ # Frame computation
+ from .transforms import (
+     extract_frame_positions,
+@@ -105,6 +115,13 @@ __all__ = [
+     "apply_relative_transform",
+     "geodesic_so3",
+     "se3_loss",
++    # 6D rotation representation
++    "rotation_matrix_to_6d",
++    "rotation_6d_to_matrix",
++    "axis_angle_to_6d",
++    "rotation_6d_to_axis_angle",
++    "geodesic_so3_6d",
++    "se3_loss_6d",
+     # Frame computation
+     "extract_frame_positions",
+     "frame_from_positions",
+diff --git a/ciffy/nn/lightning/__init__.py b/ciffy/nn/lightning/__init__.py
+index 2906f36..e47c750 100644
+--- a/ciffy/nn/lightning/__init__.py
++++ b/ciffy/nn/lightning/__init__.py
+@@ -3,11 +3,6 @@
+ This module provides LightningModules, DataModules, and Callbacks for training
+ ciffy's generative models with PyTorch Lightning.
+ 
+-Note:
+-    ResidueFlowModule and ConsolidatedVAEModule have been archived.
+-    For new residue-level modeling, use ciffy.nn.residue.ResidueVAE directly.
+-    Old code is in archive/nn/lightning/modules/.
+-
+ Example:
+     >>> from ciffy.nn.lightning import LatentDiffusionModule, LatentDiffusionDataModule
+     >>> from lightning import Trainer
+diff --git a/ciffy/nn/lightning/modules/__init__.py b/ciffy/nn/lightning/modules/__init__.py
+index 376b0e2..720848a 100644
+--- a/ciffy/nn/lightning/modules/__init__.py
++++ b/ciffy/nn/lightning/modules/__init__.py
+@@ -1,10 +1,4 @@
+-"""LightningModules for ciffy models.
+-
+-Note:
+-    ResidueFlowModule and ConsolidatedVAEModule have been archived.
+-    See archive/nn/lightning/modules/ for the old implementations.
+-    Use ciffy.nn.residue.ResidueVAE for new residue-level modeling.
+-"""
++"""LightningModules for ciffy models."""
+ 
+ from .base import BaseCiffyModule
+ from .vae_base import BaseVAEModule, BaseVAEModelConfig
+diff --git a/ciffy/nn/residue/decoder.py b/ciffy/nn/residue/decoder.py
+index 096660b..b6ead12 100644
+--- a/ciffy/nn/residue/decoder.py
++++ b/ciffy/nn/residue/decoder.py
+@@ -2,6 +2,8 @@
+ 
+ from __future__ import annotations
+ 
++from typing import Literal
++
+ import torch
+ import torch.nn as nn
+ 
+@@ -11,6 +13,27 @@ from ciffy.nn.layers.transformer import RMSNorm
+ from ciffy.polymer import Polymer
+ 
+ 
++class ResidualBlock(nn.Module):
++    """Residual block with pre-norm and SiLU activation."""
++
++    def __init__(self, dim: int, dropout: float = 0.1):
++        super().__init__()
++        self.norm = RMSNorm(dim)
++        self.linear1 = nn.Linear(dim, dim * 2)
++        self.linear2 = nn.Linear(dim * 2, dim)
++        self.dropout = nn.Dropout(dropout)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:
++        residual = x
++        x = self.norm(x)
++        x = self.linear1(x)
++        x = nn.functional.silu(x)
++        x = self.dropout(x)
++        x = self.linear2(x)
++        x = self.dropout(x)
++        return residual + x
++
++
+ class ResidueDecoder(nn.Module):
+     """
+     Decodes per-residue latents to local coordinates and inter-residue transforms.
+@@ -27,12 +50,14 @@ class ResidueDecoder(nn.Module):
+         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
+         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
+         dropout: Dropout probability.
++        rotation_repr: Rotation representation: "axis_angle" (6D output) or
++            "rotation_6d" (9D output with continuous 6D rotation).
+ 
+     Example:
+         >>> decoder = ResidueDecoder(latent_dim=32, d_model=128)
+         >>> coords, transforms = decoder(z, polymer)
+         >>> # coords: (n_atoms, 3) local coordinates
+-        >>> # transforms: (n_residues, 6) inter-residue SE(3) transforms
++        >>> # transforms: (n_residues, 6 or 9) inter-residue SE(3) transforms
+     """
+ 
+     def __init__(
+@@ -44,11 +69,16 @@ class ResidueDecoder(nn.Module):
+         atom_dim: int | None = None,
+         residue_dim: int | None = None,
+         dropout: float = 0.1,
++        rotation_repr: Literal["axis_angle", "rotation_6d"] = "axis_angle",
+     ):
+         super().__init__()
+         self.latent_dim = latent_dim
+         self.d_model = d_model
+         self.n_heads = n_heads
++        self.rotation_repr = rotation_repr
++
++        # Output dimension: 6 for axis-angle, 9 for 6D rotation
++        self.transform_dim = 9 if rotation_repr == "rotation_6d" else 6
+ 
+         # Default embedding dimensions
+         if atom_dim is None:
+@@ -87,21 +117,30 @@ class ResidueDecoder(nn.Module):
+         coord_layers.append(nn.Linear(d_model, 3))
+         self.coord_head = nn.Sequential(*coord_layers)
+ 
+-        # Transform decoder (residue-level)
++        # Transform decoder (residue-level) with deeper residual blocks
+         self.residue_embedding = PolymerEmbedding(
+             scale=Scale.RESIDUE,
+             residue_dim=d_model // 4,
+         )
+-        self.transform_decoder = nn.Sequential(
++
++        # Input projection
++        self.transform_proj = nn.Sequential(
+             nn.Linear(latent_dim + self.residue_embedding.output_dim, d_model),
+             RMSNorm(d_model),
+             nn.SiLU(),
+             nn.Dropout(dropout),
+-            nn.Linear(d_model, d_model),
++        )
++
++        # Residual blocks (4 blocks for deeper transform prediction)
++        n_transform_blocks = 4
++        self.transform_blocks = nn.ModuleList([
++            ResidualBlock(d_model, dropout) for _ in range(n_transform_blocks)
++        ])
++
++        # Output head
++        self.transform_head = nn.Sequential(
+             RMSNorm(d_model),
+-            nn.SiLU(),
+-            nn.Dropout(dropout),
+-            nn.Linear(d_model, 6),
++            nn.Linear(d_model, self.transform_dim),
+         )
+ 
+     def forward(
+@@ -118,8 +157,9 @@ class ResidueDecoder(nn.Module):
+ 
+         Returns:
+             coords: (n_atoms, 3) local coordinates (in residue-aligned frames).
+-            transforms: (n_residues, 6) inter-residue SE(3) transforms
+-                       (axis-angle rotation, translation).
++            transforms: (n_residues, 6 or 9) inter-residue SE(3) transforms.
++                If rotation_repr="axis_angle": (axis-angle rotation, translation).
++                If rotation_repr="rotation_6d": (6D rotation, translation).
+         """
+         # Expand latents to atom level
+         z_expanded = polymer.expand(z, Scale.RESIDUE)
+@@ -130,9 +170,12 @@ class ResidueDecoder(nn.Module):
+         x = self.coord_decoder_proj(x)
+         coords = self.coord_head(x)
+ 
+-        # Decode transforms
++        # Decode transforms with residual blocks
+         res_emb = self.residue_embedding(polymer)
+-        t_input = torch.cat([z, res_emb], dim=-1)
+-        transforms = self.transform_decoder(t_input)
++        t = torch.cat([z, res_emb], dim=-1)
++        t = self.transform_proj(t)
++        for block in self.transform_blocks:
++            t = block(t)
++        transforms = self.transform_head(t)
+ 
+         return coords, transforms
+diff --git a/ciffy/nn/residue/vae.py b/ciffy/nn/residue/vae.py
+index a275c14..6e057da 100644
+--- a/ciffy/nn/residue/vae.py
++++ b/ciffy/nn/residue/vae.py
+@@ -9,6 +9,7 @@ import torch.nn as nn
+ 
+ import ciffy
+ from ciffy import Scale
++from ciffy.geometry import rotation_6d_to_axis_angle
+ from ciffy.polymer import Polymer
+ 
+ from .encoder import ResidueEncoder
+@@ -78,6 +79,8 @@ class ResidueVAE(nn.Module):
+         atom_dim: Dimension for atom type embeddings. Defaults to d_model // 2.
+         residue_dim: Dimension for residue type embeddings. Defaults to d_model // 2.
+         dropout: Dropout probability.
++        rotation_repr: Rotation representation: "axis_angle" (6D output) or
++            "rotation_6d" (9D output with continuous 6D rotation).
+ 
+     Example:
+         >>> model = ResidueVAE(latent_dim=32, d_model=128)
+@@ -102,8 +105,10 @@ class ResidueVAE(nn.Module):
+         atom_dim: int | None = None,
+         residue_dim: int | None = None,
+         dropout: float = 0.1,
++        rotation_repr: Literal["axis_angle", "rotation_6d"] = "axis_angle",
+     ):
+         super().__init__()
++        self.rotation_repr = rotation_repr
+ 
+         self.encoder = ResidueEncoder(
+             latent_dim=latent_dim,
+@@ -123,6 +128,7 @@ class ResidueVAE(nn.Module):
+             atom_dim=atom_dim,
+             residue_dim=residue_dim,
+             dropout=dropout,
++            rotation_repr=rotation_repr,
+         )
+ 
+     @property
+@@ -223,6 +229,13 @@ class ResidueVAE(nn.Module):
+         z = torch.randn(n_residues, self.latent_dim, device=device) * temperature
+         local_coords, transforms = self.decode(z, template)
+ 
++        # Convert 6D rotation to axis-angle for apply_local_transforms
++        if self.rotation_repr == "rotation_6d":
++            rot_6d = transforms[:, :6]
++            trans = transforms[:, 6:]
++            rot_aa = rotation_6d_to_axis_angle(rot_6d)
++            transforms = torch.cat([rot_aa, trans], dim=-1)
++
+         from ciffy.biochemistry.linking import O3P_FRAME, P_FRAME
+ 
+         return (
+diff --git a/ciffy/polymer/polymer.py b/ciffy/polymer/polymer.py
+index 9309686..4a7b8a3 100644
+--- a/ciffy/polymer/polymer.py
++++ b/ciffy/polymer/polymer.py
+@@ -335,20 +335,20 @@ class Polymer(AtomContainer):
+         """
+         Compute inter-residue SE(3) transforms using specified source and target frames.
+ 
+-        This is the LOCAL FRAME paradigm - each transform[i] describes how to go from
+-        source_frame in residue i to target_frame in residue i+1. Use for chain
+-        reconstruction and backbone sampling.
++        This is the LOCAL FRAME paradigm - each transform[i] describes how residue i
++        is positioned relative to residue i-1. Use for chain reconstruction and
++        backbone sampling.
+ 
+         Args:
+-            source_frame: Frame definition for residue i (5'/N-terminal side).
++            source_frame: Frame definition for residue i-1 (5'/N-terminal side).
+                 REQUIRED - no default to make frame choice explicit.
+-            target_frame: Frame definition for residue i+1 (3'/C-terminal side).
++            target_frame: Frame definition for residue i (3'/C-terminal side).
+                 REQUIRED - no default to make frame choice explicit.
+ 
+         Returns:
+             (n_residues, 6) array where:
+-            - transforms[i] = SE(3) from source_frame[i] TO target_frame[i+1]
+-            - transforms[-1] = zeros (no successor residue)
++            - transforms[0] = zeros (first residue has no predecessor)
++            - transforms[i] = SE(3) from source_frame[i-1] TO target_frame[i]
+             - Each transform is [axis_angle (3), translation (3)]
+ 
+         Raises:
+@@ -377,7 +377,7 @@ class Polymer(AtomContainer):
+             >>> rebuilt = aligned.apply_local_transforms(transforms, src, tgt)
+             >>> ciffy.rmsd(rebuilt, polymer) < 0.01  # True
+         """
+-        from ..geometry.transforms import compute_relative_transform
++        from ..geometry.transforms import rotation_to_axis_angle
+ 
+         # Fail-fast: require both frames
+         if source_frame is None:
+@@ -395,13 +395,32 @@ class Polymer(AtomContainer):
+         else:
+             tgt_origins, tgt_Rs = self._compute_frame_matrices(target_frame)
+ 
+-        # Compute transforms: source_frame[i] -> target_frame[i+1]
+-        transforms = ops.zeros_nd((n_residues, 6), like=self.coordinates)
+-        for i in range(n_residues - 1):
+-            transforms[i] = compute_relative_transform(
+-                src_origins[i], src_Rs[i],
+-                tgt_origins[i + 1], tgt_Rs[i + 1],
+-            )
++        # Compute transforms: transforms[i] = source_frame[i-1] -> target_frame[i]
++        # transforms[0] = identity (first residue has no predecessor)
++        # Vectorized: compute all n_residues-1 transforms at once
++        if n_residues < 2:
++            return ops.zeros_nd((n_residues, 6), like=self.coordinates)
++
++        # Relative rotation: R_rel = R1.T @ R2 for consecutive pairs
++        # src_Rs[:-1] is (n-1, 3, 3), tgt_Rs[1:] is (n-1, 3, 3)
++        src_Rs_prev = src_Rs[:-1]  # frames 0..n-2
++        tgt_Rs_curr = tgt_Rs[1:]   # frames 1..n-1
++        R_rel = ops.transpose(src_Rs_prev, (0, 2, 1)) @ tgt_Rs_curr  # (n-1, 3, 3)
++
++        # Convert to axis-angle (already vectorized)
++        axis_angles = rotation_to_axis_angle(R_rel)  # (n-1, 3)
++
++        # Translation in source frame coords: t_local = R1.T @ (origin2 - origin1)
++        t_world = tgt_origins[1:] - src_origins[:-1]  # (n-1, 3)
++        # Batched matrix-vector multiply: (n-1, 3, 3) @ (n-1, 3, 1) -> (n-1, 3, 1)
++        t_local = (ops.transpose(src_Rs_prev, (0, 2, 1)) @ t_world[..., None]).squeeze(-1)
++
++        # Concatenate rotation and translation
++        transforms_1_to_n = ops.cat([axis_angles, t_local], axis=-1)  # (n-1, 6)
++
++        # Prepend zeros for first residue
++        zeros_first = ops.zeros_nd((1, 6), like=self.coordinates)
++        transforms = ops.cat([zeros_first, transforms_1_to_n], axis=0)  # (n, 6)
+ 
+         return transforms
+ 
+@@ -472,8 +491,16 @@ class Polymer(AtomContainer):
+         current_origin = ops.zeros_nd((3,), like=coords)
+ 
+         # Chain residues together
++        # transforms[i] describes how residue i is positioned relative to i-1
++        # transforms[0] is ignored (first residue stays at origin)
+         atom_offset = 0
+         for i in range(n_residues):
++            # Apply transforms[i] BEFORE placing residue i (skip first residue)
++            if i > 0:
++                current_origin, current_R = apply_relative_transform(
++                    current_origin, current_R, transforms[i]
++                )
++
+             n_atoms_i = int(counts[i])
+             local_coords = coords[atom_offset:atom_offset + n_atoms_i]
+ 
+@@ -482,12 +509,6 @@ class Polymer(AtomContainer):
+                 local_coords @ current_R.T + current_origin
+             )
+ 
+-            # Update frame for next residue
+-            if i < n_residues - 1:
+-                current_origin, current_R = apply_relative_transform(
+-                    current_origin, current_R, transforms[i]
+-                )
+-
+             atom_offset += n_atoms_i
+ 
+         return self.copy(coordinates=global_coords)
+@@ -507,9 +528,11 @@ class Polymer(AtomContainer):
+ 
+         Args:
+             transforms: (n_residues, 6) array from local_transforms().
+-            source_frame: Frame definition for residue i (must match local_transforms).
++                transforms[i] describes how residue i is positioned relative to i-1.
++                transforms[0] is ignored (first residue stays at origin).
++            source_frame: Frame definition for residue i-1 (must match local_transforms).
+                 REQUIRED - no default to make frame choice explicit.
+-            target_frame: Frame definition for residue i+1 (must match local_transforms).
++            target_frame: Frame definition for residue i (must match local_transforms).
+                 REQUIRED - no default to make frame choice explicit.
+ 
+         Returns:
+@@ -522,7 +545,7 @@ class Polymer(AtomContainer):
+             1. First residue placed at global origin
+             2. For each subsequent residue i:
+                a. Compute source_frame in residue i-1 (now in global coords)
+-               b. Apply transforms[i-1] to get target_frame position for residue i
++               b. Apply transforms[i] to get target_frame position for residue i
+                c. Compute target_frame in residue i's local coords
+                d. Align local target_frame to global target_frame position
+ 
+@@ -564,7 +587,7 @@ class Polymer(AtomContainer):
+             atom_offsets.append(atom_offsets[-1] + int(counts[i]))
+ 
+         # First residue stays at origin (its local coords are already aligned)
+-        # For subsequent residues, compute frame alignment
++        # For subsequent residues, compute frame alignment using transforms[i]
+         for i in range(1, n_residues):
+             # Get previous residue's atoms (now in global coords)
+             prev_start, prev_end = atom_offsets[i - 1], atom_offsets[i]
+@@ -575,9 +598,9 @@ class Polymer(AtomContainer):
+             src_positions = extract_frame_positions(prev_global, prev_atoms, source_frame)
+             src_origin, src_R = frame_from_positions(src_positions)
+ 
+-            # Apply transform to get target_frame position for current residue
++            # Apply transforms[i] to get target_frame position for current residue
+             target_origin, target_R = apply_relative_transform(
+-                src_origin, src_R, transforms[i - 1]
++                src_origin, src_R, transforms[i]
+             )
+ 
+             # Get current residue's atoms (still in local coords)
+diff --git a/tests/polymer/test_frames.py b/tests/polymer/test_frames.py
+index 111a5c5..9ca459e 100644
+--- a/tests/polymer/test_frames.py
++++ b/tests/polymer/test_frames.py
+@@ -200,8 +200,8 @@ class TestLocalFrames:
+         transforms = p.local_transforms(GLYCOSIDIC_FRAME, GLYCOSIDIC_FRAME)
+ 
+         assert transforms.shape == (n_res, 6)
+-        # Last transform should be zeros (no successor residue)
+-        assert np.allclose(transforms[-1], 0, atol=1e-6)
++        # First transform should be zeros (first residue has no predecessor)
++        assert np.allclose(transforms[0], 0, atol=1e-6)
+ 
+     @pytest.mark.parametrize("backend", BACKENDS)
+     def test_local_transforms_backend_preserved(self, backend):
+@@ -250,9 +250,10 @@ class TestAppendWithFrames:
+         res_type1 = Residue.from_index(p.sequence[1])
+         n_atoms0 = res0.size()
+ 
++        # transforms[1] describes how residue 1 is positioned relative to residue 0
+         built = built.append(
+             res_type1.subset(res1.atoms.tolist()),
+-            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[0]),
++            LocalCoordinates(aligned.coordinates[n_atoms0:], transforms[1]),
+             residue=res_type1,
+             # No explicit frames - uses defaults
+         )
+@@ -282,6 +283,7 @@ class TestAppendWithFrames:
+         )
+ 
+         # Build subsequent residues with explicit frames
++        # transforms[i] describes how residue i is positioned relative to i-1
+         offset = int(counts[0])
+         for i in range(1, n_res):
+             n_atoms = int(counts[i])
+@@ -291,7 +293,7 @@ class TestAppendWithFrames:
+             built = built.append(
+                 res_type.subset(res_i.atoms.tolist()),
+                 LocalCoordinates(
+-                    aligned.coordinates[offset : offset + n_atoms], transforms[i - 1]
++                    aligned.coordinates[offset : offset + n_atoms], transforms[i]
+                 ),
+                 residue=res_type,
+                 source_frame=GLYCOSIDIC_FRAME,
+-- 
+2.52.0
+

@@ -52,9 +52,13 @@ def main():
     # Save the extended structure
     # =========================================================================
 
+    # Templates have ideal CCD coordinates - can be written directly
     output_path = "/tmp/extended_rna.cif"
-    polymer.write(output_path)
-    print(f"Saved extended polymer to: {output_path}")
+    if polymer.coordinates is not None:
+        polymer.write(output_path)
+        print(f"Saved extended polymer to: {output_path}")
+    else:
+        print(f"Template has no coordinates - skipping write")
     print()
 
     # =========================================================================

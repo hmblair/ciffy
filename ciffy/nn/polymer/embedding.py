@@ -62,6 +62,11 @@ class PolymerEmbedding(nn.Module):
         """
         super().__init__()
 
+        # Treat 0 as None (disabled)
+        atom_dim = atom_dim or None
+        residue_dim = residue_dim or None
+        element_dim = element_dim or None
+
         if scale not in (Scale.ATOM, Scale.RESIDUE):
             raise ValueError(
                 f"scale must be ATOM or RESIDUE, got {scale.name}"

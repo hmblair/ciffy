@@ -20,7 +20,8 @@ Usage:
     ciffy predict latent-diffusion model.safetensors --sequence acgu  # Generate from diffusion
     ciffy predict coord-diffusion model.safetensors --sequence acgu   # Generate from diffusion
 
-    ciffy download --max_count 100   # Download structures from RCSB PDB
+    ciffy download 1EHZ 4V9F         # Download specific PDB IDs
+    ciffy download --max_count 100   # Search and download structures from RCSB PDB
     ciffy download --preset casp15   # Download CASP15 benchmark targets
 """
 
@@ -747,8 +748,11 @@ def _download_command(args):
     """Handle the download subcommand."""
     from ciffy.datasets import download_cli
 
+    # Convert empty list to None (triggers search mode)
+    pdb_ids = args.pdb_ids if args.pdb_ids else None
+
     download_cli(
-        pdb_ids=args.id,
+        pdb_ids=pdb_ids,
         preset=args.preset,
         polymer_types=args.type,
         output_dir=args.output_dir,
@@ -1345,6 +1349,11 @@ def main():
         ),
     )
     download_parser.add_argument(
+        "pdb_ids",
+        nargs="*",
+        help="PDB ID(s) to download (e.g., 1EHZ 4V9F). If omitted, searches for structures.",
+    )
+    download_parser.add_argument(
         "--preset",
         type=str,
         default=None,
@@ -1354,14 +1363,6 @@ def main():
         "--list-presets",
         action="store_true",
         help="List available preset datasets and exit",
-    )
-
-    download_parser.add_argument(
-        "--id",
-        type=str,
-        nargs="+",
-        default=None,
-        help="Download specific PDB ID(s) instead of searching (e.g., --id 1EHZ 4V9F)",
     )
     download_parser.add_argument(
         "--type", "-t",

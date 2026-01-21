@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import ciffy
+from tests.utils import get_test_cif
 from ciffy import Residue, Scale, join
 from ciffy import template
 
@@ -165,7 +166,7 @@ class TestJoin:
     def test_join_with_loaded_structure(self):
         """Join works with structures loaded from files (HETATM is separate)."""
         p1 = _template_with_coords("ac")
-        p2 = ciffy.load("tests/data/9MDS.cif")
+        p2 = ciffy.load(get_test_cif("9MDS"))
 
         # Should work - HETATM atoms are now in separate HeteroAtoms container
         result = join(p1, p2)

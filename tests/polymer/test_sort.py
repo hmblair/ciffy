@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import ciffy
+from tests.utils import get_test_cif
 from ciffy import Scale, operations
 
 
@@ -14,7 +15,7 @@ class TestSortAtoms:
 
     def test_sort_atoms_returns_polymer(self, backend):
         """sort_atoms() returns a Polymer."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).residue([0, 1, 2])
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0).residue([0, 1, 2])
         sorted_p = operations.sort_atoms(p)
 
         assert isinstance(sorted_p, ciffy.Polymer)
@@ -23,7 +24,7 @@ class TestSortAtoms:
 
     def test_sort_atoms_preserves_size(self, backend):
         """sort_atoms() preserves atom count."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).residue([0, 1, 2])
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0).residue([0, 1, 2])
         sorted_p = operations.sort_atoms(p)
 
         assert sorted_p.size() == p.size()
@@ -34,7 +35,7 @@ class TestSortAtoms:
 
     def test_sort_atoms_orders_by_enum_value(self, backend):
         """Atoms within each residue are sorted by enum value."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).residue([0, 1, 2])
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0).residue([0, 1, 2])
         sorted_p = operations.sort_atoms(p)
 
         for i in range(sorted_p.size(Scale.RESIDUE)):
@@ -45,7 +46,7 @@ class TestSortAtoms:
 
     def test_sort_atoms_sorts_all_fields(self, backend):
         """sort_atoms() reorders all atom-level fields."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).residue(0)
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0).residue(0)
 
         # Get original atoms and their corresponding coords
         orig_atoms = np.asarray(p.atoms).copy()
@@ -62,7 +63,7 @@ class TestSortAtoms:
 
     def test_sort_atoms_idempotent(self, backend):
         """Calling sort_atoms() twice gives same result."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).residue([0, 1, 2])
+        p = ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0).residue([0, 1, 2])
         sorted_once = operations.sort_atoms(p)
         sorted_twice = operations.sort_atoms(sorted_once)
 

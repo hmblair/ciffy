@@ -6,12 +6,13 @@ import pytest
 import ciffy
 from ciffy.rna import ReactivityIndex, ReactivityMatch
 from ciffy.biochemistry import Scale
+from tests.utils import get_test_cif
 
 
 @pytest.fixture
 def polymer():
     """Load a test polymer chain."""
-    return ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+    return ciffy.load(get_test_cif("9MDS")).chain(0).strip()
 
 
 class TestReactivityIndex:

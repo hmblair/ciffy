@@ -20,6 +20,7 @@ from ciffy import Scale
 from ciffy.operations.gnm import graph_laplacian, gnm_correlations, gnm_variances
 # Import the public API
 from ciffy.operations import GNM, contact_map
+from tests.utils import get_test_cif
 
 
 def make_symmetric_adj(n: int, backend: str, seed: int = 42):
@@ -573,7 +574,7 @@ class TestContactMap:
     @pytest.fixture
     def polymer(self, backend):
         """Load a test polymer with the specified backend."""
-        return ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0)
+        return ciffy.load(get_test_cif("9MDS"), backend=backend).chain(0)
 
     def test_output_shape_residue(self, backend, polymer):
         """Test contact map shape at residue scale."""
@@ -647,8 +648,9 @@ class TestContactMap:
         contacts at exactly the cutoff boundary may differ. We check that
         the total number of contacts is very close.
         """
-        polymer_np = ciffy.load("tests/data/9MDS.cif", backend="numpy").chain(0)
-        polymer_torch = ciffy.load("tests/data/9MDS.cif", backend="torch").chain(0)
+        cif_path = get_test_cif("9MDS")
+        polymer_np = ciffy.load(cif_path, backend="numpy").chain(0)
+        polymer_torch = ciffy.load(cif_path, backend="torch").chain(0)
 
         adj_np = contact_map(polymer_np, cutoff=7.0)
         adj_torch = contact_map(polymer_torch, cutoff=7.0)

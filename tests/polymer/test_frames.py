@@ -12,6 +12,9 @@ import pytest
 import ciffy
 from ciffy import Scale, operations
 from ciffy.biochemistry.linking import GLYCOSIDIC_FRAME, O3P_FRAME, P_FRAME
+from tests.utils import get_test_cif
+
+CIF_9MDS = get_test_cif("9MDS")
 
 
 class TestDecomposeCompose:
@@ -19,7 +22,7 @@ class TestDecomposeCompose:
 
     def test_roundtrip_default_frames(self):
         """decompose -> compose roundtrip preserves structure."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
 
         transforms = operations.decompose(p)
@@ -30,7 +33,7 @@ class TestDecomposeCompose:
 
     def test_roundtrip_glycosidic_frames(self):
         """Roundtrip with GLYCOSIDIC->GLYCOSIDIC frames."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue(list(range(min(6, p.size(Scale.RESIDUE)))))
 
         transforms = operations.decompose(p, source=GLYCOSIDIC_FRAME, target=GLYCOSIDIC_FRAME)
@@ -41,7 +44,7 @@ class TestDecomposeCompose:
 
     def test_roundtrip_o3p_p_frames(self):
         """Roundtrip with O3P->P frames (default)."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
 
         transforms = operations.decompose(p, source=O3P_FRAME, target=P_FRAME)
@@ -52,7 +55,7 @@ class TestDecomposeCompose:
 
     def test_transforms_shape(self):
         """Transforms has correct shape and identity first element."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue(list(range(min(5, p.size(Scale.RESIDUE)))))
         n_res = p.size(Scale.RESIDUE)
 
@@ -66,7 +69,7 @@ class TestDecomposeCompose:
 
     def test_transforms_carries_frame_metadata(self):
         """Transforms object stores source and target frames."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue([0, 1, 2])
 
         transforms = operations.decompose(p, source=O3P_FRAME, target=P_FRAME)
@@ -79,7 +82,7 @@ class TestDecomposeCompose:
         pytest.importorskip("torch")
         import torch
 
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().torch()
+        p = ciffy.load(CIF_9MDS).chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
         # Create a random rotation
@@ -108,7 +111,7 @@ class TestDecomposeCompose:
         pytest.importorskip("torch")
         import torch
 
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().torch()
+        p = ciffy.load(CIF_9MDS).chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
         # Translate the polymer
@@ -125,7 +128,7 @@ class TestDecomposeCompose:
 
     def test_backend_preserved(self, backend):
         """decompose/compose work with both backends."""
-        p = ciffy.load("tests/data/9MDS.cif", backend=backend).chain(0).strip().residue([0, 1, 2])
+        p = ciffy.load(CIF_9MDS, backend=backend).chain(0).strip().residue([0, 1, 2])
 
         transforms = operations.decompose(p)
         rebuilt = operations.compose(p, transforms)
@@ -135,7 +138,7 @@ class TestDecomposeCompose:
 
     def test_single_residue(self):
         """Works with single residue polymer."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0])
+        p = ciffy.load(CIF_9MDS).chain(0).strip().residue([0])
 
         transforms = operations.decompose(p)
         assert len(transforms) == 1
@@ -147,7 +150,7 @@ class TestDecomposeCompose:
 
     def test_compose_with_different_polymer(self):
         """compose works with a different polymer (template)."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
         # Extract transforms from original
@@ -161,7 +164,7 @@ class TestDecomposeCompose:
 
     def test_compose_size_mismatch_raises(self):
         """compose raises if transform count doesn't match residue count."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip()
+        p = ciffy.load(CIF_9MDS).chain(0).strip()
         p = p.residue([0, 1, 2])
 
         transforms = operations.decompose(p)
@@ -176,13 +179,13 @@ class TestTransformsDataclass:
 
     def test_len(self):
         """len(transforms) returns number of residues."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1, 2])
+        p = ciffy.load(CIF_9MDS).chain(0).strip().residue([0, 1, 2])
         transforms = operations.decompose(p)
         assert len(transforms) == 3
 
     def test_data_access(self):
         """Can access transform data directly."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).strip().residue([0, 1])
+        p = ciffy.load(CIF_9MDS).chain(0).strip().residue([0, 1])
         transforms = operations.decompose(p)
 
         # Access quaternion and translation

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from ciffy.rna import dotbracket_to_pairs, pairs_to_dotbracket, secondary_structure
+from tests.utils import get_test_cif
 
 
 class TestDotbracketToPairs:
@@ -123,7 +124,7 @@ class TestSecondaryStructure:
         import ciffy
 
         # Load RNA with connections
-        polymer = ciffy.load("tests/data/3SKW.cif", skip=[])
+        polymer = ciffy.load(get_test_cif("3SKW"), skip=[])
         ss = secondary_structure(polymer)
 
         # Should have same length as residue count
@@ -142,7 +143,7 @@ class TestSecondaryStructure:
         import ciffy
 
         # Load without connections (default)
-        polymer = ciffy.load("tests/data/3SKW.cif")
+        polymer = ciffy.load(get_test_cif("3SKW"))
         assert polymer.connections is None
 
         with pytest.raises(ValueError, match="no connections"):
@@ -152,7 +153,7 @@ class TestSecondaryStructure:
         import ciffy
 
         # Load and select single chain
-        polymer = ciffy.load("tests/data/3SKW.cif", skip=[]).chain(0)
+        polymer = ciffy.load(get_test_cif("3SKW"), skip=[]).chain(0)
         ss = secondary_structure(polymer)
 
         assert len(ss) == polymer.size(ciffy.RESIDUE)

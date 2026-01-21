@@ -5,6 +5,7 @@ Tests for Polymer.copy() - field deletion and deep copying.
 import numpy as np
 
 import ciffy
+from tests.utils import get_test_cif
 from ciffy import Scale
 from ciffy.biochemistry import Residue
 
@@ -14,7 +15,7 @@ class TestCopyFieldDeletion:
 
     def test_copy_removes_bfactors(self):
         """copy(bfactors=None) removes bfactors field."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+        p = ciffy.load(get_test_cif("9MDS")).chain(0).residue(0)
 
         # Verify bfactors exist
         assert hasattr(p, 'bfactors')
@@ -35,7 +36,7 @@ class TestCopyFieldDeletion:
 
     def test_copy_without_field_allows_extend(self):
         """Polymer without bfactors can extend without providing bfactors."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+        p = ciffy.load(get_test_cif("9MDS")).chain(0).residue(0)
         p = p.copy(bfactors=None)
 
         # Get new residue data (no bfactors)
@@ -57,7 +58,7 @@ class TestCopyFieldDeletion:
 
     def test_copy_none_preserves_other_fields(self):
         """Removing one field preserves all other fields."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+        p = ciffy.load(get_test_cif("9MDS")).chain(0).residue(0)
         original_coords = np.asarray(p.coordinates).copy()
         original_atoms = np.asarray(p.atoms).copy()
         original_seq = p.sequence_str()
@@ -70,7 +71,7 @@ class TestCopyFieldDeletion:
 
     def test_copy_deep_copies_arrays(self):
         """copy() creates independent array copies."""
-        p = ciffy.load("tests/data/9MDS.cif").chain(0).residue(0)
+        p = ciffy.load(get_test_cif("9MDS")).chain(0).residue(0)
         p2 = p.copy()
 
         # Modify original

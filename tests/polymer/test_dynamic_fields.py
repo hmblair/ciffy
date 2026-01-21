@@ -4,13 +4,14 @@ import numpy as np
 import pytest
 
 import ciffy
+from tests.utils import get_test_cif
 from ciffy.biochemistry import Scale
 
 
 @pytest.fixture
 def polymer():
     """Load a test polymer."""
-    return ciffy.load("tests/data/9MDS.cif").chain(0)
+    return ciffy.load(get_test_cif("9MDS")).chain(0)
 
 
 class TestAnnotateBasic:
@@ -125,7 +126,7 @@ class TestFieldSlicing:
 
     def test_chain_selection_slices_all_scales(self):
         """Chain selection slices fields at all scales."""
-        polymer = ciffy.load("tests/data/9MDS.cif")
+        polymer = ciffy.load(get_test_cif("9MDS"))
         n_chains = polymer.size(Scale.CHAIN)
         if n_chains < 2:
             pytest.skip("Need multi-chain structure")

@@ -5,7 +5,7 @@
 ```bash
 git clone https://github.com/hmblair/ciffy.git
 cd ciffy
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 **Prerequisites:** Python 3.9+, C compiler, gperf 3.1+
@@ -13,9 +13,10 @@ pip install -e .
 ## Running Tests
 
 ```bash
-pytest tests/
-pytest tests/ -v              # verbose
-pytest tests/test_loader.py   # specific file
+pytest tests/                    # all tests
+pytest tests/ -n auto            # parallel execution
+pytest tests/io/                 # specific module
+pytest tests/ -k "test_load"     # by name pattern
 ```
 
 ## Repository Structure
@@ -26,9 +27,15 @@ pytest tests/test_loader.py   # specific file
   - `backend/` - NumPy/PyTorch abstraction layer
   - `operations/` - Geometric operations (alignment, RMSD, etc.)
   - `io/` - CIF file reading and writing
+  - `cli/` - Command-line interface
+  - `geometry/` - Geometric primitives (frames, transforms)
+  - `nn/` - Neural network utilities (PolymerDataset, PolymerEmbedding)
+  - `rna/` - RNA-specific utilities (reactivity, secondary structure)
+  - `utils/` - Clustering and splitting utilities
+  - `visualize/` - Visualization tools
   - `src/` - C source code for fast parsing
 - **`codegen/`** - Code generation from PDB Chemical Component Dictionary
-- **`tests/`** - Test suite
+- **`tests/`** - Test suite (organized by module)
 
 ## Code Generation
 

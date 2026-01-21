@@ -159,10 +159,21 @@ class Polymer(AtomContainer):
         else:
             hetero = object.__getattribute__(self, '_hetero')
 
+        # Handle connections override or copy from self
+        if 'connections' in overrides:
+            connections = overrides.pop('connections')
+        else:
+            connections = object.__getattribute__(self, '_connections')
+
+        if 'connection_types' in overrides:
+            connection_types = overrides.pop('connection_types')
+        else:
+            connection_types = object.__getattribute__(self, '_connection_types')
+
         # Set internal state
         object.__setattr__(instance, '_bonds', None)  # Bonds need recomputation
-        object.__setattr__(instance, '_connections', object.__getattribute__(self, '_connections'))
-        object.__setattr__(instance, '_connection_types', object.__getattribute__(self, '_connection_types'))
+        object.__setattr__(instance, '_connections', connections)
+        object.__setattr__(instance, '_connection_types', connection_types)
         object.__setattr__(instance, '_hetero', hetero)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -775,6 +786,104 @@ class Polymer(AtomContainer):
         from .._selection import mask
         return mask(self, indices, from_scale, to_scale)
 
+    def _remap_connections(
+        self: Polymer,
+        selector: Array | slice,
+    ) -> tuple[Array | None, Array | None]:
+        """
+        Remap connections to new atom indices after selection.
+
+        Filters connections to only include pairs where both atoms are in
+        the selection, then remaps indices to the new ordering.
+
+        Args:
+            selector: Boolean mask or slice for atom selection.
+
+        Returns:
+            Tuple of (remapped_connections, filtered_connection_types),
+            or (None, None) if no connections exist or none remain.
+        """
+        if self._connections is None:
+            return None, None
+
+        conn = self._connections
+        n_atoms = self.size()
+
+        if isinstance(selector, slice):
+            # Slice selection: filter to atoms in range, remap by offset
+            start = selector.start if selector.start is not None else 0
+            stop = selector.stop if selector.stop is not None else n_atoms
+
+            # Filter: both atoms must be in [start, stop)
+            valid = (
+                (conn[:, 0] >= start) & (conn[:, 0] < stop) &
+                (conn[:, 1] >= start) & (conn[:, 1] < stop)
+            )
+
+            if not ops.any(valid):
+                return None, None
+
+            # Filter and remap by subtracting start
+            filtered = conn[valid]
+            remapped = filtered - start
+
+        else:
+            # Boolean mask selection: filter and remap via cumsum
+            # Build old->new index mapping (cumsum gives 1-indexed, subtract 1)
+            new_indices = ops.cumsum(ops.to_int64(selector)) - 1
+
+            # Filter: both atoms must be True in mask
+            valid = selector[conn[:, 0]] & selector[conn[:, 1]]
+
+            if not ops.any(valid):
+                return None, None
+
+            # Filter and remap
+            filtered = conn[valid]
+            remapped = ops.stack([
+                new_indices[filtered[:, 0]],
+                new_indices[filtered[:, 1]]
+            ], axis=1)
+
+        # Filter connection types if present
+        filtered_types = None
+        if self._connection_types is not None:
+            filtered_types = self._connection_types[valid]
+
+        return remapped, filtered_types
+
+    def _select(self: Polymer, mask: Array, scale: Scale) -> Polymer:
+        """
+        Override base selection to also remap connections.
+
+        Uses the hierarchy to derive masks, compute new sizes/lengths,
+        slice fields, and remap connection indices accordingly.
+        """
+        # Derive masks at all scales
+        remove_empty = (scale == Scale.ATOM) and self._hierarchy.has_scale(Scale.RESIDUE)
+        masks = self._hierarchy.derive_masks(mask, scale, remove_empty)
+
+        # Compute new hierarchy for selection
+        new_per = self._hierarchy.compute_per(masks)
+        new_hierarchy = _Hierarchy(new_per, self._hierarchy._ref)
+
+        # Extract masks for _slice_all
+        atom_mask = masks[Scale.ATOM]
+        res_mask = masks.get(Scale.RESIDUE)
+        chn_mask = masks.get(Scale.CHAIN)
+
+        # Slice all fields and annotations
+        sliced = self._slice_all(atom_mask, res_mask, chn_mask)
+        sliced['hierarchy'] = new_hierarchy
+
+        # Remap connections if present
+        if self._connections is not None:
+            connections, connection_types = self._remap_connections(atom_mask)
+            sliced['connections'] = connections
+            sliced['connection_types'] = connection_types
+
+        return self._clone(**sliced)
+
     def _select_contiguous(self: Polymer, ix: int, scale: Scale) -> Polymer:
         """
         Fast path for selecting a single contiguous unit (chain or residue).
@@ -801,6 +910,12 @@ class Polymer(AtomContainer):
         # Slice all fields and annotations using slices (fast path for large arrays)
         sliced = self._slice_all(atom_slice, res_slice, chain_slice)
         sliced['hierarchy'] = new_hierarchy
+
+        # Remap connections if present (using slice for efficiency)
+        if self._connections is not None:
+            connections, connection_types = self._remap_connections(atom_slice)
+            sliced['connections'] = connections
+            sliced['connection_types'] = connection_types
 
         return self._clone(**sliced)
 

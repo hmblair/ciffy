@@ -148,3 +148,123 @@ class TestConnectionCorrectness:
         pct_valid = has_n_or_o.sum() / len(connections) * 100
 
         assert pct_valid > 99, f"Only {pct_valid:.1f}% involve N or O"
+
+
+class TestConnectionsAfterSelection:
+    """Tests verifying connections are correctly remapped after selection."""
+
+    def test_chain_selection_remaps_connections(self, cif_9mds):
+        """Connections should be filtered and remapped after chain selection."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+        original_n_atoms = polymer.size()
+
+        # Select first chain
+        chain0 = polymer.chain(0)
+
+        # Connections should exist (chain has internal H-bonds)
+        if chain0.connections is not None:
+            # All indices should be valid for new atom count
+            assert chain0.connections.max() < chain0.size()
+            assert chain0.connections.min() >= 0
+
+            # Connection types should match connection count
+            if chain0.connection_types is not None:
+                assert len(chain0.connection_types) == len(chain0.connections)
+
+    def test_residue_selection_remaps_connections(self, cif_9mds):
+        """Connections should be filtered and remapped after residue selection."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+
+        # Select first 10 residues
+        selected = polymer.residue(list(range(10)))
+
+        # After selection, any remaining connections should have valid indices
+        if selected.connections is not None:
+            n_atoms = selected.size()
+            assert selected.connections.min() >= 0
+            assert selected.connections.max() < n_atoms
+
+    def test_atom_selection_remaps_connections(self, cif_9mds):
+        """Connections should be filtered and remapped after atom selection."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+        n_atoms = polymer.size()
+
+        # Select first half of atoms
+        mask = np.zeros(n_atoms, dtype=bool)
+        mask[:n_atoms // 2] = True
+        selected = polymer[mask]
+
+        # After selection, any remaining connections should have valid indices
+        if selected.connections is not None:
+            assert selected.connections.min() >= 0
+            assert selected.connections.max() < selected.size()
+
+    def test_connections_filtered_when_atoms_removed(self, cif_9mds):
+        """Connections involving removed atoms should be excluded."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+        original_connections = polymer.connections
+        original_count = len(original_connections)
+
+        # Select only a subset of atoms (first chain)
+        chain0 = polymer.chain(0)
+
+        # Should have fewer connections (or none)
+        if chain0.connections is not None:
+            assert len(chain0.connections) <= original_count
+        # If None, that's also valid (no connections in selected region)
+
+    def test_connection_distances_preserved_after_selection(self, cif_9mds):
+        """H-bond distances should remain valid after selection."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+
+        # Select first chain
+        chain0 = polymer.chain(0)
+
+        if chain0.connections is not None and len(chain0.connections) > 0:
+            coords = chain0.coordinates
+            connections = chain0.connections
+
+            # Compute distances
+            atom1_coords = coords[connections[:, 0]]
+            atom2_coords = coords[connections[:, 1]]
+            distances = np.linalg.norm(atom1_coords - atom2_coords, axis=1)
+
+            # Should still be valid H-bond distances
+            assert distances.min() > 2.0
+            assert distances.max() < 4.0
+
+    def test_multiple_selections_remap_correctly(self, cif_9mds):
+        """Chained selections should maintain valid connections."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+
+        # Chain selections: chain(0) -> residue(first 5)
+        chain0 = polymer.chain(0)
+        subset = chain0.residue(list(range(min(5, chain0.size(ciffy.Scale.RESIDUE)))))
+
+        if subset.connections is not None:
+            # All indices valid
+            assert subset.connections.min() >= 0
+            assert subset.connections.max() < subset.size()
+
+    def test_connections_none_when_no_skip(self, cif_9mds):
+        """Without skip=[], connections should be None after selection too."""
+        polymer = ciffy.load(cif_9mds)  # Default skip, no connections
+        assert polymer.connections is None
+
+        chain0 = polymer.chain(0)
+        assert chain0.connections is None  # Should remain None
+
+    def test_contiguous_selection_remaps_connections(self, cif_9mds):
+        """Single-index chain/residue selection (contiguous path) should remap."""
+        polymer = ciffy.load(cif_9mds, skip=["descriptions"])
+
+        # Single chain (uses _select_contiguous fast path)
+        chain0 = polymer.chain(0)
+        if chain0.connections is not None:
+            assert chain0.connections.max() < chain0.size()
+
+        # Single residue
+        res0 = polymer.residue(0)
+        # Single residue unlikely to have H-bonds, but should not crash
+        if res0.connections is not None:
+            assert res0.connections.max() < res0.size()

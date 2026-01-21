@@ -356,6 +356,93 @@ class TestPolymerDatasetEdgeCases:
         p2 = ds_cache[0]
         assert p1 is p2  # Same object returned from cache
 
+    def test_dataset_cache_disabled(self):
+        """Dataset without cache returns different objects."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, cache=False)
+
+        p1 = ds[0]
+        p2 = ds[0]
+        assert p1 is not p2  # Different objects without cache
+
+    def test_dataset_load_preloads_all(self):
+        """Dataset load() preloads all items into cache."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, limit=5)
+        assert ds._cache is not None
+
+        # Before load, cache is empty
+        assert len(ds._cache._items) == 0
+
+        # After load, all items cached
+        ds.load()
+        assert len(ds._cache._items) == len(ds)
+
+        # Items are accessible
+        for i in range(len(ds)):
+            assert ds[i] is not None
+
+    def test_dataset_load_returns_self(self):
+        """Dataset load() returns self for chaining."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, limit=3).load()
+        assert isinstance(ds, PolymerDataset)
+        assert len(ds._cache._items) == len(ds)
+
+    def test_dataset_load_raises_without_cache(self):
+        """Dataset load() raises ValueError when cache disabled."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, cache=False)
+
+        with pytest.raises(ValueError, match="cache is disabled"):
+            ds.load()
+
+    def test_dataset_chain_correctness(self):
+        """Dataset returns correct chain for chain_idx."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        if len(ds) == 0:
+            pytest.skip("No chains in test data")
+
+        # Get first item and verify it's a single chain
+        chain = ds[0]
+        assert chain.size(Scale.CHAIN) == 1
+
+    def test_dataset_backend_numpy(self):
+        """Dataset respects backend='numpy'."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, backend="numpy")
+        if len(ds) == 0:
+            pytest.skip("No chains in test data")
+
+        p = ds[0]
+        assert isinstance(p.coordinates, np.ndarray)
+
+    def test_dataset_backend_torch(self):
+        """Dataset respects backend='torch'."""
+        import torch
+        from ciffy.nn import PolymerDataset
+        from ciffy import Scale
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, backend="torch")
+        if len(ds) == 0:
+            pytest.skip("No chains in test data")
+
+        p = ds[0]
+        assert isinstance(p.coordinates, torch.Tensor)
+
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestPolymerDatasetPathSequence:
@@ -393,7 +480,8 @@ class TestPolymerDatasetPathSequence:
 
     def test_dataset_datasplit_integration(self):
         """Dataset integrates with DataSplit."""
-        from ciffy.nn import PolymerDataset, split_items
+        from ciffy.nn import PolymerDataset
+        from ciffy.utils.split import split_items
         from ciffy import Scale
         from pathlib import Path
 

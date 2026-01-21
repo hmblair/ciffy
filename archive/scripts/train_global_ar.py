@@ -17,45 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import ciffy
 from ciffy.nn import PolymerDataset
 from ciffy.nn.autoregressive import CoordinateARModel, CoordinateARModelConfig
-from ciffy.biochemistry import Residue, Scale, Molecule
-
-
-def get_residue_atom_counts(dataset: PolymerDataset, n_samples: int = 100) -> dict:
-    """Get atom counts for each residue type from dataset."""
-    from collections import Counter
-
-    atom_counts = {res: Counter() for res in [Residue.A, Residue.C, Residue.G, Residue.U]}
-
-    for i in range(min(n_samples, len(dataset))):
-        try:
-            poly = dataset[i]
-            if poly is None:
-                continue
-            poly = poly.strip()
-            if poly.size() == 0:
-                continue
-
-            seq = poly.sequence.numpy() if hasattr(poly.sequence, 'numpy') else poly.sequence
-            counts = poly.counts(Scale.RESIDUE)
-            counts = counts.numpy() if hasattr(counts, 'numpy') else counts
-
-            for j, (res_val, n_atoms) in enumerate(zip(seq, counts)):
-                for res in atom_counts:
-                    if res.value == res_val:
-                        atom_counts[res][int(n_atoms)] += 1
-                        break
-        except Exception:
-            continue
-
-    # Get most common atom count for each residue
-    result = {}
-    for res, counter in atom_counts.items():
-        if counter:
-            most_common = counter.most_common(1)[0][0]
-            result[res] = most_common
-            print(f"  {res.name}: {most_common} atoms")
-
-    return result
+from ciffy.biochemistry import Scale, Molecule
 
 
 def train(
@@ -90,14 +52,6 @@ def train(
         print("No chains found, exiting")
         return None
 
-    # Get residue atom counts
-    print("\n=== Getting Residue Atom Info ===")
-    residue_atoms = get_residue_atom_counts(dataset)
-
-    if len(residue_atoms) == 0:
-        print("No residue info found, exiting")
-        return None
-
     # Create model
     config = CoordinateARModelConfig(
         d_model=d_model,
@@ -105,7 +59,7 @@ def train(
         num_heads=8,
         dropout=0.1,
     )
-    model = CoordinateARModel(residue_atoms, config).to(device)
+    model = CoordinateARModel(config).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {n_params:,}")
@@ -218,8 +172,8 @@ def sample_structures(model: CoordinateARModel, output_dir: Path, device: str = 
     for seq_str in test_sequences:
         print(f"\nSequence: {seq_str}")
 
-        # Create template from sequence
-        template = ciffy.template(seq_str.lower())
+        # Create template from sequence (heavy atoms only to match training)
+        template = ciffy.template(seq_str.lower()).heavy()
 
         try:
             # Sample using the model

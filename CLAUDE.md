@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Ciffy is a library for researchers to **load, inspect, manipulate, and predict macromolecular structures** (proteins, RNA, DNA).
+Ciffy is a library for researchers to **load, inspect, manipulate, and save macromolecular structures** (proteins, RNA, DNA).
 
 **Design priorities:** Ease of use, performance, backend-agnostic (NumPy/PyTorch).
 
@@ -91,7 +91,7 @@ polymer.expand(features, Scale.RESIDUE)    # Residue → atom features
 ### Geometry & I/O
 
 ```python
-polymer.center()               # Center coordinates
+polymer, _ = polymer.center()               # Center coordinates (second output is centroid)
 polymer.numpy() / polymer.torch()
 polymer.to('cuda')
 polymer.write('output.cif')
@@ -110,7 +110,7 @@ neighbors = operations.knn(polymer, k=16)             # K-nearest neighbors
 adj = operations.adjacency(polymer)                   # Adjacency matrix from bonds
 bond_dists = operations.bonded_distances(polymer, Residue.A.O3p, Residue.A.P)
 
-# Frame operations (for ML pipelines)
+# Frame operations
 transforms = operations.decompose(polymer)             # Extract inter-residue SE(3) transforms
 rebuilt = operations.compose(polymer, transforms)      # Rebuild polymer from transforms
 # transforms.data: (n_residues, 7) - [quaternion(4), translation(3)]
@@ -228,143 +228,4 @@ p_atoms = polymer.atoms == int(RNA.Backbone.P)
 # BAD - hardcoded integers
 mask = polymer.sequence == 5  # What residue is this? Will it change?
 mask = polymer.atoms == 2     # Atom values are auto-generated, not stable!
-```
-
-### Training Practices
-
-1. **Always do a dry run locally first** - Before submitting to GPU cluster via `rex`, run a quick local test (1 epoch, small batch) to catch errors early.
-
-2. **Always save sample predictions** - Save sample predictions/generations to `outputs/` so the user can visually inspect model quality. Use `polymer.write('outputs/sample_001.cif')` to write structures.
-
-3. **Avoid batching complexity** - Structures have different sizes. Process one structure at a time rather than implementing complex batching logic.
-
-4. **Keep training loops simple** - Focus on getting results fast. Avoid premature optimization or over-engineering.
-
-5. **Use ciffy's built-in features** - `PolymerDataset`, `PolymerEmbedding`, and `Polymer` methods are battle-tested and handle the many edge cases in .cif files. Don't reimplement this functionality.
-
-## Neural Network API
-
-### PolymerDataset
-
-```python
-from ciffy.nn import PolymerDataset
-
-dataset = PolymerDataset(
-    "./structures/",
-    scale=Scale.CHAIN,           # MOLECULE or CHAIN
-    molecule_types=Molecule.RNA,
-    min_residues=10,             # or max
-    max_atoms=5000,              # or min
-    exclude_ids=["1ABC"],
-)
-polymer = dataset[0]  # Caching enabled by default
-dataset.load()        # Preload all structures with parallel I/O (~2-5x faster)
-```
-
-### Train/Test Splitting
-
-```python
-from ciffy.nn import split_items, PolymerDataset
-
-split = split_items(paths, train=0.8, val=0.1, test=0.1, seed=42)
-train_dataset = PolymerDataset(split.train, scale=Scale.CHAIN)
-val_dataset = PolymerDataset(split.val, scale=Scale.CHAIN)
-```
-
-### PolymerEmbedding
-
-```python
-from ciffy.nn import PolymerEmbedding
-
-# Atom-level embeddings (atom + residue + element)
-embed = PolymerEmbedding(
-    scale=Scale.ATOM,
-    atom_dim=64,      # Atom type embedding
-    residue_dim=32,   # Residue type (expanded to atoms)
-    element_dim=16,   # Element type embedding
-    dropout=0.1,      # Optional dropout on output
-)
-features = embed(polymer)  # (num_atoms, 112)
-
-# Residue-level embeddings (only residue_dim valid)
-embed = PolymerEmbedding(scale=Scale.RESIDUE, residue_dim=64)
-features = embed(polymer)  # (num_residues, 64)
-
-embed.output_dim  # Total embedding dimension
-```
-
-### Transformer
-
-Modern transformer with Pre-LN, RMSNorm, RoPE, and SwiGLU (4x FFN width).
-
-```python
-from ciffy.nn.layers import Transformer
-
-model = Transformer(
-    d_model=256,
-    num_layers=4,
-    num_heads=8,
-    dropout=0.1,
-    use_rope=True,          # Rotary position embeddings (disable if using attn_bias)
-    qk_norm=False,          # QK normalization for training stability
-    layer_scale_init=1e-4,  # Per-residual learnable scaling (None to disable)
-)
-
-x = torch.randn(batch, seq_len, 256)
-out = model(x)                          # (batch, seq_len, 256)
-out = model(x, mask=padding_mask)       # mask: (batch, seq_len), True = masked
-out = model(x, attn_bias=dist_bias)     # attn_bias: (batch, heads, seq, seq)
-```
-
-Also available: `TransformerBlock`, `CausalTransformer`, `AdaLNTransformer` (for diffusion), `Pairformer` (AlphaFold3-style).
-
-### RMSD Loss
-
-**Use `ciffy.rmsd` as the default loss function for structure prediction models.** It computes Kabsch-aligned RMSD with gradient support.
-
-```python
-import ciffy
-
-# Polymer RMSD (returns per-molecule RMSD by default)
-loss = ciffy.rmsd(pred_polymer, target_polymer)
-loss = ciffy.rmsd(pred_polymer, target_polymer, scale=Scale.CHAIN)  # Per-chain
-
-# Coordinate RMSD (for training loops)
-loss = ciffy.rmsd(pred_coords, target_coords)           # (N, 3) -> scalar
-loss = ciffy.rmsd(pred_coords, target_coords, eps=1e-8) # Gradient-stable near 0
-```
-
-The `eps` parameter adds numerical stability when RMSD approaches zero during training.
-
-## Current Goal: RNA Structure Representation Learning
-
-### Objective
-
-Learn a latent representation of RNA structures with the following requirements:
-
-1. **Chain or residue scale** - Latents at chain or residue level (either is acceptable)
-2. **Fully differentiable** - Encoder and decoder are differentiable in both directions
-3. **Regularized latent space** - Latent distribution close to N(0, I)
-4. **High reconstruction fidelity** - <1 Å RMSD for 100-mer chains
-
-### Relevant Files
-
-```
-ciffy/nn/residue/
-├── encoder.py      # ResidueEncoder
-├── decoder.py      # ResidueDecoder
-├── vae.py          # ResidueVAE
-└── training.py     # precompute_targets(), create_batches()
-
-scripts/train_vae.py    # Training script
-```
-
-### Running
-
-```bash
-# Local test
-python scripts/train_vae.py --data tests/data --epochs 10
-
-# Remote GPU
-rex sherlock -d --gpu scripts/train_vae.py -- --name <experiment_name>
 ```

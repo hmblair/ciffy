@@ -273,7 +273,7 @@ class TestDataSplitClustering:
 
     def test_from_clusters_basic(self):
         """Test split_by_clusters with simple labels."""
-        from ciffy.nn import split_by_clusters
+        from ciffy.utils.split import split_by_clusters
 
         items = list(range(10))
         labels = [0, 0, 0, 1, 1, 2, 2, 2, 2, 3]
@@ -297,7 +297,7 @@ class TestDataSplitClustering:
 
     def test_from_clusters_keeps_clusters_together(self):
         """Items in same cluster stay in same split."""
-        from ciffy.nn import split_by_clusters
+        from ciffy.utils.split import split_by_clusters
 
         items = ["a", "b", "c", "d", "e", "f"]
         labels = [0, 0, 1, 1, 2, 2]  # 3 clusters of 2
@@ -324,7 +324,7 @@ class TestDataSplitClustering:
 
     def test_from_clusters_length_mismatch_raises(self):
         """Mismatched items and labels length raises error."""
-        from ciffy.nn import split_by_clusters
+        from ciffy.utils.split import split_by_clusters
 
         items = [1, 2, 3]
         labels = [0, 0]  # Wrong length
@@ -334,7 +334,7 @@ class TestDataSplitClustering:
 
     def test_from_clusters_single_cluster_warns(self):
         """Single cluster warns about inability to split."""
-        from ciffy.nn import split_by_clusters
+        from ciffy.utils.split import split_by_clusters
 
         items = [1, 2, 3, 4]
         labels = [0, 0, 0, 0]  # All same cluster
@@ -352,7 +352,7 @@ class TestDataSplitClustering:
 
     def test_by_sequence_identity(self):
         """Test split_by_sequence_identity function."""
-        from ciffy.nn import split_by_sequence_identity
+        from ciffy.utils.split import split_by_sequence_identity
 
         paths = [
             Path(get_test_cif("3SKW")),
@@ -379,7 +379,7 @@ class TestSplitBySequence:
 
     def test_basic_split(self):
         """Test basic split_by_sequence usage."""
-        from ciffy.nn.training.split import split_by_sequence
+        from ciffy.utils.split import split_by_sequence
 
         paths = [
             Path(get_test_cif("3SKW")),
@@ -396,7 +396,7 @@ class TestSplitBySequence:
 
     def test_reproducible_with_seed(self):
         """Same seed produces same split."""
-        from ciffy.nn.training.split import split_by_sequence
+        from ciffy.utils.split import split_by_sequence
 
         paths = [
             Path(get_test_cif("3SKW")),
@@ -411,7 +411,7 @@ class TestSplitBySequence:
 
     def test_different_seeds_may_differ(self):
         """Different seeds may produce different splits."""
-        from ciffy.nn.training.split import split_by_sequence
+        from ciffy.utils.split import split_by_sequence
 
         # Need enough structures/clusters to see variation
         paths = [
@@ -509,8 +509,8 @@ class TestImports:
         assert ClusterResult is not None
 
     def test_import_split_functions(self):
-        """Can import split functions from ciffy.nn.training.split."""
-        from ciffy.nn.training.split import (
+        """Can import split functions from ciffy.utils.split."""
+        from ciffy.utils.split import (
             split_by_sequence,
             split_by_sequence_identity,
             split_by_clusters,
@@ -534,7 +534,7 @@ class TestToDirectories:
 
     def test_creates_directories_with_symlinks(self, tmp_path):
         """Creates train/val/test directories with symlinks."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         paths = [Path(get_test_cif(name)) for name in ["3SKW", "9GCM"]]
         split = split_items(paths, train=0.5, val=0.0, test=0.5, seed=42)
@@ -550,7 +550,7 @@ class TestToDirectories:
 
     def test_creates_directories_with_copies(self, tmp_path):
         """Creates directories with file copies when symlink=False."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         paths = [Path(get_test_cif("3SKW"))]
         split = split_items(paths, train=1.0, val=0.0, test=0.0, seed=42)
@@ -564,7 +564,8 @@ class TestToDirectories:
 
     def test_works_with_polymer_dataset(self, tmp_path):
         """Directories work with PolymerDataset."""
-        from ciffy.nn import split_items, split_to_directories, PolymerDataset
+        from ciffy.utils.split import split_items, split_to_directories
+        from ciffy.nn import PolymerDataset
 
         paths = [Path(get_test_cif(name)) for name in ["3SKW", "9GCM"]]
         split = split_items(paths, train=1.0, val=0.0, test=0.0, seed=42)
@@ -576,7 +577,7 @@ class TestToDirectories:
 
     def test_exist_ok_skips_existing(self, tmp_path):
         """exist_ok=True skips existing files."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         paths = [Path(get_test_cif("3SKW"))]
         split = split_items(paths, train=1.0, val=0.0, test=0.0, seed=42)
@@ -590,7 +591,7 @@ class TestToDirectories:
 
     def test_raises_on_existing_without_exist_ok(self, tmp_path):
         """Raises FileExistsError when destination exists."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         paths = [Path(get_test_cif("3SKW"))]
         split = split_items(paths, train=1.0, val=0.0, test=0.0, seed=42)
@@ -602,7 +603,7 @@ class TestToDirectories:
 
     def test_raises_on_non_path_items(self, tmp_path):
         """Raises TypeError for non-Path items."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         split = split_items([1, 2, 3], train=0.67, val=0.0, test=0.33)
 
@@ -611,7 +612,7 @@ class TestToDirectories:
 
     def test_skips_empty_splits(self, tmp_path):
         """Doesn't create directories for empty splits."""
-        from ciffy.nn import split_items, split_to_directories
+        from ciffy.utils.split import split_items, split_to_directories
 
         paths = [Path(get_test_cif("3SKW"))]
         split = split_items(paths, train=1.0, val=0.0, test=0.0, seed=42)

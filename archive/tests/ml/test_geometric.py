@@ -1344,29 +1344,27 @@ class TestEquivariantTransformer:
 
         assert torch.allclose(output1_rotated, output2, atol=1e-4)
 
-    def test_different_attention_types(self):
-        """Test both attention types work."""
+    def test_edge_wise_attention(self):
+        """Test edge-wise attention works."""
         from ciffy.nn.geometric import EquivariantTransformer
         in_repr = Repr(lvals=[0, 1], mult=4)
         out_repr = Repr(lvals=[0, 1], mult=2)
         hidden_repr = Repr(lvals=[0, 1], mult=8)
 
-        for attn_type in ["node_wise", "edge_wise"]:
-            model = EquivariantTransformer(
-                in_repr, out_repr, hidden_repr,
-                hidden_layers=1,
-                edge_dim=16,
-                edge_hidden_dim=32,
-                k_neighbors=8,
-                attention_type=attn_type,
-            )
+        model = EquivariantTransformer(
+            in_repr, out_repr, hidden_repr,
+            hidden_layers=1,
+            edge_dim=16,
+            edge_hidden_dim=32,
+            k_neighbors=8,
+        )
 
-            coords = torch.randn(30, 3)
-            features = torch.randn(30, in_repr.mult, in_repr.dim())
+        coords = torch.randn(30, 3)
+        features = torch.randn(30, in_repr.mult, in_repr.dim())
 
-            output = model(coords, features)
-            assert output.shape == (30, out_repr.mult, out_repr.dim())
-            assert not torch.isnan(output).any()
+        output = model(coords, features)
+        assert output.shape == (30, out_repr.mult, out_repr.dim())
+        assert not torch.isnan(output).any()
 
     def test_different_rbf_types(self):
         """Test all RBF types work in the model."""

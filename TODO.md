@@ -1,77 +1,5 @@
 # TODO
 
-## HIGH Priority
-
-### Handle Missing Atoms in PolymerFlowModel (Imputation)
-
-**Goal**: Allow flow model to encode/decode structures with missing atoms.
-
-**Context**: Currently, structures with missing atoms are filtered out during training because the flow model expects a fixed number of atoms per residue type. This can discard a significant portion of real PDB structures.
-
-**Proposed approach (imputation)**:
-1. During encoding, identify missing atoms by comparing actual vs expected count
-2. Fill missing positions with the residue's mean coordinates (stored in PCA)
-3. Encode the "completed" residue normally
-4. On decode, complete structures are generated naturally
-
-**Implementation**:
-```python
-def encode(self, coords, sequence):
-    # For each residue, check if atoms are missing
-    for i, res_type in enumerate(sequence):
-        expected = self._atom_counts[res_type]
-        actual = len(residue_coords)
-        if actual < expected:
-            # Impute missing atoms with mean positions
-            residue_coords = self._impute_missing(residue_coords, res_type)
-    # Continue with normal encoding...
-```
-
-**Files affected**:
-- `ciffy/nn/flow/polymer.py` - Add `_impute_missing()` method to `PolymerFlowModel.encode()`
-- `ciffy/nn/flow/residue/model.py` - Store atom masks or expected positions
-
-**Effort**: ~50-100 lines, 2-4 hours
-**Impact**: Fewer samples filtered during training, better data utilization
-
-**Alternative approach (masked training)**:
-
-Train the flow model to handle missing atoms natively by using masked inputs during training:
-
-1. During training, randomly mask some atoms (set to zero or learnable mask token)
-2. Model learns to produce valid latents even with partial input
-3. At inference, naturally handles incomplete structures
-
-```python
-class MaskedPCAFlow(PCAFlow):
-    def __init__(self, V, mean, mask_token=None):
-        super().__init__(V, mean)
-        # Learnable embedding for masked positions
-        self.mask_embedding = nn.Parameter(torch.zeros(3))
-
-    def encode(self, coords, mask=None):
-        if mask is not None:
-            # Replace masked positions with learned embedding
-            coords = coords.clone()
-            coords[mask] = self.mask_embedding
-        return super().encode(coords)
-```
-
-**Pros**:
-- Model learns robust representations
-- No information loss from imputation
-- Works even with many missing atoms
-
-**Cons**:
-- Requires retraining flow models
-- More complex training procedure
-- May need larger models for robustness
-
-**Effort**: 1-2 days (includes retraining)
-**Impact**: Most robust solution for incomplete structures
-
----
-
 ## MEDIUM Priority
 
 ### Remove Deprecated Polymer Methods (API Cleanup)
@@ -179,14 +107,6 @@ The following modules lack test coverage. Adding tests would improve reliability
 | Module | Issue |
 |--------|-------|
 | `ciffy/operations/extract.py` | Used by template system, no tests |
-
-### Medium Priority
-
-| Module | Issue |
-|--------|-------|
-| `ciffy/nn/dataset.py` | ML pipeline data loading, no direct tests |
-| `ciffy/nn/inference.py` | Inference utilities, no tests |
-| `ciffy/nn/runners/` | Training infrastructure (experiment_runner, inference_runner), no tests |
 
 ### Low Priority
 

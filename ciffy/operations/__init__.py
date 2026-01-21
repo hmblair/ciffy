@@ -28,7 +28,7 @@ from .geometry import (
     pca,
 )
 
-# Frame operations - new API
+# Frame operations
 from .frames import (
     Transforms,
     decompose,
@@ -37,25 +37,12 @@ from .frames import (
     sort_atoms,
 )
 
-# Frame operations - legacy (to be removed)
-from .frames import (
-    frames,
-    align_to_frame,
-    unalign,
-    local_transforms,
-    apply_local_transforms,
-)
-
-# Legacy alias
-kabsch_distance = rmsd
-
 __all__ = [
     # Reduction
     "Reduction",
     "REDUCTIONS",
     # Alignment (Kabsch)
     "coordinate_covariance",
-    "kabsch_distance",
     "kabsch_rotation",
     "kabsch_align",
     "align",
@@ -89,16 +76,10 @@ __all__ = [
     "bonded_distances",
     "moment",
     "pca",
-    # Frame operations - new API
+    # Frame operations
     "Transforms",
     "decompose",
     "compose",
     "gather",
     "sort_atoms",
-    # Frame operations - legacy (to be removed)
-    "frames",
-    "align_to_frame",
-    "unalign",
-    "local_transforms",
-    "apply_local_transforms",
 ]

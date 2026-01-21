@@ -281,10 +281,7 @@ class _Hierarchy:
         ref: Array,
     ) -> _Hierarchy:
         """
-        Create a Hierarchy from the legacy sizes dict and lengths array.
-
-        This factory method converts the old representation to the new
-        unified _per dict.
+        Create a Hierarchy from sizes dict and lengths array.
 
         Args:
             sizes: Dict mapping Scale to atoms-per-unit arrays.

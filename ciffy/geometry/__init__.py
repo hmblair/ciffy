@@ -79,10 +79,16 @@ from .alignment import (
 from .rmsd import rmsd_coords
 
 # Geometry projection (torch-only, differentiable)
-from .projection import project_bond_lengths
+try:
+    from .projection import project_bond_lengths
+except ImportError:
+    project_bond_lengths = None  # torch not available
 
-# Geometry constraints (general system for bond/angle losses)
-from .constraints import GeometryConstraints
+# Geometry constraints (torch-only, general system for bond/angle losses)
+try:
+    from .constraints import GeometryConstraints
+except ImportError:
+    GeometryConstraints = None  # torch not available
 
 __all__ = [
     # Vector operations

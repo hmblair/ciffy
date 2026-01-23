@@ -14,6 +14,7 @@ from ..backend import (
 )
 from ..biochemistry import Scale, Molecule
 from ..geometry.rmsd import rmsd_coords as _rmsd_coords
+from .geometry import pairwise_distances, moment
 
 if TYPE_CHECKING:
     import torch
@@ -193,8 +194,8 @@ def lddt(
         )
 
     # Compute distance matrices
-    pred_dists = pred.pairwise_distances()
-    ref_dists = ref.pairwise_distances()
+    pred_dists = pairwise_distances(pred)
+    ref_dists = pairwise_distances(ref)
 
     if is_torch(pred_coords):
         import torch
@@ -383,12 +384,12 @@ def _rmsd_polymer(
 
     if use_f64:
         cov_compute = to_float64(cov)
-        var1 = to_float64(polymer1_c.moment(2, scale).mean(-1))
-        var2 = to_float64(polymer2_c.moment(2, scale).mean(-1))
+        var1 = to_float64(moment(polymer1_c, 2, scale).mean(-1))
+        var2 = to_float64(moment(polymer2_c, 2, scale).mean(-1))
     else:
         cov_compute = cov
-        var1 = polymer1_c.moment(2, scale).mean(-1)
-        var2 = polymer2_c.moment(2, scale).mean(-1)
+        var1 = moment(polymer1_c, 2, scale).mean(-1)
+        var2 = moment(polymer2_c, 2, scale).mean(-1)
 
     # SVD to find optimal rotation
     try:

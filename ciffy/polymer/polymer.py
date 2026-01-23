@@ -652,11 +652,9 @@ class Polymer(AtomContainer):
             DeprecationWarning,
             stacklevel=2,
         )
-        # Compute pairwise distances at the given scale
-        if scale == Scale.ATOM:
-            dists = self.pairwise_distances()
-        else:
-            dists = self.pairwise_distances(scale)
+        # Use operations module directly to avoid cascading deprecation warnings
+        from ..operations.geometry import pairwise_distances
+        dists = pairwise_distances(self, scale)
 
         n = dists.shape[0]
         if k >= n:
@@ -715,6 +713,9 @@ class Polymer(AtomContainer):
             DeprecationWarning,
             stacklevel=2,
         )
+        # Use operations module directly to avoid cascading deprecation warnings
+        from ..operations.geometry import moment
+
         aligned, _ = self.center(scale)
         _, Q = aligned._pc(scale)
 
@@ -724,7 +725,7 @@ class Polymer(AtomContainer):
         ).squeeze()
 
         # Ensure stability by fixing signs based on third moments
-        signs = ops.sign(aligned.moment(3, scale))
+        signs = ops.sign(moment(aligned, 3, scale))
         signs[:, 0] = signs[:, 1] * signs[:, 2] * ops.det(Q)
         signs_exp = aligned.expand(signs, scale)
 

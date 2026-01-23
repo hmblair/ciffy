@@ -37,6 +37,7 @@ from ..backend import (
     zeros_like,
 )
 from ..biochemistry import Scale
+from .geometry import pairwise_distances
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -84,7 +85,7 @@ def contact_map(
         >>> adj_atom = contact_map(polymer, cutoff=4.0, scale=Scale.ATOM)
     """
     # Compute pairwise distances at the specified scale
-    dists = polymer.pairwise_distances(scale)
+    dists = pairwise_distances(polymer, scale)
 
     # Create binary adjacency: 1 if distance < cutoff, 0 otherwise
     mask = dists < cutoff
@@ -133,7 +134,7 @@ def inverse_square_map(
         >>> adj = inverse_square_map(polymer, cutoff=15.0)
     """
     # Compute pairwise distances at the specified scale
-    dists = polymer.pairwise_distances(scale)
+    dists = pairwise_distances(polymer, scale)
 
     # Compute 1/r² (avoid division by zero on diagonal by adding 1 to zeros)
     # Diagonal entries have dist=0, so we temporarily set them to 1 to avoid div-by-zero

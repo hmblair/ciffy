@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Union, Any
 import numpy as np
 
 from ..biochemistry import Scale
+from ..operations.geometry import pairwise_distances
 
 if TYPE_CHECKING:
     from ..polymer import Polymer
@@ -180,7 +181,7 @@ def contact_map(
         _, ax = plt.subplots(figsize=(8, 8))
 
     # Compute pairwise distances
-    distances = polymer.pairwise_distances(scale)
+    distances = pairwise_distances(polymer, scale)
 
     # Convert to numpy if torch tensor
     if hasattr(distances, 'numpy'):

@@ -164,26 +164,37 @@ int *_get_offsets(char *buffer, int fields, CifErrorContext *ctx) {
 }
 
 
+/**
+ * @brief Calculate length of a potentially quoted field.
+ *
+ * Scans from ptr until field end, handling quoted strings properly.
+ * Does not modify ptr. Fields end at whitespace unless inside quotes.
+ *
+ * @param ptr Start of field (may or may not be quoted)
+ * @return Length of field including any outer quotes
+ */
+static inline size_t _field_length(const char *ptr) {
+    const char *end = ptr;
+    bool in_squotes = false;
+    bool in_dquotes = false;
+
+    while (*end != '\0' && ((*end != ' ' && *end != '\n') || in_squotes || in_dquotes)) {
+        if (*end == '\'' && !in_dquotes) in_squotes = !in_squotes;
+        if (*end == '"' && !in_squotes) in_dquotes = !in_dquotes;
+        end++;
+    }
+    return (size_t)(end - ptr);
+}
+
+
 char *_get_field(char *buffer, CifErrorContext *ctx) {
 
     /* Skip leading whitespace */
     while (*buffer == ' ') { buffer++; }
 
-    /* Read until whitespace, handling quotes.
-     * Single quotes toggle quote mode (ignore spaces within).
-     * Double quotes affect single quote interpretation. */
-    bool squotes = false;
-    bool dquotes = false;
-
-    char *start = buffer;
-    while (*buffer != '\0' && ((*buffer != ' ' && *buffer != '\n') || squotes)) {
-        if (*buffer == '\'' && !dquotes) { squotes = !squotes; }
-        if (*buffer == '\"') { dquotes = !dquotes; }
-        buffer++;
-    }
-
-    size_t length = (size_t)(buffer - start);
-    return _strdup_n(start, length, ctx);
+    /* Calculate field length using unified helper (handles quotes) */
+    size_t length = _field_length(buffer);
+    return _strdup_n(buffer, length, ctx);
 }
 
 
@@ -300,6 +311,128 @@ int _str_to_int(const char *str) {
  * Inline parsing functions (no allocation, cache-friendly)
  * ───────────────────────────────────────────────────────────────────────────── */
 
+
+/* ============================================================================
+ * QUOTE AND COLUMN DETECTION HELPERS
+ *
+ * These helpers consolidate common patterns for:
+ * - Detecting column 0 position (for semicolon blocks)
+ * - Detecting quote terminators (for quoted string fields)
+ * - Skipping quoted fields
+ *
+ * Safety notes on pointer access:
+ * - _at_column_zero: Uses short-circuit evaluation; ptr[-1] only accessed
+ *   when ptr > data_start, which guarantees ptr[-1] is valid.
+ * - _is_terminating_quote: Only called when *ptr is a quote character
+ *   (verified by caller), and buffer is null-terminated, so ptr[1] always
+ *   exists (at minimum it's the '\0' terminator).
+ * ============================================================================ */
+
+/**
+ * @brief Check if position is at column 0 (start of line).
+ *
+ * A position is at column 0 if it's at the start of the data section
+ * or immediately follows a newline character.
+ *
+ * SAFETY: Uses short-circuit evaluation. ptr[-1] is only accessed when
+ * ptr > data_start, ensuring the access is within buffer bounds.
+ *
+ * @param ptr Current position in buffer
+ * @param data_start Start of data section (first valid position)
+ * @return true if at column 0
+ */
+static inline bool _at_column_zero(const char *ptr, const char *data_start) {
+    return ptr == data_start || (ptr > data_start && ptr[-1] == '\n');
+}
+
+/**
+ * @brief Check if current quote character terminates a field.
+ *
+ * In CIF, a quoted field ends when the closing quote is followed by
+ * whitespace (space, tab, newline) or end of string. This allows
+ * quotes to appear inside quoted strings when not at field boundaries.
+ *
+ * SAFETY: This function accesses ptr[1]. It should only be called when
+ * *ptr is a quote character (verified by the caller's condition check).
+ * Since the buffer is null-terminated and *ptr != '\0' (it's a quote),
+ * there is always at least one more character at ptr[1] (the '\0' if
+ * nothing else).
+ *
+ * @param ptr Pointer to a quote character (must not be at '\0')
+ * @return true if the quote terminates the field
+ */
+static inline bool _is_terminating_quote(const char *ptr) {
+    char next = ptr[1];
+    return next == ' ' || next == '\t' || next == '\n' || next == '\0';
+}
+
+/**
+ * @brief Skip past a quoted string field.
+ *
+ * Advances ptr from opening quote to just past the closing quote.
+ * The closing quote is identified by being followed by whitespace or '\0'.
+ *
+ * @param ptr Pointer to opening quote (modified in place to after closing quote)
+ */
+static inline void _skip_quoted_string(char **ptr) {
+    char quote = *(*ptr)++;  /* Save quote char and skip it */
+    while (**ptr != '\0') {
+        if (**ptr == quote && _is_terminating_quote(*ptr)) {
+            (*ptr)++;  /* Skip closing quote */
+            return;
+        }
+        (*ptr)++;
+    }
+    /* Unterminated quote - ptr is at '\0' */
+}
+
+
+/**
+ * @brief Extract content from a semicolon multi-line value.
+ *
+ * Given a pointer to the opening ';', returns a pointer to the content
+ * and its length. The content excludes the opening/closing ';' lines.
+ *
+ * @param ptr Pointer to opening ';' at column 0
+ * @param data_start Start of data section (for column 0 detection)
+ * @param len Output: content length
+ * @return Pointer to content start
+ */
+static char *_extract_semicolon_content(char *ptr, const char *data_start, size_t *len) {
+    /* Move past the opening ';' to the content */
+    char *content_start = ptr + 1;
+
+    /* Find end of opening line (content may start here) */
+    while (*content_start == ' ' || *content_start == '\t') content_start++;
+    char *line_end = content_start;
+    while (*line_end != '\n' && *line_end != '\0') line_end++;
+
+    /* Check if opening line has content or if content starts on next line */
+    if (content_start == line_end) {
+        /* No content on opening line, start from next line */
+        if (*line_end == '\n') content_start = line_end + 1;
+    }
+
+    /* Find closing ';' at column 0 */
+    char *scan = content_start;
+    char *content_end = content_start;
+    while (*scan != '\0') {
+        if (*scan == ';' && _at_column_zero(scan, data_start)) {
+            /* Found closing semicolon */
+            content_end = scan - 1;  /* Exclude the newline before closing ';' */
+            if (content_end < content_start) content_end = content_start;
+            break;
+        }
+        scan++;
+    }
+
+    if (len != NULL) {
+        *len = (size_t)(content_end - content_start);
+    }
+    return content_start;
+}
+
+
 /**
  * @brief Skip over a semicolon text block in CIF data.
  *
@@ -361,7 +494,7 @@ static bool _skip_field(char **ptr, const char *data_start) {
     }
 
     /* Check for semicolon block at column 0 */
-    if (**ptr == ';' && (*ptr == data_start || (*ptr)[-1] == '\n')) {
+    if (**ptr == ';' && _at_column_zero(*ptr, data_start)) {
         return _skip_semicolon_block(ptr);
     }
 
@@ -370,13 +503,9 @@ static bool _skip_field(char **ptr, const char *data_start) {
         return false;
     }
 
-    /* Quoted string */
+    /* Quoted string - use helper for safe quote handling */
     if (**ptr == '\'' || **ptr == '"') {
-        char quote = *(*ptr)++;
-        while (**ptr != '\0' && !(**ptr == quote && ((*ptr)[1] == ' ' || (*ptr)[1] == '\t' || (*ptr)[1] == '\n' || (*ptr)[1] == '\0'))) {
-            (*ptr)++;
-        }
-        if (**ptr == quote) (*ptr)++;
+        _skip_quoted_string(ptr);
         return true;
     }
 
@@ -568,15 +697,7 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
         while (*ptr == ' ') ptr++;
 
         if (len != NULL) {
-            char *end = ptr;
-            bool squotes = false;
-            bool dquotes = false;
-            while (*end != '\0' && ((*end != ' ' && *end != '\n') || squotes)) {
-                if (*end == '\'' && !dquotes) squotes = !squotes;
-                if (*end == '"') dquotes = !dquotes;
-                end++;
-            }
-            *len = (size_t)(end - ptr);
+            *len = _field_length(ptr);
         }
         return ptr;
     }
@@ -600,14 +721,37 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
     }
 
     char *ptr;
-    if (block->variable_width) {
+
+    /* Fixed-width blocks are the common case (atom_site), check first */
+    if (__builtin_expect(!block->variable_width, 1)) {
+        /* Fixed-width: use precomputed offsets (fast path) */
+        ptr = block->lines[line] + block->offsets[index];
+        while (*ptr == ' ') ptr++;
+
+        if (len != NULL) {
+            /* Inline length calculation for performance */
+            char *end = ptr;
+            bool squotes = false;
+            bool dquotes = false;
+            while (*end != '\0' && ((*end != ' ' && *end != '\n') || squotes)) {
+                if (*end == '\'' && !dquotes) squotes = !squotes;
+                if (*end == '"') dquotes = !dquotes;
+                end++;
+            }
+            *len = (size_t)(end - ptr);
+        }
+        return ptr;
+    }
+
+    /* Variable-width: navigate field-by-field (slow path, rare) */
+    {
         /*
          * Variable-width: navigate field-by-field to handle multi-line values.
          * Cannot use simple offset calculation because rows may span multiple
          * physical lines when containing semicolon blocks.
          */
+        const char *data_start = block->data.ptr;
         ptr = block->lines[line];
-        char *data_start = block->data.ptr;
 
         /* Skip to the target field */
         for (int f = 0; f < index; f++) {
@@ -621,11 +765,11 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
             }
 
             /* Skip this field */
-            if (*ptr == ';' && (ptr == data_start || ptr[-1] == '\n')) {
+            if (*ptr == ';' && _at_column_zero(ptr, data_start)) {
                 /* Semicolon block - skip entire block */
                 while (*ptr != '\n' && *ptr != '\0') ptr++;  /* Skip opening line */
                 if (*ptr == '\n') ptr++;
-                while (*ptr != '\0' && !(*ptr == ';' && (ptr == data_start || ptr[-1] == '\n'))) {
+                while (*ptr != '\0' && !(*ptr == ';' && _at_column_zero(ptr, data_start))) {
                     while (*ptr != '\n' && *ptr != '\0') ptr++;
                     if (*ptr == '\n') ptr++;
                 }
@@ -634,12 +778,8 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
                     if (*ptr == '\n') ptr++;
                 }
             } else if (*ptr == '\'' || *ptr == '"') {
-                /* Quoted string */
-                char quote = *ptr++;
-                while (*ptr != '\0' && !(*ptr == quote && (ptr[1] == ' ' || ptr[1] == '\t' || ptr[1] == '\n' || ptr[1] == '\0'))) {
-                    ptr++;
-                }
-                if (*ptr == quote) ptr++;
+                /* Quoted string - use helper for safe terminator detection */
+                _skip_quoted_string(&ptr);
             } else {
                 /* Regular field */
                 while (*ptr != '\0' && *ptr != ' ' && *ptr != '\t' && *ptr != '\n') {
@@ -654,67 +794,22 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
             ptr++;
             while (*ptr == ' ' || *ptr == '\t') ptr++;
         }
-    } else {
-        /* Fixed-width: use precomputed offsets */
-        ptr = block->lines[line] + block->offsets[index];
-        /* Skip leading whitespace */
-        while (*ptr == ' ') ptr++;
-    }
 
-    /*
-     * Handle semicolon multi-line value.
-     * Semicolon blocks start with ';' at column 0 (start of line).
-     */
-    if (*ptr == ';' && (ptr == block->data.ptr || ptr[-1] == '\n')) {
-        /* Move past the opening ';' to the content */
-        char *content_start = ptr + 1;
-
-        /* Find end of opening line (content may start here) */
-        while (*content_start == ' ' || *content_start == '\t') content_start++;
-        char *line_end = content_start;
-        while (*line_end != '\n' && *line_end != '\0') line_end++;
-
-        /* Check if opening line has content or if content starts on next line */
-        if (content_start == line_end) {
-            /* No content on opening line, start from next line */
-            if (*line_end == '\n') content_start = line_end + 1;
+        /*
+         * Handle semicolon multi-line value (variable-width only).
+         * Semicolon blocks start with ';' at column 0 (start of line).
+         * Fixed-width blocks (atom_site) never contain semicolon values.
+         */
+        if (*ptr == ';' && _at_column_zero(ptr, data_start)) {
+            return _extract_semicolon_content(ptr, data_start, len);
         }
 
-        /* Find closing ';' at column 0 */
-        char *scan = content_start;
-        char *content_end = content_start;
-        while (*scan != '\0') {
-            if (*scan == ';' && (scan == block->data.ptr || scan[-1] == '\n')) {
-                /* Found closing semicolon */
-                content_end = scan - 1;  /* Exclude the newline before closing ';' */
-                if (content_end < content_start) content_end = content_start;
-                break;
-            }
-            scan++;
-        }
-
+        /* Regular field in variable-width block */
         if (len != NULL) {
-            *len = (size_t)(content_end - content_start);
+            *len = _field_length(ptr);
         }
-        return content_start;
+        return ptr;
     }
-
-    /* Regular field - calculate length */
-    if (len != NULL) {
-        char *end = ptr;
-        bool squotes = false;
-        bool dquotes = false;
-
-        /* Always check for '\0' first to prevent reading past buffer end */
-        while (*end != '\0' && ((*end != ' ' && *end != '\n') || squotes)) {
-            if (*end == '\'' && !dquotes) squotes = !squotes;
-            if (*end == '"') dquotes = !dquotes;
-            end++;
-        }
-        *len = (size_t)(end - ptr);
-    }
-
-    return ptr;
 }
 
 

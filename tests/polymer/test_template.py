@@ -294,12 +294,13 @@ class TestFromSequenceEdgeCases:
     def test_repeated_single_residue(self):
         """Test repeated single residue."""
         from ciffy import template, Scale
+        from ciffy.biochemistry import Residue
 
         polymer = template("aaaa")
 
         assert polymer.size(Scale.RESIDUE) == 4
-        # All residues should be adenosine (0)
-        assert all(r == 0 for r in polymer.sequence)
+        # All residues should be adenosine
+        assert all(r == Residue.A.value for r in polymer.sequence)
 
     def test_backend_invalid_raises(self):
         """Test invalid backend raises ValueError."""

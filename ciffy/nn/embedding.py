@@ -142,21 +142,33 @@ class PolymerEmbedding(nn.Module):
             name: Name of the index type for error messages.
 
         Raises:
-            IndexError: If any indices exceed the vocabulary size.
+            IndexError: If any indices are out of bounds.
         """
         # Force sync to surface any pending CUDA errors
         if indices.is_cuda:
             torch.cuda.synchronize()
 
-        invalid_mask = indices >= max_idx
-        if invalid_mask.any():
-            invalid_indices = indices[invalid_mask].unique().tolist()
-            invalid_count = invalid_mask.sum().item()
+        # Check for negative indices (invalid - should never happen)
+        neg_mask = indices < 0
+        if neg_mask.any():
+            neg_indices = indices[neg_mask].unique().tolist()
+            neg_count = neg_mask.sum().item()
             raise IndexError(
-                f"PolymerEmbedding: {invalid_count} {name} indices out of bounds. "
-                f"Valid range: [0, {max_idx}), got values: {invalid_indices[:10]}"
-                f"{'...' if len(invalid_indices) > 10 else ''}. "
-                f"This may indicate corrupted data or unsupported atom/residue types."
+                f"PolymerEmbedding: {neg_count} negative {name} indices found. "
+                f"Got values: {neg_indices[:10]}{'...' if len(neg_indices) > 10 else ''}. "
+                f"This indicates a bug in the data loading pipeline."
+            )
+
+        # Check for indices >= max_idx
+        high_mask = indices >= max_idx
+        if high_mask.any():
+            high_indices = indices[high_mask].unique().tolist()
+            high_count = high_mask.sum().item()
+            raise IndexError(
+                f"PolymerEmbedding: {high_count} {name} indices out of bounds. "
+                f"Valid range: [0, {max_idx}), got values: {high_indices[:10]}"
+                f"{'...' if len(high_indices) > 10 else ''}. "
+                f"This may indicate unsupported atom/residue types."
             )
 
     def _embed(
@@ -169,12 +181,13 @@ class PolymerEmbedding(nn.Module):
         """
         Embed indices with lazy validation.
 
-        Clamps indices and performs embedding lookup. If an error occurs,
-        validates indices to provide a detailed error message.
+        Performs embedding lookup. If an error occurs, validates indices
+        to provide a detailed error message.
 
         Args:
             embedding: The embedding layer.
-            indices: Raw indices (may contain -1 for unknown).
+            indices: Indices to embed. Index 0 = unknown/sentinel,
+                indices 1+ = valid values. Negative indices are invalid.
             max_idx: Maximum valid index for validation.
             name: Name of the index type for error messages.
 
@@ -182,16 +195,12 @@ class PolymerEmbedding(nn.Module):
             Embedded tensor.
 
         Raises:
-            IndexError: If any indices exceed the vocabulary size.
+            IndexError: If any indices are out of bounds (negative or >= max_idx).
         """
-        # Clamp -1 (unknown) to 0, but leave upper bound unclamped
-        # so out-of-bounds indices still fail
-        clamped = indices.clamp(min=0)
-
         try:
-            return embedding(clamped)
+            return embedding(indices)
         except (IndexError, RuntimeError):
-            # Embedding failed - validate original indices for detailed error
+            # Embedding failed - validate indices for detailed error
             self._validate_and_raise(indices, max_idx, name)
             raise  # Re-raise if validation didn't find the issue
 
@@ -208,10 +217,11 @@ class PolymerEmbedding(nn.Module):
             - N = num_residues if scale=RESIDUE
 
         Raises:
-            IndexError: If any indices exceed the vocabulary size.
+            IndexError: If any indices are out of bounds.
 
         Note:
-            Unknown indices (-1) are mapped to index 0 (unknown/padding).
+            Index 0 represents unknown/unrecognized values and maps to a
+            dedicated "unknown" embedding. Valid indices start at 1.
             Validation is lazy - indices are only checked if an error occurs,
             avoiding GPU sync overhead on the happy path.
         """

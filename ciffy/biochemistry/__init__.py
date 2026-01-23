@@ -73,9 +73,11 @@ from .linking import (
 # =============================================================================
 # VOCABULARY SIZES (for embedding layers)
 # =============================================================================
+# All indices start at 1, with 0 reserved for unknown/sentinel.
+# Sizes are max_value + 1 to accommodate index 0.
 
 NUM_ELEMENTS: int = max(e.value for e in Element) + 1
-NUM_RESIDUES: int = Residue.count()
+NUM_RESIDUES: int = max(r.value for r in Residue.all()) + 1
 NUM_ATOMS: int = Atom.count()
 
 

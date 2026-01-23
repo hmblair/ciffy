@@ -242,7 +242,7 @@ class TestAtomGroupWithGeometry:
                 "OP2": Atom("OP2", 4, 2),
                 "C5p": Atom("C5p", 5, 3),
             },
-            value=0,
+            value=1,  # Note: 0 is reserved for unknown
             molecule_type=1,  # RNA
             abbrev="a",
             ideal=ideal,
@@ -256,7 +256,7 @@ class TestAtomGroupWithGeometry:
         assert int(atom) == 2
 
     def test_residue_metadata(self, residue: AtomGroup):
-        assert residue.value == 0
+        assert residue.value == 1
         assert residue.molecule_type == 1
         assert residue.abbrev == "a"
 

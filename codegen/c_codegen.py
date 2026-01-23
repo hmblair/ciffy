@@ -238,7 +238,11 @@ def generate_reverse_header(
         '#include <stddef.h>',
         '#include "../log.h"',
         '',
+        '/* UNKNOWN_INDEX (-1) is returned by lookup functions to indicate "not found".',
+        ' * UNKNOWN_VALUE (0) is stored in arrays for unknown/unrecognized entries.',
+        ' * All valid enum values start at 1, with 0 reserved as the sentinel. */',
         '#define UNKNOWN_INDEX    (-1)',
+        '#define UNKNOWN_VALUE    (0)',
         '#define UNKNOWN_ELEMENT  "X"',
         '#define UNKNOWN_RESIDUE  "UNK"',
         '#define UNKNOWN_ATOM     "X"',
@@ -353,7 +357,10 @@ def generate_bond_patterns_header(
 ) -> None:
     """Generate bond_patterns.h with static bond arrays for C bond graph building."""
 
+    # Residue indices start at 1, so arrays need size n_residues + 1
+    # Index 0 is reserved for unknown/sentinel
     n_residues = len(all_residues)
+    array_size = n_residues + 1
 
     # Molecule type indices derived from MOLECULE_TYPES (single source of truth)
     mol_idx = {mt.name: idx for idx, mt in enumerate(MOLECULE_TYPES)}
@@ -370,11 +377,13 @@ def generate_bond_patterns_header(
         ' * Each residue type has an array of bond pairs stored as',
         ' * (atom_value_1, atom_value_2) pairs. These are the atom enum',
         ' * values, not local indices.',
+        ' *',
+        ' * Note: Residue indices start at 1. Index 0 is reserved/unused.',
         ' */',
         '',
         '#include <stdint.h>',
         '',
-        f'#define NUM_RESIDUE_TYPES {n_residues}',
+        f'#define NUM_RESIDUE_TYPES {array_size}',
         '',
         '/* Molecule type constants */',
         f'#define MOL_PROTEIN {mol_idx["PROTEIN"]}',
@@ -441,8 +450,15 @@ def generate_bond_patterns_header(
             bond_array_names.append('NULL')
             bond_counts.append(0)
 
+    # Prepend index 0 (reserved/unknown) entries to all arrays
+    bond_array_names.insert(0, 'NULL')
+    bond_counts.insert(0, 0)
+    mol_types.insert(0, 0)
+    linking_prev.insert(0, 0)
+    linking_next.insert(0, 0)
+
     # Generate lookup tables
-    lines.append('/* Lookup tables indexed by residue type */')
+    lines.append('/* Lookup tables indexed by residue type (index 0 = unknown/reserved) */')
     lines.append(f'static const int32_t* RESIDUE_BONDS[NUM_RESIDUE_TYPES] = {{')
     for i, name in enumerate(bond_array_names):
         comma = ',' if i < len(bond_array_names) - 1 else ''
@@ -458,7 +474,7 @@ def generate_bond_patterns_header(
     lines.append('')
 
     # Molecule type per residue
-    lines.append('/* Molecule type for each residue type */')
+    lines.append('/* Molecule type for each residue type (index 0 = unknown/reserved) */')
     lines.append(f'static const int8_t RESIDUE_MOLECULE_TYPE[NUM_RESIDUE_TYPES] = {{')
     for i, mt in enumerate(mol_types):
         comma = ',' if i < len(mol_types) - 1 else ''

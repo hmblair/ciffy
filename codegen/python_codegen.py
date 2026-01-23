@@ -415,14 +415,16 @@ def generate_python_residues(
     lines.append('')
 
     # Generate residue members with lazy loaders
+    # Note: indices start at 1 (0 is reserved for unknown/sentinel)
     for idx, res in enumerate(all_residues):
         mol_name = MOLECULE_TYPES[res.molecule_type].name
+        value = idx + 1  # Start at 1, not 0
         if res.class_name in has_atoms:
             # Use lazy loader - members=None, loader=function
             lines.append(
                 f'    {res.name} = AtomGroup('
                 f'"{res.name}", None, '
-                f'value={idx}, molecule_type=Molecule.{mol_name}.value, '
+                f'value={value}, molecule_type=Molecule.{mol_name}.value, '
                 f'abbrev="{res.abbreviation}", '
                 f'loader=_load_{res.class_name})'
             )
@@ -431,7 +433,7 @@ def generate_python_residues(
             lines.append(
                 f'    {res.name} = AtomGroup('
                 f'"{res.name}", {{}}, '
-                f'value={idx}, molecule_type=Molecule.{mol_name}.value, '
+                f'value={value}, molecule_type=Molecule.{mol_name}.value, '
                 f'abbrev="{res.abbreviation}")'
             )
 

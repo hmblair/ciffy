@@ -153,12 +153,12 @@ def _build_indices(data: LoadedData) -> IndexedData:
 
     residues = data.residues
 
-    # Build residue mappings
-    residue_index = {res.name: idx for idx, res in enumerate(residues)}
+    # Build residue mappings (indices start at 1, 0 is reserved for unknown/sentinel)
+    residue_index = {res.name: idx + 1 for idx, res in enumerate(residues)}
     cif_to_residue = {
-        cif: idx for idx, res in enumerate(residues) for cif in res.cif_names
+        cif: idx + 1 for idx, res in enumerate(residues) for cif in res.cif_names
     }
-    residue_to_cif = {idx: res.cif_names[0] for idx, res in enumerate(residues)}
+    residue_to_cif = {idx + 1: res.cif_names[0] for idx, res in enumerate(residues)}
 
     # Build atom index using two-phase algorithm
     # Phase A: Backbone atoms get unified values (shared across residues)

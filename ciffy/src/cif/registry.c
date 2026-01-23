@@ -1228,7 +1228,7 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
 
 /**
  * @brief Parse a field and perform hash table lookup.
- * @param dest   Destination lvalue (receives lookup value or PARSE_FAIL)
+ * @param dest   Destination lvalue (receives lookup value or UNKNOWN_VALUE if not found)
  * @param idx    Column index in offsets array
  * @param table  Hash lookup function (e.g., _lookup_element)
  * @param buf    Scratch buffer (must be MAX_INLINE_BUFFER size)
@@ -1250,16 +1250,16 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
             (dest) = _r->value; \
         } else { \
             LOG_INFO("Unknown element '%s' at line %d", buf, block->data.line + row); \
-            (dest) = PARSE_FAIL; \
+            (dest) = UNKNOWN_VALUE; \
         } \
     } else { \
-        (dest) = PARSE_FAIL; \
+        (dest) = UNKNOWN_VALUE; \
     } \
 } while(0)
 
 /**
  * @brief Parse two fields, combine with separator, and perform hash lookup.
- * @param dest   Destination lvalue (receives lookup value or PARSE_FAIL)
+ * @param dest   Destination lvalue (receives lookup value or UNKNOWN_VALUE if not found)
  * @param idx1   Column index for first field (e.g., comp_id)
  * @param idx2   Column index for second field (e.g., atom_id)
  * @param sep    Separator character (e.g., '_')
@@ -1295,10 +1295,10 @@ void _compute_batch_groups(BatchGroup *groups, int *group_count, int max_groups)
             (dest) = _r->value; \
         } else { \
             LOG_INFO("Unknown atom '%s' at line %d", buf, block->data.line + row); \
-            (dest) = PARSE_FAIL; \
+            (dest) = UNKNOWN_VALUE; \
         } \
     } else { \
-        (dest) = PARSE_FAIL; \
+        (dest) = UNKNOWN_VALUE; \
     } \
 } while(0)
 

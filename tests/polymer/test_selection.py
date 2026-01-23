@@ -73,10 +73,10 @@ class TestResidueType:
     def test_residue_type_valid_index(self, backend):
         """residue_type with valid index returns matching residues."""
         import ciffy
+        from ciffy.biochemistry import Residue
 
         p = ciffy.template("acgu", backend=backend)
-        # Adenosine is residue type 0
-        result = p.residue_type(0)
+        result = p.residue_type(Residue.A.value)
 
         assert not result.empty()
         # Should have atoms from adenosine residue
@@ -85,10 +85,11 @@ class TestResidueType:
     def test_residue_type_array_input(self, backend):
         """residue_type accepts array of residue indices."""
         import ciffy
+        from ciffy.biochemistry import Residue
 
         p = ciffy.template("acgu", backend=backend)
-        # Select adenosine (type 0) and cytidine (type 1)
-        result = p.residue_type(np.array([0, 1]))
+        # Select adenosine and cytidine
+        result = p.residue_type(np.array([Residue.A.value, Residue.C.value]))
 
         assert not result.empty()
         # Should return residues (non-empty result means selection worked)

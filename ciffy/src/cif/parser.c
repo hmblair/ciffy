@@ -748,22 +748,47 @@ static int *_count_atoms_per_residue(mmCIF *cif, mmBlock *block, int residue_cou
         }
 
         /* Track chain changes to update current_chain index */
-        if (prev_chain_ptr == NULL) {
+        if (prev_chain_ptr == NULL ||
+            !_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
             prev_chain_ptr = chain_ptr;
             prev_chain_len = chain_len;
-            /* Find initial chain index using hash lookup */
             current_chain = chain_lookup_find(chain_lookup, chain_ptr, chain_len);
-        } else if (!_field_eq_field(prev_chain_ptr, prev_chain_len, chain_ptr, chain_len)) {
-            prev_chain_ptr = chain_ptr;
-            prev_chain_len = chain_len;
-            /* Find new chain index using hash lookup */
-            current_chain = chain_lookup_find(chain_lookup, chain_ptr, chain_len);
+
+            /* Fail immediately if chain not found */
+            if (current_chain < 0) {
+                /* Build expected chains list */
+                char expected[256] = {0};
+                int pos = 0;
+                for (int i = 0; i < chain_count && pos < 250; i++) {
+                    if (cif->names && cif->names[i]) {
+                        if (pos > 0) {
+                            expected[pos++] = ',';
+                            expected[pos++] = ' ';
+                        }
+                        int len = snprintf(expected + pos, 250 - pos, "'%s'", cif->names[i]);
+                        if (len > 0) pos += len;
+                    }
+                }
+
+                /* Copy chain name for error message */
+                char bad_chain[64];
+                size_t copy_len = chain_len < 63 ? chain_len : 63;
+                memcpy(bad_chain, chain_ptr, copy_len);
+                bad_chain[copy_len] = '\0';
+
+                CIF_SET_ERROR(ctx, CIF_ERR_PARSE,
+                    "Chain ID mismatch: _atom_site.label_asym_id '%s' not found in "
+                    "_struct_asym.id [%s]",
+                    bad_chain, expected);
+                free(sizes);
+                return NULL;
+            }
         }
 
         /* Parse sequence ID and compute global residue index */
         int seq_id = _parse_int_inline(block, line, seq_index);
 
-        if (current_chain >= 0 && current_chain < chain_count) {
+        if (current_chain < chain_count) {
             ChainSeqInfo *info = &seq_info[current_chain];
             int local_res_idx = seq_id - info->min_seq_id;
             int global_res_idx = info->res_offset + local_res_idx;

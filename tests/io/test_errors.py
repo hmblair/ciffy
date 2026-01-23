@@ -656,3 +656,50 @@ ATOM 1 C CA . ALA A 1 1 1.0 2.0 3.0 A 1
             ciffy.load(str(cif_file))
         except (RuntimeError, ValueError):
             pass  # Acceptable to fail on special chars
+
+    def test_chain_id_mismatch(self, tmp_path):
+        """load raises clear error when atom chain IDs don't match struct_asym."""
+        import ciffy
+
+        cif_file = tmp_path / "chain_mismatch.cif"
+        # _struct_asym defines chain "0" but _atom_site uses chain "A"
+        cif_file.write_text("""data_TEST
+#
+loop_
+_struct_asym.id
+_struct_asym.pdbx_blank_PDB_chainid_flag
+_struct_asym.pdbx_modified
+_struct_asym.entity_id
+_struct_asym.details
+0 N N 1 ?
+#
+loop_
+_pdbx_poly_seq_scheme.asym_id
+_pdbx_poly_seq_scheme.entity_id
+_pdbx_poly_seq_scheme.seq_id
+_pdbx_poly_seq_scheme.mon_id
+_pdbx_poly_seq_scheme.pdb_strand_id
+0 1 1 G 0
+0 1 2 C 0
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+ATOM 1 P P . G A 1 1 0.0 0.0 0.0 1
+ATOM 2 C C1' . G A 1 1 1.0 0.0 0.0 1
+#
+""")
+
+        with pytest.raises((RuntimeError, ValueError), match="Chain ID mismatch"):
+            ciffy.load(str(cif_file))

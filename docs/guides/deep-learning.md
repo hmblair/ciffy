@@ -471,6 +471,36 @@ print(f"Found {len(dataset)} chains")
 polymer = dataset[0]
 ```
 
+#### Splitting Datasets
+
+Split datasets into train/val/test subsets while keeping all chains from the same file together:
+
+```python
+from ciffy.nn import PolymerDataset
+from ciffy import Scale
+
+dataset = PolymerDataset("./data/cif", scale=Scale.CHAIN)
+
+# 3-way split
+train, val, test = dataset.split(0.8, 0.1, 0.1, seed=42)
+
+# 2-way split (val=0 omits validation set from result)
+train, test = dataset.split(0.9, 0.0, 0.1, seed=42)
+
+print(f"Train: {len(train)}, Val: {len(val)}, Test: {len(test)}")
+```
+
+For ML applications, use sequence-identity clustering to prevent homologous sequences from appearing in different splits:
+
+```python
+# Cluster by sequence identity before splitting (requires MMseqs2)
+train, val, test = dataset.split(
+    0.8, 0.1, 0.1,
+    by_sequence=True,  # Cluster first
+    threshold=0.5,     # 50% sequence identity threshold
+)
+```
+
 ### Modern Transformer
 
 A reusable transformer with modern best practices:

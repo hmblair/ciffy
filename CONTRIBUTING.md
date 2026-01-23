@@ -31,7 +31,7 @@ pytest tests/ -k "test_load"     # by name pattern
   - `geometry/` - Geometric primitives (frames, transforms)
   - `nn/` - Neural network utilities (PolymerDataset, PolymerEmbedding)
   - `rna/` - RNA-specific utilities (reactivity, secondary structure)
-  - `utils/` - Clustering and splitting utilities
+  - `utils/` - Internal helper utilities
   - `visualize/` - Visualization tools
   - `src/` - C source code for fast parsing
 - **`codegen/`** - Code generation from PDB Chemical Component Dictionary

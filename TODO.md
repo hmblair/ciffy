@@ -114,4 +114,3 @@ The following modules lack test coverage. Adding tests would improve reliability
 |--------|-------|
 | `ciffy/utils/formatting.py` | Utility functions |
 | `ciffy/utils/helpers.py` | Utility functions |
-| `ciffy/cli/` | CLI commands |

@@ -219,6 +219,63 @@ def generate_markdown_table(all_results: list[dict]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Batch Loading Benchmark
+# ─────────────────────────────────────────────────────────────────────────────
+
+def benchmark_batch_loading(files: list[tuple[str, str]], runs: int = BENCHMARK_RUNS) -> dict:
+    """
+    Compare batch loading (all files at once) vs sequential loading.
+
+    Args:
+        files: List of (pdb_id, filepath) tuples.
+        runs: Number of benchmark runs.
+
+    Returns:
+        Dict with sequential_sum, batch, speedup, and per-file breakdown.
+    """
+    import ciffy
+
+    filepaths = [f[1] for f in files]
+
+    # Benchmark loading all files at once (uses OMP if available)
+    def load_batch():
+        return ciffy.load(filepaths, backend="numpy")
+
+    # Benchmark loading files sequentially
+    def load_sequential():
+        return [ciffy.load(f, backend="numpy") for f in filepaths]
+
+    batch_result = Timer.benchmark(load_batch, runs=runs)
+    sequential_result = Timer.benchmark(load_sequential, runs=runs)
+
+    # Get total atoms
+    polymers = load_batch()
+    total_atoms = sum(p.size() for p in polymers)
+
+    return {
+        "n_files": len(files),
+        "total_atoms": total_atoms,
+        "sequential": sequential_result.to_dict(),
+        "batch": batch_result.to_dict(),
+        "speedup": sequential_result.mean / batch_result.mean if batch_result.mean > 0 else 0,
+    }
+
+
+def print_batch_results(results: dict) -> None:
+    """Print batch loading benchmark results."""
+    print(f"\n{'='*60}")
+    print(f"Batch Loading: {results['n_files']} files ({results['total_atoms']:,} atoms total)")
+    print(f"{'='*60}")
+
+    seq = results["sequential"]
+    batch = results["batch"]
+
+    print(f"Sequential:  {seq['mean']*1000:7.2f} ms ± {seq['std']*1000:.2f} ms")
+    print(f"Batch (OMP): {batch['mean']*1000:7.2f} ms ± {batch['std']*1000:.2f} ms")
+    print(f"Speedup:     {results['speedup']:.2f}x")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PolymerDataset Benchmarking
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -331,4 +388,10 @@ if __name__ == "__main__":
         print(f"ciffy version: {ciffy.__version__}")
         for results in all_results:
             print_results(results)
+
+        # Batch loading comparison
+        if len(TEST_FILES) > 1:
+            batch_results = benchmark_batch_loading(TEST_FILES)
+            print_batch_results(batch_results)
+
         print()

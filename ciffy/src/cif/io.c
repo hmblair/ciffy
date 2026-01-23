@@ -333,6 +333,61 @@ static bool _skip_semicolon_block(char **ptr) {
 }
 
 
+/**
+ * @brief Skip a single field value, handling quotes and semicolon blocks.
+ *
+ * Advances ptr past one field. Fields may be:
+ * - Regular unquoted values (whitespace-delimited)
+ * - Quoted strings ('...' or "...")
+ * - Semicolon multi-line blocks (when ';' is at column 0)
+ *
+ * @param ptr Pointer to current position (modified in place)
+ * @param data_start Start of data section (for column 0 detection)
+ * @return true if field was found and skipped, false if at section end/EOF
+ */
+static bool _skip_field(char **ptr, const char *data_start) {
+    /* Skip leading whitespace (not newlines) */
+    while (**ptr == ' ' || **ptr == '\t') (*ptr)++;
+
+    /* Check for newline - field might be on next line */
+    if (**ptr == '\n') {
+        (*ptr)++;
+        /* Check if next line starts with semicolon block */
+        if (**ptr == ';') {
+            return _skip_semicolon_block(ptr);
+        }
+        /* Continue looking for field on new line */
+        return _skip_field(ptr, data_start);
+    }
+
+    /* Check for semicolon block at column 0 */
+    if (**ptr == ';' && (*ptr == data_start || (*ptr)[-1] == '\n')) {
+        return _skip_semicolon_block(ptr);
+    }
+
+    /* End of data */
+    if (**ptr == '\0' || _is_section_end(*ptr)) {
+        return false;
+    }
+
+    /* Quoted string */
+    if (**ptr == '\'' || **ptr == '"') {
+        char quote = *(*ptr)++;
+        while (**ptr != '\0' && !(**ptr == quote && ((*ptr)[1] == ' ' || (*ptr)[1] == '\t' || (*ptr)[1] == '\n' || (*ptr)[1] == '\0'))) {
+            (*ptr)++;
+        }
+        if (**ptr == quote) (*ptr)++;
+        return true;
+    }
+
+    /* Regular unquoted field */
+    while (**ptr != '\0' && **ptr != ' ' && **ptr != '\t' && **ptr != '\n') {
+        (*ptr)++;
+    }
+    return true;
+}
+
+
 char *_find_block_end(char *start) {
     char *p = start;
 
@@ -367,31 +422,39 @@ int _count_lines_fast(const char *start, const char *end) {
 
 CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
     const char *name = block->category ? block->category : "unknown";
+    int num_attrs = block->attributes;
+    char *data_start = block->data.ptr;
 
-    /* Count lines first by scanning for newlines, skipping semicolon blocks */
+    /*
+     * Count logical rows. Each row consists of exactly num_attrs fields.
+     * Fields may span multiple physical lines when using semicolon blocks.
+     */
     int count = 0;
-    int skipped_blocks = 0;
-    char *ptr = block->data.ptr;
+    char *ptr = data_start;
 
     while (*ptr != '\0' && !_is_section_end(ptr)) {
-        /* Skip semicolon text blocks (multi-line values) */
-        if (*ptr == ';') {
-            if (!_skip_semicolon_block(&ptr)) {
-                LOG_WARNING("Unterminated semicolon block in %s", name);
+        /* Skip leading whitespace and empty lines */
+        while (*ptr == ' ' || *ptr == '\t' || *ptr == '\n') ptr++;
+
+        if (*ptr == '\0' || _is_section_end(ptr)) break;
+
+        /* Found start of a row - consume num_attrs fields */
+        int fields = 0;
+        while (fields < num_attrs) {
+            if (!_skip_field(&ptr, data_start)) {
+                /* Unexpected end - partial row */
+                if (fields > 0) {
+                    LOG_WARNING("Partial row in %s: got %d/%d fields",
+                                name, fields, num_attrs);
+                }
+                goto done_counting;
             }
-            skipped_blocks++;
-            continue;
+            fields++;
         }
         count++;
-        /* Advance to next line */
-        while (*ptr != '\n' && *ptr != '\0') ptr++;
-        if (*ptr == '\n') ptr++;
     }
 
-    if (skipped_blocks > 0) {
-        LOG_INFO("Skipped %d semicolon text block(s) in %s", skipped_blocks, name);
-    }
-
+done_counting:
     block->end = ptr;
     block->size = count;
 
@@ -400,24 +463,26 @@ CifError _scan_lines(mmBlock *block, CifErrorContext *ctx) {
         return CIF_OK;
     }
 
-    /* Allocate line pointer array */
+    /* Allocate row pointer array */
     block->lines = malloc((size_t)count * sizeof(char *));
     if (block->lines == NULL) {
         CIF_SET_ERROR(ctx, CIF_ERR_ALLOC,
-            "Failed to allocate line pointers for %d lines", count);
+            "Failed to allocate row pointers for %d rows", count);
         return CIF_ERR_ALLOC;
     }
 
-    /* Second pass: populate pointers, skipping semicolon blocks */
-    ptr = block->data.ptr;
+    /* Second pass: populate row start pointers */
+    ptr = data_start;
     for (int i = 0; i < count; i++) {
-        /* Skip any semicolon blocks */
-        while (*ptr == ';') {
-            _skip_semicolon_block(&ptr);
-        }
+        /* Skip leading whitespace and empty lines */
+        while (*ptr == ' ' || *ptr == '\t' || *ptr == '\n') ptr++;
+
         block->lines[i] = ptr;
-        while (*ptr != '\n' && *ptr != '\0') ptr++;
-        if (*ptr == '\n') ptr++;
+
+        /* Skip num_attrs fields to advance to next row */
+        for (int f = 0; f < num_attrs; f++) {
+            _skip_field(&ptr, data_start);
+        }
     }
 
     return CIF_OK;
@@ -536,20 +601,106 @@ char *_get_field_ptr(mmBlock *block, int line, int index, size_t *len) {
 
     char *ptr;
     if (block->variable_width) {
-        /* Variable-width: calculate offset for this specific line */
-        char *line_start = block->lines[line];
-        int offset = _get_offset(line_start, ' ', index);
-        ptr = line_start + offset;
+        /*
+         * Variable-width: navigate field-by-field to handle multi-line values.
+         * Cannot use simple offset calculation because rows may span multiple
+         * physical lines when containing semicolon blocks.
+         */
+        ptr = block->lines[line];
+        char *data_start = block->data.ptr;
+
+        /* Skip to the target field */
+        for (int f = 0; f < index; f++) {
+            /* Skip whitespace */
+            while (*ptr == ' ' || *ptr == '\t') ptr++;
+
+            /* Handle newline - next field might be on next line */
+            while (*ptr == '\n') {
+                ptr++;
+                while (*ptr == ' ' || *ptr == '\t') ptr++;
+            }
+
+            /* Skip this field */
+            if (*ptr == ';' && (ptr == data_start || ptr[-1] == '\n')) {
+                /* Semicolon block - skip entire block */
+                while (*ptr != '\n' && *ptr != '\0') ptr++;  /* Skip opening line */
+                if (*ptr == '\n') ptr++;
+                while (*ptr != '\0' && !(*ptr == ';' && (ptr == data_start || ptr[-1] == '\n'))) {
+                    while (*ptr != '\n' && *ptr != '\0') ptr++;
+                    if (*ptr == '\n') ptr++;
+                }
+                if (*ptr == ';') {
+                    while (*ptr != '\n' && *ptr != '\0') ptr++;  /* Skip closing line */
+                    if (*ptr == '\n') ptr++;
+                }
+            } else if (*ptr == '\'' || *ptr == '"') {
+                /* Quoted string */
+                char quote = *ptr++;
+                while (*ptr != '\0' && !(*ptr == quote && (ptr[1] == ' ' || ptr[1] == '\t' || ptr[1] == '\n' || ptr[1] == '\0'))) {
+                    ptr++;
+                }
+                if (*ptr == quote) ptr++;
+            } else {
+                /* Regular field */
+                while (*ptr != '\0' && *ptr != ' ' && *ptr != '\t' && *ptr != '\n') {
+                    ptr++;
+                }
+            }
+        }
+
+        /* Skip whitespace before target field */
+        while (*ptr == ' ' || *ptr == '\t') ptr++;
+        while (*ptr == '\n') {
+            ptr++;
+            while (*ptr == ' ' || *ptr == '\t') ptr++;
+        }
     } else {
         /* Fixed-width: use precomputed offsets */
         ptr = block->lines[line] + block->offsets[index];
+        /* Skip leading whitespace */
+        while (*ptr == ' ') ptr++;
     }
 
-    /* Skip leading whitespace */
-    while (*ptr == ' ') ptr++;
+    /*
+     * Handle semicolon multi-line value.
+     * Semicolon blocks start with ';' at column 0 (start of line).
+     */
+    if (*ptr == ';' && (ptr == block->data.ptr || ptr[-1] == '\n')) {
+        /* Move past the opening ';' to the content */
+        char *content_start = ptr + 1;
 
+        /* Find end of opening line (content may start here) */
+        while (*content_start == ' ' || *content_start == '\t') content_start++;
+        char *line_end = content_start;
+        while (*line_end != '\n' && *line_end != '\0') line_end++;
+
+        /* Check if opening line has content or if content starts on next line */
+        if (content_start == line_end) {
+            /* No content on opening line, start from next line */
+            if (*line_end == '\n') content_start = line_end + 1;
+        }
+
+        /* Find closing ';' at column 0 */
+        char *scan = content_start;
+        char *content_end = content_start;
+        while (*scan != '\0') {
+            if (*scan == ';' && (scan == block->data.ptr || scan[-1] == '\n')) {
+                /* Found closing semicolon */
+                content_end = scan - 1;  /* Exclude the newline before closing ';' */
+                if (content_end < content_start) content_end = content_start;
+                break;
+            }
+            scan++;
+        }
+
+        if (len != NULL) {
+            *len = (size_t)(content_end - content_start);
+        }
+        return content_start;
+    }
+
+    /* Regular field - calculate length */
     if (len != NULL) {
-        /* Calculate field length (until whitespace or newline) */
         char *end = ptr;
         bool squotes = false;
         bool dquotes = false;

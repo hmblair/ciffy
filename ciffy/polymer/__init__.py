@@ -13,13 +13,12 @@ Classes:
 
 Factory Functions:
     template: Create Polymer from sequence string (e.g., "acgu").
-    from_extract: Convert extracted coordinates back to Polymer.
 """
 
 from .base import AtomContainer, Field, Metadata
 from .polymer import Polymer
 from .hetero import HeteroAtoms
-from .template import template, from_extract
+from .template import template
 
 __all__ = [
     "AtomContainer",
@@ -28,5 +27,4 @@ __all__ = [
     "Field",
     "Metadata",
     "template",
-    "from_extract",
 ]

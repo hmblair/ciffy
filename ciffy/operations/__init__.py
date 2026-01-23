@@ -11,7 +11,6 @@ from .alignment import (
     align,
     intersect,
 )
-from .extract import extract
 from .gnm import GNM, contact_map, inverse_square_map
 from .metrics import tm_score, lddt, rmsd, coordinate_covariance, rg, clashes, sasa
 from .cluster import cluster, cluster_representatives, ClusterResult
@@ -47,8 +46,6 @@ __all__ = [
     "kabsch_align",
     "align",
     "intersect",
-    # Extraction
-    "extract",
     # GNM utilities
     "GNM",
     "contact_map",

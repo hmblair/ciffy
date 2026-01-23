@@ -183,24 +183,6 @@ Templates have zero coordinates. Use them for:
 - Computing expected atom counts
 - Testing pipelines
 
-### From Existing Structure
-
-Extract a template (sequence + structure) from an existing polymer:
-
-```python
-from ciffy import from_extract
-
-# Original structure
-polymer = ciffy.load("structure.cif")
-
-# Extract specific chains
-template = from_extract(polymer, chains=[0, 1])
-
-# Use with predicted coordinates
-predicted_coords = model(template)
-result = template.copy(coordinates=predicted_coords)
-```
-
 ## File Format Details
 
 ### What ciffy Reads

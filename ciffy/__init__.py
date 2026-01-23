@@ -53,7 +53,7 @@ except ImportError as e:
     ) from e
 
 # Core types
-from .polymer import Polymer, Field, Metadata, template, from_extract
+from .polymer import Polymer, Field, Metadata, template
 from .polymer import HeteroAtoms
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
@@ -90,6 +90,9 @@ except ImportError:
 # Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map
 
+# RNA-specific utilities
+from .rna.reactivity import ReactivityIndex, ReactivityMatch
+
 # Convenience aliases - these are commonly used so we keep them
 ATOM = Scale.ATOM
 RESIDUE = Scale.RESIDUE
@@ -120,9 +123,6 @@ __all__ = [
     "write_cif",
     # Template
     "template",
-    "from_extract",
-    # Ensemble
-    "Ensemble",
     # Operations
     "rmsd",
     "align",

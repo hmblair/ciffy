@@ -75,17 +75,13 @@ from . import biochemistry
 from . import operations
 from . import visualize
 
-# Optional submodules (require additional dependencies)
-# nn and flow require PyTorch and are not included in the PyPI distribution
+# Optional submodule (requires PyTorch)
 import types as _types
 nn: "_types.ModuleType | None"
-flow: "_types.ModuleType | None"
 try:
     from . import nn as nn
-    from . import flow as flow
 except ImportError:
     nn = None
-    flow = None
 
 # Visualization convenience functions
 from .visualize import to_defattr, plot_profile, contact_map

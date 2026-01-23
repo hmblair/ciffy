@@ -465,9 +465,8 @@ class TestPolymerDatasetPathSequence:
         assert len(dataset) < len(full_dataset)
 
     def test_dataset_datasplit_integration(self):
-        """Dataset integrates with DataSplit."""
+        """Dataset integrates with split() method."""
         from ciffy.nn import PolymerDataset
-        from ciffy.utils.split import split_items
         from ciffy import Scale
         from pathlib import Path
 
@@ -475,9 +474,8 @@ class TestPolymerDatasetPathSequence:
         if len(cif_files) < 4:
             pytest.skip("Need at least 4 CIF files")
 
-        split = split_items(cif_files, train=0.5, val=0.25, test=0.25, seed=42)
-        train_ds = PolymerDataset(split.train, scale=Scale.CHAIN)
-        test_ds = PolymerDataset(split.test, scale=Scale.CHAIN)
+        ds = PolymerDataset(cif_files, scale=Scale.CHAIN)
+        train_ds, _, test_ds = ds.split(train=0.5, val=0.25, test=0.25, seed=42)
 
         # No file overlap between train and test
         train_files = set(p for p, _ in train_ds._index)
@@ -585,3 +583,222 @@ class TestPolymerEmbeddingEdgeCases:
 
         features = embed(p)
         assert features.shape == (1, 32)
+
+
+# =============================================================================
+# Test PolymerDataset.split()
+# =============================================================================
+
+@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestPolymerDatasetSplit:
+    """Tests for PolymerDataset.split() method."""
+
+    def test_split_basic_three_way(self):
+        """Basic 3-way split works correctly."""
+        from ciffy.nn import PolymerDataset
+        from pathlib import Path
+
+        cif_files = sorted(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 3:
+            pytest.skip("Need at least 3 CIF files for 3-way split test")
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        train, val, test = ds.split(0.6, 0.2, 0.2, seed=42)
+
+        # Each split should be a PolymerDataset
+        assert isinstance(train, PolymerDataset)
+        assert isinstance(val, PolymerDataset)
+        assert isinstance(test, PolymerDataset)
+
+        # Total items should match original
+        total = len(train) + len(val) + len(test)
+        assert total == len(ds)
+
+    def test_split_two_way(self):
+        """2-way split (train/test only) works correctly."""
+        from ciffy.nn import PolymerDataset
+        from pathlib import Path
+
+        cif_files = sorted(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 2:
+            pytest.skip("Need at least 2 CIF files for 2-way split test")
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        result = ds.split(0.8, 0.0, 0.2, seed=42)
+
+        # Should return tuple of 2
+        assert len(result) == 2
+        train, test = result
+
+        # Total items should match original
+        assert len(train) + len(test) == len(ds)
+
+    def test_split_no_file_overlap(self):
+        """Files don't overlap between splits."""
+        from ciffy.nn import PolymerDataset
+        from pathlib import Path
+
+        cif_files = sorted(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 3:
+            pytest.skip("Need at least 3 CIF files")
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        train, val, test = ds.split(0.5, 0.25, 0.25, seed=42)
+
+        # Extract files from each split
+        train_files = set(p for p, _ in train._index)
+        val_files = set(p for p, _ in val._index)
+        test_files = set(p for p, _ in test._index)
+
+        # No overlap between splits
+        assert len(train_files & val_files) == 0
+        assert len(train_files & test_files) == 0
+        assert len(val_files & test_files) == 0
+
+    def test_split_preserves_config(self):
+        """Split child datasets preserve parent configuration."""
+        from ciffy.nn import PolymerDataset
+        from ciffy import Molecule
+
+        ds = PolymerDataset(
+            DATA_DIR,
+            scale=Scale.CHAIN,
+            molecule_types=Molecule.RNA,
+            backend="numpy",
+        )
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 items")
+
+        train, test = ds.split(0.5, 0.0, 0.5, seed=42)
+
+        # Check configuration is preserved
+        assert train.scale == ds.scale
+        assert train.molecule_types == ds.molecule_types
+        assert train.backend == ds.backend
+
+    def test_split_reproducible_with_seed(self):
+        """Same seed produces same split."""
+        from ciffy.nn import PolymerDataset
+        from pathlib import Path
+
+        cif_files = sorted(Path(DATA_DIR).glob("*.cif"))
+        if len(cif_files) < 2:
+            pytest.skip("Need at least 2 CIF files")
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+
+        train1, test1 = ds.split(0.5, 0.0, 0.5, seed=123)
+        train2, test2 = ds.split(0.5, 0.0, 0.5, seed=123)
+
+        train1_files = set(p for p, _ in train1._index)
+        train2_files = set(p for p, _ in train2._index)
+
+        assert train1_files == train2_files
+
+    def test_split_invalid_ratios_raises(self):
+        """Invalid split ratios raise ValueError."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+
+        # Negative ratios
+        with pytest.raises(ValueError, match="non-negative"):
+            ds.split(-0.1, 0.5, 0.6)
+
+        # Sum != 1.0
+        with pytest.raises(ValueError, match="sum to 1.0"):
+            ds.split(0.5, 0.5, 0.5)
+
+    def test_split_empty_dataset(self):
+        """Splitting empty dataset returns empty splits."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, max_atoms=1)  # Should filter out everything
+        assert len(ds) == 0
+
+        train, test = ds.split(0.8, 0.0, 0.2)
+        assert len(train) == 0
+        assert len(test) == 0
+
+    def test_split_child_dataset_works(self):
+        """Child datasets can load items correctly."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 items")
+
+        train, test = ds.split(0.5, 0.0, 0.5, seed=42)
+
+        # Load an item from each split
+        if len(train) > 0:
+            p = train[0]
+            assert isinstance(p, ciffy.Polymer)
+            assert p.size(Scale.CHAIN) == 1
+
+        if len(test) > 0:
+            p = test[0]
+            assert isinstance(p, ciffy.Polymer)
+            assert p.size(Scale.CHAIN) == 1
+
+    def test_split_molecule_scale(self):
+        """Split works at molecule scale."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.MOLECULE)
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 molecules")
+
+        train, test = ds.split(0.5, 0.0, 0.5, seed=42)
+
+        assert len(train) + len(test) == len(ds)
+
+        # Check items are full molecules
+        if len(train) > 0:
+            p = train[0]
+            assert isinstance(p, ciffy.Polymer)
+
+    def test_split_with_cache(self):
+        """Split datasets with cache work correctly."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, cache=True)
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 items")
+
+        train, _ = ds.split(0.5, 0.0, 0.5, seed=42)
+
+        # Child dataset should have its own cache
+        assert train._cache is not None
+
+        # Load item twice - should return same object
+        if len(train) > 0:
+            p1 = train[0]
+            p2 = train[0]
+            assert p1 is p2
+
+    def test_split_without_cache(self):
+        """Split datasets without cache work correctly."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN, cache=False)
+        if len(ds) < 2:
+            pytest.skip("Need at least 2 items")
+
+        train, _ = ds.split(0.5, 0.0, 0.5, seed=42)
+
+        # Child dataset should not have cache
+        assert train._cache is None
+
+    def test_split_train_only(self):
+        """Split with only train returns single dataset."""
+        from ciffy.nn import PolymerDataset
+
+        ds = PolymerDataset(DATA_DIR, scale=Scale.CHAIN)
+
+        result = ds.split(1.0, 0.0, 0.0, seed=42)
+
+        # Should return tuple of 1
+        assert len(result) == 1
+        train = result[0]
+        assert len(train) == len(ds)

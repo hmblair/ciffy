@@ -15,13 +15,8 @@ from typing import TYPE_CHECKING, Optional, Sequence, Union
 if TYPE_CHECKING:
     from ciffy.polymer import Polymer
 
-try:
-    import torch
-    from torch.utils.data import Dataset
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    Dataset = object  # Placeholder for type hints
+import torch
+from torch.utils.data import Dataset
 
 from ciffy.biochemistry import Scale, Molecule
 
@@ -178,16 +173,9 @@ class PolymerDataset(Dataset):
                 structure. Default True.
 
         Raises:
-            ImportError: If PyTorch is not installed.
             ValueError: If scale is not MOLECULE or CHAIN.
             FileNotFoundError: If directory does not exist or paths are invalid.
         """
-        if not TORCH_AVAILABLE:
-            raise ImportError(
-                "PyTorch is required for PolymerDataset. "
-                "Install with: pip install torch"
-            )
-
         if scale not in (Scale.MOLECULE, Scale.CHAIN):
             raise ValueError(
                 f"scale must be MOLECULE or CHAIN, got {scale.name}"
@@ -486,3 +474,167 @@ class PolymerDataset(Dataset):
             self._cache._items[idx] = item
 
         return self
+
+    @classmethod
+    def _from_index(
+        cls,
+        index: list[tuple[Path, int | None]],
+        *,
+        scale: Scale,
+        min_atoms: int | None,
+        max_atoms: int | None,
+        min_residues: int | None,
+        max_residues: int | None,
+        min_chains: int | None,
+        max_chains: int | None,
+        backend: str,
+        molecule_types: tuple[Molecule, ...] | None,
+        exclude_ids: set[str] | None,
+        limit: int | None,
+        cache: bool,
+    ) -> "PolymerDataset":
+        """
+        Create dataset from pre-built index (internal use).
+
+        This bypasses the normal file scanning and filtering, using a
+        pre-filtered index directly. Used by split() to create child datasets.
+        """
+        # Create instance without calling __init__
+        instance = object.__new__(cls)
+        instance.scale = scale
+        instance.min_atoms = min_atoms
+        instance.max_atoms = max_atoms
+        instance.min_residues = min_residues
+        instance.max_residues = max_residues
+        instance.min_chains = min_chains
+        instance.max_chains = max_chains
+        instance.backend = backend
+        instance.molecule_types = molecule_types
+        instance.exclude_ids = exclude_ids
+        instance.limit = limit
+        instance._index = index
+        instance._cache = PolymerCache() if cache else None
+
+        # Register paths in cache
+        if instance._cache is not None:
+            for path, _ in index:
+                instance._cache.register(path)
+
+        return instance
+
+    def split(
+        self,
+        train: float = 0.8,
+        val: float = 0.1,
+        test: float = 0.0,
+        seed: int | None = 42,
+        by_sequence: bool = False,
+        threshold: float = 0.5,
+        coverage: float = 0.8,
+        threads: int = 4,
+    ) -> tuple["PolymerDataset", ...]:
+        """
+        Split dataset into train/val/test subsets.
+
+        Splitting is done at the file level to preserve model boundaries.
+        Files are assigned to splits (not individual chains), ensuring all
+        chains from a file stay in the same split.
+
+        Args:
+            train: Fraction for training set (default: 0.8).
+            val: Fraction for validation set (default: 0.1).
+            test: Fraction for test set (default: 0.0).
+            seed: Random seed for reproducibility (default: 42).
+            by_sequence: If True, cluster by sequence identity before splitting
+                to prevent homologous sequences in different splits. Requires
+                MMseqs2 (default: False).
+            threshold: Sequence identity threshold for clustering when
+                by_sequence=True (default: 0.5).
+            coverage: Minimum alignment coverage for clustering (default: 0.8).
+            threads: Number of threads for MMseqs2 (default: 4).
+
+        Returns:
+            Tuple of 1-3 PolymerDataset instances, one for each nonzero split.
+            Order is always (train, val, test), but zero-fraction splits are
+            omitted from the tuple.
+
+        Raises:
+            ValueError: If split ratios don't sum to ~1.0 or are negative.
+            RuntimeError: If by_sequence=True and MMseqs2 is not installed.
+
+        Example:
+            >>> dataset = PolymerDataset("./structures/", scale=Scale.CHAIN)
+            >>> train, val, test = dataset.split(0.8, 0.1, 0.1)
+            >>> train, test = dataset.split(0.9, 0.0, 0.1)  # 2-way split
+        """
+        from ._split import _split_items, _split_by_sequence_identity
+
+        if any(r < 0 for r in [train, val, test]):
+            raise ValueError("Split ratios must be non-negative")
+
+        total = train + val + test
+        if not (0.99 <= total <= 1.01):
+            raise ValueError(f"Split ratios must sum to 1.0, got {total}")
+
+        # Extract unique paths from index (preserves model boundaries)
+        unique_paths = list(dict.fromkeys(path for path, _ in self._index))
+
+        if len(unique_paths) == 0:
+            # Empty dataset - return empty splits for nonzero fractions
+            results = []
+            for frac in [train, val, test]:
+                if frac > 0:
+                    results.append(self._create_child_dataset([]))
+            return tuple(results)
+
+        # Split paths
+        if by_sequence:
+            train_paths, val_paths, test_paths = _split_by_sequence_identity(
+                unique_paths,
+                threshold=threshold,
+                train=train,
+                val=val,
+                test=test,
+                seed=seed,
+                coverage=coverage,
+                threads=threads,
+            )
+        else:
+            train_paths, val_paths, test_paths = _split_items(
+                unique_paths,
+                train=train,
+                val=val,
+                test=test,
+                seed=seed,
+            )
+
+        # Create child datasets for nonzero fractions
+        results = []
+        for frac, paths in [(train, train_paths), (val, val_paths), (test, test_paths)]:
+            if frac > 0:
+                # Filter index to only include entries from these paths
+                path_set = set(paths)
+                child_index = [(p, idx) for p, idx in self._index if p in path_set]
+                results.append(self._create_child_dataset(child_index))
+
+        return tuple(results)
+
+    def _create_child_dataset(
+        self, index: list[tuple[Path, int | None]]
+    ) -> "PolymerDataset":
+        """Create a child dataset with the same configuration but different index."""
+        return PolymerDataset._from_index(
+            index,
+            scale=self.scale,
+            min_atoms=self.min_atoms,
+            max_atoms=self.max_atoms,
+            min_residues=self.min_residues,
+            max_residues=self.max_residues,
+            min_chains=self.min_chains,
+            max_chains=self.max_chains,
+            backend=self.backend,
+            molecule_types=self.molecule_types,
+            exclude_ids=self.exclude_ids,
+            limit=self.limit,
+            cache=self._cache is not None,
+        )

@@ -90,6 +90,7 @@ environment = { CIFFY_NO_OPENMP="1" }
 # Users can build from source with OpenMP if needed.
 
 [tool.cibuildwheel.windows]
+before-all = "choco install gperf -y"
 before-build = "pip install numpy"
 environment = { CIFFY_NO_OPENMP="1" }
 

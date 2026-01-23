@@ -37,7 +37,7 @@ Available extras: `ml`, `torch`, `vis`, `geometric`, `dev`
 | Task | Code |
 |------|------|
 | Load structure | `polymer = ciffy.load("file.cif")` |
-| Get RNA only | `rna = polymer.by_type(ciffy.RNA)` |
+| Get RNA only | `rna = polymer.molecule_type(ciffy.RNA)` |
 | Get backbone | `backbone = polymer.backbone()` |
 | Compute RMSD | `rmsd = ciffy.rmsd(p1, p2)` |
 | Superimpose structures | `ref, aligned = ciffy.align(p1, p2)` |
@@ -149,10 +149,10 @@ for name, count in zip(polymer.names, atoms_per_chain):
 
 ```python
 # Get only RNA chains
-rna = polymer.by_type(ciffy.RNA)
+rna = polymer.molecule_type(ciffy.RNA)
 
 # Get only protein chains
-protein = polymer.by_type(ciffy.PROTEIN)
+protein = polymer.molecule_type(ciffy.PROTEIN)
 
 # Available types: RNA, DNA, PROTEIN, LIGAND, ION, WATER
 ```
@@ -171,18 +171,15 @@ for chain in polymer.chains():
     print(f"{chain.names[0]}: {chain.size()} atoms")
 ```
 
-### Polymer vs Heteroatoms
+### Heteroatoms
 
-Separate polymer atoms from waters, ions, and ligands:
+Separate heteroatoms (waters, ions, ligands) from polymer chains:
 
 ```python
-# Only polymer atoms (RNA, DNA, protein)
-polymer_only = polymer.poly()
-
 # Only heteroatoms (water, ions, ligands)
 hetero = polymer.hetero()
 
-# Backbone atoms
+# Backbone atoms only
 backbone = polymer.backbone()
 ```
 
@@ -272,31 +269,6 @@ multi = ciffy.template(["acgu", "MGKLF"])  # RNA + protein
 
 Template polymers have correct atom types, elements, and residue sequences but ideal coordinates. This is useful for generative modeling where coordinates are predicted separately.
 
-## Flow Models (Generative Modeling)
-
-ciffy includes a high-level API for generating polymer conformations using normalizing flows:
-
-```python
-from ciffy import flow
-
-# Sample conformations from a sequence
-polymer = flow.sample("acgu")
-polymer.write("output.cif")
-
-# Multiple samples
-samples = flow.sample("acgu", n_samples=10)
-
-# Encode existing structure to latent space
-import ciffy
-existing = ciffy.load("structure.cif").poly()
-latents = flow.encode(existing)
-
-# Decode modified latents
-new_polymer = flow.decode(latents, "acgu")
-```
-
-See the [Flow Models Guide](guides/flow-models.md) for training custom models and advanced usage.
-
 ## Working with Residue Types
 
 The `Residue` enum provides access to all residue types:
@@ -323,7 +295,7 @@ print(f"{Residue.A.name}: {len(list(Residue.A))} atoms")
 polymer.write("output.cif")
 
 # Save a selection
-rna_only = polymer.by_type(ciffy.RNA)
+rna_only = polymer.molecule_type(ciffy.RNA)
 rna_only.write("rna_chains.cif")
 ```
 
@@ -363,7 +335,7 @@ ciffy structure.cif --sequence
 polymer = ciffy.load("structure.cif")
 
 # Keep only polymer chains
-clean = polymer.poly()
+clean = polymer.molecule_type(ciffy.RNA)
 
 # Remove residues with missing atoms
 clean = clean.strip(ciffy.RESIDUE)
@@ -407,7 +379,6 @@ for chain in polymer.chains():
 - [Selection Guide](guides/selection.md) - Molecule types, atom filtering, chain selection
 - [I/O Guide](guides/io.md) - Loading from URLs, metadata, writing files
 - [Analysis Guide](guides/analysis.md) - RMSD, alignment, distances, reductions
-- [Flow Models Guide](guides/flow-models.md) - Generative modeling with normalizing flows
 - [Deep Learning Guide](guides/deep-learning.md) - PyTorch, GPU, embeddings
 - [Visualization Guide](guides/visualization.md) - Plots and ChimeraX export
 - [API Reference](api.md) - Complete API documentation

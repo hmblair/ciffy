@@ -2,28 +2,6 @@
 
 This guide covers using ciffy with PyTorch for deep learning applications.
 
-## Quick Start: Flow Models
-
-For generative modeling, ciffy provides a high-level API that handles all the complexity:
-
-```python
-from ciffy import flow
-
-# Sample conformations from sequence (2 lines!)
-polymer = flow.sample("acgu")
-polymer.write("output.cif")
-
-# Train on your own data
-model = flow.train(["data/*.cif"], residues="ACGU", n_epochs=200, device="cuda")
-
-# Generate with trained model
-samples = flow.sample("acgu", n_samples=10, model=model)
-```
-
-See the [Flow Models Guide](flow-models.md) for comprehensive documentation of the high-level API.
-
-The rest of this guide covers lower-level PyTorch integration for custom model development.
-
 ## PyTorch Backend
 
 Load structures directly as PyTorch tensors:
@@ -331,9 +309,6 @@ for epoch in range(100):
 ```
 
 ## Generative Modeling
-
-!!! tip "Use the Flow API for common workflows"
-    For sampling conformations or training flow models, use the high-level `ciffy.flow` API shown at the top of this guide. The lower-level approach below is for custom model architectures.
 
 Use `template()` to create template structures for generative models that predict coordinates:
 

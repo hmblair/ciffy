@@ -96,7 +96,7 @@ for name, desc in zip(polymer.names, polymer.descriptions):
 polymer = ciffy.load("input.cif")
 
 # Modify structure
-clean = polymer.poly().strip(ciffy.RESIDUE)
+clean = polymer.molecule_type(ciffy.RNA).strip(ciffy.RESIDUE)
 
 # Save to new file
 clean.write("output.cif")
@@ -119,10 +119,10 @@ for chain in polymer.chains():
     chain.write(f"chain_{chain.names[0]}.cif")
 
 # Save only RNA
-polymer.by_type(ciffy.RNA).write("rna_only.cif")
+polymer.molecule_type(ciffy.RNA).write("rna_only.cif")
 
 # Save polymer without heteroatoms
-polymer.poly().write("polymer_only.cif")
+polymer.molecule_type(ciffy.RNA).write("polymer_only.cif")
 ```
 
 ## Splitting Structures
@@ -145,17 +145,18 @@ for chain in polymer.chains():
     chain.write(f"chains/chain_{name}.cif")
 ```
 
-### Split Polymer from Heteroatoms
+### Extract Heteroatoms
 
 ```python
 polymer = ciffy.load("structure.cif")
 
-# Separate polymer and heteroatoms
-poly = polymer.poly()
+# Get only heteroatoms (water, ions, ligands)
 hetero = polymer.hetero()
-
-poly.write("polymer.cif")
 hetero.write("heteroatoms.cif")
+
+# Get only RNA chains
+rna = polymer.molecule_type(ciffy.RNA)
+rna.write("rna_only.cif")
 ```
 
 ## Building Structures

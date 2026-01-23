@@ -278,13 +278,14 @@ plt.savefig("comparison.png")
 
 ```python
 import numpy as np
+from ciffy import operations
 
-p1 = ciffy.load("conf1.cif").poly()
-p2 = ciffy.load("conf2.cif").poly()
+p1 = ciffy.load("conf1.cif")
+p2 = ciffy.load("conf2.cif")
 
 # Compute distance matrices
-d1 = p1.pairwise_distances(ciffy.RESIDUE)
-d2 = p2.pairwise_distances(ciffy.RESIDUE)
+d1 = operations.pairwise_distances(p1, scale=ciffy.RESIDUE)
+d2 = operations.pairwise_distances(p2, scale=ciffy.RESIDUE)
 
 # Difference
 diff = np.abs(d1 - d2)
@@ -297,38 +298,6 @@ ax.set_title("Conformational Change")
 plt.savefig("diff_map.png")
 ```
 
-## Ramachandran Plots
-
-For protein structures, visualize backbone dihedrals:
-
-```python
-import ciffy
-import numpy as np
-import matplotlib.pyplot as plt
-
-protein = ciffy.load("protein.cif").by_type(ciffy.PROTEIN)
-
-# Get phi/psi angles
-phi = protein.dihedral(ciffy.DihedralType.PHI)
-psi = protein.dihedral(ciffy.DihedralType.PSI)
-
-# Convert to degrees
-phi_deg = np.degrees(phi)
-psi_deg = np.degrees(psi)
-
-# Plot
-fig, ax = plt.subplots(figsize=(8, 8))
-ax.scatter(phi_deg, psi_deg, alpha=0.5, s=10)
-ax.set_xlabel("φ (degrees)")
-ax.set_ylabel("ψ (degrees)")
-ax.set_xlim(-180, 180)
-ax.set_ylim(-180, 180)
-ax.axhline(0, color='gray', linewidth=0.5)
-ax.axvline(0, color='gray', linewidth=0.5)
-ax.set_title("Ramachandran Plot")
-plt.savefig("ramachandran.png")
-```
-
 ## Radius of Gyration Profile
 
 ```python
@@ -337,7 +306,7 @@ import numpy as np
 from ciffy.visualize import plot_profile
 import matplotlib.pyplot as plt
 
-polymer = ciffy.load("structure.cif").poly()
+polymer = ciffy.load("structure.cif")
 
 # Compute per-residue distance from center
 centered, _ = polymer.center(ciffy.MOLECULE)
@@ -352,7 +321,7 @@ res_distances = polymer.reduce(distances, ciffy.RESIDUE)
 # Plot
 fig, ax = plt.subplots(figsize=(12, 4))
 plot_profile(polymer, res_distances, ax=ax, ylabel="Distance from center (Å)")
-ax.set_title(f"{polymer.id()} Radial Distribution")
+ax.set_title(f"{polymer.pdb_id} Radial Distribution")
 plt.savefig("radial_profile.png")
 ```
 

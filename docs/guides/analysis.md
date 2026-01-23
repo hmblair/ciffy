@@ -112,19 +112,21 @@ The alignment:
 
 ## Pairwise Distances
 
-Compute distance matrices:
+Compute distance matrices using the operations module:
 
 ```python
+from ciffy import operations
+
 # Atom-atom distances
-atom_distances = polymer.pairwise_distances()
+atom_distances = operations.pairwise_distances(polymer)
 print(f"Shape: {atom_distances.shape}")  # (N, N)
 
 # Distances between chain centroids
-chain_distances = polymer.pairwise_distances(scale=ciffy.CHAIN)
+chain_distances = operations.pairwise_distances(polymer, scale=ciffy.CHAIN)
 print(f"Shape: {chain_distances.shape}")  # (C, C)
 
 # Distances between residue centroids
-residue_distances = polymer.pairwise_distances(scale=ciffy.RESIDUE)
+residue_distances = operations.pairwise_distances(polymer, scale=ciffy.RESIDUE)
 ```
 
 ## Reduction Operations
@@ -227,12 +229,13 @@ third = polymer.moment(3, ciffy.CHAIN)
 
 ```python
 import ciffy
+from ciffy import operations
 
 # Load structure
 polymer = ciffy.load("ribosome.cif", backend="torch")
 
 # Get RNA chains only
-rna = polymer.by_type(ciffy.RNA)
+rna = polymer.molecule_type(ciffy.RNA)
 
 # Compute per-chain analysis
 for i, chain in enumerate(rna.chains()):
@@ -246,7 +249,7 @@ for i, chain in enumerate(rna.chains()):
     # Get residue count
     n_residues = chain.size(ciffy.RESIDUE)
 
-    print(f"Chain {chain.id()}: {n_residues} residues, Rg = {rg:.2f} Å")
+    print(f"Chain {chain.pdb_id}: {n_residues} residues, Rg = {rg:.2f} Å")
 
 # Compare two conformations
 p1 = ciffy.load("conf1.cif", backend="torch")
@@ -265,11 +268,11 @@ The `GNM` class models molecular dynamics as a network of harmonic springs, usef
 ### Basic Usage
 
 ```python
-from ciffy.operations import GNM
+from ciffy.operations import GNM, pairwise_distances
 import numpy as np
 
 # Build contact map from residue distances (7Å cutoff is typical)
-distances = polymer.pairwise_distances(scale=ciffy.RESIDUE)
+distances = pairwise_distances(polymer, scale=ciffy.RESIDUE)
 adj = (distances < 7.0).astype(np.float32)
 np.fill_diagonal(adj, 0)  # No self-connections
 

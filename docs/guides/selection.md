@@ -4,7 +4,7 @@ This guide covers how to select and filter molecular structures in ciffy.
 
 ## Molecule Type Selection
 
-ciffy supports various molecule types. Use `by_type()` to filter by type:
+ciffy supports various molecule types. Use `molecule_type()` to filter by type:
 
 ```python
 import ciffy
@@ -12,9 +12,9 @@ import ciffy
 polymer = ciffy.load("structure.cif")
 
 # Select by molecule type
-rna_chains = polymer.by_type(ciffy.RNA)
-protein_chains = polymer.by_type(ciffy.PROTEIN)
-dna_chains = polymer.by_type(ciffy.DNA)
+rna_chains = polymer.molecule_type(ciffy.RNA)
+protein_chains = polymer.molecule_type(ciffy.PROTEIN)
+dna_chains = polymer.molecule_type(ciffy.DNA)
 ```
 
 ### Available Molecule Types
@@ -33,8 +33,8 @@ dna_chains = polymer.by_type(ciffy.DNA)
 from ciffy.biochemistry import Molecule
 
 # Access all molecule types
-ligands = polymer.by_type(Molecule.LIGAND)
-ions = polymer.by_type(Molecule.ION)
+ligands = polymer.molecule_type(Molecule.LIGAND)
+ions = polymer.molecule_type(Molecule.ION)
 ```
 
 ### Iterating Over Chains
@@ -70,59 +70,49 @@ chains_ac = polymer.chain([0, 2])
 print(polymer.names)  # ['A', 'B', 'C', ...]
 ```
 
-## Polymer vs Non-Polymer
+## Heteroatoms
 
-Separate polymer atoms from heteroatoms (water, ions, ligands):
+Separate heteroatoms (water, ions, ligands) from polymer chains:
 
 ```python
-# Get only polymer atoms (RNA, DNA, protein)
-polymer_only = polymer.poly()
-
 # Get only heteroatoms (water, ions, ligands)
 heteroatoms = polymer.hetero()
-
-# Check counts
-print(f"Polymer atoms: {polymer.polymer_count}")
-print(f"Non-polymer atoms: {polymer.nonpoly()}")
 ```
-
-!!! note
-    The `poly()` result has valid residue information and supports residue-scale operations. The `hetero()` result does not have residue structure.
 
 ## Residue Selection
 
-Select specific residue types using `by_residue()`:
+Select specific residue types using `residue_type()`:
 
 ```python
 from ciffy import Residue
 
-# Get all adenosine residues (use CIF residue name)
-adenosines = polymer.by_residue(Residue.A)
+# Get all adenosine residues
+adenosines = polymer.residue_type(Residue.A)
 
 # Get all purines (A and G)
-purines = polymer.by_residue([Residue.A, Residue.G])
+purines = polymer.residue_type([Residue.A, Residue.G])
 
 # Get all pyrimidines (C and U)
-pyrimidines = polymer.by_residue([Residue.C, Residue.U])
+pyrimidines = polymer.residue_type([Residue.C, Residue.U])
 
 # Amino acids use 3-letter codes (ALA, GLY, etc.)
-alanines = polymer.by_residue(Residue.ALA)
+alanines = polymer.residue_type(Residue.ALA)
 ```
 
 ## Atom Selection
 
 ### By Atom Type Index
 
-Use `by_atom()` to select atoms by their type index:
+Use `atom_type()` to select atoms by their type index:
 
 ```python
 from ciffy import Residue
 
 # Get all N1 atoms from adenosines
-n1_atoms = polymer.by_atom(Residue.A.N1)
+n1_atoms = polymer.atom_type(Residue.A.N1)
 
 # Get multiple atom types
-c1_prime = polymer.by_atom([
+c1_prime = polymer.atom_type([
     Residue.A.C1p,
     Residue.G.C1p,
 ])
@@ -189,7 +179,7 @@ Get the center of mass for each nucleobase in an RNA:
 ```python
 import ciffy
 
-rna = ciffy.load("structure.cif").by_type(ciffy.RNA)
+rna = ciffy.load("structure.cif").molecule_type(ciffy.RNA)
 
 # Get nucleobase atoms and compute per-residue centers
 _, nucleobase_centers = rna.nucleobase().center(ciffy.RESIDUE)
@@ -257,11 +247,11 @@ Chain multiple selections together:
 
 ```python
 # Get backbone atoms of RNA chains only
-rna_backbone = polymer.by_type(ciffy.RNA).backbone()
+rna_backbone = polymer.molecule_type(ciffy.RNA).backbone()
 
 # Get nucleobases of first chain
 chain_a_bases = polymer.chain(0).nucleobase()
 
-# Polymer-only, then by chain
-clean = polymer.poly().chain([0, 1])
+# RNA only, then by chain
+clean = polymer.molecule_type(ciffy.RNA).chain([0, 1])
 ```

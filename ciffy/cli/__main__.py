@@ -387,9 +387,16 @@ def _cluster_command(args):
 
 def main():
     """Main entry point for the ciffy CLI."""
+    from .. import __version__
+
     parser = argparse.ArgumentParser(
         prog="ciffy",
         description="Load and inspect CIF files.",
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"ciffy {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="command")

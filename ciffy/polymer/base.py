@@ -220,6 +220,16 @@ class AtomContainer:
             return value.data
         return value
 
+    def __getattr__(self, name: str):
+        """Provide helpful error messages for missing fields."""
+        if name in _KNOWN_FIELDS:
+            raise AttributeError(
+                f"This polymer has no '{name}' field. "
+                f"Template polymers and filtered results may lack certain fields. "
+                f"Use polymer.copy({name}=...) to add it."
+            )
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def __setattr__(self, name: str, value) -> None:
         """Intercept attribute assignment to validate and update Field data."""
         # Check if this is an existing Field

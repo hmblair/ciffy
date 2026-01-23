@@ -75,9 +75,9 @@ addopts = "-v --ignore=tests/profile.py"
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-*"
 skip = "*-win32 *-manylinux_i686 *-musllinux*"
-test-requires = ["pytest", "numpy"]
-# Run from temp dir to avoid importing source ciffy/ instead of installed wheel
-test-command = "cd {tmp} && pytest {project}/tests -v --ignore={project}/tests/profile.py"
+# Skip wheel tests - CI runs full test suite. Just verify import works.
+test-requires = ["numpy"]
+test-command = "python -c \"import ciffy; print(f'ciffy {ciffy.__version__} OK')\""
 
 [tool.cibuildwheel.linux]
 before-all = "(yum install -y epel-release && yum install -y gperf) || (apt-get update && apt-get install -y gperf) || apk add gperf"

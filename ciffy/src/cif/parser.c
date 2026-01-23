@@ -1617,7 +1617,9 @@ mmBlock _read_block(ParseCursor *cursor, CifErrorContext *ctx) {
     while (!CURSOR_AT_END(cursor) && _eq(cursor->ptr, block.category)) {
         block.attributes++;
         CURSOR_NEXT_LINE(cursor);
-        if (*cursor->ptr == ';') {
+        /* Multi-line attribute values (;...;) only valid in single-entry blocks.
+         * In loop blocks, ';' after headers is data, not an attribute value. */
+        if (block.single && *cursor->ptr == ';') {
             if (!_skip_multiline_attr(cursor)) {
                 LOG_ERROR("Unterminated multiline in block %s", block.category);
                 CIF_SET_ERROR(ctx, CIF_ERR_PARSE, "Unterminated multiline attribute");

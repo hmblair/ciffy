@@ -561,7 +561,7 @@ class _Hierarchy:
         input_mask: Array,
         input_scale: Scale,
         remove_empty_residues: bool = False,
-    ) -> tuple[Array, Array | None, Array]:
+    ) -> dict[Scale, Array]:
         """
         Derive masks at all scales from an input mask at a specific scale.
 

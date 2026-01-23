@@ -34,9 +34,6 @@ from ..utils import filter_by_mask
 from ..utils.formatting import format_chain_table
 
 
-UNKNOWN = "UNKNOWN"
-
-
 class Polymer(AtomContainer):
     """
     A molecular structure with coordinates, atom types, and hierarchy.

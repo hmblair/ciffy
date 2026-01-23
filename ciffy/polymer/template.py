@@ -183,11 +183,11 @@ def template(
         Polymer template (coordinates=None). Use copy(coordinates=...) to add coords.
 
     Examples:
-        >>> template = template("acgu")
-        >>> template.size(Scale.RESIDUE)
+        >>> rna = template("acgu")
+        >>> rna.size(Scale.RESIDUE)
         4
-        >>> template.coordinates  # None - template has no coordinates
-        >>> polymer = template.copy(coordinates=predicted_coords)
+        >>> rna.coordinates  # None - template has no coordinates
+        >>> polymer = rna.copy(coordinates=predicted_coords)
 
         >>> protein = template("MGKLF")
         >>> protein.size(Scale.RESIDUE)

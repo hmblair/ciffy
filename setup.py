@@ -8,6 +8,7 @@ Metadata is defined in pyproject.toml. This file only handles:
 
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 from setuptools.command.sdist import sdist
 import os
 import sys
@@ -227,10 +228,23 @@ def generate_hash_tables(force=False):
         sys.exit(1)
 
 
+class GenerateAndBuildPy(build_py):
+    """Custom build_py that generates Python files before copying.
+
+    This runs BEFORE build_ext, ensuring generated Python files
+    (_generated_*.py) are included in wheel distributions.
+    """
+
+    def run(self):
+        generate_hash_tables(force=False)
+        super().run()
+
+
 class GenerateAndBuildExt(build_ext):
     """Custom build_ext that generates hash tables before compiling."""
 
     def run(self):
+        # Codegen may have already run in build_py, but check again for safety
         generate_hash_tables(force=False)
         super().run()
 
@@ -495,6 +509,7 @@ ext_module = Extension(
 
 ext_modules = [ext_module]
 cmdclass = {
+    'build_py': GenerateAndBuildPy,
     'build_ext': GenerateAndBuildExt,
     'sdist': GenerateAndSdist,
 }

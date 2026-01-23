@@ -1,27 +1,27 @@
 """
-Tests for Polymer geometric method edge cases.
+Tests for geometry operations.
 
-Tests pairwise_distances, knn, center, align, and moment.
+Tests pairwise_distances, knn, center, align, moment, bonded_distances, adjacency.
 """
 
 import pytest
 import numpy as np
 
+from ciffy import operations
+from ciffy.biochemistry import Scale
 from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly
 from tests.testing import get_tolerances
 
 
 class TestPairwiseDistances:
-    """Test pairwise_distances() edge cases."""
+    """Test operations.pairwise_distances() edge cases."""
 
     def test_pairwise_single_atom(self, backend):
         """pairwise_distances with 1 atom returns 1x1 zero matrix."""
-        import ciffy
-
         p = get_single_chain_poly(backend)
         single = p[:1]
 
-        dists = single.pairwise_distances()
+        dists = operations.pairwise_distances(single)
 
         assert dists.shape == (1, 1)
         val = dists[0, 0].item() if hasattr(dists[0, 0], 'item') else dists[0, 0]
@@ -29,13 +29,11 @@ class TestPairwiseDistances:
 
     def test_pairwise_two_atoms(self, backend):
         """pairwise_distances with 2 atoms returns 2x2 symmetric matrix."""
-        import ciffy
-
         p = get_single_chain_poly(backend)
         # Take first 2 atoms
         two = p[:2]
 
-        dists = two.pairwise_distances()
+        dists = operations.pairwise_distances(two)
 
         assert dists.shape == (2, 2)
         # Diagonal should be zero
@@ -49,13 +47,10 @@ class TestPairwiseDistances:
 
     def test_pairwise_at_residue_scale(self, backend):
         """pairwise_distances at residue scale computes centroid distances."""
-        import ciffy
-        from ciffy import Scale
-
         p = get_single_chain_poly(backend)
         n_res = p.size(Scale.RESIDUE)
 
-        dists = p.pairwise_distances(scale=Scale.RESIDUE)
+        dists = operations.pairwise_distances(p, scale=Scale.RESIDUE)
 
         assert dists.shape == (n_res, n_res)
         # Diagonal should be zero (distance to self)
@@ -66,18 +61,17 @@ class TestPairwiseDistances:
     def test_pairwise_at_chain_scale(self, backend):
         """pairwise_distances at chain scale on multi-chain structure."""
         import ciffy
-        from ciffy import Scale
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
         n_chains = p.size(Scale.CHAIN)
 
-        dists = p.pairwise_distances(scale=Scale.CHAIN)
+        dists = operations.pairwise_distances(p, scale=Scale.CHAIN)
 
         assert dists.shape == (n_chains, n_chains)
 
 
 class TestKNN:
-    """Test knn() edge cases."""
+    """Test operations.knn() edge cases."""
 
     def test_knn_k_equals_n_fails(self, backend):
         """knn raises ValueError when k >= n."""
@@ -87,7 +81,7 @@ class TestKNN:
         n = p.size()
 
         with pytest.raises(ValueError, match="must be less than"):
-            p.knn(k=n)
+            operations.knn(p, k=n)
 
     def test_knn_k_greater_than_n_fails(self, backend):
         """knn raises ValueError when k > n."""
@@ -97,7 +91,7 @@ class TestKNN:
         n = p.size()
 
         with pytest.raises(ValueError, match="must be less than"):
-            p.knn(k=n + 10)
+            operations.knn(p, k=n + 10)
 
     def test_knn_single_atom_fails(self, backend):
         """knn on single atom raises ValueError."""
@@ -106,14 +100,14 @@ class TestKNN:
         p = get_single_chain_poly(backend)[:1]
 
         with pytest.raises(ValueError):
-            p.knn(k=1)
+            operations.knn(p, k=1)
 
     def test_knn_k_one(self, backend):
         """knn with k=1 returns single nearest neighbor per point."""
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        neighbors = p.knn(k=1)
+        neighbors = operations.knn(p, k=1)
 
         # Shape should be (1, n_atoms)
         assert neighbors.shape[0] == 1
@@ -125,7 +119,7 @@ class TestKNN:
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 5
-        neighbors = p.knn(k=k)
+        neighbors = operations.knn(p, k=k)
 
         # Shape should be (k, n_atoms)
         assert neighbors.shape[0] == k
@@ -140,7 +134,7 @@ class TestKNN:
         n_res = p.size(Scale.RESIDUE)
         k = min(3, n_res - 1)
 
-        neighbors = p.knn(k=k, scale=Scale.RESIDUE)
+        neighbors = operations.knn(p, k=k, scale=Scale.RESIDUE)
 
         assert neighbors.shape[0] == k
         assert neighbors.shape[1] == n_res
@@ -150,7 +144,7 @@ class TestKNN:
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        neighbors = p.knn(k=3)
+        neighbors = operations.knn(p, k=3)
 
         neighbors_np = np.asarray(neighbors)
         n = p.size()
@@ -223,7 +217,7 @@ class TestCenter:
 
 
 class TestMoment:
-    """Test moment() edge cases."""
+    """Test operations.moment() edge cases."""
 
     def test_moment_first_order(self, backend):
         """moment(1) returns centroid (same as reduce MEAN)."""
@@ -232,7 +226,7 @@ class TestMoment:
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        m1 = p.moment(1, Scale.CHAIN)
+        m1 = operations.moment(p, 1, Scale.CHAIN)
         mean = p.reduce(p.coordinates, Scale.CHAIN, Reduction.MEAN)
 
         m1_np = np.asarray(m1)
@@ -246,7 +240,7 @@ class TestMoment:
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        m2 = p.moment(2, Scale.CHAIN)
+        m2 = operations.moment(p, 2, Scale.CHAIN)
 
         # Second moment should be non-negative for coordinates
         # (squares are non-negative)
@@ -259,7 +253,7 @@ class TestMoment:
         from ciffy import Scale
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        m3 = p.moment(3, Scale.CHAIN)
+        m3 = operations.moment(p, 3, Scale.CHAIN)
 
         # Third moment can be positive or negative
         assert m3.shape[0] == p.size(Scale.CHAIN)
@@ -286,7 +280,7 @@ class TestAlign:
         else:
             chain.coordinates = np.random.randn(chain.size(), 3).astype(np.float32) * 10
 
-        aligned, Q = chain.pca(Scale.CHAIN)
+        aligned, Q = operations.pca(chain, Scale.CHAIN)
 
         # Rotation matrix should be 3x3
         assert Q.shape[-2:] == (3, 3)
@@ -312,7 +306,7 @@ class TestAlign:
         else:
             p.coordinates = np.random.randn(p.size(), 3).astype(np.float32) * 10
 
-        _, Q = p.pca(Scale.MOLECULE)
+        _, Q = operations.pca(p, Scale.MOLECULE)
 
         Q_np = np.asarray(Q).squeeze()
 
@@ -672,7 +666,7 @@ class TestScale:
 
 
 class TestBondedDistances:
-    """Test bonded_distances() method."""
+    """Test operations.bonded_distances() edge cases."""
 
     def test_bonded_distances_o3p_p(self, backend):
         """bonded_distances finds O3'-P phosphodiester bonds."""
@@ -681,7 +675,7 @@ class TestBondedDistances:
 
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)
 
-        distances = p.bonded_distances(Residue.A.O3p, Residue.A.P)
+        distances = operations.bonded_distances(p, Residue.A.O3p, Residue.A.P)
 
         # Should find many O3'-P bonds
         assert len(distances) > 0
@@ -696,7 +690,7 @@ class TestBondedDistances:
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)
 
         # Use invalid atom type values that don't exist
-        distances = p.bonded_distances(99999, 99998)
+        distances = operations.bonded_distances(p, 99999, 99998)
 
         assert len(distances) == 0
 
@@ -707,7 +701,7 @@ class TestBondedDistances:
 
         p = ciffy.load(get_test_cif("9MDS"), backend=backend)
 
-        distances = p.bonded_distances(Residue.A.C3p, Residue.A.O3p)
+        distances = operations.bonded_distances(p, Residue.A.C3p, Residue.A.O3p)
 
         assert len(distances) > 0
         # Typical C-O bond is ~1.4 Å
@@ -727,7 +721,7 @@ class TestBondedDistances:
         p.coordinates = coords
 
         # Compute bond distances (O3'-P)
-        distances = p.bonded_distances(Residue.A.O3p, Residue.A.P)
+        distances = operations.bonded_distances(p, Residue.A.O3p, Residue.A.P)
 
         assert distances.requires_grad
 
@@ -750,8 +744,8 @@ class TestBondedDistances:
         p_np = ciffy.load(get_test_cif("9MDS"), backend="numpy")
         p_torch = ciffy.load(get_test_cif("9MDS"), backend="torch")
 
-        dist_np = p_np.bonded_distances(Residue.A.O3p, Residue.A.P)
-        dist_torch = p_torch.bonded_distances(Residue.A.O3p, Residue.A.P)
+        dist_np = operations.bonded_distances(p_np, Residue.A.O3p, Residue.A.P)
+        dist_torch = operations.bonded_distances(p_torch, Residue.A.O3p, Residue.A.P)
 
         assert len(dist_np) == len(dist_torch)
         tol = get_tolerances()
@@ -962,14 +956,14 @@ class TestGather:
 
 
 class TestAdjacency:
-    """Test Polymer.adjacency() edge cases."""
+    """Test operations.adjacency() edge cases."""
 
     def test_adjacency_dtype_bool(self, backend):
         """adjacency(dtype='bool') returns boolean matrix."""
         import ciffy
 
         p = get_single_chain_poly(backend)
-        adj = p.adjacency(dtype='bool')
+        adj = operations.adjacency(p, dtype='bool')
 
         adj_np = np.asarray(adj)
         assert adj_np.dtype == np.bool_ or adj_np.dtype == bool
@@ -979,7 +973,7 @@ class TestAdjacency:
         import ciffy
 
         p = get_single_chain_poly(backend)
-        adj = p.adjacency(dtype='float32')
+        adj = operations.adjacency(p, dtype='float32')
 
         adj_np = np.asarray(adj)
         assert adj_np.dtype == np.float32
@@ -989,7 +983,7 @@ class TestAdjacency:
         import ciffy
 
         p = get_single_chain_poly(backend)
-        adj = p.adjacency()
+        adj = operations.adjacency(p)
 
         n = p.size()
         assert adj.shape == (n, n)
@@ -1001,5 +995,110 @@ class TestAdjacency:
         _template = ciffy.template("a", backend=backend)
         empty = _template[_template.atoms < 0]  # Impossible mask
 
-        adj = empty.adjacency()
+        adj = operations.adjacency(empty)
         assert adj.shape == (0, 0)
+
+
+class TestDeprecatedMethods:
+    """Test that deprecated Polymer methods still work and emit warnings."""
+
+    def test_pairwise_distances_deprecated(self, backend):
+        """polymer.pairwise_distances() emits DeprecationWarning."""
+        import warnings
+
+        p = get_single_chain_poly(backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = p.pairwise_distances()
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "pairwise_distances" in str(w[0].message)
+
+        # Verify result matches operations
+        expected = operations.pairwise_distances(p)
+        assert result.shape == expected.shape
+
+    def test_knn_deprecated(self, backend):
+        """polymer.knn() emits DeprecationWarning."""
+        import warnings
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = p.knn(k=3)
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "knn" in str(w[0].message)
+
+        expected = operations.knn(p, k=3)
+        assert result.shape == expected.shape
+
+    def test_moment_deprecated(self, backend):
+        """polymer.moment() emits DeprecationWarning."""
+        import warnings
+        import ciffy
+
+        p = ciffy.load(get_test_cif("9GCM"), backend=backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = p.moment(1, Scale.CHAIN)
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "moment" in str(w[0].message)
+
+        expected = operations.moment(p, 1, Scale.CHAIN)
+        assert result.shape == expected.shape
+
+    def test_pca_deprecated(self, backend):
+        """polymer.pca() emits DeprecationWarning."""
+        import warnings
+        import ciffy
+
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result, _ = p.pca(Scale.MOLECULE)
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "pca" in str(w[0].message)
+
+        expected, _ = operations.pca(p, Scale.MOLECULE)
+        assert result.coordinates.shape == expected.coordinates.shape
+
+    def test_bonded_distances_deprecated(self, backend):
+        """polymer.bonded_distances() emits DeprecationWarning."""
+        import warnings
+        from ciffy import Residue
+
+        p = get_single_chain_poly(backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = p.bonded_distances(Residue.A.O3p, Residue.A.P)
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "bonded_distances" in str(w[0].message)
+
+        expected = operations.bonded_distances(p, Residue.A.O3p, Residue.A.P)
+        assert result.shape == expected.shape
+
+    def test_adjacency_deprecated(self, backend):
+        """polymer.adjacency() emits DeprecationWarning."""
+        import warnings
+
+        p = get_single_chain_poly(backend)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = p.adjacency()
+            assert len(w) == 1
+            assert issubclass(w[0].category, DeprecationWarning)
+            assert "adjacency" in str(w[0].message)
+
+        expected = operations.adjacency(p)
+        assert result.shape == expected.shape

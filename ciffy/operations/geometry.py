@@ -90,7 +90,14 @@ def adjacency(polymer: "Polymer", dtype: str = 'bool') -> Array:
         This is O(N^2) memory. For large structures, use polymer.bonds
         property directly or CSR representation.
     """
+    import numpy as np
+
     n_atoms = polymer.size()
+
+    # Handle empty polymer
+    if n_atoms == 0:
+        return np.zeros((0, 0), dtype=dtype)
+
     bonds = polymer.bonds
 
     # Create zero matrix in correct backend

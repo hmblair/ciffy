@@ -7,6 +7,7 @@ Tests operations on empty, single-atom, and single-residue polymers.
 import pytest
 import numpy as np
 
+from ciffy import operations
 from tests.utils import get_test_cif, BACKENDS
 
 
@@ -93,7 +94,7 @@ class TestSingleAtomPolymer:
         polymer = ciffy.load(get_test_cif("3SKW"), backend=backend)
         single = polymer[:1]
 
-        dists = single.pairwise_distances()
+        dists = operations.pairwise_distances(single)
         assert dists.shape == (1, 1)
 
         dist_val = dists[0, 0].item() if hasattr(dists[0, 0], 'item') else dists[0, 0]
@@ -107,7 +108,7 @@ class TestSingleAtomPolymer:
         single = polymer[:1]
 
         with pytest.raises(ValueError):
-            single.knn(k=1)
+            operations.knn(single, k=1)
 
 
 class TestSingleResiduePolymer:

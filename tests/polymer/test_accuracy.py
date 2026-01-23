@@ -14,6 +14,7 @@ E.g., distances via np.linalg.norm, means via coords.mean(axis=0).
 import pytest
 import numpy as np
 
+from ciffy import operations
 from tests.utils import get_test_cif
 
 
@@ -125,26 +126,26 @@ class TestAccuracyGeometry:
     def test_pairwise_distance_specific_pair(self, backend):
         """Distance between atoms 0 and 1 matches numpy ground truth."""
         p = load_2f8s(backend)
-        dists = p.pairwise_distances()
+        dists = operations.pairwise_distances(p)
         actual = dists[0, 1].item() if hasattr(dists[0, 1], 'item') else dists[0, 1]
         assert np.isclose(actual, EXPECTED["dist_atom_0_1"], rtol=1e-5)
 
     def test_pairwise_distance_symmetric(self, backend):
         """Distance matrix is symmetric (d[i,j] == d[j,i])."""
         p = load_2f8s(backend).chain(0)  # Use chain A for speed
-        dists = np.asarray(p.pairwise_distances())
+        dists = np.asarray(operations.pairwise_distances(p))
         assert np.allclose(dists, dists.T, rtol=1e-6)
 
     def test_pairwise_distance_diagonal_zero(self, backend):
         """Distance matrix diagonal is all zeros."""
         p = load_2f8s(backend).chain(0)
-        dists = np.asarray(p.pairwise_distances())
+        dists = np.asarray(operations.pairwise_distances(p))
         assert np.allclose(np.diag(dists), 0, atol=1e-10)
 
     def test_pairwise_distance_nonnegative(self, backend):
         """All distances are non-negative."""
         p = load_2f8s(backend).chain(0)
-        dists = np.asarray(p.pairwise_distances())
+        dists = np.asarray(operations.pairwise_distances(p))
         assert (dists >= 0).all()
 
     def test_center_produces_zero_mean(self, backend):
@@ -188,8 +189,8 @@ class TestAccuracyGeometry:
     def test_knn_first_neighbor_is_closest(self, backend):
         """KNN returns the actual nearest neighbor."""
         p = load_2f8s(backend).chain(0)  # Use chain A for speed
-        neighbors = p.knn(k=1)
-        dists = np.asarray(p.pairwise_distances())
+        neighbors = operations.knn(p, k=1)
+        dists = np.asarray(operations.pairwise_distances(p))
         neighbors_np = np.asarray(neighbors)
 
         # Spot check first 20 atoms
@@ -207,7 +208,7 @@ class TestAccuracyGeometry:
         """KNN with k>1 returns k different neighbors per atom."""
         p = load_2f8s(backend).chain(0)
         k = 5
-        neighbors = np.asarray(p.knn(k=k))
+        neighbors = np.asarray(operations.knn(p, k=k))
 
         # Check no duplicates for each atom
         for i in range(min(20, p.size())):
@@ -368,19 +369,19 @@ class TestAccuracyAdjacency:
     def test_adjacency_symmetric(self, backend):
         """Adjacency matrix is symmetric."""
         p = load_2f8s(backend).chain(0)
-        adj = np.asarray(p.adjacency())
+        adj = np.asarray(operations.adjacency(p))
         assert np.allclose(adj, adj.T)
 
     def test_adjacency_diagonal_zero(self, backend):
         """Adjacency matrix diagonal is zero (no self-bonds)."""
         p = load_2f8s(backend).chain(0)
-        adj = np.asarray(p.adjacency())
+        adj = np.asarray(operations.adjacency(p))
         assert np.allclose(np.diag(adj), 0)
 
     def test_adjacency_matches_bonds(self, backend):
         """Adjacency matrix non-zeros match bond list."""
         p = load_2f8s(backend).chain(0)
-        adj = np.asarray(p.adjacency())
+        adj = np.asarray(operations.adjacency(p))
         bonds = np.asarray(p.bonds)
 
         # Each bond should create two adjacency entries
@@ -391,7 +392,7 @@ class TestAccuracyAdjacency:
     def test_adjacency_nnz_equals_twice_bonds(self, backend):
         """Number of adjacency non-zeros equals 2x bond count (symmetric)."""
         p = load_2f8s(backend).chain(0)
-        adj = np.asarray(p.adjacency())
+        adj = np.asarray(operations.adjacency(p))
         n_bonds = len(p.bonds)
         nnz = np.count_nonzero(adj)
         assert nnz == 2 * n_bonds

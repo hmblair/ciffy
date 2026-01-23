@@ -6,7 +6,7 @@ import pytest
 import numpy as np
 
 import ciffy
-from ciffy import Scale
+from ciffy import Scale, operations
 
 from tests.utils import get_test_cif, TORCH_AVAILABLE, DATA_DIR
 
@@ -16,13 +16,13 @@ from tests.utils import get_test_cif, TORCH_AVAILABLE, DATA_DIR
 # =============================================================================
 
 class TestKNN:
-    """Tests for Polymer.knn() method."""
+    """Tests for operations.knn() function."""
 
     def test_knn_shape(self, backend):
         """Test that knn returns correct shape."""
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 5
-        neighbors = p.knn(k=k, scale=Scale.ATOM)
+        neighbors = operations.knn(p, k=k, scale=Scale.ATOM)
 
         assert neighbors.shape == (k, p.size())
 
@@ -30,14 +30,14 @@ class TestKNN:
         """Test KNN at residue scale."""
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         k = 3
-        neighbors = p.knn(k=k, scale=Scale.RESIDUE)
+        neighbors = operations.knn(p, k=k, scale=Scale.RESIDUE)
 
         assert neighbors.shape == (k, p.size(Scale.RESIDUE))
 
     def test_knn_excludes_self(self, backend):
         """Test that knn excludes self (no point is its own neighbor)."""
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
-        neighbors = p.knn(k=3, scale=Scale.ATOM)
+        neighbors = operations.knn(p, k=3, scale=Scale.ATOM)
 
         # Check that no atom is its own neighbor
         n_atoms = p.size()
@@ -51,7 +51,7 @@ class TestKNN:
         """Test that knn raises error when k >= n."""
         p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         with pytest.raises(ValueError, match="k=.* must be less than"):
-            p.knn(k=p.size(), scale=Scale.ATOM)
+            operations.knn(p, k=p.size(), scale=Scale.ATOM)
 
 
 # =============================================================================

@@ -159,13 +159,14 @@ def template(
     backend: str = "numpy",
     id: str = "template",
     atoms: dict[int, Sequence[int]] | None = None,
+    coordinates: bool = False,
 ) -> Polymer:
     """
     Generate a template Polymer from a sequence string or list of sequences.
 
     Creates a Polymer template with correct atom types, elements, and residue
-    sequence, but without coordinates. Use Polymer.copy(coordinates=...) to add
-    predicted coordinates.
+    sequence. By default, coordinates are None; use coordinates=True to generate
+    ideal coordinates from CCD monomer library data.
 
     Args:
         sequence: Single-letter sequence string, or list of strings for multi-chain.
@@ -178,9 +179,13 @@ def template(
         backend: Array backend, either "numpy" or "torch".
         id: PDB identifier for the polymer.
         atoms: Optional dict mapping residue type (int) to atom values to include.
+        coordinates: If True, generate ideal coordinates for each residue.
+            Residues are placed sequentially without inter-residue transforms
+            (linear layout). If False (default), coordinates are None.
 
     Returns:
-        Polymer template (coordinates=None). Use copy(coordinates=...) to add coords.
+        Polymer with ideal coordinates if coordinates=True, else template
+        (coordinates=None). Use copy(coordinates=...) to add predicted coords.
 
     Examples:
         >>> rna = template("acgu")
@@ -188,6 +193,10 @@ def template(
         4
         >>> rna.coordinates  # None - template has no coordinates
         >>> polymer = rna.copy(coordinates=predicted_coords)
+
+        >>> rna_ideal = template("acgu", coordinates=True)
+        >>> rna_ideal.coordinates.shape  # Has coordinates
+        (88, 3)
 
         >>> protein = template("MGKLF")
         >>> protein.size(Scale.RESIDUE)
@@ -219,6 +228,15 @@ def template(
             if atoms is not None and res_idx in atoms:
                 atom_group = atom_group.subset(set(atoms[res_idx]))
 
-            polymer = polymer.append(atom_group, residue=residue, name=chain_name)
+            if coordinates:
+                ideal = atom_group.ideal
+                if ideal is None:
+                    raise ValueError(
+                        f"Residue {residue.name} has no ideal coordinates. "
+                        f"Cannot generate coordinates=True template."
+                    )
+                polymer = polymer.append(atom_group, ideal, residue=residue, name=chain_name)
+            else:
+                polymer = polymer.append(atom_group, residue=residue, name=chain_name)
 
     return polymer.torch() if backend == "torch" else polymer

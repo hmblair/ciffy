@@ -23,6 +23,7 @@ from ._generated_linking import (
     NUCLEIC_ACID_LINK_GEOMETRY,
     PEPTIDE_LINK_GEOMETRY,
 )
+from ._generated_atoms import UNIFIED_BACKBONE_VALUES
 from .constants import (
     Sugar, PhosphateGroup, ProteinBackbone,
     PurineBase, PyrimidineBase,
@@ -30,18 +31,22 @@ from .constants import (
 from .atom import AtomGroup
 
 
-# Unified backbone atom values (same indices as codegen/config.py but Python names)
-# These are shared across all residue types, enabling robust frame resolution
-# for modified residues with standard backbones.
-# Note: Uses Python names (O5p not O5') to match internal ciffy naming convention.
-BACKBONE_ATOM_VALUES: dict[str, int] = {
-    # Nucleic acid backbone (Python names with p for apostrophe)
-    "P": 1, "OP1": 2, "OP2": 3, "OP3": 4,
-    "O5p": 5, "C5p": 6, "C4p": 7, "O4p": 8,
-    "C3p": 9, "O3p": 10, "C2p": 11, "O2p": 12, "C1p": 13,
-    # Protein backbone
-    "N": 14, "CA": 15, "C": 16, "O": 17,
-}
+# Unified backbone atom values with Python names (O5p instead of O5').
+# Derived from auto-generated UNIFIED_BACKBONE_VALUES.
+def _build_backbone_atom_values() -> dict[str, int]:
+    """Convert CIF names to Python names for backbone atoms."""
+    cif_to_python = {
+        "O5'": "O5p", "C5'": "C5p", "C4'": "C4p", "O4'": "O4p",
+        "C3'": "C3p", "O3'": "O3p", "C2'": "C2p", "O2'": "O2p", "C1'": "C1p",
+    }
+    result = {}
+    for cif_name, value in UNIFIED_BACKBONE_VALUES.items():
+        python_name = cif_to_python.get(cif_name, cif_name)
+        result[python_name] = value
+    return result
+
+
+BACKBONE_ATOM_VALUES: dict[str, int] = _build_backbone_atom_values()
 
 
 @dataclass

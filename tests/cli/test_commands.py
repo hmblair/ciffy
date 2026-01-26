@@ -5,6 +5,7 @@ Tests the CLI commands by calling their handler functions directly.
 """
 
 import argparse
+import shutil
 import pytest
 import sys
 from io import StringIO
@@ -12,6 +13,12 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from tests.utils import get_test_cif
+
+# Skip marker for tests requiring mmseqs2
+requires_mmseqs = pytest.mark.skipif(
+    shutil.which("mmseqs") is None,
+    reason="mmseqs2 not installed"
+)
 
 
 class TestInfoCommand:
@@ -311,6 +318,7 @@ class TestMainEntrypoint:
         assert "Radius of gyration" in captured.out
 
 
+@requires_mmseqs
 class TestClusterCommand:
     """Tests for the cluster command (requires mmseqs2)."""
 

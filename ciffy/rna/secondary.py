@@ -39,6 +39,40 @@ _OPEN_BRACKETS = "([{<"
 _CLOSE_BRACKETS = ")]}>"
 _BRACKET_PAIRS = dict(zip(_CLOSE_BRACKETS, _OPEN_BRACKETS))
 
+# Watson-Crick hydrogen bond patterns: (base1, base2) -> [(atom1, atom2), ...]
+# Each base pair type requires ALL listed H-bonds to be present.
+# Atom indices from ciffy.Residue enum.
+_WC_HBONDS: dict[tuple[int, int], list[tuple[int, int]]] = {}
+
+
+def _init_wc_hbonds() -> None:
+    """Initialize Watson-Crick hydrogen bond patterns."""
+    from ..biochemistry import Residue
+
+    A, G, C, U = Residue.A.value, Residue.G.value, Residue.C.value, Residue.U.value
+
+    # A-U: 2 H-bonds
+    _WC_HBONDS[(A, U)] = [
+        (int(Residue.A.N1), int(Residue.U.N3)),  # N1--N3
+        (int(Residue.A.N6), int(Residue.U.O4)),  # N6--O4
+    ]
+    _WC_HBONDS[(U, A)] = [(b, a) for a, b in _WC_HBONDS[(A, U)]]
+
+    # G-C: 3 H-bonds
+    _WC_HBONDS[(G, C)] = [
+        (int(Residue.G.O6), int(Residue.C.N4)),  # O6--N4
+        (int(Residue.G.N1), int(Residue.C.N3)),  # N1--N3
+        (int(Residue.G.N2), int(Residue.C.O2)),  # N2--O2
+    ]
+    _WC_HBONDS[(C, G)] = [(b, a) for a, b in _WC_HBONDS[(G, C)]]
+
+    # G-U wobble: 2 H-bonds
+    _WC_HBONDS[(G, U)] = [
+        (int(Residue.G.O6), int(Residue.U.N3)),  # O6--N3
+        (int(Residue.G.N1), int(Residue.U.O2)),  # N1--O2
+    ]
+    _WC_HBONDS[(U, G)] = [(b, a) for a, b in _WC_HBONDS[(G, U)]]
+
 
 def dotbracket_to_pairs(dotbracket: str) -> np.ndarray:
     """Convert dot-bracket notation to base pair array.
@@ -165,11 +199,13 @@ def pairs_to_dotbracket(pairs: np.ndarray, length: int) -> str:
     return "".join(result)
 
 
-def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
-    """Extract secondary structure from polymer connections as dot-bracket.
+def secondary_structure(polymer: "Polymer", min_loop_size: int = 3):
+    """Extract base pairs from polymer hydrogen bond connections.
 
-    Determines base pairs from hydrogen bond connections in the polymer
-    and returns the secondary structure in dot-bracket notation.
+    Determines Watson-Crick base pairs (A-U, G-C, G-U wobble) from hydrogen
+    bond connections. Only pairs with ALL expected hydrogen bonds present
+    are included (2 for A-U/G-U, 3 for G-C), filtering out tertiary
+    interactions like A-minor motifs.
 
     Args:
         polymer: RNA polymer with connections loaded. Must be loaded with
@@ -179,8 +215,9 @@ def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
             Pairs with |i - j| <= min_loop_size are filtered out. Default 3.
 
     Returns:
-        Dot-bracket string of length equal to the number of residues.
-        Uses extended notation ([{<) for pseudoknots if present.
+        Array of shape (n_pairs, 2) where each row [i, j] is a base pair
+        with i < j. Returns empty array of shape (0, 2) if no pairs found.
+        Array type matches the polymer's backend (numpy or torch).
 
     Raises:
         ValueError: If polymer has no connections loaded.
@@ -189,67 +226,98 @@ def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
         >>> import ciffy
         >>> polymer = ciffy.load("structure.cif", skip=[])
         >>> from ciffy.rna import secondary_structure
-        >>> ss = secondary_structure(polymer)
-        >>> print(ss)
-        '(((...)))'
+        >>> pairs = secondary_structure(polymer)
+        >>> pairs
+        array([[0, 6],
+               [1, 5]])
     """
+    from ..backend import ops
     from ..biochemistry import Scale
+
+    # Initialize WC patterns on first call
+    if not _WC_HBONDS:
+        _init_wc_hbonds()
 
     if polymer.connections is None:
         raise ValueError(
             "Polymer has no connections. Load with skip=[] to include connections."
         )
 
+    # Reference array for backend-aware operations
+    ref = polymer._hierarchy._ref
+
     connections = np.asarray(polymer.connections)
-    n_residues = polymer.size(Scale.RESIDUE)
+    atoms = np.asarray(polymer.atoms)
+    sequence = np.asarray(polymer.sequence)
 
     if connections.size == 0:
-        return "." * n_residues
+        return ops.empty((0, 2), like=ref, dtype='int64')
 
     # Get residue membership for each atom
     residue_membership = np.asarray(polymer.membership(Scale.RESIDUE))
     n_atoms = polymer.size()
 
     # Filter connections to only include atoms in this polymer
-    # (handles case where polymer is a selection from larger structure)
     valid_mask = (connections[:, 0] < n_atoms) & (connections[:, 1] < n_atoms)
     connections = connections[valid_mask]
 
     if connections.size == 0:
-        return "." * n_residues
+        return ops.empty((0, 2), like=ref, dtype='int64')
 
-    # Convert atom pairs to residue pairs
-    residue_pairs = residue_membership[connections]  # (n_connections, 2)
+    # Build set of (res_i, res_j, atom_i, atom_j) for fast lookup
+    # Normalize so res_i < res_j
+    hbond_set: set[tuple[int, int, int, int]] = set()
+    for atom1, atom2 in connections:
+        res1 = residue_membership[atom1]
+        res2 = residue_membership[atom2]
+        if res1 == res2:
+            continue
+        if res1 < res2:
+            hbond_set.add((res1, res2, atoms[atom1], atoms[atom2]))
+        else:
+            hbond_set.add((res2, res1, atoms[atom2], atoms[atom1]))
 
-    # Keep only inter-residue pairs (different residues)
-    inter_residue_mask = residue_pairs[:, 0] != residue_pairs[:, 1]
-    residue_pairs = residue_pairs[inter_residue_mask]
+    # Find Watson-Crick base pairs with all required H-bonds
+    base_pairs: list[tuple[int, int]] = []
 
-    if residue_pairs.size == 0:
-        return "." * n_residues
+    # Check all potential residue pairs
+    checked: set[tuple[int, int]] = set()
+    for res_i, res_j, _, _ in hbond_set:
+        if (res_i, res_j) in checked:
+            continue
+        checked.add((res_i, res_j))
 
-    # Ensure i < j for each pair
-    residue_pairs = np.sort(residue_pairs, axis=1)
+        # Skip if loop too small
+        if res_j - res_i <= min_loop_size:
+            continue
 
-    # Filter by minimum loop size (removes backbone H-bonds)
-    distances = residue_pairs[:, 1] - residue_pairs[:, 0]
-    residue_pairs = residue_pairs[distances > min_loop_size]
+        # Get base types
+        base_i = sequence[res_i]
+        base_j = sequence[res_j]
 
-    if residue_pairs.size == 0:
-        return "." * n_residues
+        # Look up required H-bonds for this base pair type
+        required = _WC_HBONDS.get((base_i, base_j))
+        if required is None:
+            continue
 
-    # Deduplicate pairs (multiple H-bonds between same residue pair)
-    unique_pairs = np.unique(residue_pairs, axis=0)
+        # Check if ALL required H-bonds are present
+        all_present = all(
+            (res_i, res_j, atom_i, atom_j) in hbond_set
+            for atom_i, atom_j in required
+        )
+
+        if all_present:
+            base_pairs.append((res_i, res_j))
+
+    if not base_pairs:
+        return ops.empty((0, 2), like=ref, dtype='int64')
 
     # Each residue can only be in one base pair - keep longest range pairs
-    # Count how many pairs each residue participates in
     paired: dict[int, tuple[int, int]] = {}  # residue -> (partner, distance)
-    for i, j in unique_pairs:
+    for i, j in base_pairs:
         dist = j - i
-        # For position i, keep pair with largest distance
         if i not in paired or dist > paired[i][1]:
             paired[i] = (j, dist)
-        # For position j, keep pair with largest distance
         if j not in paired or dist > paired[j][1]:
             paired[j] = (i, dist)
 
@@ -257,14 +325,12 @@ def secondary_structure(polymer: "Polymer", min_loop_size: int = 3) -> str:
     final_pairs = set()
     for res, (partner, _) in paired.items():
         if res < partner:
-            # Check if partner also points back to res
             if partner in paired and paired[partner][0] == res:
                 final_pairs.add((res, partner))
 
     if not final_pairs:
-        return "." * n_residues
+        return ops.empty((0, 2), like=ref, dtype='int64')
 
-    final_pairs = np.array(sorted(final_pairs), dtype=np.int64)
-
-    # Convert to dot-bracket
-    return pairs_to_dotbracket(final_pairs, n_residues)
+    # Convert to array in polymer's backend
+    result = np.array(sorted(final_pairs), dtype=np.int64)
+    return ops.to_backend(result, like=ref)

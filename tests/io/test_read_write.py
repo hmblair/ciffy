@@ -165,9 +165,8 @@ class TestLoad:
         polymer = load(cif_file, backend=backend)
         repr_str = repr(polymer)
 
-        # Check header line contains PDB ID and backend
+        # Check header line contains PDB ID
         assert polymer.pdb_id in repr_str
-        assert backend in repr_str
 
         # Check column headers are present
         assert "Type" in repr_str

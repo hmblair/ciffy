@@ -83,15 +83,17 @@ print(polymer)
 
 Example output:
 ```
-PDB 9GCM (numpy)
-──────────────────────
+Polymer 9GCM [2024-08-02]
+─────────────────────────
    Type     Res  Atoms
+─────────────────────────
 A  RNA      135   1413
 B  PROTEIN  132   1032
 C  PROTEIN  246   1261
 D  PROTEIN  485    760
-──────────────────────
-            998   4466
+─────────────────────────
+Σ  4        998   4466
+─────────────────────────
 ```
 
 ## Working with Polymers

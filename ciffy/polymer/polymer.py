@@ -1757,7 +1757,7 @@ class Polymer(AtomContainer):
     def __repr__(self: Polymer) -> str:
         """String representation with structure summary."""
         rows = self.chain_info()
-        return format_chain_table(self.pdb_id, self.backend, rows, self.date)
+        return format_chain_table(self.pdb_id, rows, self.date)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Backend Conversion

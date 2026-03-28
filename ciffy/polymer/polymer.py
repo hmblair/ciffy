@@ -1822,3 +1822,90 @@ class Polymer(AtomContainer):
         from ..io.writer import write_cif
         write_cif(self, filename)
 
+    def biotite(self: Polymer):
+        """
+        Convert to a biotite AtomArray.
+
+        Populates annotations dynamically based on which fields are
+        present on the polymer. Coordinates, atom names, element symbols,
+        residue names/IDs, and chain IDs are set when the underlying
+        data is available.
+
+        Requires the ``biotite`` package to be installed.
+
+        Returns:
+            biotite.structure.AtomArray.
+
+        Raises:
+            ImportError: If biotite is not installed.
+            ValueError: If the polymer is empty.
+        """
+        try:
+            from biotite.structure import AtomArray
+        except ImportError:
+            raise ImportError(
+                "biotite is required for this method. "
+                "Install it with: pip install biotite"
+            )
+
+        if self.empty():
+            raise ValueError("Cannot convert empty polymer to AtomArray")
+
+        n_atoms = self.size()
+        array = AtomArray(n_atoms)
+
+        # Coordinates
+        coords = self._get_field_data('coordinates')
+        if coords is not None:
+            array.coord = to_numpy(coords).astype(np.float32)
+
+        # Atom names
+        atoms_data = self._get_field_data('atoms')
+        if atoms_data is not None:
+            array.atom_name = np.array(self.atom_names(), dtype="U6")
+
+        # Element symbols
+        elements_data = self._get_field_data('elements')
+        if elements_data is not None:
+            elements = to_numpy(elements_data)
+            array.element = np.array(
+                [ELEMENT_NAMES.get(int(e), "") for e in elements],
+                dtype="U2",
+            )
+
+        # Residue names and IDs
+        seq_data = self._get_field_data('sequence')
+        if seq_data is not None:
+            hierarchy = self._get_hierarchy()
+            res_membership = to_numpy(hierarchy.membership(Scale.RESIDUE))
+            seq = to_numpy(seq_data)
+            res_names = []
+            for i in range(n_atoms):
+                try:
+                    res_names.append(
+                        Residue.from_index(int(seq[res_membership[i]])).name
+                    )
+                except KeyError:
+                    res_names.append("UNK")
+            array.res_name = np.array(res_names, dtype="U5")
+            array.res_id = res_membership.astype(np.int32) + 1
+
+        # Chain IDs
+        names = self._names
+        if names is not None and len(names) > 0:
+            hierarchy = self._get_hierarchy()
+            chain_membership = to_numpy(hierarchy.membership(Scale.CHAIN))
+            chain_ids = [
+                names[int(chain_membership[i])]
+                if int(chain_membership[i]) < len(names) else "?"
+                for i in range(n_atoms)
+            ]
+            array.chain_id = np.array(chain_ids, dtype="U4")
+
+        # B-factors as custom annotation
+        bfactors_data = self._get_field_data('bfactors')
+        if bfactors_data is not None:
+            array.set_annotation("b_factor", to_numpy(bfactors_data).astype(np.float32))
+
+        return array
+

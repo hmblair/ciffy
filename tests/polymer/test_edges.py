@@ -8,7 +8,8 @@ import pytest
 import numpy as np
 
 from ciffy import operations
-from tests.utils import get_test_cif, BACKENDS
+from ciffy.backend import ops
+from tests.utils import get_test_cif, get_like, BACKENDS, skip_if_no_torch, TORCH_AVAILABLE
 
 
 class TestEmptyPolymer:
@@ -312,39 +313,34 @@ class TestResolvedStrip:
 class TestBackendConversion:
     """Test backend conversion edge cases."""
 
-    def test_numpy_to_numpy(self):
-        """numpy() on numpy polymer returns same object."""
+    def test_same_backend_roundtrip(self, backend):
+        """Converting to same backend returns same backend."""
         import ciffy
 
-        p = ciffy.template("acgu", backend="numpy")
-        p2 = p.numpy()
+        p = ciffy.template("acgu", backend=backend)
+        if backend == "numpy":
+            p2 = p.numpy()
+        else:
+            p2 = p.torch()
 
-        # Should return self (or equivalent)
-        assert p2.backend == "numpy"
+        assert p2.backend == backend
 
-    def test_torch_to_torch(self):
-        """torch() on torch polymer returns same object."""
+    def test_roundtrip_preserves_data(self, backend):
+        """Round-trip through the other backend preserves data."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
 
-        p = ciffy.template("acgu", backend="torch")
-        p2 = p.torch()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        coords_orig = np.asarray(p.coordinates).copy()
 
-        assert p2.backend == "torch"
+        if backend == "numpy":
+            p2 = p.torch().numpy()
+        else:
+            p2 = p.numpy().torch()
 
-    def test_numpy_to_torch_and_back(self):
-        """Round-trip numpy -> torch -> numpy preserves data."""
-        import ciffy
-
-        p = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        coords_orig = p.coordinates.copy()
-
-        p_torch = p.torch()
-        assert p_torch.backend == "torch"
-
-        p_back = p_torch.numpy()
-        assert p_back.backend == "numpy"
-
-        assert np.allclose(p_back.coordinates, coords_orig)
+        assert p2.backend == backend
+        assert np.allclose(np.asarray(p2.coordinates), coords_orig)
 
     def test_to_requires_torch_backend(self):
         """to() raises ValueError on numpy backend."""
@@ -355,104 +351,99 @@ class TestBackendConversion:
         with pytest.raises(ValueError, match="torch backend"):
             p.to("cpu")
 
-    def test_to_no_args_returns_self(self):
-        """to() with no args returns same object."""
+    def test_to_no_args_returns_self(self, backend):
+        """to() with no args returns self (torch) or raises (numpy)."""
         import ciffy
 
-        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
-        p2 = p.to()
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
 
-        assert p2 is p
+        if backend == "numpy":
+            with pytest.raises(ValueError, match="torch backend"):
+                p.to()
+        else:
+            p2 = p.to()
+            assert p2 is p
 
 
 class TestArraySetterValidation:
     """Test backend/device validation on array property setters."""
 
-    def test_coordinates_rejects_wrong_backend(self):
+    def test_coordinates_rejects_wrong_backend(self, backend):
         """Setting coordinates with wrong backend raises TypeError."""
-        import ciffy
-        import torch
-
-        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        torch_coords = torch.randn(p_numpy.size(), 3)
-
-        with pytest.raises(TypeError, match="Cannot assign torch"):
-            p_numpy.coordinates = torch_coords
-
-    def test_coordinates_rejects_wrong_backend_reverse(self):
-        """Setting torch coordinates with numpy raises TypeError."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
 
-        p_torch = ciffy.load(get_test_cif("3SKW"), backend="torch")
-        numpy_coords = np.random.randn(p_torch.size(), 3).astype(np.float32)
+        other = "torch" if backend == "numpy" else "numpy"
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        ref = get_like(other)
+        wrong_coords = ops.randn((p.size(), 3), like=ref)
 
-        with pytest.raises(TypeError, match="Cannot assign numpy"):
-            p_torch.coordinates = numpy_coords
+        with pytest.raises(TypeError, match=f"Cannot assign {other}"):
+            p.coordinates = wrong_coords
 
-    def test_atoms_rejects_wrong_backend(self):
+    def test_atoms_rejects_wrong_backend(self, backend):
         """Setting atoms with wrong backend raises TypeError."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
-        import torch
 
-        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        torch_atoms = torch.zeros(p_numpy.size(), dtype=torch.long)
+        other = "torch" if backend == "numpy" else "numpy"
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        ref = get_like(other)
+        wrong_atoms = ops.zeros(p.size(), like=ref, dtype='int64')
 
-        with pytest.raises(TypeError, match="Cannot assign torch"):
-            p_numpy.atoms = torch_atoms
+        with pytest.raises(TypeError, match=f"Cannot assign {other}"):
+            p.atoms = wrong_atoms
 
-    def test_elements_rejects_wrong_backend(self):
+    def test_elements_rejects_wrong_backend(self, backend):
         """Setting elements with wrong backend raises TypeError."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
-        import torch
 
-        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        torch_elements = torch.zeros(p_numpy.size(), dtype=torch.long)
+        other = "torch" if backend == "numpy" else "numpy"
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        ref = get_like(other)
+        wrong_elements = ops.zeros(p.size(), like=ref, dtype='int64')
 
-        with pytest.raises(TypeError, match="Cannot assign torch"):
-            p_numpy.elements = torch_elements
+        with pytest.raises(TypeError, match=f"Cannot assign {other}"):
+            p.elements = wrong_elements
 
-    def test_sequence_rejects_wrong_backend(self):
+    def test_sequence_rejects_wrong_backend(self, backend):
         """Setting sequence with wrong backend raises TypeError."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
-        import torch
         from ciffy import Scale
 
-        p_numpy = ciffy.load(get_test_cif("3SKW"), backend="numpy")
-        torch_seq = torch.zeros(p_numpy.size(Scale.RESIDUE), dtype=torch.long)
+        other = "torch" if backend == "numpy" else "numpy"
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
+        ref = get_like(other)
+        wrong_seq = ops.zeros(p.size(Scale.RESIDUE), like=ref, dtype='int64')
 
-        with pytest.raises(TypeError, match="Cannot assign torch"):
-            p_numpy.sequence = torch_seq
+        with pytest.raises(TypeError, match=f"Cannot assign {other}"):
+            p.sequence = wrong_seq
 
-    def test_lengths_is_readonly(self):
+    def test_lengths_is_readonly(self, backend):
         """lengths is a read-only property delegating to hierarchy."""
         import ciffy
 
-        p = ciffy.template("acgu", backend="numpy")
+        p = ciffy.template("acgu", backend=backend)
 
         # Python 3.10: "can't set attribute", Python 3.11+: "has no setter"
         with pytest.raises(AttributeError, match="can't set attribute|has no setter"):
             p.lengths = p.lengths
 
-    def test_coordinates_accepts_same_backend(self):
+    def test_coordinates_accepts_same_backend(self, backend):
         """Setting coordinates with same backend works."""
         import ciffy
 
-        p = ciffy.template("acgu", backend="numpy")
-        new_coords = np.random.randn(p.size(), 3).astype(np.float32)
+        p = ciffy.template("acgu", backend=backend)
+        new_coords = ops.randn((p.size(), 3), like=get_like(backend))
 
         p.coordinates = new_coords
-        assert np.allclose(p.coordinates, new_coords)
-
-    def test_coordinates_accepts_same_backend_torch(self):
-        """Setting torch coordinates on torch polymer works."""
-        import ciffy
-        import torch
-
-        p = ciffy.template("acgu", backend="torch")
-        new_coords = torch.randn(p.size(), 3)
-
-        p.coordinates = new_coords
-        assert torch.allclose(p.coordinates, new_coords)
+        assert ops.allclose(p.coordinates, new_coords)
 
 
 class TestDeviceProperty:
@@ -465,22 +456,32 @@ class TestDeviceProperty:
         p = ciffy.template("acgu", backend="numpy")
         assert p.device is None
 
-    def test_device_torch_returns_cpu(self):
-        """device property returns 'cpu' for torch CPU tensor."""
+    def test_device_torch_returns_cpu(self, backend):
+        """device property returns 'cpu' for torch, None for numpy."""
         import ciffy
 
-        p = ciffy.template("acgu", backend="torch")
-        assert p.device == "cpu"
+        p = ciffy.template("acgu", backend=backend)
+        if backend == "torch":
+            assert p.device == "cpu"
+        else:
+            assert p.device is None
 
-    def test_device_after_backend_conversion(self):
+    def test_device_after_backend_conversion(self, backend):
         """device property updates after backend conversion."""
+        if not TORCH_AVAILABLE:
+            pytest.skip("PyTorch not available")
         import ciffy
 
-        p = ciffy.template("acgu", backend="numpy")
-        assert p.device is None
+        p = ciffy.template("acgu", backend=backend)
 
-        p_torch = p.torch()
-        assert p_torch.device == "cpu"
+        if backend == "numpy":
+            assert p.device is None
+            p2 = p.torch()
+            assert p2.device == "cpu"
+        else:
+            assert p.device == "cpu"
+            p2 = p.numpy()
+            assert p2.device is None
 
 
 class TestMembershipMethod:
@@ -563,11 +564,8 @@ class TestMembershipMethod:
         p = ciffy.template("acgu", backend=backend)
         idx = p.membership(Scale.RESIDUE)
 
-        if backend == "torch":
-            import torch
-            assert idx.dtype == torch.int64
-        else:
-            assert idx.dtype == np.int64
+        idx_np = np.asarray(idx)
+        assert idx_np.dtype == np.int64
 
     def test_membership_consistency_with_counts(self, backend):
         """membership() is consistent with counts()."""
@@ -645,11 +643,7 @@ class TestAtomNames:
         p = ciffy.template("a", backend=backend)
 
         # Set invalid atom value
-        if backend == "torch":
-            import torch
-            p.atoms = torch.full((p.size(),), 99999, dtype=torch.int64)
-        else:
-            p.atoms = np.full(p.size(), 99999, dtype=np.int64)
+        p.atoms = ops.full((p.size(),), 99999, like=p.atoms)
 
         names = p.atom_names()
         assert all(name == "?" for name in names)
@@ -747,12 +741,14 @@ class TestDetach:
 
         assert np.allclose(p.coordinates, original_coords)
 
-    def test_detach_removes_grad(self):
+    def test_detach_removes_grad(self, backend):
         """detach() removes gradient tracking on torch tensors."""
+        skip_if_no_torch(backend)
+        if backend == "numpy":
+            pytest.skip("Gradient tracking is torch-specific")
         import ciffy
-        import torch
 
-        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         p.coordinates = p.coordinates.clone().requires_grad_(True)
 
         assert p.coordinates.requires_grad
@@ -761,18 +757,20 @@ class TestDetach:
 
         assert not p.coordinates.requires_grad
 
-    def test_detach_preserves_values(self):
+    def test_detach_preserves_values(self, backend):
         """detach() preserves coordinate values."""
+        skip_if_no_torch(backend)
+        if backend == "numpy":
+            pytest.skip("Gradient tracking is torch-specific")
         import ciffy
-        import torch
 
-        p = ciffy.load(get_test_cif("3SKW"), backend="torch")
+        p = ciffy.load(get_test_cif("3SKW"), backend=backend)
         original_coords = p.coordinates.clone()
 
         p.coordinates = p.coordinates.requires_grad_(True)
         p.detach()
 
-        assert torch.allclose(p.coordinates, original_coords)
+        assert ops.allclose(p.coordinates, original_coords)
 
 
 class TestCanonical:
@@ -830,11 +828,7 @@ class TestCanonical:
         p = ciffy.template("a", backend=backend)
 
         # Set to a non-canonical (modified) residue type - H2U is dihydrouridine
-        if backend == "torch":
-            import torch
-            p.sequence = torch.tensor([Residue.H2U.value], dtype=torch.int64)
-        else:
-            p.sequence = np.array([Residue.H2U.value], dtype=np.int64)
+        p.sequence = ops.array([Residue.H2U.value], like=p.sequence)
 
         canonical = p.canonical()
         assert canonical.empty()

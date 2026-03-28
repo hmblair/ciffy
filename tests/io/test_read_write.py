@@ -9,7 +9,7 @@ import os
 import tempfile
 import pytest
 
-from tests.utils import DATA_DIR, BACKENDS
+from tests.utils import DATA_DIR, BACKENDS, requires_torch
 from tests.testing import get_tolerances
 
 CIF_FILES = sorted(glob.glob(str(DATA_DIR / "*.cif")))
@@ -65,6 +65,7 @@ class TestLoad:
         with pytest.raises(OSError):
             load("nonexistent_file.cif", backend=backend)
 
+    @requires_torch
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_backend_conversion(self, cif_file):
         """Test that polymers can be converted between backends."""
@@ -77,8 +78,8 @@ class TestLoad:
 
         # Convert to torch
         torch_polymer = np_polymer.torch()
-        import torch
-        assert isinstance(torch_polymer.coordinates, torch.Tensor)
+        from ciffy.backend import is_torch
+        assert is_torch(torch_polymer.coordinates)
 
         # Convert back to numpy
         np_polymer2 = torch_polymer.numpy()
@@ -87,11 +88,12 @@ class TestLoad:
         # Verify coordinates are equivalent
         assert np.allclose(np_polymer.coordinates, np_polymer2.coordinates)
 
+    @requires_torch
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_to_device(self, cif_file):
         """Test Polymer.to() for device conversion."""
         from ciffy import load
-        import torch
+        torch = pytest.importorskip("torch")
 
         polymer = load(cif_file, backend="torch")
 
@@ -102,11 +104,12 @@ class TestLoad:
         assert polymer_cpu.elements.device.type == "cpu"
         assert polymer_cpu.sequence.device.type == "cpu"
 
+    @requires_torch
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_to_dtype(self, cif_file):
         """Test Polymer.to() for dtype conversion (float tensors only)."""
         from ciffy import load
-        import torch
+        torch = pytest.importorskip("torch")
 
         polymer = load(cif_file, backend="torch")
 
@@ -123,11 +126,12 @@ class TestLoad:
         assert polymer_fp64.coordinates.dtype == torch.float64
         assert polymer_fp64.atoms.dtype == torch.int64
 
+    @requires_torch
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_to_device_and_dtype(self, cif_file):
         """Test Polymer.to() with both device and dtype."""
         from ciffy import load
-        import torch
+        torch = pytest.importorskip("torch")
 
         polymer = load(cif_file, backend="torch")
 
@@ -138,6 +142,7 @@ class TestLoad:
         assert polymer_new.atoms.device.type == "cpu"
         assert polymer_new.atoms.dtype == torch.int64
 
+    @requires_torch
     @pytest.mark.parametrize("cif_file", CIF_FILES)
     def test_to_returns_self_when_no_args(self, cif_file):
         """Test Polymer.to() returns self when no arguments provided."""

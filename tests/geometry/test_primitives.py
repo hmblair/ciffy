@@ -20,7 +20,8 @@ from ciffy.geometry import (
     optimal_rotation_to_target,
     project_to_rotation_circle,
 )
-from ciffy.backend import clone
+from ciffy.backend import clone, to_backend, allclose, is_torch
+from tests.utils import get_like
 
 
 class TestVectorOperations:
@@ -365,32 +366,31 @@ class TestTorchCompatibility:
     @pytest.fixture
     def torch_available(self):
         """Check if PyTorch is available."""
-        try:
-            import torch
-            return True
-        except ImportError:
+        from tests.utils import TORCH_AVAILABLE
+        if not TORCH_AVAILABLE:
             pytest.skip("PyTorch not available")
 
     def test_rodrigues_rotate_torch(self, torch_available):
         """Rodrigues rotation with torch tensors."""
-        import torch
+        ref = get_like("torch")
 
-        point = torch.tensor([1.0, 0.0, 0.0])
-        axis = torch.tensor([0.0, 0.0, 1.0])
-        origin = torch.tensor([0.0, 0.0, 0.0])
+        point = to_backend(np.array([1.0, 0.0, 0.0]), like=ref)
+        axis = to_backend(np.array([0.0, 0.0, 1.0]), like=ref)
+        origin = to_backend(np.array([0.0, 0.0, 0.0]), like=ref)
 
         rotated = rodrigues_rotate(point, axis, origin, np.pi / 2)
 
-        assert torch.allclose(rotated, torch.tensor([0.0, 1.0, 0.0]), atol=1e-6)
+        expected = to_backend(np.array([0.0, 1.0, 0.0]), like=ref)
+        assert allclose(rotated, expected, atol=1e-6)
 
     def test_optimal_rotation_torch(self, torch_available):
         """Optimal rotation with torch tensors."""
-        import torch
+        ref = get_like("torch")
 
-        point = torch.tensor([1.0, 0.0, 0.0])
-        target = torch.tensor([0.0, 1.0, 0.0])
-        axis = torch.tensor([0.0, 0.0, 1.0])
-        origin = torch.tensor([0.0, 0.0, 0.0])
+        point = to_backend(np.array([1.0, 0.0, 0.0]), like=ref)
+        target = to_backend(np.array([0.0, 1.0, 0.0]), like=ref)
+        axis = to_backend(np.array([0.0, 0.0, 1.0]), like=ref)
+        origin = to_backend(np.array([0.0, 0.0, 0.0]), like=ref)
 
         angle = optimal_rotation_to_target(point, target, origin, axis)
 
@@ -398,9 +398,9 @@ class TestTorchCompatibility:
 
     def test_clone_torch(self, torch_available):
         """Clone creates independent copy for torch."""
-        import torch
+        ref = get_like("torch")
 
-        arr = torch.tensor([1.0, 2.0, 3.0])
+        arr = to_backend(np.array([1.0, 2.0, 3.0]), like=ref)
         arr_copy = clone(arr)
 
         arr_copy[0] = 999.0
@@ -408,7 +408,7 @@ class TestTorchCompatibility:
 
     def test_roundtrip_numpy_torch(self, torch_available):
         """Same results with numpy and torch."""
-        import torch
+        ref = get_like("torch")
 
         # Numpy version
         point_np = np.array([1.0, 2.0, 3.0])
@@ -419,10 +419,11 @@ class TestTorchCompatibility:
         rotated_np = rodrigues_rotate(point_np, axis_np, origin_np, angle)
 
         # Torch version
-        point_t = torch.tensor(point_np)
-        axis_t = torch.tensor(axis_np)
-        origin_t = torch.tensor(origin_np)
+        point_t = to_backend(point_np, like=ref)
+        axis_t = to_backend(axis_np, like=ref)
+        origin_t = to_backend(origin_np, like=ref)
 
         rotated_t = rodrigues_rotate(point_t, axis_t, origin_t, angle)
 
-        assert np.allclose(rotated_np, rotated_t.numpy(), atol=1e-6)
+        from ciffy.backend import to_numpy
+        assert np.allclose(rotated_np, to_numpy(rotated_t), atol=1e-6)

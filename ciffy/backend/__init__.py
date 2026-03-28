@@ -78,6 +78,9 @@ from .ops import (
     ones_like,
     eye,
     fill_diagonal,
+    full,
+    randn,
+    allclose,
     to_backend,
     convert_backend,
     # Dtype conversion
@@ -147,6 +150,9 @@ __all__ = [
     "ones_like",
     "eye",
     "fill_diagonal",
+    "full",
+    "randn",
+    "allclose",
     "to_backend",
     "convert_backend",
     # Dtype conversion

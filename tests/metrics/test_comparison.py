@@ -6,8 +6,9 @@ import numpy as np
 import ciffy
 from ciffy import Scale, Molecule, tm_score, lddt, rmsd
 
-from tests.utils import get_test_cif, random_coordinates
+from tests.utils import get_test_cif, random_coordinates, get_like
 from tests.testing import get_tolerances
+from ciffy.backend import to_backend
 
 
 # =============================================================================
@@ -190,11 +191,7 @@ class TestLDDTEdgeCases:
         n = p.size()
         coords = np.zeros((n, 3), dtype=np.float32)
         coords[:, 0] = np.arange(n) * 100  # 100 angstroms apart
-        if backend == "torch":
-            import torch
-            p.coordinates = torch.from_numpy(coords)
-        else:
-            p.coordinates = coords
+        p.coordinates = to_backend(coords, like=get_like(backend))
 
         # Very small cutoff = no pairs
         global_score, per_res = lddt(p, p, cutoff=1.0)
@@ -317,9 +314,7 @@ class TestRmsdFunction:
 
         np.random.seed(42)
         noise = np.random.randn(p1.size(), 3).astype(np.float32) * 0.5
-        if backend == "torch":
-            import torch
-            noise = torch.from_numpy(noise)
+        noise = to_backend(noise, like=p1.coordinates)
         p2 = p1.copy(coordinates=p1.coordinates + noise)
 
         rmsd_val = rmsd(p1, p2)
@@ -345,10 +340,9 @@ class TestRmsdFunction:
         coords1 = np.random.randn(20, 3).astype(np.float32)
         coords2 = coords1 + 0.1
 
-        if backend == "torch":
-            import torch
-            coords1 = torch.from_numpy(coords1)
-            coords2 = torch.from_numpy(coords2)
+        ref = get_like(backend)
+        coords1 = to_backend(coords1, like=ref)
+        coords2 = to_backend(coords2, like=ref)
 
         rmsd_val = rmsd(coords1, coords2)
 
@@ -410,9 +404,7 @@ class TestIntersect:
         # Add some noise to p2 coordinates
         np.random.seed(42)
         noise = np.random.randn(len(p2), 3).astype(np.float32) * 0.5
-        if backend == "torch":
-            import torch
-            noise = torch.from_numpy(noise)
+        noise = to_backend(noise, like=p1.coordinates)
         p2.coordinates = p2.coordinates + noise
 
         # Direct RMSD would fail (different sizes)
@@ -441,3 +433,205 @@ class TestIntersect:
 
         with pytest.raises(TypeError, match="Backend mismatch"):
             ciffy.intersect(p1, p2)
+
+
+# =============================================================================
+# RMSD invariance tests
+# =============================================================================
+
+
+class TestRMSDInvariance:
+    """Test RMSD invariance properties (rotation, translation, reflection).
+
+    Uses parametrized any_cif fixture to run on all test PDBs.
+    """
+
+    def test_rotation_zero_rmsd(self, any_cif):
+        """Rotating a polymer should give zero RMSD after alignment."""
+        import copy
+
+        polymer = ciffy.load(any_cif)
+
+        theta = np.pi / 2
+        rotation = np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ], dtype=np.float32)
+
+        rotated = copy.deepcopy(polymer)
+        rotated.coordinates = polymer.coordinates @ rotation.T
+
+        dist = rmsd(polymer, rotated, Scale.MOLECULE)
+        assert np.allclose(dist, 0, atol=1e-3)
+
+    def test_translation_zero_rmsd(self, any_cif):
+        """Translating a polymer should give zero RMSD after alignment."""
+        import copy
+
+        polymer = ciffy.load(any_cif)
+
+        translated = copy.deepcopy(polymer)
+        translated.coordinates = polymer.coordinates + np.array([100.0, -50.0, 25.0])
+
+        dist = rmsd(polymer, translated, Scale.MOLECULE)
+        assert np.allclose(dist, 0, atol=1e-3)
+
+    def test_flip_nonzero_rmsd(self, any_cif):
+        """Flipping/reflecting coordinates should give nonzero RMSD."""
+        import copy
+
+        polymer = ciffy.load(any_cif)
+
+        flipped = copy.deepcopy(polymer)
+        flipped.coordinates = polymer.coordinates * np.array([1, 1, -1])
+
+        dist = rmsd(polymer, flipped, Scale.MOLECULE)
+        assert dist > 0.1
+
+    def test_numpy_backend(self, any_cif):
+        """Test RMSD with NumPy backend explicitly."""
+        polymer = ciffy.load(any_cif, backend="numpy")
+        assert polymer.backend == "numpy"
+
+        dist = rmsd(polymer, polymer)
+        n_atoms = polymer.coordinates.shape[0]
+        tolerance = max(1e-6, (n_atoms ** 0.5) * 1e-7 * 100)
+        assert np.allclose(dist, 0, atol=tolerance)
+
+    def test_default_scale(self, any_cif):
+        """Test that rmsd defaults to MOLECULE scale."""
+        polymer = ciffy.load(any_cif)
+
+        dist_default = rmsd(polymer, polymer)
+        dist_explicit = rmsd(polymer, polymer, Scale.MOLECULE)
+
+        assert np.allclose(dist_default, dist_explicit)
+
+    def test_identical_structures(self, any_cif):
+        """Test RMSD of identical structures is zero."""
+        polymer = ciffy.load(any_cif)
+        dist = rmsd(polymer, polymer)
+
+        n_atoms = polymer.coordinates.shape[0]
+        tolerance = max(1e-6, (n_atoms ** 0.5) * 1e-7 * 100)
+        assert np.allclose(dist, 0, atol=tolerance)
+
+    def test_single_chain(self, any_cif):
+        """Test RMSD works on single-chain polymers."""
+        import copy
+
+        polymer = ciffy.load(any_cif)
+        chain = polymer.chain(0)
+
+        perturbed = copy.deepcopy(chain)
+        perturbed.coordinates = chain.coordinates + np.random.randn(*chain.coordinates.shape) * 0.1
+
+        dist = rmsd(chain, perturbed)
+        assert dist.shape == (1,)
+        assert dist[0] > 0
+
+    def test_chain_scale(self, any_cif):
+        """Test RMSD at CHAIN scale."""
+        import copy
+
+        polymer = ciffy.load(any_cif)
+
+        perturbed = copy.deepcopy(polymer)
+        coords = perturbed.coordinates.copy()
+        n_first_chain = polymer.counts(Scale.CHAIN)[0]
+        coords[:n_first_chain] += np.random.randn(n_first_chain, 3) * 1.0
+        perturbed.coordinates = coords
+
+        dist = rmsd(polymer, perturbed, Scale.CHAIN)
+        assert dist.shape[0] == polymer.size(Scale.CHAIN)
+        assert dist[0] > dist[1:].mean()
+
+
+# =============================================================================
+# RMSD edge cases with small atom counts
+# =============================================================================
+
+
+class TestRMSDEdgeCases:
+    """Edge case tests for rmsd with small atom counts.
+
+    The Kabsch algorithm uses SVD on a 3x3 covariance matrix. With fewer than
+    3 atoms, the covariance matrix is rank-deficient (degenerate), which can
+    cause numerical instability.
+    """
+
+    @staticmethod
+    def _create_small_polymer(n_atoms: int, backend: str = "numpy", seed: int = 42):
+        """Create a minimal polymer with n_atoms for testing."""
+        from ciffy import Polymer
+        from ciffy.polymer.hierarchy import _Hierarchy
+        from ciffy.polymer import Field
+
+        rng = np.random.RandomState(seed)
+        coords = rng.randn(n_atoms, 3).astype(np.float32) * 10.0
+
+        atoms = np.zeros(n_atoms, dtype=np.int64)
+        elements = np.ones(n_atoms, dtype=np.int64) * 8
+        sequence = np.zeros(1, dtype=np.int64)
+
+        sizes = {
+            Scale.RESIDUE: np.array([n_atoms], dtype=np.int64),
+            Scale.CHAIN: np.array([n_atoms], dtype=np.int64),
+            Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+        }
+        lengths = np.array([1], dtype=np.int64)
+
+        hierarchy = _Hierarchy.from_sizes_and_lengths(
+            sizes=sizes,
+            lengths=lengths,
+            ref=coords,
+        )
+
+        polymer = Polymer(
+            hierarchy,
+            coordinates=Field(coords, Scale.ATOM),
+            atoms=Field(atoms, Scale.ATOM),
+            elements=Field(elements, Scale.ATOM),
+            sequence=Field(sequence, Scale.RESIDUE),
+            pdb_id="test",
+            names=["A"],
+        )
+
+        if backend == "torch":
+            return polymer.torch()
+        return polymer
+
+    def test_single_atom_rmsd(self, backend):
+        """rmsd with single atom should return exactly 0."""
+        p = self._create_small_polymer(1, backend)
+
+        dist = rmsd(p, p)
+
+        assert dist.shape == (1,)
+        if backend == "torch":
+            assert dist.item() == 0.0
+        else:
+            assert dist[0] == 0.0
+
+    def test_two_atom_rmsd(self, backend):
+        """rmsd with two atoms should return ~0 for self-comparison."""
+        p = self._create_small_polymer(2, backend)
+        dist = rmsd(p, p)
+
+        assert dist.shape == (1,)
+        if backend == "torch":
+            assert dist.item() < 0.02
+        else:
+            assert dist[0] < 1e-5
+
+    def test_three_atom_rmsd(self, backend):
+        """rmsd with three atoms should return ~0 for self-comparison."""
+        p = self._create_small_polymer(3, backend)
+        dist = rmsd(p, p)
+
+        assert dist.shape == (1,)
+        if backend == "torch":
+            assert dist.item() < 0.02
+        else:
+            assert dist[0] < 1e-5

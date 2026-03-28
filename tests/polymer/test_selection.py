@@ -324,12 +324,6 @@ class TestGetItem:
         p = ciffy.template("acgu", backend=backend)
         mask = p.atoms >= 0  # All True (atoms are non-negative)
 
-        if backend == "torch":
-            import torch
-            mask = torch.ones(p.size(), dtype=torch.bool)
-        else:
-            mask = np.ones(p.size(), dtype=bool)
-
         result = p[mask]
         assert result.size() == p.size()
 
@@ -339,11 +333,7 @@ class TestGetItem:
 
         p = ciffy.template("acgu", backend=backend)
 
-        if backend == "torch":
-            import torch
-            mask = torch.zeros(p.size(), dtype=torch.bool)
-        else:
-            mask = np.zeros(p.size(), dtype=bool)
+        mask = p.atoms < 0  # All False (atoms are non-negative)
 
         result = p[mask]
         assert result.empty()

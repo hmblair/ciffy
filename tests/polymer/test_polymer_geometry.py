@@ -9,7 +9,8 @@ import numpy as np
 
 from ciffy import operations
 from ciffy.biochemistry import Scale
-from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly
+from ciffy.backend import ops
+from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly, get_like
 from tests.testing import get_tolerances
 
 
@@ -273,12 +274,8 @@ class TestAlign:
 
         # Give varied coordinates for meaningful alignment
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            chain.coordinates = torch.randn(chain.size(), 3) * 10
-        else:
-            chain.coordinates = np.random.randn(chain.size(), 3).astype(np.float32) * 10
+        ref = get_like(backend)
+        chain.coordinates = ops.randn((chain.size(), 3), like=ref) * 10
 
         aligned, Q = operations.pca(chain, Scale.CHAIN)
 
@@ -299,12 +296,8 @@ class TestAlign:
 
         # Give varied coordinates
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            p.coordinates = torch.randn(p.size(), 3) * 10
-        else:
-            p.coordinates = np.random.randn(p.size(), 3).astype(np.float32) * 10
+        ref = get_like(backend)
+        p.coordinates = ops.randn((p.size(), 3), like=ref) * 10
 
         _, Q = operations.pca(p, Scale.MOLECULE)
 
@@ -327,12 +320,8 @@ class TestCopyWithCoordinates:
         original_coords = np.asarray(p.coordinates).copy()
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            new_coords = torch.randn(p.size(), 3)
-        else:
-            new_coords = np.random.randn(p.size(), 3).astype(np.float32)
+        ref = get_like(backend)
+        new_coords = ops.randn((p.size(), 3), like=ref)
 
         p2 = p.copy(coordinates=new_coords)
 
@@ -349,12 +338,8 @@ class TestCopyWithCoordinates:
         p = get_single_chain_poly(backend)
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            new_coords = torch.randn(p.size(), 3)
-        else:
-            new_coords = np.random.randn(p.size(), 3).astype(np.float32)
+        ref = get_like(backend)
+        new_coords = ops.randn((p.size(), 3), like=ref)
 
         p2 = p.copy(coordinates=new_coords)
 
@@ -373,14 +358,9 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_rotation
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords1 = torch.randn(10, 3)
-            coords2 = torch.randn(10, 3)
-        else:
-            coords1 = np.random.randn(10, 3).astype(np.float32)
-            coords2 = np.random.randn(10, 3).astype(np.float32)
+        ref = get_like(backend)
+        coords1 = ops.randn((10, 3), like=ref)
+        coords2 = ops.randn((10, 3), like=ref)
 
         R = kabsch_rotation(coords1, coords2)
 
@@ -391,14 +371,9 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_rotation
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords1 = torch.randn(20, 3)
-            coords2 = torch.randn(20, 3)
-        else:
-            coords1 = np.random.randn(20, 3).astype(np.float32)
-            coords2 = np.random.randn(20, 3).astype(np.float32)
+        ref = get_like(backend)
+        coords1 = ops.randn((20, 3), like=ref)
+        coords2 = ops.randn((20, 3), like=ref)
 
         R = kabsch_rotation(coords1, coords2)
         R_np = np.asarray(R)
@@ -413,14 +388,9 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_rotation
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords1 = torch.randn(15, 3)
-            coords2 = torch.randn(15, 3)
-        else:
-            coords1 = np.random.randn(15, 3).astype(np.float32)
-            coords2 = np.random.randn(15, 3).astype(np.float32)
+        ref = get_like(backend)
+        coords1 = ops.randn((15, 3), like=ref)
+        coords2 = ops.randn((15, 3), like=ref)
 
         R = kabsch_rotation(coords1, coords2)
         det = np.linalg.det(np.asarray(R))
@@ -434,14 +404,9 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_align
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords1 = torch.randn(10, 3)
-            coords2 = torch.randn(10, 3)
-        else:
-            coords1 = np.random.randn(10, 3).astype(np.float32)
-            coords2 = np.random.randn(10, 3).astype(np.float32)
+        ref = get_like(backend)
+        coords1 = ops.randn((10, 3), like=ref)
+        coords2 = ops.randn((10, 3), like=ref)
 
         result = kabsch_align(coords1, coords2)
 
@@ -456,12 +421,8 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_align
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords = torch.randn(20, 3)
-        else:
-            coords = np.random.randn(20, 3).astype(np.float32)
+        ref = get_like(backend)
+        coords = ops.randn((20, 3), like=ref)
 
         aligned, R, _ = kabsch_align(coords, coords, center=True)
         aligned_np = np.asarray(aligned)
@@ -485,22 +446,13 @@ class TestKabschAlignment:
         ], dtype=np.float32)
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords2 = torch.randn(30, 3)
-            coords1 = coords2 @ torch.from_numpy(R_true.T)  # Rotate coords2
-        else:
-            coords2 = np.random.randn(30, 3).astype(np.float32)
-            coords1 = coords2 @ R_true.T  # Rotate coords2
+        ref = get_like(backend)
+        coords2 = ops.randn((30, 3), like=ref)
+        coords1 = coords2 @ ops.to_backend(R_true.T, like=ref)  # Rotate coords2
 
         # Center both first
-        if backend == "torch":
-            coords1_c = coords1 - coords1.mean(dim=0)
-            coords2_c = coords2 - coords2.mean(dim=0)
-        else:
-            coords1_c = coords1 - coords1.mean(axis=0)
-            coords2_c = coords2 - coords2.mean(axis=0)
+        coords1_c = coords1 - coords1.mean(0)
+        coords2_c = coords2 - coords2.mean(0)
 
         aligned, R, _ = kabsch_align(coords1_c, coords2_c, center=False)
 
@@ -516,15 +468,10 @@ class TestKabschAlignment:
         from ciffy.operations.alignment import kabsch_align
 
         np.random.seed(42)
-        if backend == "torch":
-            import torch
-            torch.manual_seed(42)
-            coords2 = torch.randn(20, 3)
-            # Translate coords1
-            coords1 = coords2 + torch.tensor([10.0, -5.0, 3.0])
-        else:
-            coords2 = np.random.randn(20, 3).astype(np.float32)
-            coords1 = coords2 + np.array([10.0, -5.0, 3.0], dtype=np.float32)
+        ref = get_like(backend)
+        coords2 = ops.randn((20, 3), like=ref)
+        translation = ops.to_backend(np.array([10.0, -5.0, 3.0], dtype=np.float32), like=ref)
+        coords1 = coords2 + translation
 
         aligned, _, _ = kabsch_align(coords1, coords2, center=True)
 
@@ -710,7 +657,7 @@ class TestBondedDistances:
 
     def test_bonded_distances_gradient_flow(self):
         """bonded_distances allows gradient flow to coordinates."""
-        import torch
+        torch = pytest.importorskip("torch")
         import ciffy
         from ciffy.biochemistry import Residue
 
@@ -736,8 +683,10 @@ class TestBondedDistances:
         # At least some gradients should be non-zero
         assert coords.grad.abs().max() > 0
 
-    def test_bonded_distances_backend_consistency(self):
+    def test_bonded_distances_backend_consistency(self, backend):
         """bonded_distances gives same results for numpy and torch."""
+        if backend == "numpy":
+            pytest.skip("Cross-backend comparison only runs once")
         import ciffy
         from ciffy.biochemistry import Residue
 
@@ -800,11 +749,10 @@ class TestAlignFunction:
             [0, 0, 1]
         ], dtype=np.float32)
 
-        if backend == "torch":
-            import torch
-            p2.coordinates = p2.coordinates @ torch.from_numpy(R.T) + torch.tensor([10.0, -5.0, 3.0])
-        else:
-            p2.coordinates = p2.coordinates @ R.T + np.array([10.0, -5.0, 3.0], dtype=np.float32)
+        ref = get_like(backend)
+        R_t = ops.to_backend(R.T, like=ref)
+        translation = ops.to_backend(np.array([10.0, -5.0, 3.0], dtype=np.float32), like=ref)
+        p2.coordinates = p2.coordinates @ R_t + translation
 
         # Before alignment, raw RMSD should be large
         raw_rmsd_before = np.sqrt(((np.asarray(p1.coordinates) - np.asarray(p2.coordinates)) ** 2).sum(axis=1).mean())

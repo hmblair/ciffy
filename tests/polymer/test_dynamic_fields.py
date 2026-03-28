@@ -173,7 +173,7 @@ class TestFieldBackendConversion:
     def test_numpy_to_torch_converts_fields(self, polymer):
         """numpy() to torch() converts fields."""
         pytest.importorskip("torch")
-        import torch
+        from ciffy.backend import is_torch
 
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
@@ -181,7 +181,7 @@ class TestFieldBackendConversion:
 
         torch_polymer = polymer.torch()
 
-        assert isinstance(torch_polymer.data, torch.Tensor)
+        assert is_torch(torch_polymer.data)
         np.testing.assert_array_equal(
             torch_polymer.data.numpy(),
             data
@@ -190,7 +190,7 @@ class TestFieldBackendConversion:
     def test_torch_to_numpy_converts_fields(self, polymer):
         """torch() to numpy() converts fields."""
         pytest.importorskip("torch")
-        import torch
+        from ciffy.backend import ops
 
         n_res = polymer.size(Scale.RESIDUE)
         data = np.arange(n_res).astype(np.float32)
@@ -198,7 +198,7 @@ class TestFieldBackendConversion:
 
         # Convert to torch, add field, convert back
         torch_polymer = polymer.torch()
-        torch_polymer = torch_polymer.annotate('extra', torch.zeros(n_res), Scale.RESIDUE)
+        torch_polymer = torch_polymer.annotate('extra', ops.zeros(n_res, like=torch_polymer.coordinates, dtype='float32'), Scale.RESIDUE)
 
         numpy_polymer = torch_polymer.numpy()
 

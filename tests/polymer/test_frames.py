@@ -80,20 +80,22 @@ class TestDecomposeCompose:
     def test_invariant_to_global_rotation(self):
         """Transforms are invariant to global rotation."""
         pytest.importorskip("torch")
-        import torch
+
+        from ciffy.backend import ops
+        from ciffy.geometry import quaternion_to_rotation_matrix
 
         p = ciffy.load(CIF_9MDS).chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
-        # Create a random rotation
-        from ciffy.geometry import quaternion_to_rotation_matrix
-        axis = torch.randn(3)
-        axis = axis / axis.norm()
-        angle = torch.tensor(0.5)
-        quat = torch.zeros(4)
-        quat[0] = torch.cos(angle / 2)
-        quat[1:] = axis * torch.sin(angle / 2)
-        R = quaternion_to_rotation_matrix(quat.unsqueeze(0)).squeeze(0)
+        # Create a random rotation using numpy, then convert
+        angle = 0.5
+        axis = np.random.randn(3).astype(np.float32)
+        axis = axis / np.linalg.norm(axis)
+        quat_np = np.zeros(4, dtype=np.float32)
+        quat_np[0] = np.cos(angle / 2)
+        quat_np[1:] = axis * np.sin(angle / 2)
+        quat = ops.to_backend(quat_np, like=p.coordinates)
+        R = quaternion_to_rotation_matrix(ops.unsqueeze(quat, 0)).squeeze(0)
 
         # Rotate the polymer
         rotated = p.copy(coordinates=p.coordinates @ R.T)
@@ -109,13 +111,14 @@ class TestDecomposeCompose:
     def test_invariant_to_global_translation(self):
         """Transforms are invariant to global translation."""
         pytest.importorskip("torch")
-        import torch
+
+        from ciffy.backend import ops
 
         p = ciffy.load(CIF_9MDS).chain(0).strip().torch()
         p = p.residue(list(range(min(4, p.size(Scale.RESIDUE)))))
 
         # Translate the polymer
-        translation = torch.randn(3) * 100
+        translation = ops.randn((3,), like=p.coordinates) * 100
         translated = p.copy(coordinates=p.coordinates + translation)
 
         # Compute transforms

@@ -62,6 +62,11 @@ def get_test_cif(pdb_id: str) -> str:
 # Test helpers
 # =============================================================================
 
+requires_torch = pytest.mark.skipif(
+    not TORCH_AVAILABLE, reason="PyTorch not available"
+)
+
+
 def skip_if_no_torch(backend: str) -> None:
     """Skip test if backend is 'torch' but PyTorch is not available.
 
@@ -87,10 +92,25 @@ def random_coordinates(n: int, backend: str, scale: float = 10.0):
     """
     coords = np.random.randn(n, 3).astype(np.float32) * scale
     if backend == "torch":
-        if not TORCH_AVAILABLE:
-            pytest.skip("PyTorch not available")
-        return torch.from_numpy(coords)
+        from ciffy.backend import to_torch
+        return to_torch(coords)
     return coords
+
+
+def to_backend(arr: np.ndarray, backend: str):
+    """Convert a numpy array to the specified backend.
+
+    Args:
+        arr: NumPy array.
+        backend: "numpy" or "torch".
+
+    Returns:
+        Array in the specified backend.
+    """
+    if backend == "torch":
+        from ciffy.backend import to_torch
+        return to_torch(arr)
+    return arr
 
 
 def set_random_coordinates(polymer, scale: float = 10.0) -> None:
@@ -165,6 +185,18 @@ def skip_if_no_device(device: str) -> None:
 # =============================================================================
 # Test polymer helpers
 # =============================================================================
+
+def get_like(backend: str):
+    """Return a minimal reference array for the given backend string.
+
+    Bridges the gap between the `backend` fixture (a string) and ops
+    that take `like` (an array). Single place that knows about backends.
+    """
+    if backend == "torch":
+        from ciffy.backend import to_torch
+        return to_torch(np.empty(0))
+    return np.empty(0)
+
 
 def get_single_chain_poly(backend: str = "numpy", sequence: str = "acgu"):
     """Get a small single-chain polymer with random coordinates.

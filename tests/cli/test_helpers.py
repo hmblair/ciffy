@@ -7,7 +7,7 @@ import sys
 from io import StringIO
 from pathlib import Path
 
-from tests.utils import get_test_cif
+from tests.utils import get_test_cif, requires_torch
 
 
 class TestResolveDevice:
@@ -31,6 +31,7 @@ class TestResolveDevice:
 
         assert resolve_device("mps") == "mps"
 
+    @requires_torch
     def test_auto_returns_valid_device(self):
         """resolve_device('auto') returns one of cpu/cuda/mps."""
         from ciffy.cli.helpers import resolve_device

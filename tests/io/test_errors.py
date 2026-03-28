@@ -7,7 +7,8 @@ Tests error conditions for loading and saving CIF files.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif, BACKENDS
+from tests.utils import get_test_cif, get_like, BACKENDS
+from ciffy.backend import to_backend
 
 
 class TestLoadErrors:
@@ -140,11 +141,7 @@ class TestRoundTripEdgeCases:
         p = ciffy.template("a", backend=backend)
         # Attach non-zero coordinates (_template has zeros)
         coords = np.random.randn(p.size(), 3).astype(np.float32) * 10
-        if backend == "torch":
-            import torch
-            p.coordinates = torch.from_numpy(coords)
-        else:
-            p.coordinates = coords
+        p.coordinates = to_backend(coords, like=get_like(backend))
 
         out_path = tmp_path / "single_residue.cif"
         p.write(str(out_path))

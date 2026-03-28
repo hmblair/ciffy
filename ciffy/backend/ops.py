@@ -1139,6 +1139,66 @@ def clamp(arr: Array, min_val: float | None = None, max_val: float | None = None
     return result
 
 
+def randn(shape: int | tuple, *, like: Array) -> Array:
+    """
+    Create a random normal array matching the backend/device of 'like'.
+
+    Args:
+        shape: Shape of the array (int for 1D, tuple for nD).
+        like: Template array to match backend and device.
+
+    Returns:
+        Random normal array in the same backend/device as 'like'.
+    """
+    if isinstance(shape, int):
+        shape = (shape,)
+    if is_torch(like):
+        import torch
+        return torch.randn(shape, device=getattr(like, 'device', None))
+    return np.random.randn(*shape).astype(np.float32)
+
+
+def allclose(a: Array, b: Array, atol: float = 1e-5, rtol: float = 1e-5) -> bool:
+    """
+    Backend-agnostic approximate equality check.
+
+    Args:
+        a: First array.
+        b: Second array.
+        atol: Absolute tolerance.
+        rtol: Relative tolerance.
+
+    Returns:
+        True if arrays are approximately equal.
+    """
+    a_np = np.asarray(a) if not isinstance(a, np.ndarray) else a
+    b_np = np.asarray(b) if not isinstance(b, np.ndarray) else b
+    return bool(np.allclose(a_np, b_np, atol=atol, rtol=rtol))
+
+
+def full(shape: int | tuple, value: float, *, like: Array, dtype: str = 'int64') -> Array:
+    """
+    Create a filled array matching the backend/device of 'like'.
+
+    Args:
+        shape: Shape of the array (int for 1D, tuple for nD).
+        value: Fill value.
+        like: Template array to match backend and device.
+        dtype: Data type ('int64', 'float32').
+
+    Returns:
+        Filled array in the same backend/device as 'like'.
+    """
+    if isinstance(shape, int):
+        shape = (shape,)
+    if is_torch(like):
+        import torch
+        torch_dtype = {'int64': torch.long, 'float32': torch.float32}[dtype]
+        return torch.full(shape, value, dtype=torch_dtype, device=getattr(like, 'device', None))
+    np_dtype = {'int64': np.int64, 'float32': np.float32}[dtype]
+    return np.full(shape, value, dtype=np_dtype)
+
+
 def argsort(arr: Array) -> Array:
     """
     Return indices that would sort the array.

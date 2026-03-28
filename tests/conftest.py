@@ -19,7 +19,7 @@ import pytest
 from tests.utils import (
     get_test_cif, TEST_PDBS, LARGE_PDBS, DATA_DIR,
     BACKENDS, TORCH_AVAILABLE, skip_if_no_torch,
-    get_single_chain_poly, random_coordinates,
+    get_single_chain_poly, random_coordinates, get_like,
 )
 
 
@@ -67,11 +67,11 @@ def skip_torch_if_unavailable(request):
     This runs for every test. If the test has a 'backend' parameter
     set to 'torch' and torch is not available, skip the test.
     """
-    # Check if this test has a backend parameter
     if "backend" in request.fixturenames:
         backend = request.getfixturevalue("backend")
         if backend == "torch" and not TORCH_AVAILABLE:
             pytest.skip("PyTorch not available")
+
 
 
 # =============================================================================
@@ -94,6 +94,8 @@ def any_polymer_numpy(request):
 @pytest.fixture(scope="session", params=TEST_PDBS)
 def any_polymer_torch(request):
     """Parametrized fixture providing polymers with torch backend."""
+    if not TORCH_AVAILABLE:
+        pytest.skip("PyTorch not available")
     from ciffy import load
     return load(get_test_cif(request.param), backend="torch")
 

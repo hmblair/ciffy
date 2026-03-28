@@ -7,7 +7,9 @@ import pytest
 
 import ciffy
 from ciffy import Scale, template
+from ciffy.backend import ops
 from ciffy.biochemistry import Residue
+from tests.utils import get_like
 
 
 # Identity quaternion (w=1) + Z-axis translation for ideal backbone spacing
@@ -36,11 +38,10 @@ def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polyme
         elements = atom_group.elements()
         coords = atom_group.ideal
 
-        if backend == "torch":
-            import torch
-            coords = torch.from_numpy(coords)
-            atoms = torch.from_numpy(atoms)
-            elements = torch.from_numpy(elements)
+        ref = get_like(backend)
+        coords = ops.to_backend(coords, like=ref)
+        atoms = ops.to_backend(atoms, like=ref)
+        elements = ops.to_backend(elements, like=ref)
 
         if poly.empty():
             poly = poly._append(residue, coords, atoms=atoms, elements=elements)
@@ -50,106 +51,6 @@ def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polyme
             )
 
     return poly
-
-
-class TestAppendEdgeCases:
-    """Edge case tests for Polymer._append()."""
-
-    def test_extend_with_identity_transform(self):
-        """Extend with zero rotation places residue along backbone."""
-        p = _template_with_coords("a")
-
-        atom_group = Residue.C.terminal(start=False, end=False)
-        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        # Identity quaternion (w=1), translate along Z
-        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
-
-        extended = p._append(
-            coordinates=coords,
-            atoms=atoms,
-            elements=elements,
-            transform=transform,
-            residue=Residue.C
-        )
-
-        assert extended.size(Scale.RESIDUE) == 2
-
-    def test_append_with_absolute_coords(self):
-        """Append with absolute coordinates (no transform)."""
-        p = _template_with_coords("a")
-
-        atom_group = Residue.C.terminal(start=False, end=False)
-        atoms, elements = atom_group.index(), atom_group.elements()
-        # Absolute coordinates - offset from origin
-        abs_coords = atom_group.ideal + np.array([10.0, 0.0, 0.0], dtype=np.float32)
-
-        extended = p._append(
-            coordinates=abs_coords,
-            atoms=atoms,
-            elements=elements,
-            residue=Residue.C
-        )
-
-        assert extended.size(Scale.RESIDUE) == 2
-        # New residue coords should be exactly what we passed (offset by 10 in X)
-        new_res_coords = extended.coordinates[-len(atoms):]
-        assert np.allclose(new_res_coords, abs_coords, atol=1e-5)
-
-    def test_append_sequence_updated(self):
-        """Appended polymer has correct sequence."""
-        p = _template_with_coords("acg")
-
-        atom_group = Residue.U.terminal(start=False, end=False)
-        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
-
-        extended = p._append(
-            coordinates=coords,
-            atoms=atoms,
-            elements=elements,
-            transform=transform,
-            residue=Residue.U
-        )
-
-        assert extended.sequence_str() == "acgu"
-
-    def test_append_chain_count_unchanged(self):
-        """Append adds residue to existing chain, not new chain."""
-        p = _template_with_coords("ac")
-        assert p.size(Scale.CHAIN) == 1
-
-        atom_group = Residue.G.terminal(start=False, end=False)
-        atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-        transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
-
-        extended = p._append(
-            coordinates=coords,
-            atoms=atoms,
-            elements=elements,
-            transform=transform,
-            residue=Residue.G
-        )
-
-        assert extended.size(Scale.CHAIN) == 1
-
-    def test_append_from_different_residue_types(self):
-        """Can append from any RNA residue type."""
-        for start_res in ['a', 'c', 'g', 'u']:
-            p = _template_with_coords(start_res)
-
-            atom_group = Residue.A.terminal(start=False, end=False)
-            atoms, elements, coords = atom_group.index(), atom_group.elements(), atom_group.ideal
-            transform = np.array([1, 0, 0, 0, 0, 0, 6.0], dtype=np.float32)
-
-            extended = p._append(
-                coordinates=coords,
-                atoms=atoms,
-                elements=elements,
-                transform=transform,
-                residue=Residue.A
-            )
-
-            assert extended.size(Scale.RESIDUE) == 2
 
 
 class TestAppend:

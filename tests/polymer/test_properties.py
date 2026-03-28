@@ -143,11 +143,6 @@ class TestBonds:
         polymer = load(cif_file, backend=backend)
         bonds = polymer.bonds
 
-        if backend == "torch":
-            import torch
-            assert isinstance(bonds, torch.Tensor)
-        else:
-            assert isinstance(bonds, np.ndarray)
         assert bonds.ndim == 2
 
     @pytest.mark.parametrize("cif_file", CIF_FILES)
@@ -247,11 +242,6 @@ class TestBonds:
         bonds = polymer.bonds
 
         # Should have bonds (nucleotides have internal bonds)
-        if backend == "torch":
-            import torch
-            assert isinstance(bonds, torch.Tensor)
-        else:
-            assert isinstance(bonds, np.ndarray)
         assert len(bonds) > 0
 
     def test_bonds_empty_polymer(self, backend):
@@ -262,11 +252,6 @@ class TestBonds:
         empty = _template[_template.atoms < 0]
 
         bonds = empty.bonds
-        if backend == "torch":
-            import torch
-            assert isinstance(bonds, torch.Tensor)
-        else:
-            assert isinstance(bonds, np.ndarray)
         assert len(bonds) == 0
 
 

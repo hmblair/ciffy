@@ -4,8 +4,9 @@ import pytest
 import numpy as np
 import warnings
 
-from tests.utils import get_test_cif
+from tests.utils import get_test_cif, requires_torch
 from tests.testing import expected_sequence_values, assert_sequence_matches, get_tolerances
+from ciffy.backend import is_torch
 
 
 class TestFromSequence:
@@ -101,8 +102,7 @@ class TestFromSequence:
         if backend == "numpy":
             assert isinstance(polymer.atoms, np.ndarray)
         else:
-            import torch
-            assert isinstance(polymer.atoms, torch.Tensor)
+            assert is_torch(polymer.atoms)
 
     @pytest.mark.parametrize("id_arg,expected_id", [
         ("my_rna", "my_rna"),
@@ -387,9 +387,9 @@ class TestFromSequenceMultiChain:
         assert polymer.names[25] == "Z"
         assert polymer.names[26] == "AA"
 
+    @requires_torch
     def test_multi_chain_torch_backend(self):
         """Test multi-chain with torch backend."""
-        import torch
         from ciffy import template, Scale
 
         polymer = template(["acgu", "acgu"], backend="torch")
@@ -397,7 +397,7 @@ class TestFromSequenceMultiChain:
         assert polymer.backend == "torch"
         assert polymer.size(Scale.CHAIN) == 2
         # Templates have atoms (tensors) but no coordinates
-        assert isinstance(polymer.atoms, torch.Tensor)
+        assert is_torch(polymer.atoms)
 
     def test_atoms_per_chain(self):
         """Test atoms are correctly distributed per chain."""

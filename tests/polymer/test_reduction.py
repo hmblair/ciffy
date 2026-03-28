@@ -7,7 +7,8 @@ Tests reduce, rreduce, expand, and count methods.
 import pytest
 import numpy as np
 
-from tests.utils import get_test_cif, BACKENDS, get_single_chain_poly
+from ciffy.backend import ops
+from tests.utils import get_test_cif, BACKENDS, get_single_chain_poly, get_like
 
 
 class TestReduce:
@@ -107,7 +108,8 @@ class TestResidueReduce:
 
         p = get_single_chain_poly(backend)
         # Create per-residue feature
-        residue_feature = p.sequence.float() if backend == "torch" else p.sequence.astype(np.float32)
+        ref = get_like(backend)
+        residue_feature = ops.to_backend(np.asarray(p.sequence).astype(np.float32), like=ref)
 
         result = p.reduce(residue_feature, Scale.CHAIN, Reduction.MEAN, from_scale=Scale.RESIDUE)
         assert result.shape[0] == 1
@@ -120,11 +122,8 @@ class TestResidueReduce:
         p = get_single_chain_poly(backend)
 
         # Create dummy per-residue features
-        if backend == "torch":
-            import torch
-            residue_feat = torch.ones(p.size(Scale.RESIDUE), dtype=torch.float32)
-        else:
-            residue_feat = np.ones(p.size(Scale.RESIDUE), dtype=np.float32)
+        ref = get_like(backend)
+        residue_feat = ops.ones(p.size(Scale.RESIDUE), like=ref, dtype='float32')
 
         result = p.reduce(residue_feat, Scale.CHAIN, Reduction.SUM, from_scale=Scale.RESIDUE)
 
@@ -142,10 +141,8 @@ class TestResidueReduce:
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
 
         # Use sequence (residue types) as feature
-        if backend == "torch":
-            seq_float = p.sequence.float()
-        else:
-            seq_float = p.sequence.astype(np.float32)
+        ref = get_like(backend)
+        seq_float = ops.to_backend(np.asarray(p.sequence).astype(np.float32), like=ref)
 
         min_val, min_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MIN, from_scale=Scale.RESIDUE)
         max_val, max_idx = p.reduce(seq_float, Scale.CHAIN, Reduction.MAX, from_scale=Scale.RESIDUE)
@@ -165,11 +162,8 @@ class TestExpand:
         p = get_single_chain_poly(backend)
 
         # Create per-chain feature (single chain)
-        if backend == "torch":
-            import torch
-            chain_feat = torch.tensor([[1.0, 2.0, 3.0]])
-        else:
-            chain_feat = np.array([[1.0, 2.0, 3.0]])
+        ref = get_like(backend)
+        chain_feat = ops.to_backend(np.array([[1.0, 2.0, 3.0]], dtype=np.float32), like=ref)
 
         expanded = p.expand(chain_feat, Scale.CHAIN, Scale.ATOM)
 
@@ -191,11 +185,8 @@ class TestExpand:
 
         # Create per-residue features
         n_res = p.size(Scale.RESIDUE)
-        if backend == "torch":
-            import torch
-            residue_feat = torch.arange(n_res, dtype=torch.float32).unsqueeze(1)
-        else:
-            residue_feat = np.arange(n_res, dtype=np.float32).reshape(-1, 1)
+        ref = get_like(backend)
+        residue_feat = ops.to_backend(np.arange(n_res, dtype=np.float32).reshape(-1, 1), like=ref)
 
         expanded = p.expand(residue_feat, Scale.RESIDUE, Scale.ATOM)
 
@@ -209,11 +200,8 @@ class TestExpand:
         p = get_single_chain_poly(backend)
 
         # Per-chain feature
-        if backend == "torch":
-            import torch
-            chain_feat = torch.tensor([[1.0]])
-        else:
-            chain_feat = np.array([[1.0]])
+        ref = get_like(backend)
+        chain_feat = ops.to_backend(np.array([[1.0]], dtype=np.float32), like=ref)
 
         expanded = p.expand(chain_feat, Scale.CHAIN, Scale.RESIDUE)
 
@@ -226,11 +214,8 @@ class TestExpand:
 
         p = get_single_chain_poly(backend)
 
-        if backend == "torch":
-            import torch
-            mol_feat = torch.tensor([[1.0]])
-        else:
-            mol_feat = np.array([[1.0]])
+        ref = get_like(backend)
+        mol_feat = ops.to_backend(np.array([[1.0]], dtype=np.float32), like=ref)
 
         with pytest.raises(ValueError):
             p.expand(mol_feat, Scale.MOLECULE, Scale.CHAIN)
@@ -246,11 +231,8 @@ class TestCount:
 
         p = get_single_chain_poly(backend)
 
-        if backend == "torch":
-            import torch
-            mask = torch.zeros(p.size(), dtype=torch.bool)
-        else:
-            mask = np.zeros(p.size(), dtype=bool)
+        ref = get_like(backend)
+        mask = ops.to_backend(np.zeros(p.size(), dtype=bool), like=ref)
 
         counts = p.count(mask, Scale.RESIDUE)
 
@@ -265,11 +247,8 @@ class TestCount:
 
         p = get_single_chain_poly(backend)
 
-        if backend == "torch":
-            import torch
-            mask = torch.ones(p.size(), dtype=torch.bool)
-        else:
-            mask = np.ones(p.size(), dtype=bool)
+        ref = get_like(backend)
+        mask = ops.to_backend(np.ones(p.size(), dtype=bool), like=ref)
 
         counts = p.count(mask, Scale.RESIDUE)
 
@@ -287,11 +266,8 @@ class TestCount:
 
         p = ciffy.load(get_test_cif("9GCM"), backend=backend)
 
-        if backend == "torch":
-            import torch
-            mask = torch.ones(p.size(), dtype=torch.bool)
-        else:
-            mask = np.ones(p.size(), dtype=bool)
+        ref = get_like(backend)
+        mask = ops.to_backend(np.ones(p.size(), dtype=bool), like=ref)
 
         counts = p.count(mask, Scale.CHAIN)
 
@@ -311,13 +287,9 @@ class TestCount:
 
         # Mask only first half of atoms
         n = p.size()
-        if backend == "torch":
-            import torch
-            mask = torch.zeros(n, dtype=torch.bool)
-            mask[:n // 2] = True
-        else:
-            mask = np.zeros(n, dtype=bool)
-            mask[:n // 2] = True
+        ref = get_like(backend)
+        mask = ops.zeros(n, like=ref, dtype='bool')
+        mask[:n // 2] = True
 
         counts = p.count(mask, Scale.RESIDUE)
 

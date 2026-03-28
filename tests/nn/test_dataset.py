@@ -8,7 +8,8 @@ import numpy as np
 import ciffy
 from ciffy import Scale, operations
 
-from tests.utils import get_test_cif, TORCH_AVAILABLE, DATA_DIR
+from tests.utils import get_test_cif, TORCH_AVAILABLE, requires_torch, DATA_DIR
+from ciffy.backend import is_torch
 
 
 # =============================================================================
@@ -416,9 +417,9 @@ class TestPolymerDatasetEdgeCases:
         p = ds[0]
         assert isinstance(p.coordinates, np.ndarray)
 
+    @requires_torch
     def test_dataset_backend_torch(self):
         """Dataset respects backend='torch'."""
-        import torch
         from ciffy.nn import PolymerDataset
         from ciffy import Scale
 
@@ -427,7 +428,7 @@ class TestPolymerDatasetEdgeCases:
             pytest.skip("No chains in test data")
 
         p = ds[0]
-        assert isinstance(p.coordinates, torch.Tensor)
+        assert is_torch(p.coordinates)
 
 
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")

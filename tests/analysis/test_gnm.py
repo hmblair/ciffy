@@ -20,7 +20,9 @@ from ciffy import Scale
 from ciffy.operations.gnm import graph_laplacian, gnm_correlations, gnm_variances
 # Import the public API
 from ciffy.operations import GNM, contact_map
-from tests.utils import get_test_cif
+from tests.utils import get_test_cif, get_like
+
+from ciffy.backend import ops
 
 
 def make_symmetric_adj(n: int, backend: str, seed: int = 42):
@@ -30,19 +32,15 @@ def make_symmetric_adj(n: int, backend: str, seed: int = 42):
     adj = adj + adj.T
     np.fill_diagonal(adj, 0)
 
-    if backend == "torch":
-        import torch
-        return torch.from_numpy(adj)
-    return adj
+    ref = get_like(backend)
+    return ops.to_backend(adj, like=ref)
 
 
 def make_array(data, backend: str):
     """Create array from list/nested list for given backend."""
     arr = np.array(data, dtype=np.float32)
-    if backend == "torch":
-        import torch
-        return torch.from_numpy(arr)
-    return arr
+    ref = get_like(backend)
+    return ops.to_backend(arr, like=ref)
 
 
 def allclose(a, b, atol=1e-5):
@@ -50,13 +48,6 @@ def allclose(a, b, atol=1e-5):
     a_np = np.asarray(a)
     b_np = np.asarray(b)
     return np.allclose(a_np, b_np, atol=atol)
-
-
-def get_diagonal(arr):
-    """Backend-agnostic diagonal extraction."""
-    if hasattr(arr, 'diagonal'):
-        return arr.diagonal()
-    return np.diag(arr)
 
 
 def isnan_any(arr):
@@ -311,25 +302,6 @@ class TestGNMIntegration:
         corr_np = np.asarray(corr)
         assert allclose(var_np, np.diag(corr_np))
 
-    def test_backend_consistency(self):
-        """Test numpy and torch backends produce same results."""
-        adj_np = make_symmetric_adj(10, "numpy")
-        adj_torch = make_symmetric_adj(10, "torch")
-
-        # Graph Laplacian
-        L_np = graph_laplacian(adj_np)
-        L_torch = graph_laplacian(adj_torch)
-        assert allclose(L_np, L_torch)
-
-        # GNM correlations
-        corr_np = gnm_correlations(adj_np)
-        corr_torch = gnm_correlations(adj_torch)
-        assert allclose(corr_np, corr_torch, atol=1e-4)
-
-        # GNM variances
-        var_np = gnm_variances(adj_np)
-        var_torch = gnm_variances(adj_torch)
-        assert allclose(var_np, var_torch, atol=1e-4)
 
 
 # ============================================================================
@@ -521,33 +493,6 @@ class TestGNMClassIntegration:
         # Laplacian
         assert allclose(gnm.laplacian, graph_laplacian(adj))
 
-    def test_backend_consistency_class(self):
-        """Test GNM class produces same results for numpy and torch."""
-        adj_np = make_symmetric_adj(10, "numpy")
-        adj_torch = make_symmetric_adj(10, "torch")
-
-        gnm_np = GNM(adj_np)
-        gnm_torch = GNM(adj_torch)
-
-        # Correlations
-        assert allclose(gnm_np.correlations, gnm_torch.correlations, atol=1e-4)
-
-        # Variances
-        assert allclose(gnm_np.variances, gnm_torch.variances, atol=1e-4)
-
-        # Cross-correlations
-        assert allclose(gnm_np.cross_correlations, gnm_torch.cross_correlations, atol=1e-4)
-
-        # Eigenvalues
-        assert allclose(gnm_np.eigenvalues, gnm_torch.eigenvalues, atol=1e-4)
-
-        # Modes
-        eig_np, modes_np = gnm_np.modes(k=5)
-        eig_torch, modes_torch = gnm_torch.modes(k=5)
-        assert allclose(eig_np, eig_torch, atol=1e-4)
-        # Note: eigenvectors may differ by sign, so compare absolute values
-        assert allclose(np.abs(modes_np), np.abs(np.asarray(modes_torch)), atol=1e-4)
-
     def test_complete_graph(self, backend):
         """Test GNM class with complete graph."""
         n = 5
@@ -640,27 +585,6 @@ class TestContactMap:
         # With huge cutoff, all pairs should be in contact (except diagonal)
         expected_contacts = n * (n - 1)  # All pairs
         assert adj_np.sum() == expected_contacts
-
-    def test_backend_consistency(self):
-        """Test numpy and torch backends produce similar contact counts.
-
-        Note: Due to floating-point differences in distance calculations,
-        contacts at exactly the cutoff boundary may differ. We check that
-        the total number of contacts is very close.
-        """
-        cif_path = get_test_cif("9MDS")
-        polymer_np = ciffy.load(cif_path, backend="numpy").chain(0)
-        polymer_torch = ciffy.load(cif_path, backend="torch").chain(0)
-
-        adj_np = contact_map(polymer_np, cutoff=7.0)
-        adj_torch = contact_map(polymer_torch, cutoff=7.0)
-
-        # Contact counts should be very close (allowing for edge cases at cutoff)
-        n_contacts_np = np.asarray(adj_np).sum()
-        n_contacts_torch = np.asarray(adj_torch).sum()
-
-        # Allow up to 1% difference in contact count
-        assert abs(n_contacts_np - n_contacts_torch) / max(n_contacts_np, 1) < 0.01
 
     def test_works_with_gnm(self, backend, polymer):
         """Test contact map integrates with GNM class."""

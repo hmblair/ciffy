@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 import ciffy
-from tests.utils import get_test_cif
+from ciffy.backend import ops
+from tests.utils import get_like, get_test_cif
 from ciffy import Residue, Scale, join
 from ciffy import template
 
@@ -41,20 +42,16 @@ def _template_with_coords(sequence: str, backend: str = "numpy") -> ciffy.Polyme
             elements = atom_group.elements()
             coords = atom_group.ideal
 
-            # Convert to torch if needed
-            if backend == "torch":
-                import torch
-                coords = torch.from_numpy(coords)
-                atoms = torch.from_numpy(atoms)
-                elements = torch.from_numpy(elements)
+            ref = get_like(backend)
+            coords = ops.to_backend(coords, like=ref)
+            atoms = ops.to_backend(atoms, like=ref)
+            elements = ops.to_backend(elements, like=ref)
 
             if poly.empty():
                 poly = poly._append(residue, coords, atoms=atoms, elements=elements)
             else:
                 transform = LINEAR_EXTEND_TRANSFORM
-                if backend == "torch":
-                    import torch
-                    transform = torch.from_numpy(transform)
+                transform = ops.to_backend(transform, like=ref)
                 poly = poly._append(residue, coords, transform, atoms=atoms, elements=elements)
 
     return poly
@@ -70,13 +67,11 @@ def extend_with_linear(poly, residue):
 
     transform = LINEAR_EXTEND_TRANSFORM
 
-    # Convert to match polymer backend
-    if poly.backend == "torch":
-        import torch
-        coords = torch.from_numpy(coords)
-        transform = torch.from_numpy(transform)
-        atoms = torch.from_numpy(atoms)
-        elements = torch.from_numpy(elements)
+    ref = get_like(poly.backend)
+    coords = ops.to_backend(coords, like=ref)
+    transform = ops.to_backend(transform, like=ref)
+    atoms = ops.to_backend(atoms, like=ref)
+    elements = ops.to_backend(elements, like=ref)
 
     return poly._append(residue, coords, transform, atoms=atoms, elements=elements)
 

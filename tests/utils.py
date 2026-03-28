@@ -37,25 +37,48 @@ LARGE_PDBS = ["9MDS", "8CAM"]
 DATA_DIR = Path(__file__).parent / "data"
 
 
+def _is_valid_cif(filepath: Path) -> bool:
+    """Check that a file looks like a valid CIF (starts with 'data_')."""
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                return line.startswith('data_')
+        return False
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def get_test_cif(pdb_id: str) -> str:
     """Get path to a test CIF file, downloading if necessary.
 
-    Uses ciffy.datasets.pdb for downloading. Raises on failure.
+    Uses ciffy.datasets.pdb for downloading. Validates the file after
+    download and re-downloads if corrupted.
     """
     from ciffy.datasets.pdb import download_structure
 
     pdb_id = pdb_id.upper()
     filepath = DATA_DIR / f"{pdb_id}.cif"
 
-    # Return cached file if it exists
+    # Return cached file if it exists and is valid
     if filepath.is_file() and filepath.stat().st_size > 0:
-        return str(filepath)
+        if _is_valid_cif(filepath):
+            return str(filepath)
+        # Corrupted file — remove and re-download
+        filepath.unlink()
 
     # Download using centralized function
     print(f"Downloading {pdb_id}.cif from RCSB PDB...", flush=True)
-    path, _ = download_structure(pdb_id, DATA_DIR, overwrite=False)
+    path, _ = download_structure(pdb_id, DATA_DIR, overwrite=True)
 
-    return str(path or filepath)
+    out = str(path or filepath)
+    if not _is_valid_cif(Path(out)):
+        raise RuntimeError(
+            f"Downloaded {pdb_id}.cif is not a valid CIF file"
+        )
+    return out
 
 
 # =============================================================================

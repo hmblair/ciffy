@@ -500,6 +500,29 @@ def pinv(arr: Array, rtol: float = 1e-15) -> Array:
     return np.linalg.pinv(arr, rcond=rtol)
 
 
+def diag_embed(arr: Array) -> Array:
+    """
+    Create a diagonal matrix from a vector, supporting batched input.
+
+    Args:
+        arr: Input of shape (*, N).
+
+    Returns:
+        Diagonal matrix of shape (*, N, N).
+    """
+    if is_torch(arr):
+        import torch
+        return torch.diag_embed(arr)
+    if arr.ndim == 1:
+        return np.diag(arr)
+    # Batched numpy: construct (*, N, N) with arr on diagonal
+    shape = arr.shape + (arr.shape[-1],)
+    result = np.zeros(shape, dtype=arr.dtype)
+    idx = np.arange(arr.shape[-1])
+    result[..., idx, idx] = arr
+    return result
+
+
 def diag(arr: Array) -> Array:
     """
     Create a diagonal matrix from a 1D array, or extract diagonal from 2D.
@@ -519,18 +542,22 @@ def diag(arr: Array) -> Array:
 
 def diagonal(arr: Array) -> Array:
     """
-    Extract the diagonal of a 2D matrix.
+    Extract the diagonal of the last two dimensions.
 
     Args:
-        arr: 2D matrix.
+        arr: Matrix of shape (*, N, N).
 
     Returns:
-        1D array containing the diagonal elements.
+        Array of shape (*, N) containing the diagonal elements.
     """
     if is_torch(arr):
         import torch
-        return torch.diagonal(arr)
-    return np.diagonal(arr)
+        return torch.diagonal(arr, dim1=-2, dim2=-1)
+    if arr.ndim == 2:
+        return np.diagonal(arr)
+    # Batched numpy
+    idx = np.arange(arr.shape[-1])
+    return arr[..., idx, idx]
 
 
 # =============================================================================

@@ -41,6 +41,7 @@ from .ops import (
     eigh,
     pinv,
     diag,
+    diag_embed,
     diagonal,
     multiply,
     sqrt,

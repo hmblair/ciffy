@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from ..backend import (
     Array,
     diag,
+    diag_embed,
     diagonal,
     eigh,
     eye,
@@ -185,7 +186,7 @@ def graph_laplacian(adj: Array, normalized: bool = False) -> Array:
         norm_adj = deg_inv_sqrt[:, None] * adj * deg_inv_sqrt[None, :]
         return eye(adj.shape[0], like=adj) - norm_adj
     else:
-        return diag(deg) - adj
+        return diag_embed(deg) - adj
 
 
 def gnm_correlations(adj: Array, rtol: float = 1e-2) -> Array:

@@ -7,6 +7,7 @@ other molecular types.
 """
 
 from __future__ import annotations
+import functools
 from typing import Any, Generator, TYPE_CHECKING
 
 import numpy as np
@@ -1822,14 +1823,13 @@ class Polymer(AtomContainer):
         from ..io.writer import write_cif
         write_cif(self, filename)
 
-    def biotite(self: Polymer):
+    def biotite(self: Polymer) -> "biotite.structure.AtomArray":
         """
         Convert to a biotite AtomArray.
 
-        Populates annotations dynamically based on which fields are
-        present on the polymer. Coordinates, atom names, element symbols,
-        residue names/IDs, and chain IDs are set when the underlying
-        data is available.
+        Structural fields (coordinates, atoms, elements, sequence) are
+        converted to biotite's built-in annotations. All other fields
+        are exported as custom annotations under their field name.
 
         Requires the ``biotite`` package to be installed.
 
@@ -1838,7 +1838,6 @@ class Polymer(AtomContainer):
 
         Raises:
             ImportError: If biotite is not installed.
-            ValueError: If the polymer is empty.
         """
         try:
             from biotite.structure import AtomArray
@@ -1849,10 +1848,18 @@ class Polymer(AtomContainer):
             )
 
         if self.empty():
-            raise ValueError("Cannot convert empty polymer to AtomArray")
+            return AtomArray(0)
 
         n_atoms = self.size()
         array = AtomArray(n_atoms)
+
+        # --- Structural fields requiring int -> string conversion ---
+
+        # Fields that map to biotite built-in annotations and need
+        # special handling; processed below, skipped in the generic loop.
+        _STRUCTURAL_FIELDS = {
+            'coordinates', 'atoms', 'elements', 'sequence', 'molecule_types',
+        }
 
         # Coordinates
         coords = self._get_field_data('coordinates')
@@ -1860,52 +1867,318 @@ class Polymer(AtomContainer):
             array.coord = to_numpy(coords).astype(np.float32)
 
         # Atom names
-        atoms_data = self._get_field_data('atoms')
-        if atoms_data is not None:
+        if self._get_field_data('atoms') is not None:
             array.atom_name = np.array(self.atom_names(), dtype="U6")
 
-        # Element symbols
+        # Element symbols (vectorized via LUT)
         elements_data = self._get_field_data('elements')
         if elements_data is not None:
+            lut = _element_name_lut()
             elements = to_numpy(elements_data)
-            array.element = np.array(
-                [ELEMENT_NAMES.get(int(e), "") for e in elements],
-                dtype="U2",
-            )
+            clamped = np.clip(elements, 0, len(lut) - 1)
+            array.element = lut[clamped]
 
-        # Residue names and IDs
+        # Residue names and IDs (vectorized via LUT + expand)
         seq_data = self._get_field_data('sequence')
         if seq_data is not None:
+            lut = _residue_name_lut()
             hierarchy = self._get_hierarchy()
             res_membership = to_numpy(hierarchy.membership(Scale.RESIDUE))
             seq = to_numpy(seq_data)
-            res_names = []
-            for i in range(n_atoms):
-                try:
-                    res_names.append(
-                        Residue.from_index(int(seq[res_membership[i]])).name
-                    )
-                except KeyError:
-                    res_names.append("UNK")
-            array.res_name = np.array(res_names, dtype="U5")
+            clamped = np.clip(seq, 0, len(lut) - 1)
+            per_residue_names = lut[clamped]
+            array.res_name = per_residue_names[res_membership]
             array.res_id = res_membership.astype(np.int32) + 1
 
-        # Chain IDs
+        # Chain IDs (vectorized via numpy indexing)
         names = self._names
         if names is not None and len(names) > 0:
             hierarchy = self._get_hierarchy()
             chain_membership = to_numpy(hierarchy.membership(Scale.CHAIN))
-            chain_ids = [
-                names[int(chain_membership[i])]
-                if int(chain_membership[i]) < len(names) else "?"
-                for i in range(n_atoms)
-            ]
-            array.chain_id = np.array(chain_ids, dtype="U4")
+            names_arr = np.array(names, dtype="U4")
+            array.chain_id = names_arr[chain_membership]
 
-        # B-factors as custom annotation
-        bfactors_data = self._get_field_data('bfactors')
-        if bfactors_data is not None:
-            array.set_annotation("b_factor", to_numpy(bfactors_data).astype(np.float32))
+        # --- All other fields exported as custom annotations ---
+        for name, field in self._get_fields().items():
+            if name in _STRUCTURAL_FIELDS:
+                continue
+            data = to_numpy(field.data)
+            if field.scale == Scale.ATOM:
+                array.set_annotation(name, data)
 
         return array
 
+
+def _biotite_boundaries(
+    chain_ids: np.ndarray,
+    res_ids: np.ndarray,
+    res_names: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Detect residue and chain boundaries from per-atom annotation arrays.
+
+    A new residue starts wherever chain_id, res_id, or res_name changes.
+    A new chain starts wherever chain_id changes at a residue boundary.
+
+    Args:
+        chain_ids: (N,) string array of chain identifiers.
+        res_ids: (N,) int array of residue sequence numbers.
+        res_names: (N,) string array of residue names.
+
+    Returns:
+        Tuple of (residue_starts, chain_starts) where each is an (M+1,)
+        int array including a trailing sentinel equal to the number of
+        elements at the next scale.
+    """
+    n = len(chain_ids)
+
+    # Residue boundaries: any annotation change between consecutive atoms
+    chain_change = chain_ids[1:] != chain_ids[:-1]
+    resid_change = res_ids[1:] != res_ids[:-1]
+    resname_change = res_names[1:] != res_names[:-1]
+    is_boundary = chain_change | resid_change | resname_change
+
+    boundary_indices = np.flatnonzero(is_boundary) + 1
+    residue_starts = np.empty(len(boundary_indices) + 2, dtype=np.intp)
+    residue_starts[0] = 0
+    residue_starts[1:-1] = boundary_indices
+    residue_starts[-1] = n
+
+    # Chain boundaries: residue-level indices where chain_id changes
+    n_residues = len(residue_starts) - 1
+    first_atoms = residue_starts[:-1]
+    res_chain_ids = chain_ids[first_atoms]
+    chain_boundary_mask = res_chain_ids[1:] != res_chain_ids[:-1]
+    chain_boundary_indices = np.flatnonzero(chain_boundary_mask) + 1
+
+    chain_starts = np.empty(len(chain_boundary_indices) + 2, dtype=np.intp)
+    chain_starts[0] = 0
+    chain_starts[1:-1] = chain_boundary_indices
+    chain_starts[-1] = n_residues
+
+    return residue_starts, chain_starts
+
+
+@functools.cache
+def _element_name_lut() -> np.ndarray:
+    """Cached lookup table mapping element index -> name string."""
+    max_idx = max(ELEMENT_NAMES.keys()) if ELEMENT_NAMES else 0
+    lut = np.full(max_idx + 1, "", dtype="U2")
+    for idx, name in ELEMENT_NAMES.items():
+        lut[idx] = name
+    return lut
+
+
+@functools.cache
+def _residue_name_lut() -> np.ndarray:
+    """Cached lookup table mapping residue index -> name string."""
+    max_idx = max(r.value for r in Residue.all())
+    lut = np.full(max_idx + 1, "UNK", dtype="U5")
+    for r in Residue.all():
+        lut[r.value] = r.name
+    return lut
+
+
+@functools.cache
+def _residue_molecule_type_lut() -> np.ndarray:
+    """Cached lookup table mapping residue index -> molecule type value."""
+    max_idx = max(r.value for r in Residue.all())
+    lut = np.full(max_idx + 1, Molecule.UNKNOWN.value, dtype=np.int64)
+    for r in Residue.all():
+        lut[r.value] = r.molecule_type
+    return lut
+
+
+def _infer_molecule_types(
+    sequence: np.ndarray,
+    chain_starts: np.ndarray,
+) -> np.ndarray:
+    """Infer per-chain molecule type by majority vote over residue types.
+
+    Modified residues (e.g. GTP in an RNA chain) may have a different
+    molecule_type than the chain as a whole, so we take the most common
+    type across all residues in each chain.
+
+    Args:
+        sequence: (R,) int64 array of residue type indices.
+        chain_starts: (C+1,) int array of residue-level chain boundaries.
+
+    Returns:
+        (C,) int64 array of molecule type values.
+    """
+    lut = _residue_molecule_type_lut()
+
+    # Vectorized map; out-of-range indices get UNKNOWN
+    max_idx = len(lut) - 1
+    clamped = np.clip(sequence, 0, max_idx)
+    res_mol_types = lut[clamped]
+    res_mol_types[sequence != clamped] = Molecule.UNKNOWN.value
+
+    # Majority vote per chain via bincount on (chain, mol_type) pairs
+    n_chains = len(chain_starts) - 1
+    chain_membership = np.repeat(
+        np.arange(n_chains, dtype=np.intp),
+        np.diff(chain_starts),
+    )
+    n_types = int(res_mol_types.max()) + 1
+    # Flatten (chain, mol_type) into a 1-D key for bincount
+    keys = chain_membership * n_types + res_mol_types
+    counts = np.bincount(keys, minlength=n_chains * n_types)
+    counts_2d = counts[:n_chains * n_types].reshape(n_chains, n_types)
+    mol_types = counts_2d.argmax(axis=1).astype(np.int64)
+
+    return mol_types
+
+
+def from_biotite(
+    array: "biotite.structure.AtomArray",
+    backend: str | None = None,
+) -> Polymer:
+    """
+    Create a Polymer from a biotite AtomArray.
+
+    Converts atom names, residue names, and element symbols back to ciffy's
+    integer encoding using batch C gperf hash table lookups.
+
+    Only ATOM records (``array.hetero == False``) are included in the
+    polymer; HETATM records are silently dropped.
+
+    Args:
+        array: A ``biotite.structure.AtomArray`` instance.
+        backend: Array backend for the returned Polymer. One of
+            ``"numpy"`` (default) or ``"torch"``.
+
+    Returns:
+        A new Polymer.
+
+    Raises:
+        ImportError: If biotite is not installed.
+        TypeError: If ``array`` is not an AtomArray.
+        ValueError: If a residue or atom name cannot be resolved.
+    """
+    try:
+        from biotite.structure import AtomArray
+    except ImportError:
+        raise ImportError(
+            "biotite is required for this function. "
+            "Install it with: pip install biotite"
+        )
+
+    if not isinstance(array, AtomArray):
+        raise TypeError(f"Expected biotite AtomArray, got {type(array).__name__}")
+
+    # Filter to polymer atoms only (exclude HETATM)
+    if hasattr(array, 'hetero'):
+        array = array[~array.hetero]
+
+    if len(array) == 0:
+        return Polymer()
+
+    from .._c import (
+        _lookup_atoms_batch,
+        _lookup_elements_batch,
+        _lookup_residues_batch,
+    )
+
+    n_atoms = len(array)
+
+    # --- Hierarchy boundaries (vectorized) ---
+    residue_starts, chain_starts = _biotite_boundaries(
+        array.chain_id, array.res_id, array.res_name,
+    )
+    n_residues = len(residue_starts) - 1
+    n_chains = len(chain_starts) - 1
+
+    # --- Residue types: batch C lookup on unique-per-residue names ---
+    unique_res_names = array.res_name[residue_starts[:-1]]
+    sequence = _lookup_residues_batch(unique_res_names)
+    failed = np.flatnonzero(sequence < 0)
+    if len(failed) > 0:
+        raise ValueError(f"Unknown residue name: '{unique_res_names[failed[0]]}'")
+
+    # --- Atom types: batch C lookup on (res_name, atom_name) pairs ---
+    res_membership = np.repeat(
+        np.arange(n_residues, dtype=np.intp),
+        np.diff(residue_starts),
+    )
+    per_atom_res_names = unique_res_names[res_membership]
+    atoms_arr = _lookup_atoms_batch(per_atom_res_names, array.atom_name)
+    failed = np.flatnonzero(atoms_arr < 0)
+    if len(failed) > 0:
+        i = failed[0]
+        raise ValueError(
+            f"Unknown atom '{array.atom_name[i]}' in residue "
+            f"'{array.res_name[i]}'"
+        )
+
+    # --- Element types: batch C lookup ---
+    elements = _lookup_elements_batch(array.element)
+    failed = np.flatnonzero(elements < 0)
+    if len(failed) > 0:
+        raise ValueError(f"Unknown element: '{array.element[failed[0]]}'")
+
+    # --- Sizes arrays (vectorized diffs) ---
+    atoms_per_res = np.diff(residue_starts).astype(np.int64)
+    res_per_chain = np.diff(chain_starts).astype(np.int64)
+
+    # atoms_per_chain: sum atoms_per_res within each chain
+    chain_membership = np.repeat(
+        np.arange(n_chains, dtype=np.intp),
+        res_per_chain,
+    )
+    atoms_per_chain = np.zeros(n_chains, dtype=np.int64)
+    np.add.at(atoms_per_chain, chain_membership, atoms_per_res)
+
+    # --- Molecule types (majority vote per chain) ---
+    mol_types = _infer_molecule_types(sequence, chain_starts)
+
+    # --- Chain names ---
+    chain_first_atoms = residue_starts[chain_starts[:-1]]
+    chain_names = list(array.chain_id[chain_first_atoms])
+
+    # --- Coordinates ---
+    coordinates = array.coord.astype(np.float32)
+
+    # --- Build hierarchy ---
+    sizes = {
+        Scale.RESIDUE: atoms_per_res,
+        Scale.CHAIN: atoms_per_chain,
+        Scale.MOLECULE: np.array([n_atoms], dtype=np.int64),
+    }
+    hierarchy = _Hierarchy.from_sizes_and_lengths(
+        sizes=sizes,
+        lengths=res_per_chain,
+        ref=coordinates,
+    )
+
+    # --- Construct Polymer with core structural fields ---
+    fields: dict[str, Any] = {
+        "coordinates": Field(coordinates, Scale.ATOM),
+        "atoms": Field(atoms_arr, Scale.ATOM),
+        "elements": Field(elements, Scale.ATOM),
+        "sequence": Field(sequence, Scale.RESIDUE),
+        "molecule_types": Field(mol_types, Scale.CHAIN),
+    }
+
+    # --- Import non-structural annotations as atom-scale fields ---
+    _STRUCTURAL_ANNOTATIONS = {
+        "chain_id", "res_id", "ins_code", "res_name",
+        "hetero", "atom_name", "element",
+    }
+    for category in array.get_annotation_categories():
+        if category in _STRUCTURAL_ANNOTATIONS:
+            continue
+        data = array.get_annotation(category)
+        if hasattr(data, 'astype'):
+            data = np.asarray(data)
+        fields[category] = Field(data, Scale.ATOM)
+
+    polymer = Polymer(
+        hierarchy,
+        **fields,
+        names=chain_names,
+    )
+
+    if backend == "torch":
+        return polymer.torch()
+
+    return polymer

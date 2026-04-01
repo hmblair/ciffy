@@ -55,6 +55,7 @@ except ImportError as e:
 # Core types
 from .polymer import Polymer, Field, Metadata, template
 from .polymer import HeteroAtoms
+from .polymer.polymer import from_biotite
 from .biochemistry import Scale, Molecule, Residue
 from .backend import Dtype
 

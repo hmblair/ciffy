@@ -10,7 +10,7 @@ import numpy as np
 from ciffy import operations
 from ciffy.biochemistry import Scale
 from ciffy.backend import ops
-from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly, get_like
+from tests.utils import get_test_cif, BACKENDS, random_coordinates, get_single_chain_poly, get_like, requires_torch
 from tests.testing import get_tolerances
 
 
@@ -683,10 +683,9 @@ class TestBondedDistances:
         # At least some gradients should be non-zero
         assert coords.grad.abs().max() > 0
 
-    def test_bonded_distances_backend_consistency(self, backend):
+    @requires_torch
+    def test_bonded_distances_backend_consistency(self):
         """bonded_distances gives same results for numpy and torch."""
-        if backend == "numpy":
-            pytest.skip("Cross-backend comparison only runs once")
         import ciffy
         from ciffy.biochemistry import Residue
 

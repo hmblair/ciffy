@@ -6,7 +6,7 @@ import numpy as np
 import ciffy
 from ciffy import Scale, Molecule, tm_score, lddt, rmsd
 
-from tests.utils import get_test_cif, random_coordinates, get_like
+from tests.utils import get_test_cif, random_coordinates, get_like, requires_torch
 from tests.testing import get_tolerances
 from ciffy.backend import to_backend
 
@@ -423,11 +423,9 @@ class TestIntersect:
         with pytest.raises(ValueError, match="residue count"):
             ciffy.intersect(p1, p2)
 
-    def test_intersect_backend_mismatch_raises(self, backend):
+    @requires_torch
+    def test_intersect_backend_mismatch_raises(self):
         """Intersect raises TypeError for mixed backends."""
-        if backend != "torch":
-            pytest.skip("This test specifically requires torch backend")
-
         p1 = ciffy.load(get_test_cif("3SKW"), backend="numpy")
         p2 = ciffy.load(get_test_cif("3SKW"), backend="torch")
 

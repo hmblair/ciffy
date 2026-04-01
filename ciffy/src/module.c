@@ -11,6 +11,12 @@
 #include "module.h"
 #include "log.h"
 #include "graph/bindings.h"
+#include "lookup.h"
+
+/* gperf-generated lookup functions (hash/atom.c, hash/element.c, hash/residue.c) */
+extern struct _LOOKUP *_lookup_atom(const char *str, size_t len);
+extern struct _LOOKUP *_lookup_element(const char *str, size_t len);
+extern struct _LOOKUP *_lookup_residue(const char *str, size_t len);
 
 /* Define the thread-local log file ID (declared extern in log.h) */
 CIFFY_THREAD_LOCAL const char *_ciffy_log_file_id = NULL;
@@ -1313,6 +1319,230 @@ cleanup:
 }
 
 
+/**
+ * @brief Look up a (residue, atom) pair via the gperf atom hash table.
+ *
+ * Expects a single string argument in the format "RESNAME_ATOMNAME"
+ * (e.g., "A_C1'", "ALA_CA"). Returns the integer atom type value,
+ * or -1 if the key is not found.
+ */
+static PyObject *py_lookup_atom(PyObject *self, PyObject *args) {
+    const char *key;
+    Py_ssize_t len;
+    if (!PyArg_ParseTuple(args, "s#", &key, &len))
+        return NULL;
+    struct _LOOKUP *result = _lookup_atom(key, (size_t)len);
+    if (result == NULL)
+        return PyLong_FromLong(-1);
+    return PyLong_FromLong(result->value);
+}
+
+/**
+ * @brief Look up an element symbol via the gperf element hash table.
+ *
+ * Expects a single string argument (e.g., "C", "N", "FE").
+ * Returns the integer element value, or -1 if not found.
+ */
+static PyObject *py_lookup_element(PyObject *self, PyObject *args) {
+    const char *key;
+    Py_ssize_t len;
+    if (!PyArg_ParseTuple(args, "s#", &key, &len))
+        return NULL;
+    struct _LOOKUP *result = _lookup_element(key, (size_t)len);
+    if (result == NULL)
+        return PyLong_FromLong(-1);
+    return PyLong_FromLong(result->value);
+}
+
+/**
+ * @brief Look up a residue name via the gperf residue hash table.
+ *
+ * Expects a single string argument (e.g., "A", "ALA", "DA").
+ * Returns the integer residue value, or -1 if not found.
+ */
+static PyObject *py_lookup_residue(PyObject *self, PyObject *args) {
+    const char *key;
+    Py_ssize_t len;
+    if (!PyArg_ParseTuple(args, "s#", &key, &len))
+        return NULL;
+    struct _LOOKUP *result = _lookup_residue(key, (size_t)len);
+    if (result == NULL)
+        return PyLong_FromLong(-1);
+    return PyLong_FromLong(result->value);
+}
+
+/**
+ * @brief Helper to extract a C string from a fixed-width NumPy Unicode element.
+ *
+ * NumPy unicode arrays (dtype U<n>) store each element as n UCS-4 codepoints
+ * (4 bytes each). This converts one element to a UTF-8 C string.
+ *
+ * @param data     Pointer to the start of the element in the array data buffer.
+ * @param itemsize Byte width of one array element (from PyArray_ITEMSIZE).
+ * @param buf      Output buffer (must be large enough, itemsize+1 is safe).
+ * @return         Length of the resulting UTF-8 string, or -1 on error.
+ */
+static Py_ssize_t _ucs4_to_utf8(const char *data, int itemsize, char *buf) {
+    /* Create a Python str from the raw UCS-4 data, stripping trailing NULs */
+    int n_chars = itemsize / 4;
+    const Py_UCS4 *ucs4 = (const Py_UCS4 *)data;
+
+    /* Find actual length (strip trailing NUL codepoints) */
+    while (n_chars > 0 && ucs4[n_chars - 1] == 0)
+        n_chars--;
+
+    /* Fast path: all ASCII (covers virtually all PDB atom/residue/element names) */
+    int all_ascii = 1;
+    for (int i = 0; i < n_chars; i++) {
+        if (ucs4[i] > 127) { all_ascii = 0; break; }
+    }
+    if (all_ascii) {
+        for (int i = 0; i < n_chars; i++)
+            buf[i] = (char)ucs4[i];
+        buf[n_chars] = '\0';
+        return n_chars;
+    }
+
+    /* Slow path: use Python to encode */
+    PyObject *s = PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, ucs4, n_chars);
+    if (!s) return -1;
+    const char *utf8 = PyUnicode_AsUTF8AndSize(s, NULL);
+    if (!utf8) { Py_DECREF(s); return -1; }
+    Py_ssize_t slen = (Py_ssize_t)strlen(utf8);
+    memcpy(buf, utf8, slen + 1);
+    Py_DECREF(s);
+    return slen;
+}
+
+/**
+ * @brief Batch atom type lookup from parallel res_name and atom_name arrays.
+ *
+ * Takes two 1-D NumPy unicode arrays (res_names, atom_names) of the same
+ * length and returns an (N,) int64 array of atom type values.  Each lookup
+ * key is formed as "RESNAME_ATOMNAME".
+ *
+ * Elements that cannot be resolved are set to -1.
+ */
+static PyObject *py_lookup_atoms_batch(PyObject *self, PyObject *args) {
+    PyArrayObject *res_arr, *atom_arr;
+    if (!PyArg_ParseTuple(args, "O!O!",
+                          &PyArray_Type, &res_arr,
+                          &PyArray_Type, &atom_arr))
+        return NULL;
+
+    npy_intp n = PyArray_SIZE(res_arr);
+    if (PyArray_SIZE(atom_arr) != n)
+        return PyErr_Format(PyExc_ValueError,
+            "res_names and atom_names must have the same length");
+
+    int res_itemsize = PyArray_ITEMSIZE(res_arr);
+    int atom_itemsize = PyArray_ITEMSIZE(atom_arr);
+    const char *res_data = PyArray_BYTES(res_arr);
+    const char *atom_data = PyArray_BYTES(atom_arr);
+
+    /* Allocate output */
+    npy_intp dims[1] = {n};
+    PyObject *out = PyArray_SimpleNew(1, dims, NPY_INT64);
+    if (!out) return NULL;
+    int64_t *out_data = PyArray_DATA((PyArrayObject *)out);
+
+    /* Scratch buffer for key construction: "RESNAME_ATOMNAME\0" */
+    char buf[256];
+    char res_buf[128], atom_buf[128];
+
+    for (npy_intp i = 0; i < n; i++) {
+        Py_ssize_t rlen = _ucs4_to_utf8(res_data + i * res_itemsize,
+                                          res_itemsize, res_buf);
+        Py_ssize_t alen = _ucs4_to_utf8(atom_data + i * atom_itemsize,
+                                          atom_itemsize, atom_buf);
+        if (rlen < 0 || alen < 0) {
+            Py_DECREF(out);
+            return NULL;
+        }
+
+        /* Build "RESNAME_ATOMNAME" key */
+        memcpy(buf, res_buf, rlen);
+        buf[rlen] = '_';
+        memcpy(buf + rlen + 1, atom_buf, alen);
+        buf[rlen + 1 + alen] = '\0';
+
+        struct _LOOKUP *result = _lookup_atom(buf, (size_t)(rlen + 1 + alen));
+        out_data[i] = result ? result->value : -1;
+    }
+
+    return out;
+}
+
+/**
+ * @brief Batch element lookup from a 1-D NumPy unicode array.
+ *
+ * Returns an (N,) int64 array of element values.
+ * Unresolved elements are set to -1.
+ */
+static PyObject *py_lookup_elements_batch(PyObject *self, PyObject *args) {
+    PyArrayObject *arr;
+    if (!PyArg_ParseTuple(args, "O!", &PyArray_Type, &arr))
+        return NULL;
+
+    npy_intp n = PyArray_SIZE(arr);
+    int itemsize = PyArray_ITEMSIZE(arr);
+    const char *data = PyArray_BYTES(arr);
+
+    npy_intp dims[1] = {n};
+    PyObject *out = PyArray_SimpleNew(1, dims, NPY_INT64);
+    if (!out) return NULL;
+    int64_t *out_data = PyArray_DATA((PyArrayObject *)out);
+
+    char buf[128];
+    for (npy_intp i = 0; i < n; i++) {
+        Py_ssize_t slen = _ucs4_to_utf8(data + i * itemsize, itemsize, buf);
+        if (slen < 0) { Py_DECREF(out); return NULL; }
+
+        /* Uppercase for element lookup */
+        for (Py_ssize_t j = 0; j < slen; j++)
+            if (buf[j] >= 'a' && buf[j] <= 'z')
+                buf[j] -= 32;
+
+        struct _LOOKUP *result = _lookup_element(buf, (size_t)slen);
+        out_data[i] = result ? result->value : -1;
+    }
+
+    return out;
+}
+
+/**
+ * @brief Batch residue lookup from a 1-D NumPy unicode array.
+ *
+ * Returns an (N,) int64 array of residue values.
+ * Unresolved residues are set to -1.
+ */
+static PyObject *py_lookup_residues_batch(PyObject *self, PyObject *args) {
+    PyArrayObject *arr;
+    if (!PyArg_ParseTuple(args, "O!", &PyArray_Type, &arr))
+        return NULL;
+
+    npy_intp n = PyArray_SIZE(arr);
+    int itemsize = PyArray_ITEMSIZE(arr);
+    const char *data = PyArray_BYTES(arr);
+
+    npy_intp dims[1] = {n};
+    PyObject *out = PyArray_SimpleNew(1, dims, NPY_INT64);
+    if (!out) return NULL;
+    int64_t *out_data = PyArray_DATA((PyArrayObject *)out);
+
+    char buf[128];
+    for (npy_intp i = 0; i < n; i++) {
+        Py_ssize_t slen = _ucs4_to_utf8(data + i * itemsize, itemsize, buf);
+        if (slen < 0) { Py_DECREF(out); return NULL; }
+
+        struct _LOOKUP *result = _lookup_residue(buf, (size_t)slen);
+        out_data[i] = result ? result->value : -1;
+    }
+
+    return out;
+}
+
+
 /* Python module method table */
 static PyMethodDef methods[] = {
     {"_load", (PyCFunction)_load, METH_VARARGS | METH_KEYWORDS,
@@ -1394,6 +1624,43 @@ static PyMethodDef methods[] = {
      "    n_atoms (int): Total number of atoms.\n\n"
      "Returns:\n"
      "    tuple: (roots, sizes, n_components).\n"},
+    {"_lookup_atom", py_lookup_atom, METH_VARARGS,
+     "Look up atom type from 'RESNAME_ATOMNAME' key.\n\n"
+     "Args:\n"
+     "    key (str): Concatenated key, e.g. 'A_C1\\'' or 'ALA_CA'.\n\n"
+     "Returns:\n"
+     "    int: Atom type value, or -1 if not found.\n"},
+    {"_lookup_element", py_lookup_element, METH_VARARGS,
+     "Look up element type from symbol.\n\n"
+     "Args:\n"
+     "    key (str): Element symbol, e.g. 'C', 'N', 'FE'.\n\n"
+     "Returns:\n"
+     "    int: Element value, or -1 if not found.\n"},
+    {"_lookup_residue", py_lookup_residue, METH_VARARGS,
+     "Look up residue type from name.\n\n"
+     "Args:\n"
+     "    key (str): Residue name, e.g. 'A', 'ALA', 'DA'.\n\n"
+     "Returns:\n"
+     "    int: Residue value, or -1 if not found.\n"},
+    {"_lookup_atoms_batch", py_lookup_atoms_batch, METH_VARARGS,
+     "Batch atom type lookup from parallel res_name and atom_name arrays.\n\n"
+     "Args:\n"
+     "    res_names (ndarray): 1-D Unicode array of residue names.\n"
+     "    atom_names (ndarray): 1-D Unicode array of atom names.\n\n"
+     "Returns:\n"
+     "    ndarray: (N,) int64 atom type values (-1 for unresolved).\n"},
+    {"_lookup_elements_batch", py_lookup_elements_batch, METH_VARARGS,
+     "Batch element lookup from a 1-D Unicode array.\n\n"
+     "Args:\n"
+     "    elements (ndarray): 1-D Unicode array of element symbols.\n\n"
+     "Returns:\n"
+     "    ndarray: (N,) int64 element values (-1 for unresolved).\n"},
+    {"_lookup_residues_batch", py_lookup_residues_batch, METH_VARARGS,
+     "Batch residue lookup from a 1-D Unicode array.\n\n"
+     "Args:\n"
+     "    res_names (ndarray): 1-D Unicode array of residue names.\n\n"
+     "Returns:\n"
+     "    ndarray: (N,) int64 residue values (-1 for unresolved).\n"},
     {NULL, NULL, 0, NULL}
 };
 

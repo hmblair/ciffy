@@ -741,11 +741,9 @@ class TestDetach:
 
         assert np.allclose(p.coordinates, original_coords)
 
+    @pytest.mark.parametrize("backend", ["torch"])
     def test_detach_removes_grad(self, backend):
         """detach() removes gradient tracking on torch tensors."""
-        skip_if_no_torch(backend)
-        if backend == "numpy":
-            pytest.skip("Gradient tracking is torch-specific")
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)
@@ -757,11 +755,9 @@ class TestDetach:
 
         assert not p.coordinates.requires_grad
 
+    @pytest.mark.parametrize("backend", ["torch"])
     def test_detach_preserves_values(self, backend):
         """detach() preserves coordinate values."""
-        skip_if_no_torch(backend)
-        if backend == "numpy":
-            pytest.skip("Gradient tracking is torch-specific")
         import ciffy
 
         p = ciffy.load(get_test_cif("3SKW"), backend=backend)

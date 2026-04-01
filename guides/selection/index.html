@@ -1,0 +1,1384 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Fast library for loading and manipulating macromolecular structures">
+      
+      
+      
+        <link rel="canonical" href="https://github.com/hmblair/ciffy/guides/selection/">
+      
+      
+        <link rel="prev" href="../../getting-started/">
+      
+      
+        <link rel="next" href="../io/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Selection & Filtering - ciffy</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#selection-and-filtering" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ciffy" class="md-header__button md-logo" aria-label="ciffy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ciffy
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Selection & Filtering
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/hmblair/ciffy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hmblair/ciffy
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ciffy" class="md-nav__button md-logo" aria-label="ciffy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ciffy
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/hmblair/ciffy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hmblair/ciffy
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Selection & Filtering
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Selection & Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#molecule-type-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Molecule Type Selection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Molecule Type Selection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-molecule-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Molecule Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iterating-over-chains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Iterating Over Chains
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chain-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chain Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#heteroatoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Heteroatoms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#residue-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residue Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atom-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atom Selection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Atom Selection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#by-atom-type-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        By Atom Type Index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backbone-atoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backbone Atoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specific-nucleotide-atoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specific Nucleotide Atoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specialized-selection-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specialized Selection Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#computing-nucleobase-centers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computing Nucleobase Centers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boolean-masking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Boolean Masking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Boolean Masking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#creating-masks-at-different-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Masks at Different Scales
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slicing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slicing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolved-residues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolved Residues
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#combining-selections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combining Selections
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input/Output
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Structural Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../protein/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protein Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rna/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    RNA Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#molecule-type-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Molecule Type Selection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Molecule Type Selection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#available-molecule-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Molecule Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iterating-over-chains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Iterating Over Chains
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chain-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chain Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#heteroatoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Heteroatoms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#residue-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Residue Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atom-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atom Selection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Atom Selection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#by-atom-type-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        By Atom Type Index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backbone-atoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backbone Atoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specific-nucleotide-atoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specific Nucleotide Atoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specialized-selection-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specialized Selection Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#computing-nucleobase-centers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computing Nucleobase Centers
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boolean-masking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Boolean Masking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Boolean Masking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#creating-masks-at-different-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Masks at Different Scales
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slicing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slicing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolved-residues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolved Residues
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#combining-selections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combining Selections
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="selection-and-filtering">Selection and Filtering<a class="headerlink" href="#selection-and-filtering" title="Permanent link">&para;</a></h1>
+<p>This guide covers how to select and filter molecular structures in ciffy.</p>
+<h2 id="molecule-type-selection">Molecule Type Selection<a class="headerlink" href="#molecule-type-selection" title="Permanent link">&para;</a></h2>
+<p>ciffy supports various molecule types. Use <code>molecule_type()</code> to filter by type:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">ciffy</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">polymer</span> <span class="o">=</span> <span class="n">ciffy</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;structure.cif&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># Select by molecule type</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">rna_chains</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">protein_chains</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">PROTEIN</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">dna_chains</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">DNA</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="available-molecule-types">Available Molecule Types<a class="headerlink" href="#available-molecule-types" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ciffy.PROTEIN</code></td>
+<td>Standard proteins (polypeptide L)</td>
+</tr>
+<tr>
+<td><code>ciffy.RNA</code></td>
+<td>RNA (polyribonucleotide)</td>
+</tr>
+<tr>
+<td><code>ciffy.DNA</code></td>
+<td>DNA (polydeoxyribonucleotide)</td>
+</tr>
+<tr>
+<td><code>Molecule.HYBRID</code></td>
+<td>DNA/RNA hybrids</td>
+</tr>
+<tr>
+<td><code>Molecule.LIGAND</code></td>
+<td>Small molecules, cofactors</td>
+</tr>
+<tr>
+<td><code>Molecule.ION</code></td>
+<td>Metal ions (Mg, K, etc.)</td>
+</tr>
+<tr>
+<td><code>Molecule.WATER</code></td>
+<td>Water molecules</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ciffy.biochemistry</span><span class="w"> </span><span class="kn">import</span> <span class="n">Molecule</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Access all molecule types</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">ligands</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">Molecule</span><span class="o">.</span><span class="n">LIGAND</span><span class="p">)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">ions</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">Molecule</span><span class="o">.</span><span class="n">ION</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="iterating-over-chains">Iterating Over Chains<a class="headerlink" href="#iterating-over-chains" title="Permanent link">&para;</a></h3>
+<p>Use <code>chains()</code> to iterate, optionally filtering by type:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Iterate over all chains</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">for</span> <span class="n">chain</span> <span class="ow">in</span> <span class="n">polymer</span><span class="o">.</span><span class="n">chains</span><span class="p">():</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">chain</span><span class="o">.</span><span class="n">names</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">chain</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="si">}</span><span class="s2"> atoms&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Iterate over only RNA chains</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">for</span> <span class="n">chain</span> <span class="ow">in</span> <span class="n">polymer</span><span class="o">.</span><span class="n">chains</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">):</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;RNA chain </span><span class="si">{</span><span class="n">chain</span><span class="o">.</span><span class="n">names</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">chain</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RESIDUE</span><span class="p">)</span><span class="si">}</span><span class="s2"> residues&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># Check molecule type</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">if</span> <span class="n">polymer</span><span class="o">.</span><span class="n">istype</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">):</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;This is a single RNA chain&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="chain-selection">Chain Selection<a class="headerlink" href="#chain-selection" title="Permanent link">&para;</a></h2>
+<p>Select specific chains by index:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Select first chain</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">chain_a</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Select multiple chains</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">chains_ac</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">chain</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Chain names are preserved</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nb">print</span><span class="p">(</span><span class="n">polymer</span><span class="o">.</span><span class="n">names</span><span class="p">)</span>  <span class="c1"># [&#39;A&#39;, &#39;B&#39;, &#39;C&#39;, ...]</span>
+</code></pre></div>
+<h2 id="heteroatoms">Heteroatoms<a class="headerlink" href="#heteroatoms" title="Permanent link">&para;</a></h2>
+<p>Separate heteroatoms (water, ions, ligands) from polymer chains:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Get only heteroatoms (water, ions, ligands)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">heteroatoms</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span>
+</code></pre></div>
+<h2 id="residue-selection">Residue Selection<a class="headerlink" href="#residue-selection" title="Permanent link">&para;</a></h2>
+<p>Select specific residue types using <code>residue_type()</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ciffy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Residue</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># Get all adenosine residues</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">adenosines</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">residue_type</span><span class="p">(</span><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="p">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Get all purines (A and G)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">purines</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">residue_type</span><span class="p">([</span><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="p">,</span> <span class="n">Residue</span><span class="o">.</span><span class="n">G</span><span class="p">])</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># Get all pyrimidines (C and U)</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="n">pyrimidines</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">residue_type</span><span class="p">([</span><span class="n">Residue</span><span class="o">.</span><span class="n">C</span><span class="p">,</span> <span class="n">Residue</span><span class="o">.</span><span class="n">U</span><span class="p">])</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="c1"># Amino acids use 3-letter codes (ALA, GLY, etc.)</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="n">alanines</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">residue_type</span><span class="p">(</span><span class="n">Residue</span><span class="o">.</span><span class="n">ALA</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="atom-selection">Atom Selection<a class="headerlink" href="#atom-selection" title="Permanent link">&para;</a></h2>
+<h3 id="by-atom-type-index">By Atom Type Index<a class="headerlink" href="#by-atom-type-index" title="Permanent link">&para;</a></h3>
+<p>Use <code>atom_type()</code> to select atoms by their type index:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ciffy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Residue</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Get all N1 atoms from adenosines</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">n1_atoms</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">atom_type</span><span class="p">(</span><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">N1</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Get multiple atom types</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">c1_prime</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">atom_type</span><span class="p">([</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">C1p</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>    <span class="n">Residue</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">C1p</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">])</span>
+</code></pre></div>
+<h3 id="backbone-atoms">Backbone Atoms<a class="headerlink" href="#backbone-atoms" title="Permanent link">&para;</a></h3>
+<p>Select backbone atoms (works for RNA, DNA, and proteins):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">backbone</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">backbone</span><span class="p">()</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Backbone atoms: </span><span class="si">{</span><span class="n">backbone</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="specific-nucleotide-atoms">Specific Nucleotide Atoms<a class="headerlink" href="#specific-nucleotide-atoms" title="Permanent link">&para;</a></h3>
+<p>ciffy provides enums for all standard atoms:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ciffy</span><span class="w"> </span><span class="kn">import</span> <span class="n">Residue</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Access nucleotide atoms via Residue enum</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Residue.A = Adenosine, Residue.G = Guanosine, etc.</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># Examples of available atoms</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">N1</span>   <span class="c1"># N1 atom in adenosine</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">N3</span>   <span class="c1"># N3 atom in adenosine</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">C1p</span>  <span class="c1"># C1&#39; sugar atom</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="n">Residue</span><span class="o">.</span><span class="n">A</span><span class="o">.</span><span class="n">P</span>    <span class="c1"># Phosphate</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="c1"># Same pattern for other nucleotides</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="n">Residue</span><span class="o">.</span><span class="n">G</span><span class="o">.</span><span class="n">N1</span>   <span class="c1"># N1 in guanosine</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="n">Residue</span><span class="o">.</span><span class="n">C</span><span class="o">.</span><span class="n">N1</span>   <span class="c1"># N1 in cytosine</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="n">Residue</span><span class="o">.</span><span class="n">U</span><span class="o">.</span><span class="n">N1</span>   <span class="c1"># N1 in uridine</span>
+</code></pre></div>
+<h3 id="specialized-selection-methods">Specialized Selection Methods<a class="headerlink" href="#specialized-selection-methods" title="Permanent link">&para;</a></h3>
+<p>ciffy provides convenience methods for common structural selections:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Works on all molecule types</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">backbone</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">backbone</span><span class="p">()</span>     <span class="c1"># Sugar-phosphate (RNA/DNA) or N-CA-C-O (protein)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1"># Nucleic acid specific</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="n">bases</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">nucleobase</span><span class="p">()</span>      <span class="c1"># RNA nucleobases only</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">phosphates</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">phosphate</span><span class="p">()</span>  <span class="c1"># RNA/DNA phosphate groups</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="c1"># Protein specific</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="n">sidechains</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">sidechain</span><span class="p">()</span>  <span class="c1"># Amino acid sidechains</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Molecule</th>
+<th>Atoms</th>
+<th>Use Case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backbone()</code></td>
+<td>RNA, DNA, Protein</td>
+<td>Sugar-phosphate or N-CA-C-O</td>
+<td>Backbone analysis</td>
+</tr>
+<tr>
+<td><code>nucleobase()</code></td>
+<td>RNA</td>
+<td>Ring atoms (N1-N9, C2-C8)</td>
+<td>Base pairing, stacking</td>
+</tr>
+<tr>
+<td><code>phosphate()</code></td>
+<td>RNA, DNA</td>
+<td>P, OP1, OP2, OP3</td>
+<td>Phosphate contacts</td>
+</tr>
+<tr>
+<td><code>sidechain()</code></td>
+<td>Protein</td>
+<td>CB onwards</td>
+<td>Sidechain packing</td>
+</tr>
+</tbody>
+</table>
+<h3 id="computing-nucleobase-centers">Computing Nucleobase Centers<a class="headerlink" href="#computing-nucleobase-centers" title="Permanent link">&para;</a></h3>
+<p>Get the center of mass for each nucleobase in an RNA:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">ciffy</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">rna</span> <span class="o">=</span> <span class="n">ciffy</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s2">&quot;structure.cif&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Get nucleobase atoms and compute per-residue centers</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">_</span><span class="p">,</span> <span class="n">nucleobase_centers</span> <span class="o">=</span> <span class="n">rna</span><span class="o">.</span><span class="n">nucleobase</span><span class="p">()</span><span class="o">.</span><span class="n">center</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RESIDUE</span><span class="p">)</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="nb">print</span><span class="p">(</span><span class="n">nucleobase_centers</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># (num_residues, 3)</span>
+</code></pre></div>
+<h2 id="boolean-masking">Boolean Masking<a class="headerlink" href="#boolean-masking" title="Permanent link">&para;</a></h2>
+<p>Use boolean masks for flexible selection:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="c1"># Create a mask</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">mask</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">elements</span> <span class="o">==</span> <span class="mi">7</span>  <span class="c1"># Nitrogen atoms only</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="n">nitrogen_atoms</span> <span class="o">=</span> <span class="n">polymer</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1"># Combine conditions</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">polymer</span><span class="o">.</span><span class="n">elements</span> <span class="o">==</span> <span class="mi">7</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">polymer</span><span class="o">.</span><span class="n">atoms</span> <span class="o">&lt;</span> <span class="mi">100</span><span class="p">)</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="n">filtered</span> <span class="o">=</span> <span class="n">polymer</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+</code></pre></div>
+<h3 id="creating-masks-at-different-scales">Creating Masks at Different Scales<a class="headerlink" href="#creating-masks-at-different-scales" title="Permanent link">&para;</a></h3>
+<p>Use <code>mask()</code> to create masks from indices:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Create atom mask from chain indices</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">atom_mask</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">mask</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">source</span><span class="o">=</span><span class="n">ciffy</span><span class="o">.</span><span class="n">CHAIN</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="n">ciffy</span><span class="o">.</span><span class="n">ATOM</span><span class="p">)</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Create residue mask from chain indices</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="n">res_mask</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">mask</span><span class="p">([</span><span class="mi">0</span><span class="p">],</span> <span class="n">source</span><span class="o">=</span><span class="n">ciffy</span><span class="o">.</span><span class="n">CHAIN</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RESIDUE</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="slicing">Slicing<a class="headerlink" href="#slicing" title="Permanent link">&para;</a></h2>
+<p>Select contiguous ranges of atoms:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># First 100 atoms</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">first_100</span> <span class="o">=</span> <span class="n">polymer</span><span class="p">[:</span><span class="mi">100</span><span class="p">]</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Atoms 50-150</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="n">middle</span> <span class="o">=</span> <span class="n">polymer</span><span class="p">[</span><span class="mi">50</span><span class="p">:</span><span class="mi">150</span><span class="p">]</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># Last 50 atoms</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="n">last_50</span> <span class="o">=</span> <span class="n">polymer</span><span class="p">[</span><span class="o">-</span><span class="mi">50</span><span class="p">:]</span>
+</code></pre></div>
+<h2 id="resolved-residues">Resolved Residues<a class="headerlink" href="#resolved-residues" title="Permanent link">&para;</a></h2>
+<p>Find and filter unresolved (missing) residues:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Get mask of resolved residues</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">resolved_mask</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">resolved</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RESIDUE</span><span class="p">)</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Remove unresolved residues</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="n">clean</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RESIDUE</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="combining-selections">Combining Selections<a class="headerlink" href="#combining-selections" title="Permanent link">&para;</a></h2>
+<p>Chain multiple selections together:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Get backbone atoms of RNA chains only</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="n">rna_backbone</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">)</span><span class="o">.</span><span class="n">backbone</span><span class="p">()</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Get nucleobases of first chain</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="n">chain_a_bases</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">nucleobase</span><span class="p">()</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="c1"># RNA only, then by chain</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="n">clean</span> <span class="o">=</span> <span class="n">polymer</span><span class="o">.</span><span class="n">molecule_type</span><span class="p">(</span><span class="n">ciffy</span><span class="o">.</span><span class="n">RNA</span><span class="p">)</span><span class="o">.</span><span class="n">chain</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.annotate", "navigation.instant", "navigation.sections", "navigation.top", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

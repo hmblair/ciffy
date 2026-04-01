@@ -11,30 +11,6 @@ Ciffy is a library for researchers to **load, inspect, manipulate, and save macr
 - **Enums for readability** - `Residue.A`, `Molecule.RNA`, `Scale.ATOM`
 - **Hierarchical scales** - Atoms → Residues → Chains → Molecules
 
-## Development
-
-### Environment
-
-```bash
-# Python
-/Users/hmblair/mambaforge/bin/python
-
-# Build
-/Users/hmblair/mambaforge/bin/pip install -e .
-
-# Test
-/Users/hmblair/mambaforge/bin/python -m pytest tests/ -n auto
-```
-
-### Data Locations
-
-```
-Local RNA DB:                 /Users/hmblair/academic/data/structures/rna
-Remote RNA DB (rex imp):      /home/hmblair/data/rna
-Remote RNA DB (rex sherlock): /scratch/users/hmblair/structures/rna
-Output dirs:                  outputs/, figures/
-```
-
 ## Core API
 
 ### Loading & Creating

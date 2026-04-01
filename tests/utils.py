@@ -51,12 +51,14 @@ def _is_valid_cif(filepath: Path) -> bool:
         return False
 
 
-def get_test_cif(pdb_id: str) -> str:
+def get_test_cif(pdb_id: str, retries: int = 3) -> str:
     """Get path to a test CIF file, downloading if necessary.
 
     Uses ciffy.datasets.pdb for downloading. Validates the file after
-    download and re-downloads if corrupted.
+    download and retries on failure. Skips the test if the file cannot
+    be obtained after all retries.
     """
+    import time
     from ciffy.datasets.pdb import download_structure
 
     pdb_id = pdb_id.upper()
@@ -69,16 +71,30 @@ def get_test_cif(pdb_id: str) -> str:
         # Corrupted file — remove and re-download
         filepath.unlink()
 
-    # Download using centralized function
-    print(f"Downloading {pdb_id}.cif from RCSB PDB...", flush=True)
-    path, _ = download_structure(pdb_id, DATA_DIR, overwrite=True)
+    # Download with retries
+    for attempt in range(retries):
+        print(f"Downloading {pdb_id}.cif from RCSB PDB "
+              f"(attempt {attempt + 1}/{retries})...", flush=True)
+        try:
+            path, _ = download_structure(pdb_id, DATA_DIR, overwrite=True)
+        except Exception:
+            path = None
 
-    out = str(path or filepath)
-    if not _is_valid_cif(Path(out)):
-        raise RuntimeError(
-            f"Downloaded {pdb_id}.cif is not a valid CIF file"
-        )
-    return out
+        out = str(path or filepath)
+        if _is_valid_cif(Path(out)):
+            return out
+
+        # Clean up invalid file before retrying
+        if Path(out).is_file():
+            Path(out).unlink()
+
+        if attempt < retries - 1:
+            time.sleep(2 ** attempt)
+
+    pytest.skip(
+        f"Could not download valid {pdb_id}.cif from RCSB PDB "
+        f"after {retries} attempts"
+    )
 
 
 # =============================================================================

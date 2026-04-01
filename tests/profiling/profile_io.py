@@ -94,6 +94,9 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     def load_biotite():
         return _biotite_load(filepath)
 
+    def load_ciffy_to_biotite():
+        return ciffy.load(filepath, backend="numpy").biotite()
+
     # Check which libraries are available
     has_biopython = not ciffy_only
     has_biotite = not ciffy_only
@@ -127,8 +130,12 @@ def benchmark_file(pdb_id: str, filepath: str, runs: int = BENCHMARK_RUNS,
     if has_biotite:
         result = Timer.benchmark(load_biotite, runs=runs)
         results["biotite"] = result.to_dict()
+
+        result = Timer.benchmark(load_ciffy_to_biotite, runs=runs)
+        results["ciffy_to_biotite"] = result.to_dict()
     else:
         results["biotite"] = None
+        results["ciffy_to_biotite"] = None
 
     # Load once to get atom count and connection count
     poly = load_ciffy_connections()
@@ -178,12 +185,20 @@ def print_results(results: dict) -> None:
     else:
         print("Biotite:     (not installed)")
 
+    if results.get("ciffy_to_biotite"):
+        ctb = results["ciffy_to_biotite"]
+        bt = results["biotite"]
+        print(f"ciffy→bt:    {ctb['mean']*1000:7.2f} ms ± {ctb['std']*1000:.2f} ms")
+        if bt:
+            speedup = bt["mean"] / ctb["mean"]
+            print(f"  → {speedup:.1f}x faster than Biotite (load+convert)")
+
 
 def generate_markdown_table(all_results: list[dict]) -> str:
     """Generate a markdown table from benchmark results."""
     lines = [
-        "| Structure | Atoms | ciffy | ciffy meta | BioPython | Biotite |",
-        "|-----------|------:|------:|-----------:|----------:|--------:|",
+        "| Structure | Atoms | ciffy | ciffy meta | BioPython | Biotite | ciffy→biotite |",
+        "|-----------|------:|------:|-----------:|----------:|--------:|--------------:|",
     ]
 
     for r in all_results:
@@ -211,8 +226,15 @@ def generate_markdown_table(all_results: list[dict]) -> str:
         else:
             biotite_str = "—"
 
+        if r.get("ciffy_to_biotite") and r["biotite"]:
+            ctb = r["ciffy_to_biotite"]
+            ctb_speedup = r["biotite"]["mean"] / ctb["mean"]
+            ciffy_to_biotite_str = f"{ctb['mean']*1000:.0f} ms ({ctb_speedup:.1f}x)"
+        else:
+            ciffy_to_biotite_str = "—"
+
         lines.append(
-            f"| {r['pdb_id']} | {r['atoms']:,} | {ciffy_ms} | {ciffy_meta_str} | {biopython_str} | {biotite_str} |"
+            f"| {r['pdb_id']} | {r['atoms']:,} | {ciffy_ms} | {ciffy_meta_str} | {biopython_str} | {biotite_str} | {ciffy_to_biotite_str} |"
         )
 
     return "\n".join(lines)
